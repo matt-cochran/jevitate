@@ -5,7 +5,7 @@ import { BrowseTheWebToken, PaceInteractionsToken, tryAbility } from "@doit/scre
 import type { SitePolicy } from "@doit/domain";
 import type { ActivityRepository, BudgetLimits, BudgetRepository, SitePolicyRepository } from "@doit/application";
 import { openDatabase, migrateToLatest, SqliteActivityRepository, SqliteBudgetRepository, SqliteSitePolicyRepository } from "@doit/storage-sqlite";
-import { ActionRunner } from "./runner.js";
+import { ActionRunner, PolicyEnforcementError } from "./runner.js";
 
 const NOW = "2026-09-17T12:00:00.000Z";
 
@@ -253,4 +253,62 @@ test("(e) happy paced path: ok, activity stamped, budget reserved, PaceInteracti
   expect(budgetRow?.used).toBe(1);
 
   await db.destroy();
+});
+
+test("(f) min-interval declared but no ActivityRepository wired: fails closed, action NOT executed", async () => {
+  executeCalls = 0;
+  const reg = makeRegistry();
+  const policy: SitePolicy = { version: "v1", throttles: { read: { minIntervalSeconds: 90 } } };
+  const policies = new FakePolicyRepo(policy);
+  const fakeBrowser = makeFakeBrowser();
+  // No `activity` repo provided, even though the policy declares a min-interval limit.
+  const runner = new ActionRunner(fakeBrowser as any, reg, {
+    policies,
+    clock: { nowIso: () => NOW },
+  });
+  await expect(
+    runner.run(baseReq({ actionId: "diag.counting-echo", sleep: async () => {} })),
+  ).rejects.toThrow(PolicyEnforcementError);
+  expect(executeCalls).toBe(0);
+  expect(openCalls).toBe(0);
+});
+
+test("(g) daily limit declared but no BudgetRepository wired: fails closed, action NOT executed", async () => {
+  executeCalls = 0;
+  const reg = makeRegistry();
+  const policy: SitePolicy = { version: "v1", throttles: { read: { dailyLimit: 5 } } };
+  const policies = new FakePolicyRepo(policy);
+  const fakeBrowser = makeFakeBrowser();
+  // No `budgets` repo provided, even though the policy declares a daily limit.
+  const runner = new ActionRunner(fakeBrowser as any, reg, {
+    policies,
+    clock: { nowIso: () => NOW },
+  });
+  await expect(
+    runner.run(baseReq({ actionId: "diag.counting-echo", sleep: async () => {} })),
+  ).rejects.toThrow(PolicyEnforcementError);
+  expect(executeCalls).toBe(0);
+  expect(openCalls).toBe(0);
+});
+
+test("(h) quiet-hours-only policy with no repos at all: does not fail-close (quiet hours needs no repo)", async () => {
+  executeCalls = 0;
+  const reg = makeRegistry();
+  const policy: SitePolicy = {
+    version: "v1",
+    quietHours: { timezone: "UTC", windows: [{ start: "00:00", end: "23:59" }] },
+  };
+  const policies = new FakePolicyRepo(policy);
+  const fakeBrowser = makeFakeBrowser();
+  // No activity/budgets repos, and no throttle limits declared -- only quietHours.
+  const runner = new ActionRunner(fakeBrowser as any, reg, {
+    policies,
+    clock: { nowIso: () => NOW },
+  });
+  // Must not throw PolicyEnforcementError -- quiet hours needs no repo to enforce.
+  // It IS currently quiet hours, so the gate itself throttles the run (a different,
+  // expected outcome -- not a fail-closed rejection).
+  const res = await runner.run(baseReq({ actionId: "diag.counting-echo", sleep: async () => {} }));
+  expect(res.outcome).toBe("throttled");
+  expect(executeCalls).toBe(0);
 });

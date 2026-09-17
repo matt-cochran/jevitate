@@ -48,6 +48,17 @@ function nextUtcMidnightAfter(nowIso: string): string {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString();
 }
 
+/** Thrown when a site policy declares a hard limit (min-interval or a budget cap)
+ * for an action's throttle class, but the ActionRunner was not constructed with the
+ * repository that enforces it. We fail closed: an unenforceable hard limit must never
+ * be silently treated as "no limit" and allowed to run. */
+export class PolicyEnforcementError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PolicyEnforcementError";
+  }
+}
+
 export class ActionRunner {
   constructor(
     private readonly browser: BrowserPort,
@@ -71,6 +82,20 @@ export class ActionRunner {
     const nowIso = () => (this.opts.clock ? this.opts.clock.nowIso() : new Date().toISOString());
 
     const resolved = resolveThrottle([policy.throttles?.[action.throttleClass] ?? {}]);
+
+    // Fail closed: a declared, repo-backed hard limit that we cannot enforce must
+    // never be silently skipped and treated as "no limit" (see PolicyEnforcementError).
+    if (typeof resolved.minIntervalSeconds === "number" && resolved.minIntervalSeconds > 0 && !this.opts.activity) {
+      throw new PolicyEnforcementError(
+        `Policy for ${req.site}/${req.account} class "${action.throttleClass}" declares a min-interval limit but no ActivityRepository was provided (refusing to run — fail closed).`,
+      );
+    }
+    if ((resolved.hourlyLimit !== undefined || resolved.dailyLimit !== undefined) && !this.opts.budgets) {
+      const limitKind = resolved.dailyLimit !== undefined ? "daily limit" : "hourly limit";
+      throw new PolicyEnforcementError(
+        `Policy for ${req.site}/${req.account} class "${action.throttleClass}" declares a ${limitKind} but no BudgetRepository was provided (refusing to run — fail closed).`,
+      );
+    }
 
     const lastAtIso = this.opts.activity
       ? await this.opts.activity.lastAt(req.site, req.account, action.throttleClass)
