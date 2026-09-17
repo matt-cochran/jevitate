@@ -100,6 +100,12 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@doit/application':
+        specifier: workspace:*
+        version: link:../application
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright
@@ -110,6 +116,9 @@ importers:
         specifier: workspace:*
         version: link:../site-sdk
     devDependencies:
+      '@doit/storage-sqlite':
+        specifier: workspace:*
+        version: link:../storage-sqlite
       zod:
         specifier: ^4.6.5
         version: 4.6.5

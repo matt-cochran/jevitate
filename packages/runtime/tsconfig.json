@@ -4,7 +4,9 @@
   "references": [
     { "path": "../screenplay" },
     { "path": "../site-sdk" },
-    { "path": "../playwright" }
+    { "path": "../playwright" },
+    { "path": "../domain" },
+    { "path": "../application" }
   ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]

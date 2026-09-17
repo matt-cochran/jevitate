@@ -6,10 +6,12 @@
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
+    "@doit/application": "workspace:*",
+    "@doit/domain": "workspace:*",
     "@doit/playwright": "workspace:*",
     "@doit/screenplay": "workspace:*",
     "@doit/site-sdk": "workspace:*"
   },
-  "devDependencies": { "zod": "^4.6.5" },
+  "devDependencies": { "@doit/storage-sqlite": "workspace:*", "zod": "^4.6.5" },
   "scripts": { "build": "tsc --build" }
 }
