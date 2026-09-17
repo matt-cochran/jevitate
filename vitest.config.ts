@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@doit/domain": pkg("domain"),
+      "@doit/application": pkg("application"),
       // Add one line per new package here, e.g.:
       // "@doit/storage-sqlite": pkg("storage-sqlite"),
     },
