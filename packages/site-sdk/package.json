@@ -1,0 +1,10 @@
+{
+  "name": "@doit/site-sdk",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": { "@doit/domain": "workspace:*", "@doit/screenplay": "workspace:*", "zod": "^4.6.5" },
+  "scripts": { "build": "tsc --build" }
+}

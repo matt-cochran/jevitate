@@ -8,6 +8,7 @@
     { "path": "packages/mcp-facade" },
     { "path": "packages/cli" },
     { "path": "packages/playwright" },
-    { "path": "packages/screenplay" }
+    { "path": "packages/screenplay" },
+    { "path": "packages/site-sdk" }
   ]
 }

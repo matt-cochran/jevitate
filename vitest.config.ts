@@ -15,6 +15,7 @@ export default defineConfig({
       "@doit/cli": pkg("cli"),
       "@doit/playwright": pkg("playwright"),
       "@doit/screenplay": pkg("screenplay"),
+      "@doit/site-sdk": pkg("site-sdk"),
       // Add one line per new package here, e.g.:
     },
   },
