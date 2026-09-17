@@ -1,7 +1,6 @@
 import type { Recording, RecordedStep, Step } from "@doit/recording";
 import { RecordingSchema } from "@doit/recording";
 import type { Actor } from "@doit/screenplay";
-import { PostconditionFailed } from "./assertion.js";
 import type { InterpretResult } from "./interpret-result.js";
 import { runStep } from "./run-step.js";
 
@@ -30,7 +29,8 @@ const SUPPORTED_FOREACH_CHILD_KINDS = new Set(["click", "extract"]);
 export class RecordingInterpreter {
   /**
    * Runs the entire recording from the start, stopping early at the first
-   * `awaiting_human` (a `handback` step) or the first `PostconditionFailed`.
+   * `awaiting_human` (a `handback` step) or the first step that throws
+   * (a `PostconditionFailed` or any other error).
    *
    * `vars` seeds the initial variable bindings (default `{}`); it is copied
    * into an internal `Map<string,string>` and never mutates the caller's
@@ -120,11 +120,21 @@ function checkForEachChildKinds(step: Step, pageIndex: number, stepIndexInPage: 
 /**
  * Shared driver for `run`/`runToCheckpoint`: executes `flat[0..lastIndex]`
  * (inclusive) in order against the shared `vars` map, stopping early on
- * `awaiting_human` or a caught `PostconditionFailed`. Any other thrown error
- * is deliberately NOT caught here — it propagates to the caller, since it
- * signals a bug or misconfiguration rather than an expected postcondition
- * failure (the plan's own language is "stops at ... the first
- * `PostconditionFailed`," not "any error").
+ * `awaiting_human` or a failed step. ANY error thrown by `runStep` — a
+ * `PostconditionFailed`, a stale selector, a Playwright strict-mode
+ * multi-match, a timeout, or any other bug/misconfiguration — is caught
+ * right here and converted into `{outcome:"failed", at:i, error}`, `i`
+ * being this step's correct global flat index. This is deliberately NOT
+ * narrowed to `PostconditionFailed`: `InterpretResult.failed.at` must be
+ * accurate for every error kind, not only an expected postcondition
+ * failure, so a caller (e.g. future diff/localization tooling) can always
+ * pin a failure to a step.
+ *
+ * Pre-flight errors (schema validation, `forEach` child-kind checks in
+ * `validateRecording`, or a negative `runToCheckpoint` `stepIndex`) happen
+ * BEFORE this loop starts and are intentionally NOT caught here — they
+ * still propagate as rejected promises, since no step (and therefore no
+ * step index) has run yet.
  */
 async function runFlat(
   actor: Actor,
@@ -137,18 +147,8 @@ async function runFlat(
     try {
       outcome = await runStep(actor, flat[i], vars, i);
     } catch (err) {
-      // NOTE (deferred to a future milestone, documentation-only):
-      // `InterpretResult.failed.at` (this `i`) is ONLY populated when the
-      // thrown error is `PostconditionFailed`. Any OTHER propagating error
-      // (a stale selector, a Playwright strict-mode multi-match, an action
-      // timeout, etc.) rejects `run`/`runToCheckpoint` with NO step index at
-      // all — the `throw err` below loses `i` entirely. This will matter
-      // once a future milestone's diff/localization tooling wants to pin
-      // every failure to a step, regardless of error kind.
-      if (err instanceof PostconditionFailed) {
-        return { outcome: "failed", at: i, error: err.message };
-      }
-      throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      return { outcome: "failed", at: i, error: message };
     }
     if (outcome.kind === "awaiting_human") {
       return { outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume };

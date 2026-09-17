@@ -102,22 +102,30 @@ test("run: seeds initial vars and threads them through the whole recording", asy
 // === run: PostconditionFailed -> failed{at} ===
 
 test("run: a postcondition failure at step 1 resolves {outcome:'failed', at:1} (not a rejected promise)", async () => {
-  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
-  const actor = actorWithPage(fakePage(locator));
-  const rec = recording([
-    [
-      { step: { kind: "navigate", url: "/inbox", expect: { kind: "urlIncludes", text: "/inbox" } } },
-      { step: { kind: "assert", check: { kind: "visible", target: { testId: "banner" } } } },
-      { step: { kind: "assert", check: { kind: "visible", target: { testId: "banner" } } } },
-    ],
-  ]);
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+    const actor = actorWithPage(fakePage(locator));
+    const rec = recording([
+      [
+        { step: { kind: "navigate", url: "/inbox", expect: { kind: "urlIncludes", text: "/inbox" } } },
+        { step: { kind: "assert", check: { kind: "visible", target: { testId: "banner" } } } },
+        { step: { kind: "assert", check: { kind: "visible", target: { testId: "banner" } } } },
+      ],
+    ]);
 
-  const interp = new RecordingInterpreter();
-  await expect(interp.run(actor as any, rec)).resolves.toEqual({
-    outcome: "failed",
-    at: 1,
-    error: expect.stringContaining("postcondition failed"),
-  });
+    const interp = new RecordingInterpreter();
+    const result = interp.run(actor as any, rec);
+    const expectation = expect(result).resolves.toEqual({
+      outcome: "failed",
+      at: 1,
+      error: expect.stringContaining("postcondition failed"),
+    });
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // === run: handback -> awaiting_human{at}, stops early ===
@@ -162,9 +170,9 @@ test("run: a handback on page 2's first step reports the global flat index, not 
   expect(result).toEqual({ outcome: "awaiting_human", at: 2, prompt: "continue?", resume });
 });
 
-// === run: non-PostconditionFailed error propagates uncaught ===
+// === run: non-PostconditionFailed error still yields failed{at} ===
 
-test("run: a non-PostconditionFailed error (unset {var}) propagates OUT of run() as a rejected promise", async () => {
+test("run: a non-PostconditionFailed error (unset {var}) resolves {outcome:'failed', at:1} with the correct step index", async () => {
   const locator = fakeLocator({ isVisible: vi.fn(async () => true) });
   const actor = actorWithPage(fakePage(locator));
   const rec = recording([
@@ -182,7 +190,44 @@ test("run: a non-PostconditionFailed error (unset {var}) propagates OUT of run()
   ]);
 
   const interp = new RecordingInterpreter();
-  await expect(interp.run(actor as any, rec)).rejects.toThrow(/unknown variable/i);
+  await expect(interp.run(actor as any, rec)).resolves.toEqual({
+    outcome: "failed",
+    at: 1,
+    error: expect.stringContaining("unknown variable"),
+  });
+});
+
+test("run: a non-PostconditionFailed error on page 2 (extract with no matching attribute) reports the correct GLOBAL index, not a per-page one", async () => {
+  const locator = fakeLocator({
+    isVisible: vi.fn(async () => true),
+    getAttribute: vi.fn(async () => null),
+  });
+  const actor = actorWithPage(fakePage(locator));
+  const rec = recording([
+    [
+      { step: { kind: "navigate", url: "/inbox", expect: { kind: "visible", target: { testId: "loaded" } } } },
+      { step: { kind: "assert", check: { kind: "visible", target: { testId: "loaded" } } } },
+    ],
+    [
+      {
+        step: {
+          kind: "extract",
+          target: { testId: "name-el" },
+          as: "name",
+          attr: "data-id",
+          expect: { kind: "visible", target: { testId: "name-el" } },
+        },
+      },
+    ],
+  ]);
+
+  const interp = new RecordingInterpreter();
+  // page 0 has 2 steps (indexes 0,1); page 1's step 0 is global index 2.
+  await expect(interp.run(actor as any, rec)).resolves.toEqual({
+    outcome: "failed",
+    at: 2,
+    error: expect.stringContaining('attribute "data-id" not found'),
+  });
 });
 
 // === runToCheckpoint ===

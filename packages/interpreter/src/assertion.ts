@@ -3,25 +3,57 @@ import type { Actor } from "@doit/screenplay";
 import { BrowseTheWebToken, CountOf, IsVisible, TextOf } from "@doit/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
 
+/** Default bound for `checkAssertion`'s polling loop, in milliseconds. */
+const DEFAULT_TIMEOUT_MS = 5000;
+/** Default interval between re-evaluations in `checkAssertion`'s polling loop, in milliseconds. */
+const DEFAULT_POLL_MS = 100;
+
+/**
+ * Options for `checkAssertion`'s bounded polling loop.
+ */
+export interface CheckAssertionOptions {
+  /** Overall bound on how long to keep re-evaluating. Default 5000ms. */
+  timeoutMs?: number;
+  /** Interval between re-evaluations. Default 100ms. */
+  pollMs?: number;
+}
+
 /**
  * Evaluates a closed-schema `Assertion` against the current page state,
- * routing each `kind` to its corresponding Screenplay question (RxD design
- * spec §4). Returns a boolean rather than throwing — callers (e.g.
- * `runStep`) decide whether a `false` result is fatal.
+ * polling (re-evaluating) it at `opts.pollMs` intervals (default 100ms) up
+ * to `opts.timeoutMs` (default 5000ms) — a bounded, web-first-assertion
+ * style retry so a postcondition checked immediately after an
+ * async-rendering action doesn't false-fail just because the UI hasn't
+ * painted yet at the moment of the first sample.
+ *
+ * Returns `true` as soon as the assertion holds. Returns `false` only once
+ * the timeout has elapsed without it ever holding — this still fails
+ * closed: a timeout is never silently treated as success. Every `kind`
+ * (`visible`/`urlIncludes`/`textIncludes`/`count`) goes through the same
+ * polling wrapper; none is special-cased as one-shot.
+ *
+ * Returns a boolean rather than throwing — callers (e.g. `runStep`) decide
+ * whether a `false` result is fatal.
  */
-export async function checkAssertion(actor: Actor, a: Assertion): Promise<boolean> {
+export async function checkAssertion(
+  actor: Actor,
+  a: Assertion,
+  opts?: CheckAssertionOptions,
+): Promise<boolean> {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await evaluateAssertionOnce(actor, a)) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(pollMs);
+  }
+}
+
+/** A single, non-retrying sample of `a` against the current page state. */
+async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolean> {
   switch (a.kind) {
     case "visible":
-      // NOTE (deferred to a future milestone, documentation-only): this is a
-      // ONE-SHOT sample — the underlying `locator.isVisible()` (and, for
-      // `urlIncludes` below, `page.url()`) do not retry/wait, unlike
-      // Playwright's own action auto-waiting. A postcondition check here
-      // does not poll, so a `visible`/`urlIncludes` expect immediately
-      // after an async-rendering action can race and fail-closed-but-falsely
-      // (the real outcome held, but wasn't observable yet at check time).
-      // Flag as a known gap to resolve (e.g. via bounded polling) before a
-      // future milestone relies on generated recordings with auto-inserted
-      // postconditions at scale.
       return actor.asks(IsVisible.target(descriptorToTarget(a.target)));
     case "urlIncludes": {
       const page = actor.ability(BrowseTheWebToken).session.page;
@@ -36,6 +68,10 @@ export async function checkAssertion(actor: Actor, a: Assertion): Promise<boolea
       return (a.min === undefined || n >= a.min) && (a.max === undefined || n <= a.max);
     }
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

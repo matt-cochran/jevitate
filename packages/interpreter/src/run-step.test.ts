@@ -49,11 +49,18 @@ test("checkAssertion: visible → true when locator reports visible", async () =
   expect(await checkAssertion(actor as any, a)).toBe(true);
 });
 
-test("checkAssertion: visible → false when locator reports not visible", async () => {
-  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
-  const actor = actorWithPage(fakePage(locator));
-  const a: Assertion = { kind: "visible", target: { testId: "banner" } };
-  expect(await checkAssertion(actor as any, a)).toBe(false);
+test("checkAssertion: visible → false when locator reports not visible (fails closed after the default timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+    const actor = actorWithPage(fakePage(locator));
+    const a: Assertion = { kind: "visible", target: { testId: "banner" } };
+    const result = checkAssertion(actor as any, a);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await result).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("checkAssertion: urlIncludes → true when page.url() contains the text", async () => {
@@ -63,11 +70,18 @@ test("checkAssertion: urlIncludes → true when page.url() contains the text", a
   expect(await checkAssertion(actor as any, a)).toBe(true);
 });
 
-test("checkAssertion: urlIncludes → false when page.url() does not contain the text", async () => {
-  const locator = fakeLocator();
-  const actor = actorWithPage(fakePage(locator, "https://example.test/settings"));
-  const a: Assertion = { kind: "urlIncludes", text: "/inbox" };
-  expect(await checkAssertion(actor as any, a)).toBe(false);
+test("checkAssertion: urlIncludes → false when page.url() does not contain the text (fails closed after the default timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator();
+    const actor = actorWithPage(fakePage(locator, "https://example.test/settings"));
+    const a: Assertion = { kind: "urlIncludes", text: "/inbox" };
+    const result = checkAssertion(actor as any, a);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await result).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("checkAssertion: textIncludes → true when innerText contains the text", async () => {
@@ -77,11 +91,18 @@ test("checkAssertion: textIncludes → true when innerText contains the text", a
   expect(await checkAssertion(actor as any, a)).toBe(true);
 });
 
-test("checkAssertion: textIncludes → false when innerText does not contain the text", async () => {
-  const locator = fakeLocator({ innerText: vi.fn(async () => "Welcome back, Bob") });
-  const actor = actorWithPage(fakePage(locator));
-  const a: Assertion = { kind: "textIncludes", target: { css: ".greeting" }, text: "Ada" };
-  expect(await checkAssertion(actor as any, a)).toBe(false);
+test("checkAssertion: textIncludes → false when innerText does not contain the text (fails closed after the default timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ innerText: vi.fn(async () => "Welcome back, Bob") });
+    const actor = actorWithPage(fakePage(locator));
+    const a: Assertion = { kind: "textIncludes", target: { css: ".greeting" }, text: "Ada" };
+    const result = checkAssertion(actor as any, a);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await result).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("checkAssertion: count → true when within [min,max]", async () => {
@@ -91,18 +112,32 @@ test("checkAssertion: count → true when within [min,max]", async () => {
   expect(await checkAssertion(actor as any, a)).toBe(true);
 });
 
-test("checkAssertion: count → false when below min", async () => {
-  const locator = fakeLocator({ count: vi.fn(async () => 0) });
-  const actor = actorWithPage(fakePage(locator));
-  const a: Assertion = { kind: "count", target: { css: "li" }, min: 1 };
-  expect(await checkAssertion(actor as any, a)).toBe(false);
+test("checkAssertion: count → false when below min (fails closed after the default timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ count: vi.fn(async () => 0) });
+    const actor = actorWithPage(fakePage(locator));
+    const a: Assertion = { kind: "count", target: { css: "li" }, min: 1 };
+    const result = checkAssertion(actor as any, a);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await result).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
-test("checkAssertion: count → false when above max", async () => {
-  const locator = fakeLocator({ count: vi.fn(async () => 6) });
-  const actor = actorWithPage(fakePage(locator));
-  const a: Assertion = { kind: "count", target: { css: "li" }, max: 5 };
-  expect(await checkAssertion(actor as any, a)).toBe(false);
+test("checkAssertion: count → false when above max (fails closed after the default timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ count: vi.fn(async () => 6) });
+    const actor = actorWithPage(fakePage(locator));
+    const a: Assertion = { kind: "count", target: { css: "li" }, max: 5 };
+    const result = checkAssertion(actor as any, a);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await result).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("checkAssertion: count → true (vacuous) with no bounds given", async () => {
@@ -128,18 +163,26 @@ test("runStep: click whose expect:visible holds resolves and clicks the target",
   expect(locator.click).toHaveBeenCalledTimes(1);
 });
 
-test("runStep: click whose expect is false rejects with PostconditionFailed", async () => {
-  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
-  const actor = actorWithPage(fakePage(locator));
-  const rec: RecordedStep = {
-    step: {
-      kind: "click",
-      target: { testId: "submit" },
-      expect: { kind: "visible", target: { testId: "confirmation" } },
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
-  expect(locator.click).toHaveBeenCalledTimes(1);
+test("runStep: click whose expect is false rejects with PostconditionFailed (after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+    const actor = actorWithPage(fakePage(locator));
+    const rec: RecordedStep = {
+      step: {
+        kind: "click",
+        target: { testId: "submit" },
+        expect: { kind: "visible", target: { testId: "confirmation" } },
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+    expect(locator.click).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("runStep: fill with {var:'body'} types the resolved var value", async () => {
@@ -210,18 +253,26 @@ test("runStep: navigate performs the navigation and checks its expect", async ()
   expect(page.goto).toHaveBeenCalledWith("/inbox");
 });
 
-test("runStep: navigate whose expect fails rejects with PostconditionFailed", async () => {
-  const locator = fakeLocator();
-  const page = fakePage(locator, "https://example.test/settings");
-  const actor = actorWithPage(page);
-  const rec: RecordedStep = {
-    step: {
-      kind: "navigate",
-      url: "/inbox",
-      expect: { kind: "urlIncludes", text: "/inbox" },
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
+test("runStep: navigate whose expect fails rejects with PostconditionFailed (after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator();
+    const page = fakePage(locator, "https://example.test/settings");
+    const actor = actorWithPage(page);
+    const rec: RecordedStep = {
+      step: {
+        kind: "navigate",
+        url: "/inbox",
+        expect: { kind: "urlIncludes", text: "/inbox" },
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("runStep: waitFor calls the resolved locator's waitFor with the given state", async () => {
@@ -263,16 +314,24 @@ test("runStep: assert checks step.check and resolves when true", async () => {
   await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({ kind: "done" });
 });
 
-test("runStep: assert rejects with PostconditionFailed when check is false", async () => {
-  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
-  const actor = actorWithPage(fakePage(locator));
-  const rec: RecordedStep = {
-    step: {
-      kind: "assert",
-      check: { kind: "visible", target: { testId: "banner" } },
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
+test("runStep: assert rejects with PostconditionFailed when check is false (after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+    const actor = actorWithPage(fakePage(locator));
+    const rec: RecordedStep = {
+      step: {
+        kind: "assert",
+        check: { kind: "visible", target: { testId: "banner" } },
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // === runStep: handback (awaiting_human) ===
@@ -384,24 +443,32 @@ test("runStep: extract rejects with a clear error when getAttribute resolves nul
   expect(vars.has("href")).toBe(false);
 });
 
-test("runStep: extract whose expect is false rejects with PostconditionFailed", async () => {
-  const locator = fakeLocator({
-    innerText: vi.fn(async () => "hello"),
-    isVisible: vi.fn(async () => false),
-  });
-  const actor = actorWithPage(fakePage(locator));
-  const rec: RecordedStep = {
-    step: {
-      kind: "extract",
-      target: { testId: "greeting-el" },
-      as: "greeting",
-      expect: { kind: "visible", target: { testId: "greeting-el" } },
-    },
-  };
-  const vars = new Map<string, string>();
-  await expect(runStep(actor as any, rec, vars)).rejects.toBeInstanceOf(PostconditionFailed);
-  // The value is still stored before the postcondition check runs.
-  expect(vars.get("greeting")).toBe("hello");
+test("runStep: extract whose expect is false rejects with PostconditionFailed (after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({
+      innerText: vi.fn(async () => "hello"),
+      isVisible: vi.fn(async () => false),
+    });
+    const actor = actorWithPage(fakePage(locator));
+    const rec: RecordedStep = {
+      step: {
+        kind: "extract",
+        target: { testId: "greeting-el" },
+        as: "greeting",
+        expect: { kind: "visible", target: { testId: "greeting-el" } },
+      },
+    };
+    const vars = new Map<string, string>();
+    const result = runStep(actor as any, rec, vars);
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+    // The value is still stored before the postcondition check runs.
+    expect(vars.get("greeting")).toBe("hello");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // === runStep: select (top-level) ===
@@ -437,19 +504,27 @@ test("runStep: select with {var:'country'} selects the resolved var value", asyn
   expect(locator.selectOption).toHaveBeenCalledWith("CA");
 });
 
-test("runStep: select whose expect is false rejects with PostconditionFailed", async () => {
-  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
-  const actor = actorWithPage(fakePage(locator));
-  const rec: RecordedStep = {
-    step: {
-      kind: "select",
-      target: { testId: "country" },
-      value: { redacted: false, value: "US" },
-      expect: { kind: "visible", target: { testId: "country" } },
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
-  expect(locator.selectOption).toHaveBeenCalledTimes(1);
+test("runStep: select whose expect is false rejects with PostconditionFailed (after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+    const actor = actorWithPage(fakePage(locator));
+    const rec: RecordedStep = {
+      step: {
+        kind: "select",
+        target: { testId: "country" },
+        value: { redacted: false, value: "US" },
+        expect: { kind: "visible", target: { testId: "country" } },
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+    expect(locator.selectOption).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("runStep: select with a redacted constant value rejects with a clear, non-PostconditionFailed error", async () => {
@@ -487,19 +562,27 @@ test("runStep: press whose expect holds calls page.keyboard.press with the given
   expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
 });
 
-test("runStep: press whose expect is false rejects with PostconditionFailed", async () => {
-  const locator = fakeLocator();
-  const page = fakePage(locator, "https://example.test/inbox");
-  const actor = actorWithPage(page);
-  const rec: RecordedStep = {
-    step: {
-      kind: "press",
-      key: "Enter",
-      expect: { kind: "urlIncludes", text: "/results" },
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
-  expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
+test("runStep: press whose expect is false rejects with PostconditionFailed (after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const locator = fakeLocator();
+    const page = fakePage(locator, "https://example.test/inbox");
+    const actor = actorWithPage(page);
+    const rec: RecordedStep = {
+      step: {
+        kind: "press",
+        key: "Enter",
+        expect: { kind: "urlIncludes", text: "/results" },
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+    expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("runStep: press touches no target/locator at all", async () => {

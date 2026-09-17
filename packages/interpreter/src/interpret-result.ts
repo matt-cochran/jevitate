@@ -12,11 +12,14 @@ import type { Assertion } from "@doit/recording";
  * - `"awaiting_human"` mirrors a `handback` step's `StepOutcome`, but `at` is
  *   the step's GLOBAL flat index across the whole recording (see
  *   `RecordingInterpreter`'s doc comment), not a per-page index.
- * - `"failed"` means `runStep` threw `PostconditionFailed` at global index
- *   `at`; `error` is that error's message. Any OTHER thrown error is not
- *   converted to this shape — it propagates out of `run`/`runToCheckpoint`
- *   as a rejected promise instead, since it signals a bug or misconfiguration
- *   rather than an expected postcondition failure.
+ * - `"failed"` means `runStep` threw at global index `at`; `error` is that
+ *   error's message. This applies to ANY thrown error, not only a
+ *   `PostconditionFailed` — `RecordingInterpreter`'s `runFlat` catches every
+ *   error kind so a failure is always pinned to the step that caused it.
+ *   Pre-flight errors (schema validation, `forEach` child-kind checks, an
+ *   invalid `runToCheckpoint` argument) happen before any step runs and
+ *   still propagate as rejected promises instead, since there is no step
+ *   index to report.
  */
 export type InterpretResult =
   | { outcome: "completed"; vars: Record<string, string> }
