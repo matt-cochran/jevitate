@@ -123,48 +123,65 @@ test(
 );
 
 test(
-  "never lets password or one-time-code values leave the browser",
+  "never lets password, one-time-code or otp values leave the browser",
   async () => {
-    const secret = "hunter2-never-leaves";
-    const otp = "424242";
+    const passwordSecret = "hunter2-never-leaves";
+    const oneTimeCodeSecret = "424242";
+    const otpSecret = "313131-otp-never-leaves";
+    // The autocomplete values are deliberately upper-case: the match must be
+    // case-insensitive, and "one-time-code" does not contain "otp", so each
+    // spelling needs its own clause in the in-page predicate.
     const html = `
       <form onsubmit="event.preventDefault()">
         <input id="pw" type="password" />
-        <input id="otp" type="text" autocomplete="ONE-TIME-CODE" />
+        <input id="one-time" type="text" autocomplete="ONE-TIME-CODE" />
+        <input id="otp" type="text" autocomplete="OTP" />
         <input id="plain" type="text" />
       </form>`;
 
     await withRecorder(html, async ({ recorder, page }) => {
-      await page.locator("#pw").fill(secret);
-      await page.locator("#otp").fill(otp);
+      await page.locator("#pw").fill(passwordSecret);
+      await page.locator("#one-time").fill(oneTimeCodeSecret);
+      await page.locator("#otp").fill(otpSecret);
       await page.locator("#plain").fill("visible-ok");
 
       await waitUntil(
-        "three filled fields",
-        () => new Set(actions(recorder).map((a) => a.payload.eid)).size === 3,
+        "all four fields filled",
+        () => new Set(actions(recorder).map((a) => a.payload.eid)).size === 4,
       );
 
       const captured = actions(recorder);
-      const forTag = (typeAttr: string): ActionCaptureEvent[] =>
-        captured.filter((a) => a.payload.typeAttr === typeAttr);
+      // Identify each field by the eid the injected script actually tagged it
+      // with, read back from the live DOM.
+      const eidFor = async (selector: string): Promise<string> => {
+        const eid = await page.locator(selector).getAttribute("data-doit-eid");
+        expect(eid, `${selector} was never tagged`).not.toBeNull();
+        return eid!;
+      };
+      const eventsFor = (eid: string): ActionCaptureEvent[] =>
+        captured.filter((a) => a.payload.eid === eid);
 
-      const passwordEvents = forTag("password");
-      expect(passwordEvents.length).toBeGreaterThan(0);
-      for (const event of passwordEvents) expect("rawText" in event.payload).toBe(false);
+      // Every secret-marked field: the rawText key is literally absent.
+      for (const selector of ["#pw", "#one-time", "#otp"]) {
+        const events = eventsFor(await eidFor(selector));
+        expect(events.length, `no events captured for ${selector}`).toBeGreaterThan(0);
+        for (const event of events) {
+          expect("rawText" in event.payload, `${selector} leaked a rawText key`).toBe(false);
+        }
+      }
 
-      // The otp field is type=text, so it is identified by its eid, not its type.
-      const plainEid = captured.find((a) => a.payload.rawText === "visible-ok")?.payload.eid;
-      expect(plainEid).toBeDefined();
-      const otpEvents = captured.filter(
-        (a) => a.payload.typeAttr === "text" && a.payload.eid !== plainEid,
-      );
-      expect(otpEvents.length).toBeGreaterThan(0);
-      for (const event of otpEvents) expect("rawText" in event.payload).toBe(false);
+      // The unmarked field still carries its value, so the test is not vacuous.
+      const plainEvents = eventsFor(await eidFor("#plain"));
+      expect(plainEvents.some((e) => e.payload.rawText === "visible-ok")).toBe(true);
+
+      // Suppressing the value does not suppress the action or its metadata.
+      expect(eventsFor(await eidFor("#pw")).every((e) => e.payload.typeAttr === "password")).toBe(true);
 
       // The load-bearing guarantee: the raw secrets are nowhere in Node.
       const everything = JSON.stringify(recorder.events);
-      expect(everything).not.toContain(secret);
-      expect(everything).not.toContain(otp);
+      expect(everything).not.toContain(passwordSecret);
+      expect(everything).not.toContain(oneTimeCodeSecret);
+      expect(everything).not.toContain(otpSecret);
     });
   },
   120_000,

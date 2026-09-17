@@ -68,8 +68,13 @@ export function installRecorderListener(): void {
       if (tag === "input") payload.typeAttr = inputType;
 
       // Secret fields: their value is never read, so it cannot leave the page.
+      // Both autocomplete spellings need their own clause: "one-time-code"
+      // does not contain "otp" as a substring.
       const autocomplete = (el.getAttribute("autocomplete") || "").toLowerCase();
-      const secret = inputType === "password" || autocomplete.indexOf("one-time-code") !== -1;
+      const secret =
+        inputType === "password" ||
+        autocomplete.indexOf("one-time-code") !== -1 ||
+        autocomplete.indexOf("otp") !== -1;
 
       if (event.type === "click" || event.type === "submit") {
         payload.rawText = (el.textContent || "").trim();
