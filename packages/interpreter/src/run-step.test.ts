@@ -122,7 +122,7 @@ test("runStep: click whose expect:visible holds resolves and clicks the target",
       expect: { kind: "visible", target: { testId: "confirmation" } },
     },
   };
-  await expect(runStep(actor as any, rec, new Map())).resolves.toBeUndefined();
+  await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({ kind: "done" });
   expect(locator.click).toHaveBeenCalledTimes(1);
 });
 
@@ -152,7 +152,7 @@ test("runStep: fill with {var:'body'} types the resolved var value", async () =>
     },
   };
   const vars = new Map([["body", "hello"]]);
-  await runStep(actor as any, rec, vars);
+  await expect(runStep(actor as any, rec, vars)).resolves.toEqual({ kind: "done" });
   expect(locator.fill).toHaveBeenCalledWith("hello");
 });
 
@@ -258,7 +258,7 @@ test("runStep: assert checks step.check and resolves when true", async () => {
       check: { kind: "visible", target: { testId: "banner" } },
     },
   };
-  await expect(runStep(actor as any, rec, new Map())).resolves.toBeUndefined();
+  await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({ kind: "done" });
 });
 
 test("runStep: assert rejects with PostconditionFailed when check is false", async () => {
@@ -273,13 +273,47 @@ test("runStep: assert rejects with PostconditionFailed when check is false", asy
   await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
 });
 
-test("runStep: out-of-scope kinds (handback) throw a not-yet-supported error", async () => {
+// === runStep: handback (awaiting_human) ===
+
+test("runStep: handback returns awaiting_human with its prompt/resume and attempts no action", async () => {
+  const locator = fakeLocator();
+  const page = fakePage(locator);
+  const actor = actorWithPage(page);
+  const resume: Assertion = { kind: "visible", target: { testId: "done-banner" } };
+  const rec: RecordedStep = {
+    step: { kind: "handback", prompt: "some prompt", resume },
+  };
+  await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({
+    kind: "awaiting_human",
+    prompt: "some prompt",
+    resume,
+    index: 0,
+  });
+
+  // No action whatsoever is attempted past a handback: neither the page nor
+  // the locator it would resolve to is touched.
+  expect(page.goto).not.toHaveBeenCalled();
+  expect(page.getByTestId).not.toHaveBeenCalled();
+  expect(page.getByRole).not.toHaveBeenCalled();
+  expect(page.getByLabel).not.toHaveBeenCalled();
+  expect(page.getByText).not.toHaveBeenCalled();
+  expect(page.locator).not.toHaveBeenCalled();
+  expect(locator.click).not.toHaveBeenCalled();
+  expect(locator.fill).not.toHaveBeenCalled();
+  expect(locator.innerText).not.toHaveBeenCalled();
+  expect(locator.isVisible).not.toHaveBeenCalled();
+  expect(locator.waitFor).not.toHaveBeenCalled();
+});
+
+test("runStep: handback echoes the explicit 4th index argument into the outcome", async () => {
   const locator = fakeLocator();
   const actor = actorWithPage(fakePage(locator));
-  const recHandback: RecordedStep = {
-    step: { kind: "handback", prompt: "help", resume: { kind: "urlIncludes", text: "/done" } },
+  const resume: Assertion = { kind: "urlIncludes", text: "/done" };
+  const rec: RecordedStep = {
+    step: { kind: "handback", prompt: "help", resume },
   };
-  await expect(runStep(actor as any, recHandback, new Map())).rejects.toThrow(/not yet supported/i);
+  const outcome = await runStep(actor as any, rec, new Map(), 5);
+  expect(outcome).toEqual({ kind: "awaiting_human", prompt: "help", resume, index: 5 });
 });
 
 // === runStep: extract (top-level) ===
@@ -299,7 +333,7 @@ test("runStep: extract stores innerText into vars and checks expect", async () =
     },
   };
   const vars = new Map<string, string>();
-  await expect(runStep(actor as any, rec, vars)).resolves.toBeUndefined();
+  await expect(runStep(actor as any, rec, vars)).resolves.toEqual({ kind: "done" });
   expect(vars.get("greeting")).toBe("hello");
 });
 
@@ -437,7 +471,7 @@ test("runStep: forEach runs a child extract per row, scoped to each row's own lo
     },
   };
   const vars = new Map<string, string>();
-  await expect(runStep(actor as any, rec, vars)).resolves.toBeUndefined();
+  await expect(runStep(actor as any, rec, vars)).resolves.toEqual({ kind: "done" });
 
   expect(itemsLocator.count).toHaveBeenCalledTimes(1);
   expect(itemsLocator.nth).toHaveBeenNthCalledWith(1, 0);
@@ -478,7 +512,7 @@ test("runStep: forEach runs a child click per row, scoped to each row's own loca
       ],
     },
   };
-  await expect(runStep(actor as any, rec, new Map())).resolves.toBeUndefined();
+  await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({ kind: "done" });
 
   expect(leaf0.click).toHaveBeenCalledTimes(1);
   expect(leaf1.click).toHaveBeenCalledTimes(1);

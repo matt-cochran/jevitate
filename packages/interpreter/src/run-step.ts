@@ -4,6 +4,7 @@ import type { Actor } from "@doit/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate } from "@doit/screenplay";
 import { checkAssertion, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
+import type { StepOutcome } from "./outcome.js";
 
 /**
  * Resolves a `ValueOrVar` to a plain string ready for typing.
@@ -39,15 +40,26 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
  * an action whose expected outcome didn't materialize must never be
  * swallowed.
  *
- * Handles `navigate | click | fill | waitFor | assert`. The remaining `Step`
- * kinds (`extract`, `forEach`, `handback`) are out of scope for this task
- * and throw rather than silently no-op.
+ * Handles all 8 `Step` kinds: `navigate | click | fill | waitFor | assert |
+ * extract | forEach` resolve to `{kind:"done"}` on success (or throw);
+ * `handback` performs no action and resolves to `{kind:"awaiting_human"}`
+ * without checking its `resume` assertion — see that case below.
+ *
+ * The optional `index` (default `0`) is not consumed by any postcondition
+ * or assertion logic here — it exists solely to be echoed into a
+ * `handback` step's `StepOutcome.awaiting_human.index`. `runStep` is only
+ * ever given one `RecordedStep` at a time and has no visibility into that
+ * step's position within a whole `Recording`; the future
+ * `RecordingInterpreter` (which sequences a full recording) will call
+ * `runStep(actor, rec, vars, globalIndex)` per step, passing the
+ * recording-global flat step index.
  */
 export async function runStep(
   actor: Actor,
   rec: RecordedStep,
   vars: Map<string, string>,
-): Promise<void> {
+  index = 0,
+): Promise<StepOutcome> {
   const step = rec.step;
   switch (step.kind) {
     case "navigate": {
@@ -55,14 +67,14 @@ export async function runStep(
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, `navigate to ${step.url}`);
       }
-      return;
+      return { kind: "done" };
     }
     case "click": {
       await Click.on(descriptorToTarget(step.target)).performAs(actor);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "click");
       }
-      return;
+      return { kind: "done" };
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
@@ -70,18 +82,18 @@ export async function runStep(
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "fill");
       }
-      return;
+      return { kind: "done" };
     }
     case "waitFor": {
       const page = actor.ability(BrowseTheWebToken).session.page;
       await descriptorToTarget(step.target).resolve(page).waitFor({ state: step.state });
-      return;
+      return { kind: "done" };
     }
     case "assert": {
       if (!(await checkAssertion(actor, step.check))) {
         throw new PostconditionFailed(step.check, "assert");
       }
-      return;
+      return { kind: "done" };
     }
     case "extract": {
       const page = actor.ability(BrowseTheWebToken).session.page;
@@ -94,7 +106,7 @@ export async function runStep(
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "extract");
       }
-      return;
+      return { kind: "done" };
     }
     case "forEach": {
       const page = actor.ability(BrowseTheWebToken).session.page;
@@ -107,10 +119,21 @@ export async function runStep(
           await runRowScopedChildStep(actor, childStep, rowLocator, vars);
         }
       }
-      return;
+      return { kind: "done" };
     }
-    default:
-      throw new Error(`not yet supported: ${step.kind}`);
+    case "handback": {
+      // Deliberately performs NO action whatsoever — no `actor`/`page`/
+      // locator is touched — and does NOT evaluate `step.resume` here. The
+      // whole point of `awaiting_human` is that replay pauses and a human
+      // acts; a future HITL runner drives the human and re-checks `resume`
+      // itself before resuming. Auto-satisfying `resume` here would defeat
+      // that.
+      return { kind: "awaiting_human", prompt: step.prompt, resume: step.resume, index };
+    }
+    default: {
+      const _exhaustive: never = step;
+      throw new Error(`not yet supported: ${(_exhaustive as Step).kind}`);
+    }
   }
 }
 
