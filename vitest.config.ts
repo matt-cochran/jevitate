@@ -9,8 +9,8 @@ export default defineConfig({
     alias: {
       "@doit/domain": pkg("domain"),
       "@doit/application": pkg("application"),
+      "@doit/storage-sqlite": pkg("storage-sqlite"),
       // Add one line per new package here, e.g.:
-      // "@doit/storage-sqlite": pkg("storage-sqlite"),
     },
   },
   test: { include: ["packages/**/*.test.ts", "site-integrations/**/*.test.ts"] },

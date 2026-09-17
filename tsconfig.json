@@ -1,4 +1,8 @@
 {
   "files": [],
-  "references": [{ "path": "packages/domain" }, { "path": "packages/application" }]
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/application" },
+    { "path": "packages/storage-sqlite" }
+  ]
 }

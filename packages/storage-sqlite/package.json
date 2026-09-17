@@ -1,0 +1,16 @@
+{
+  "name": "@doit/storage-sqlite",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": {
+    "@doit/application": "workspace:*",
+    "@doit/domain": "workspace:*",
+    "better-sqlite3": "^11.0.0",
+    "kysely": "^0.27.0"
+  },
+  "devDependencies": { "@types/better-sqlite3": "^7.6.0" },
+  "scripts": { "build": "tsc --build" }
+}
