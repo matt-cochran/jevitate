@@ -1,0 +1,10 @@
+{
+  "name": "@doit/screenplay",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": { "@doit/playwright": "workspace:*" },
+  "scripts": { "build": "tsc --build" }
+}

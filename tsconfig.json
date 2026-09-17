@@ -7,6 +7,7 @@
     { "path": "packages/daemon" },
     { "path": "packages/mcp-facade" },
     { "path": "packages/cli" },
-    { "path": "packages/playwright" }
+    { "path": "packages/playwright" },
+    { "path": "packages/screenplay" }
   ]
 }

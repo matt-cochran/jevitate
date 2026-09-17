@@ -14,6 +14,7 @@ export default defineConfig({
       "@doit/mcp-facade": pkg("mcp-facade"),
       "@doit/cli": pkg("cli"),
       "@doit/playwright": pkg("playwright"),
+      "@doit/screenplay": pkg("screenplay"),
       // Add one line per new package here, e.g.:
     },
   },
