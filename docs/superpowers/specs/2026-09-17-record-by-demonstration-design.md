@@ -71,6 +71,17 @@ interface RedactedValue { redacted: true; length: number; sample?: string /* onl
 - **Start-from-state**: the recorder can attach to an already-open session (e.g. one the interpreter paused at a checkpoint) and capture a **delimited supplemental segment** for splicing (§7).
 - **Never captures**: password inputs / fields marked sensitive / the login sequence.
 
+## 5b. Always-on recording & retention (all interactions)
+
+Recording is **always on for every interaction — human *and* LLM/automation** — using the one unified `Recording` format, so the two are directly comparable.
+
+- **Diagnostic value (apples-to-apples):** a failing automated run is **diffed against a reference** (the human demonstration, or the last-good run) to localize exactly where it diverged — self-healing becomes a *comparison*, not a *re-discovery* (feeds §7 self-healing / the companion ops design). No need to reproduce the failure; both traces already exist.
+- **Retention (short-lived by default):**
+  - Automated run **succeeds → delete** the full step/DOM capture; keep only the receipt + `timingSummary`.
+  - Automated run **fails/diverges → retain** the redacted recording, attached to the failure fingerprint, for replay/diff until the issue is resolved (or a retention cap).
+  - **Human demonstrations → retain while needed** for authoring/variation, then GC (bounded TTL or explicit "done").
+- **Guardrail (unchanged):** always-on never loosens redaction — recordings are redacted, **secrets / `human-only` steps never captured**, access-controlled, size-capped, background-GC'd (CONOPS §9 retention, §6.5 redacted evidence). Our semantic recording is the diffable/replayable artifact; Playwright's binary trace remains optional deep-debug evidence on failures.
+
 ## 6. Multiple recordings & variable inference
 
 - The user records the **same journey 1–3 times**. For a constant single-shot task, one recording suffices. For variable tasks, 2–3 takes with *different* values.
