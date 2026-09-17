@@ -12,3 +12,4 @@ export * from "./interaction-policy.js";
 export * from "./rng.js";
 export * from "./throttle-resolver.js";
 export * from "./quiet-hours.js";
+export * from "./pacer.js";
