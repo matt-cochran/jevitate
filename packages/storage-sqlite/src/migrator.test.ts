@@ -28,3 +28,15 @@ test("incoming_message dedups on (site, account_id, source_message_id)", async (
   ).rejects.toThrow();
   await db.destroy();
 });
+
+test("budget_counter dedups on (site, account_id, throttle_class, window_kind, window_start)", async () => {
+  const db = openDatabase(":memory:");
+  await migrateToLatest(db);
+  const row = { site: "s", account_id: "a", throttle_class: "default", window_kind: "day",
+    window_start: "2026-09-17", used: 1 };
+  await db.insertInto("budget_counter").values(row).execute();
+  await expect(
+    db.insertInto("budget_counter").values({ ...row, used: 2 }).execute(),
+  ).rejects.toThrow();
+  await db.destroy();
+});

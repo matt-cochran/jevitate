@@ -39,8 +39,35 @@ export interface IncomingMessageTable {
   processing_status: string;
 }
 
+export interface SiteSettingTable {
+  site: string;
+  account_id: string;
+  key: string;
+  value_json: string;       // JSON
+  updated_at: string;
+}
+
+export interface BudgetCounterTable {
+  site: string;
+  account_id: string;
+  throttle_class: string;
+  window_kind: string;
+  window_start: string;
+  used: number;
+}
+
+export interface ActionActivityTable {
+  site: string;
+  account_id: string;
+  throttle_class: string;
+  last_at: string;
+}
+
 export interface Database {
   command: CommandTable;
   event: EventTable;
   incoming_message: IncomingMessageTable;
+  site_setting: SiteSettingTable;
+  budget_counter: BudgetCounterTable;
+  action_activity: ActionActivityTable;
 }
