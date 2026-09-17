@@ -51,10 +51,16 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
  * an action whose expected outcome didn't materialize must never be
  * swallowed.
  *
- * Handles all 8 `Step` kinds: `navigate | click | fill | waitFor | assert |
- * extract | forEach` resolve to `{kind:"done"}` on success (or throw);
- * `handback` performs no action and resolves to `{kind:"awaiting_human"}`
- * without checking its `resume` assertion — see that case below.
+ * Handles all 10 `Step` kinds: `navigate | click | fill | waitFor | assert |
+ * extract | select | press | forEach` resolve to `{kind:"done"}` on success
+ * (or throw); `handback` performs no action and resolves to
+ * `{kind:"awaiting_human"}` without checking its `resume` assertion — see
+ * that case below.
+ *
+ * `select` and `press` deliberately follow the same direct-resolve pattern
+ * as `waitFor` (resolve the target/page and call the Playwright method
+ * directly) rather than going through a Screenplay `Activity` wrapper like
+ * `click`/`fill` do — a ruling made for this task, not an oversight.
  *
  * The optional `index` (default `0`) is not consumed by any postcondition
  * or assertion logic here — it exists solely to be echoed into a
@@ -116,6 +122,23 @@ export async function runStep(
       vars.set(step.as, value);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "extract");
+      }
+      return { kind: "done" };
+    }
+    case "select": {
+      const value = resolveValue(step.value, vars);
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      await descriptorToTarget(step.target).resolve(page).selectOption(value);
+      if (!(await checkAssertion(actor, step.expect))) {
+        throw new PostconditionFailed(step.expect, "select");
+      }
+      return { kind: "done" };
+    }
+    case "press": {
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      await page.keyboard.press(step.key);
+      if (!(await checkAssertion(actor, step.expect))) {
+        throw new PostconditionFailed(step.expect, "press");
       }
       return { kind: "done" };
     }

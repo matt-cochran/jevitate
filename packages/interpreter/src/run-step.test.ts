@@ -13,6 +13,7 @@ function fakeLocator(overrides: Partial<Record<string, any>> = {}) {
     isVisible: vi.fn(async () => true),
     count: vi.fn(async () => 0),
     waitFor: vi.fn(async () => {}),
+    selectOption: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -26,6 +27,7 @@ function fakePage(locator: ReturnType<typeof fakeLocator>, url = "https://exampl
     getByLabel: vi.fn(() => locator),
     getByText: vi.fn(() => locator),
     locator: vi.fn(() => locator),
+    keyboard: { press: vi.fn(async () => {}) },
   };
 }
 
@@ -400,6 +402,123 @@ test("runStep: extract whose expect is false rejects with PostconditionFailed", 
   await expect(runStep(actor as any, rec, vars)).rejects.toBeInstanceOf(PostconditionFailed);
   // The value is still stored before the postcondition check runs.
   expect(vars.get("greeting")).toBe("hello");
+});
+
+// === runStep: select (top-level) ===
+
+test("runStep: select whose expect:visible holds resolves and selects the option", async () => {
+  const locator = fakeLocator({ isVisible: vi.fn(async () => true) });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "select",
+      target: { testId: "country" },
+      value: { redacted: false, value: "US" },
+      expect: { kind: "visible", target: { testId: "country" } },
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({ kind: "done" });
+  expect(locator.selectOption).toHaveBeenCalledWith("US");
+});
+
+test("runStep: select with {var:'country'} selects the resolved var value", async () => {
+  const locator = fakeLocator({ isVisible: vi.fn(async () => true) });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "select",
+      target: { testId: "country" },
+      value: { var: "country" },
+      expect: { kind: "visible", target: { testId: "country" } },
+    },
+  };
+  const vars = new Map([["country", "CA"]]);
+  await expect(runStep(actor as any, rec, vars)).resolves.toEqual({ kind: "done" });
+  expect(locator.selectOption).toHaveBeenCalledWith("CA");
+});
+
+test("runStep: select whose expect is false rejects with PostconditionFailed", async () => {
+  const locator = fakeLocator({ isVisible: vi.fn(async () => false) });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "select",
+      target: { testId: "country" },
+      value: { redacted: false, value: "US" },
+      expect: { kind: "visible", target: { testId: "country" } },
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
+  expect(locator.selectOption).toHaveBeenCalledTimes(1);
+});
+
+test("runStep: select with a redacted constant value rejects with a clear, non-PostconditionFailed error", async () => {
+  const locator = fakeLocator();
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "select",
+      target: { testId: "country" },
+      value: { redacted: true, length: 2 },
+      expect: { kind: "visible", target: { testId: "country" } },
+    },
+  };
+  const err = await runStep(actor as any, rec, new Map()).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err).not.toBeInstanceOf(PostconditionFailed);
+  expect(err.message).toMatch(/redacted/i);
+  expect(locator.selectOption).not.toHaveBeenCalled();
+});
+
+// === runStep: press (top-level, no target) ===
+
+test("runStep: press whose expect holds calls page.keyboard.press with the given key", async () => {
+  const locator = fakeLocator();
+  const page = fakePage(locator, "https://example.test/results");
+  const actor = actorWithPage(page);
+  const rec: RecordedStep = {
+    step: {
+      kind: "press",
+      key: "Enter",
+      expect: { kind: "urlIncludes", text: "/results" },
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).resolves.toEqual({ kind: "done" });
+  expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
+});
+
+test("runStep: press whose expect is false rejects with PostconditionFailed", async () => {
+  const locator = fakeLocator();
+  const page = fakePage(locator, "https://example.test/inbox");
+  const actor = actorWithPage(page);
+  const rec: RecordedStep = {
+    step: {
+      kind: "press",
+      key: "Enter",
+      expect: { kind: "urlIncludes", text: "/results" },
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
+  expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
+});
+
+test("runStep: press touches no target/locator at all", async () => {
+  const locator = fakeLocator();
+  const page = fakePage(locator, "https://example.test/results");
+  const actor = actorWithPage(page);
+  const rec: RecordedStep = {
+    step: {
+      kind: "press",
+      key: "Enter",
+      expect: { kind: "urlIncludes", text: "/results" },
+    },
+  };
+  await runStep(actor as any, rec, new Map());
+  expect(page.getByTestId).not.toHaveBeenCalled();
+  expect(page.getByRole).not.toHaveBeenCalled();
+  expect(page.getByLabel).not.toHaveBeenCalled();
+  expect(page.getByText).not.toHaveBeenCalled();
+  expect(page.locator).not.toHaveBeenCalled();
 });
 
 // === runStep: forEach (row-scoped) ===

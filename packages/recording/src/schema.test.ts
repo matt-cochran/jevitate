@@ -225,6 +225,195 @@ describe("RecordingSchema", () => {
     expect(() => RecordingSchema.parse(invalid)).toThrow();
   });
 
+  // === Task 1: select + press primitives ===
+
+  it("parses a valid select step with expect", () => {
+    const validRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "select",
+                target: { testId: "country" },
+                value: { redacted: false, value: "US" },
+                expect: { kind: "visible", target: { testId: "country" } },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(validRecording)).not.toThrow();
+  });
+
+  it("parses a select step with a var value", () => {
+    const validRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "select",
+                target: { testId: "country" },
+                value: { var: "country" },
+                expect: { kind: "visible", target: { testId: "country" } },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(validRecording)).not.toThrow();
+  });
+
+  it("rejects a select step without expect (Poka-Yoke)", () => {
+    const invalidRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "select",
+                target: { testId: "country" },
+                value: { redacted: false, value: "US" },
+                // Missing expect field
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(invalidRecording)).toThrow();
+  });
+
+  it("rejects a select step without a value", () => {
+    const invalidRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "select",
+                target: { testId: "country" },
+                expect: { kind: "visible", target: { testId: "country" } },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(invalidRecording)).toThrow();
+  });
+
+  it("parses a valid press step with expect", () => {
+    const validRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "press",
+                key: "Enter",
+                expect: { kind: "urlIncludes", text: "/results" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(validRecording)).not.toThrow();
+  });
+
+  it("rejects a press step without expect (Poka-Yoke)", () => {
+    const invalidRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "press",
+                key: "Enter",
+                // Missing expect field
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(invalidRecording)).toThrow();
+  });
+
+  it("rejects a press step without a key", () => {
+    const invalidRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "press",
+                expect: { kind: "urlIncludes", text: "/results" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(invalidRecording)).toThrow();
+  });
+
+  it("rejects a press step with a target field (press has no target)", () => {
+    const invalidRecording = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "press",
+                key: "Enter",
+                target: { testId: "search-box" },
+                expect: { kind: "urlIncludes", text: "/results" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => RecordingSchema.parse(invalidRecording)).toThrow();
+  });
+
   it("rejects a StepTiming with an unexpected extra field", () => {
     const invalid = {
       version: "1.0",

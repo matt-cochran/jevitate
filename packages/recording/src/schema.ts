@@ -30,6 +30,8 @@ export type Step =
   | { kind: "fill"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion }
   | { kind: "waitFor"; label?: string; target: TargetDescriptor; state: "visible" | "hidden" | "attached" }
   | { kind: "extract"; label?: string; target: TargetDescriptor; as: string; attr?: string; expect: Assertion }
+  | { kind: "select"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion }
+  | { kind: "press"; label?: string; key: string; expect: Assertion }
   | { kind: "forEach"; label?: string; items: TargetDescriptor; as: string; steps: Step[] }
   | { kind: "assert"; label?: string; check: Assertion }
   | { kind: "handback"; label?: string; prompt: string; resume: Assertion; timeoutMs?: number };
@@ -198,6 +200,23 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       target: TargetDescriptorSchema,
       as: z.string(),
       attr: z.string().optional(),
+      expect: AssertionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("select"),
+      label: z.string().optional(),
+      target: TargetDescriptorSchema,
+      value: ValueOrVarSchema,
+      expect: AssertionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("press"),
+      label: z.string().optional(),
+      key: z.string(),
       expect: AssertionSchema,
     })
     .strict(),
