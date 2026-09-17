@@ -6,5 +6,10 @@
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": { "@doit/playwright": "workspace:*", "@doit/recording": "workspace:*", "playwright": "^1.49.0" },
+  "devDependencies": {
+    "@doit/example-site": "workspace:*",
+    "@doit/interpreter": "workspace:*",
+    "@doit/screenplay": "workspace:*"
+  },
   "scripts": { "build": "tsc --build" }
 }
