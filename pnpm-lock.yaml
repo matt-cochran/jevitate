@@ -50,6 +50,12 @@ importers:
       '@doit/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@doit/storage-sqlite':
+        specifier: workspace:*
+        version: link:../storage-sqlite
       commander:
         specifier: ^12.0.0
         version: 12.1.0

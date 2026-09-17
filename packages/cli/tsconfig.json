@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "references": [{ "path": "../daemon" }],
+  "references": [{ "path": "../daemon" }, { "path": "../domain" }, { "path": "../storage-sqlite" }],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
 }

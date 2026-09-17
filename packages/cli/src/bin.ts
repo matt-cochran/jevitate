@@ -5,7 +5,8 @@ import { ProfileManager } from "@doit/daemon";
 import { buildProgram } from "./program.js";
 
 const profiles = new ProfileManager(join(homedir(), ".doit", "profiles"));
-const program = buildProgram({ profiles });
+const dbPath = join(homedir(), ".doit", "db.sqlite");
+const program = buildProgram({ profiles, dbPath });
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(`${String(err)}\n`);
   process.exitCode = 1;
