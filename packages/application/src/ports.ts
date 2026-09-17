@@ -1,4 +1,4 @@
-import type { CommandState, RiskClass, DomainEvent, DomainEventInput, NormalizedMessage } from "@doit/domain";
+import type { CommandState, RiskClass, DomainEvent, DomainEventInput, NormalizedMessage, SitePolicy } from "@doit/domain";
 
 export interface Clock {
   nowIso(): string;
@@ -47,4 +47,9 @@ export interface IncomingMessageRecord extends NormalizedMessage {
 export interface IncomingMessageRepository {
   upsert(site: string, account: string, msg: NormalizedMessage): Promise<{ inserted: boolean; id: string }>;
   listBySite(site: string, account: string): Promise<IncomingMessageRecord[]>;
+}
+
+export interface SitePolicyRepository {
+  get(site: string, account: string): Promise<SitePolicy | null>;
+  set(site: string, account: string, policy: SitePolicy): Promise<void>;
 }

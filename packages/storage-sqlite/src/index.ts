@@ -4,3 +4,4 @@ export * from "./migrator.js";
 export * from "./command-repository.js";
 export * from "./event-log.js";
 export * from "./incoming-message-repository.js";
+export * from "./site-policy-repository.js";
