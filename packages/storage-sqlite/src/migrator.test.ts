@@ -1,5 +1,4 @@
 import { expect, test } from "vitest";
-import { sql } from "kysely";
 import { openDatabase } from "./db.js";
 import { migrateToLatest } from "./migrator.js";
 

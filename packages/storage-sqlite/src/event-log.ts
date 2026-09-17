@@ -10,7 +10,7 @@ export class SqliteEventLog implements EventLog {
     const result = await this.db.insertInto("event").values({
       aggregate: e.aggregate, type: e.type, payload: JSON.stringify(e.payload ?? null),
       occurred_at: e.occurredAt, correlation_id: e.correlationId,
-    } as any).returning("sequence").executeTakeFirstOrThrow();
+    }).returning("sequence").executeTakeFirstOrThrow();
     return Number(result.sequence);
   }
 

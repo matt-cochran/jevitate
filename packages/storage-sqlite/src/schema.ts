@@ -1,3 +1,5 @@
+import type { Generated } from "kysely";
+
 export interface CommandTable {
   id: string;
   site: string;
@@ -16,7 +18,7 @@ export interface CommandTable {
 }
 
 export interface EventTable {
-  sequence: number;         // autoincrement
+  sequence: Generated<number>; // autoincrement
   aggregate: string;
   type: string;
   payload: string;          // JSON

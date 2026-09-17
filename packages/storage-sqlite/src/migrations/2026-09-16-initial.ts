@@ -2,7 +2,7 @@ import { Kysely, sql } from "kysely";
 
 export async function up(db: Kysely<unknown>): Promise<void> {
   await sql`
-    CREATE TABLE command (
+    CREATE TABLE IF NOT EXISTS command (
       id TEXT PRIMARY KEY,
       site TEXT NOT NULL,
       account_id TEXT NOT NULL,
@@ -20,7 +20,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       UNIQUE (site, account_id, idempotency_key)
     )`.execute(db);
   await sql`
-    CREATE TABLE event (
+    CREATE TABLE IF NOT EXISTS event (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
       aggregate TEXT NOT NULL,
       type TEXT NOT NULL,
@@ -28,5 +28,5 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       occurred_at TEXT NOT NULL,
       correlation_id TEXT NOT NULL
     )`.execute(db);
-  await sql`CREATE INDEX idx_command_state ON command (state, not_before)`.execute(db);
+  await sql`CREATE INDEX IF NOT EXISTS idx_command_state ON command (state, not_before)`.execute(db);
 }
