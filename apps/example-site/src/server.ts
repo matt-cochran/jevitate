@@ -20,7 +20,10 @@ export function buildServer(): FastifyInstance {
 
   app.post<{ Body: { username?: string } }>("/login", async (req, reply) => {
     if (!req.body?.username) { reply.code(400).send("username required"); return; }
-    reply.setCookie("sid", "ok", { path: "/" }).redirect("/inbox");
+    // maxAge is required: without it this is a session cookie, and Chromium drops session
+    // cookies when a persistent context is closed, so login would not survive across the
+    // separate ActionRunner.run() calls that reuse the same profileDir.
+    reply.setCookie("sid", "ok", { path: "/", maxAge: 60 * 60 * 24 }).redirect("/inbox");
   });
 
   app.get("/whoami", async (req, reply) => {

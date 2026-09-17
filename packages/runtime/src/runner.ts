@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { BrowserPort } from "@doit/playwright";
 import type { ActionRegistry } from "@doit/site-sdk";
 import { CastActor, BrowseTheWeb } from "@doit/screenplay";
@@ -12,6 +13,7 @@ export interface RunRequest {
   baseUrl: string;
   headless: boolean;
   allowedOrigins: string[];
+  traceDir?: string;
 }
 
 export interface RunResult {
@@ -33,10 +35,16 @@ export class ActionRunner {
       allowedOrigins: req.allowedOrigins,
       baseUrl: req.baseUrl,
     });
+    if (req.traceDir) await session.startTracing();
     try {
       const actor = CastActor.named(req.account).whoCan(new BrowseTheWeb(session, req.allowedOrigins));
       const raw = await action.execute(actor, input);
       return { output: action.output.parse(raw) };
+    } catch (err) {
+      if (req.traceDir) {
+        await session.stopTracingToFile(join(req.traceDir, `trace-${req.actionId}.zip`));
+      }
+      throw err;
     } finally {
       await session.close();
     }

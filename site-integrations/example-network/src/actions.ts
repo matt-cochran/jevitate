@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { defineAction } from "@doit/site-sdk";
-import { Navigate } from "@doit/screenplay";
+import { Navigate, Enter, Click } from "@doit/screenplay";
 import { NormalizedThreadSchema } from "@doit/domain";
 import { AuthenticatedUser, InboxThreads, ThreadDetail } from "./questions.js";
+import { UsernameField, SignInButton } from "./targets.js";
 
 export const SessionStatus = defineAction({
   id: "session.status", version: "1.0.0",
@@ -37,4 +38,23 @@ export const ThreadGet = defineAction({
   },
 });
 
-export const EXAMPLE_NETWORK_ACTIONS = [SessionStatus, InboxList, ThreadGet];
+// Fixture/dev convenience for M2: real sites have the user log in interactively (per the CONOPS),
+// so this action only exists to drive the example-network fixture through auth in tests/dev,
+// not as a pattern for how production sites authenticate.
+export const AuthLogin = defineAction({
+  id: "auth.login", version: "1.0.0",
+  input: z.object({ username: z.string().min(1) }),
+  output: z.object({ authenticated: z.boolean() }),
+  risk: "read", throttleClass: "read",
+  async execute(actor, input) {
+    await actor.attemptsTo(
+      Navigate.to("/login"),
+      Enter.theText(input.username).into(UsernameField),
+      Click.on(SignInButton),
+    );
+    const who = await actor.asks(AuthenticatedUser);
+    return { authenticated: who.authenticated };
+  },
+});
+
+export const EXAMPLE_NETWORK_ACTIONS = [SessionStatus, InboxList, ThreadGet, AuthLogin];
