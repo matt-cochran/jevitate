@@ -3,19 +3,51 @@ import type { Actor } from "@doit/screenplay";
 import { BrowseTheWebToken, CountOf, IsVisible, TextOf } from "@doit/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
 
-/** Default bound for `checkAssertion`'s polling loop, in milliseconds. */
+/** Default bound for the bounded polling loop, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
-/** Default interval between re-evaluations in `checkAssertion`'s polling loop, in milliseconds. */
+/** Default interval between re-evaluations in the bounded polling loop, in milliseconds. */
 const DEFAULT_POLL_MS = 100;
 
 /**
- * Options for `checkAssertion`'s bounded polling loop.
+ * Options for the bounded polling loop shared by `checkAssertion` and every
+ * other postcondition check that needs the same retry window.
  */
 export interface CheckAssertionOptions {
   /** Overall bound on how long to keep re-evaluating. Default 5000ms. */
   timeoutMs?: number;
   /** Interval between re-evaluations. Default 100ms. */
   pollMs?: number;
+}
+
+/**
+ * The one bounded-polling primitive every postcondition check in the
+ * interpreter goes through: re-evaluates `sample` at `opts.pollMs` intervals
+ * (default 100ms) until it returns `true` or `opts.timeoutMs` (default
+ * 5000ms) elapses.
+ *
+ * Exported so the row-scoped checks in `run-step.ts` (`forEach`'s "at least
+ * one row" precondition and `checkAssertionInRow`) share this exact loop and
+ * these exact defaults rather than growing a second, divergent one. Before
+ * that, the same `Assertion` retried for 5s at the top level and failed
+ * instantly inside a `forEach` row.
+ *
+ * Fails closed by construction: it returns `false` once the bound elapses
+ * without `sample` ever holding. Polling only rescues a check that raced an
+ * async UI update inside the window; it never converts a persistent failure
+ * into a pass.
+ */
+export async function pollUntil(
+  sample: () => Promise<boolean>,
+  opts?: CheckAssertionOptions,
+): Promise<boolean> {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await sample()) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(pollMs);
+  }
 }
 
 /**
@@ -40,14 +72,7 @@ export async function checkAssertion(
   a: Assertion,
   opts?: CheckAssertionOptions,
 ): Promise<boolean> {
-  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS;
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (await evaluateAssertionOnce(actor, a)) return true;
-    if (Date.now() >= deadline) return false;
-    await sleep(pollMs);
-  }
+  return pollUntil(() => evaluateAssertionOnce(actor, a), opts);
 }
 
 /** A single, non-retrying sample of `a` against the current page state. */

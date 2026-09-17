@@ -200,9 +200,20 @@ export function installRecorderListener(): void {
       // Secret fields: their value is never read, so it cannot leave the page.
       // Both autocomplete spellings need their own clause: "one-time-code"
       // does not contain "otp" as a substring.
+      //
+      // The `autocomplete`-contains-"password" clause is NOT redundant with
+      // the `type === "password"` one. A "show password" toggle is universally
+      // implemented by flipping the input's `type` between `password` and
+      // `text`, so a user who reveals the field *before* typing (and a page
+      // that ships a text-type field it masks in JS) yields
+      // `inputType === "text"` with `autocomplete="current-password"` — a
+      // genuine human-only field the type check alone reads as an ordinary
+      // machine-fillable one. A substring match covers both standard tokens
+      // ("current-password", "new-password") without enumerating them.
       const autocomplete = (el.getAttribute("autocomplete") || "").toLowerCase();
       const secret =
         inputType === "password" ||
+        autocomplete.indexOf("password") !== -1 ||
         autocomplete.indexOf("one-time-code") !== -1 ||
         autocomplete.indexOf("otp") !== -1;
 

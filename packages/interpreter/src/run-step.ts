@@ -2,7 +2,7 @@ import type { Locator, Page } from "playwright";
 import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@doit/recording";
 import type { Actor } from "@doit/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate } from "@doit/screenplay";
-import { checkAssertion, PostconditionFailed } from "./assertion.js";
+import { checkAssertion, pollUntil, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
 
@@ -146,8 +146,18 @@ export async function runStep(
       const page = actor.ability(BrowseTheWebToken).session.page;
       const target = descriptorToTarget(step.items);
       const itemsLocator = target.resolve(page);
-      const count = await itemsLocator.count();
-      if (count === 0) {
+      // The "at least one row" precondition polls on the same bound as every
+      // other postcondition (`pollUntil`, 5000ms/100ms): a list still being
+      // rendered asynchronously must not read as a genuinely empty one. It
+      // still fails closed — a list that never gains a row throws below once
+      // the bound elapses — and it costs nothing on the happy path, where the
+      // first sample already sees rows and returns immediately.
+      let count = 0;
+      const rowsAppeared = await pollUntil(async () => {
+        count = await itemsLocator.count();
+        return count > 0;
+      });
+      if (!rowsAppeared) {
         throw new PostconditionFailed(
           { kind: "count", target: step.items, min: 1 },
           `forEach: 0 rows matched for items target ${target.description} (expected at least 1)`,
@@ -255,18 +265,25 @@ function resolveInRoot(root: Page | Locator, d: TargetDescriptor): Locator {
  * an `Assertion` against a single row's `Locator` rather than the page.
  * `urlIncludes` is inherently page-global (not row-scoped), so it delegates
  * to the same page-level check `checkAssertion` uses, ignoring `rowLocator`.
+ *
+ * Polls on exactly the same bound as `checkAssertion`, through the same
+ * `pollUntil` primitive and the same 5000ms/100ms defaults, so an
+ * `Assertion` behaves identically whether it is checked at the top level or
+ * inside a `forEach` row. Like `checkAssertion` it still fails closed,
+ * returning `false` once the bound elapses.
  */
 async function checkAssertionInRow(actor: Actor, a: Assertion, rowLocator: Locator): Promise<boolean> {
+  return pollUntil(() => evaluateAssertionInRowOnce(actor, a, rowLocator));
+}
+
+/** A single, non-retrying sample of `a` against one row's `Locator`. */
+async function evaluateAssertionInRowOnce(
+  actor: Actor,
+  a: Assertion,
+  rowLocator: Locator,
+): Promise<boolean> {
   switch (a.kind) {
     case "visible":
-      // NOTE (deferred to a future milestone, documentation-only): this is a
-      // ONE-SHOT sample — `Locator.isVisible()` does not retry/wait, unlike
-      // Playwright's own action auto-waiting. A `visible` postcondition
-      // checked immediately after an async-rendering row action can race
-      // and fail-closed-but-falsely (a real row update that just hasn't
-      // painted yet reads as "not visible"). Flag as a known gap to resolve
-      // (e.g. via bounded polling) before a future milestone relies on
-      // generated recordings with auto-inserted postconditions at scale.
       return resolveInRoot(rowLocator, a.target).isVisible();
     case "urlIncludes": {
       const page = actor.ability(BrowseTheWebToken).session.page;

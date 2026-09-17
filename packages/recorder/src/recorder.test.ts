@@ -143,19 +143,29 @@ test(
 );
 
 test(
-  "never lets password, one-time-code or otp values leave the browser",
+  "never lets password, one-time-code, otp or autocomplete-password values leave the browser",
   async () => {
     const passwordSecret = "hunter2-never-leaves";
     const oneTimeCodeSecret = "424242";
     const otpSecret = "313131-otp-never-leaves";
+    const shownPasswordSecret = "toggled-visible-never-leaves";
+    const newPasswordSecret = "brand-new-never-leaves";
     // The autocomplete values are deliberately upper-case: the match must be
     // case-insensitive, and "one-time-code" does not contain "otp", so each
     // spelling needs its own clause in the in-page predicate.
+    //
+    // `#shown-pw` and `#new-pw` are `type="text"` on purpose: that is exactly
+    // what a "show password" toggle produces (it flips the input's `type`
+    // between `password` and `text`), and what a page that masks a text field
+    // in JS ships from the start. The `type` check alone misses both; only
+    // the `autocomplete`-contains-"password" clause catches them.
     const html = `
       <form onsubmit="event.preventDefault()">
         <input id="pw" type="password" />
         <input id="one-time" type="text" autocomplete="ONE-TIME-CODE" />
         <input id="otp" type="text" autocomplete="OTP" />
+        <input id="shown-pw" type="text" autocomplete="CURRENT-PASSWORD" />
+        <input id="new-pw" type="text" autocomplete="new-password" />
         <input id="plain" type="text" />
       </form>`;
 
@@ -163,11 +173,13 @@ test(
       await page.locator("#pw").fill(passwordSecret);
       await page.locator("#one-time").fill(oneTimeCodeSecret);
       await page.locator("#otp").fill(otpSecret);
+      await page.locator("#shown-pw").fill(shownPasswordSecret);
+      await page.locator("#new-pw").fill(newPasswordSecret);
       await page.locator("#plain").fill("visible-ok");
 
       await waitUntil(
-        "all four fields filled",
-        () => new Set(actions(recorder).map((a) => a.payload.eid)).size === 4,
+        "all six fields filled",
+        () => new Set(actions(recorder).map((a) => a.payload.eid)).size === 6,
       );
 
       const captured = actions(recorder);
@@ -182,7 +194,7 @@ test(
         captured.filter((a) => a.payload.eid === eid);
 
       // Every secret-marked field: the rawText key is literally absent.
-      for (const selector of ["#pw", "#one-time", "#otp"]) {
+      for (const selector of ["#pw", "#one-time", "#otp", "#shown-pw", "#new-pw"]) {
         const events = eventsFor(await eidFor(selector));
         expect(events.length, `no events captured for ${selector}`).toBeGreaterThan(0);
         for (const event of events) {
@@ -202,6 +214,8 @@ test(
       expect(everything).not.toContain(passwordSecret);
       expect(everything).not.toContain(oneTimeCodeSecret);
       expect(everything).not.toContain(otpSecret);
+      expect(everything).not.toContain(shownPasswordSecret);
+      expect(everything).not.toContain(newPasswordSecret);
     });
   },
   120_000,

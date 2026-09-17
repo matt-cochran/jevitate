@@ -720,29 +720,157 @@ test("runStep: forEach runs a child click per row, scoped to each row's own loca
   expect(leaf1.click).toHaveBeenCalledTimes(1);
 });
 
-test("runStep: forEach rejects with PostconditionFailed when a child click's row-scoped expect is false", async () => {
-  const leaf0 = fakeLocator({ isVisible: vi.fn(async () => false) });
-  const row0 = fakeRowRoot(leaf0);
-  const itemsLocator = fakeItemsLocator([row0]);
-  const page = fakePageReturning(itemsLocator);
-  const actor = actorWithPage(page);
+test("runStep: forEach rejects with PostconditionFailed when a child click's row-scoped expect is never true (fails closed after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const leaf0 = fakeLocator({ isVisible: vi.fn(async () => false) });
+    const row0 = fakeRowRoot(leaf0);
+    const itemsLocator = fakeItemsLocator([row0]);
+    const page = fakePageReturning(itemsLocator);
+    const actor = actorWithPage(page);
 
-  const rec: RecordedStep = {
-    step: {
-      kind: "forEach",
-      items: { testId: "rows" },
-      as: "row",
-      steps: [
-        {
-          kind: "click",
-          target: { testId: "delete-btn" },
-          expect: { kind: "visible", target: { testId: "delete-btn" } },
-        },
-      ],
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
-  expect(leaf0.click).toHaveBeenCalledTimes(1);
+    const rec: RecordedStep = {
+      step: {
+        kind: "forEach",
+        items: { testId: "rows" },
+        as: "row",
+        steps: [
+          {
+            kind: "click",
+            target: { testId: "delete-btn" },
+            expect: { kind: "visible", target: { testId: "delete-btn" } },
+          },
+        ],
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+    expect(leaf0.click).toHaveBeenCalledTimes(1);
+    // It polled the row-scoped assertion rather than sampling it once, and
+    // still failed closed once the bound elapsed.
+    expect((leaf0.isVisible as any).mock.calls.length).toBeGreaterThan(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// === RED/GREEN: forEach's row-count precondition and its row-scoped
+// postconditions poll the same way `checkAssertion` does (Finding 2) ===
+
+test("runStep: forEach whose items count becomes >0 only after a delay still runs the row loop (polls, not one-shot)", async () => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.now();
+    const leaf0 = fakeLocator({ isVisible: vi.fn(async () => true) });
+    const row0 = fakeRowRoot(leaf0);
+    const rows = [row0];
+    const itemsLocator = {
+      count: vi.fn(async () => (Date.now() - start >= 300 ? rows.length : 0)),
+      nth: vi.fn((i: number) => rows[i]),
+    };
+    const page = fakePageReturning(itemsLocator);
+    const actor = actorWithPage(page);
+
+    const rec: RecordedStep = {
+      step: {
+        kind: "forEach",
+        items: { testId: "rows" },
+        as: "row",
+        steps: [
+          {
+            kind: "click",
+            target: { testId: "delete-btn" },
+            expect: { kind: "visible", target: { testId: "delete-btn" } },
+          },
+        ],
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).resolves.toEqual({ kind: "done" });
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+
+    // Re-sampled rather than giving up on the first (empty) read.
+    expect((itemsLocator.count as any).mock.calls.length).toBeGreaterThan(1);
+    expect(leaf0.click).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("runStep: forEach child click whose row-scoped expect becomes true only after a delay passes (polls, not one-shot)", async () => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.now();
+    const leaf0 = fakeLocator({ isVisible: vi.fn(async () => Date.now() - start >= 300) });
+    const row0 = fakeRowRoot(leaf0);
+    const itemsLocator = fakeItemsLocator([row0]);
+    const page = fakePageReturning(itemsLocator);
+    const actor = actorWithPage(page);
+
+    const rec: RecordedStep = {
+      step: {
+        kind: "forEach",
+        items: { testId: "rows" },
+        as: "row",
+        steps: [
+          {
+            kind: "click",
+            target: { testId: "delete-btn" },
+            expect: { kind: "visible", target: { testId: "delete-btn" } },
+          },
+        ],
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).resolves.toEqual({ kind: "done" });
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+
+    expect((leaf0.isVisible as any).mock.calls.length).toBeGreaterThan(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("runStep: forEach child extract whose row-scoped textIncludes expect becomes true only after a delay passes (every kind polls, not visible-only)", async () => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.now();
+    const leaf0 = fakeLocator({
+      innerText: vi.fn(async () => (Date.now() - start >= 300 ? "Ready: done" : "Loading...")),
+    });
+    const row0 = fakeRowRoot(leaf0);
+    const itemsLocator = fakeItemsLocator([row0]);
+    const page = fakePageReturning(itemsLocator);
+    const actor = actorWithPage(page);
+
+    const rec: RecordedStep = {
+      step: {
+        kind: "forEach",
+        items: { testId: "rows" },
+        as: "row",
+        steps: [
+          {
+            kind: "extract",
+            target: { testId: "status" },
+            as: "status",
+            expect: { kind: "textIncludes", target: { testId: "status" }, text: "done" },
+          },
+        ],
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).resolves.toEqual({ kind: "done" });
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+
+    expect((leaf0.innerText as any).mock.calls.length).toBeGreaterThan(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("runStep: forEach throws for an unsupported child step kind", async () => {
@@ -763,29 +891,38 @@ test("runStep: forEach throws for an unsupported child step kind", async () => {
   await expect(runStep(actor as any, rec, new Map())).rejects.toThrow(/not supported in A\.1/);
 });
 
-test("runStep: forEach over 0 matched rows rejects with PostconditionFailed (fails closed instead of no-op completed)", async () => {
-  const itemsLocator = fakeItemsLocator([]);
-  const page = fakePageReturning(itemsLocator);
-  const actor = actorWithPage(page);
+test("runStep: forEach over 0 matched rows rejects with PostconditionFailed (fails closed instead of no-op completed, after the default polling timeout)", async () => {
+  vi.useFakeTimers();
+  try {
+    const itemsLocator = fakeItemsLocator([]);
+    const page = fakePageReturning(itemsLocator);
+    const actor = actorWithPage(page);
 
-  const rec: RecordedStep = {
-    step: {
-      kind: "forEach",
-      items: { testId: "rows" },
-      as: "row",
-      steps: [
-        {
-          kind: "extract",
-          target: { testId: "cell" },
-          as: "cell",
-          expect: { kind: "visible", target: { testId: "cell" } },
-        },
-      ],
-    },
-  };
-  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
-  expect(itemsLocator.count).toHaveBeenCalledTimes(1);
-  expect(itemsLocator.nth).not.toHaveBeenCalled();
+    const rec: RecordedStep = {
+      step: {
+        kind: "forEach",
+        items: { testId: "rows" },
+        as: "row",
+        steps: [
+          {
+            kind: "extract",
+            target: { testId: "cell" },
+            as: "cell",
+            expect: { kind: "visible", target: { testId: "cell" } },
+          },
+        ],
+      },
+    };
+    const result = runStep(actor as any, rec, new Map());
+    const expectation = expect(result).rejects.toBeInstanceOf(PostconditionFailed);
+    await vi.advanceTimersByTimeAsync(6000);
+    await expectation;
+    // Polled the count rather than sampling once, and still failed closed.
+    expect((itemsLocator.count as any).mock.calls.length).toBeGreaterThan(1);
+    expect(itemsLocator.nth).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // === resolveInRoot (via forEach child steps): frameUrl guard ===
