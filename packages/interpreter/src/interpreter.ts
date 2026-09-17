@@ -1,8 +1,9 @@
-import type { Recording, RecordedStep, Step } from "@doit/recording";
+import type { Recording, RecordedStep, Step, StepTiming } from "@doit/recording";
 import { RecordingSchema } from "@doit/recording";
 import type { Actor } from "@doit/screenplay";
 import type { InterpretResult } from "./interpret-result.js";
 import { runStep } from "./run-step.js";
+import type { RecordingSink } from "./sink.js";
 
 /**
  * The `forEach` child step kinds Task 4's `run-step.ts` actually supports
@@ -35,12 +36,25 @@ export class RecordingInterpreter {
    * `vars` seeds the initial variable bindings (default `{}`); it is copied
    * into an internal `Map<string,string>` and never mutates the caller's
    * object.
+   *
+   * `sink`, when given, receives one `RecordedStep` per top-level step that
+   * completes successfully (`{kind:"done"}`), in order, with genuinely
+   * measured timing (see `runFlat`'s doc comment) — "always-on recording"
+   * (design spec §5b): an automated run can emit a `Recording` describing
+   * what it actually did, directly comparable to a human-authored/captured
+   * one. `sink` is entirely optional and off by default: omitting it is
+   * zero behavior change from before this parameter existed.
    */
-  async run(actor: Actor, rec: Recording, vars?: Record<string, string>): Promise<InterpretResult> {
+  async run(
+    actor: Actor,
+    rec: Recording,
+    vars?: Record<string, string>,
+    sink?: RecordingSink,
+  ): Promise<InterpretResult> {
     validateRecording(rec);
     const flat = flatten(rec);
     const varsMap = new Map(Object.entries(vars ?? {}));
-    return runFlat(actor, flat, varsMap, flat.length - 1);
+    return runFlat(actor, flat, varsMap, flat.length - 1, sink);
   }
 
   /**
@@ -135,23 +149,61 @@ function checkForEachChildKinds(step: Step, pageIndex: number, stepIndexInPage: 
  * BEFORE this loop starts and are intentionally NOT caught here — they
  * still propagate as rejected promises, since no step (and therefore no
  * step index) has run yet.
+ *
+ * `sink` (optional; `undefined` for `runToCheckpoint`, which does not
+ * support sinking) is fed one `RecordedStep` per iteration of this loop that
+ * completes with `{kind:"done"}` — the SAME granularity as this loop's own
+ * top-level steps, so a `forEach` is sunk once as a whole, never expanded
+ * per row (its row-scoped children have no `RecordedStep` wrapper of their
+ * own to sink). A step that throws (postcondition failure or otherwise) is
+ * never sunk — the run stops there, and a sink recording shorter than the
+ * input is the correct, expected signal for a failed run. `awaiting_human`
+ * likewise stops the loop before that step is sunk.
+ *
+ * Timing is measured with `performance.now()` around each `runStep` call,
+ * NOT copied from the input step's own (possibly absent) `timing` — this is
+ * what makes the emitted `Recording` describe what THIS run actually did:
+ * `atMs` is time since this run started, `durationMs` is this step's own
+ * wall-clock duration, and `gapBeforeMs` is the wall-clock gap since the
+ * previous SUNK step finished (0 for the first sunk step, since it's
+ * measured from the same instant the run started).
+ *
+ * Crucially, the sunk `RecordedStep`'s `step` data (target/value/etc.) is
+ * the INPUT step's data, unchanged — only `timing` is replaced. This
+ * preserves whatever redaction the input already encoded (`{redacted:true,
+ * length}` or `{var:"..."}` stays exactly that); the actual runtime string
+ * `resolveValue` computed for typing/selecting is never substituted in.
  */
 async function runFlat(
   actor: Actor,
   flat: RecordedStep[],
   vars: Map<string, string>,
   lastIndex: number,
+  sink?: RecordingSink,
 ): Promise<InterpretResult> {
+  const runStartedAt = performance.now();
+  let lastSunkStepEndedAt = runStartedAt;
   for (let i = 0; i <= lastIndex; i++) {
     let outcome;
+    const stepStartedAt = performance.now();
     try {
       outcome = await runStep(actor, flat[i], vars, i);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { outcome: "failed", at: i, error: message };
     }
+    const stepEndedAt = performance.now();
     if (outcome.kind === "awaiting_human") {
       return { outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume };
+    }
+    if (sink) {
+      const timing: StepTiming = {
+        atMs: stepStartedAt - runStartedAt,
+        durationMs: stepEndedAt - stepStartedAt,
+        gapBeforeMs: stepStartedAt - lastSunkStepEndedAt,
+      };
+      sink.step({ ...flat[i], timing });
+      lastSunkStepEndedAt = stepEndedAt;
     }
   }
   return { outcome: "completed", vars: Object.fromEntries(vars) };
