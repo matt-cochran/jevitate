@@ -54,9 +54,11 @@ export class SqliteCommandRepository implements CommandRepository {
         .where((eb) => eb.or([eb("not_before", "is", null), eb("not_before", "<=", now)]))
         .orderBy("created_at", "asc").limit(1).executeTakeFirst();
       if (!candidate) return null;
-      await tx.updateTable("command")
+      const updated = await tx.updateTable("command")
         .set({ state: "leased", lease_expires_at: leaseUntil, updated_at: now })
-        .where("id", "=", candidate.id).where("state", "=", "ready").execute();
+        .where("id", "=", candidate.id).where("state", "=", "ready")
+        .executeTakeFirst();
+      if (!updated || updated.numUpdatedRows === 0n) return null;
       return toRecord({ ...candidate, state: "leased", lease_expires_at: leaseUntil });
     });
   }
