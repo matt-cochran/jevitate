@@ -41,6 +41,10 @@ importers:
       '@doit/domain':
         specifier: workspace:*
         version: link:../domain
+    devDependencies:
+      '@doit/storage-sqlite':
+        specifier: workspace:*
+        version: link:../storage-sqlite
 
   packages/domain:
     dependencies:

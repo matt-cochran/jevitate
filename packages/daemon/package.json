@@ -9,5 +9,6 @@
     "@doit/application": "workspace:*",
     "@doit/domain": "workspace:*"
   },
+  "devDependencies": { "@doit/storage-sqlite": "workspace:*" },
   "scripts": { "build": "tsc --build" }
 }
