@@ -1,6 +1,6 @@
 import type { Question } from "@doit/screenplay";
 import { BrowseTheWebToken } from "@doit/screenplay";
-import type { NormalizedThread } from "@doit/domain";
+import type { NormalizedMessage, NormalizedThread } from "@doit/domain";
 
 export const AuthenticatedUser: Question<{ authenticated: boolean; account: string | null }> = {
   description: "authenticated user",
@@ -43,7 +43,7 @@ export function ThreadDetail(threadId: string): Question<NormalizedThread> {
       const subject = (await page.getByRole("heading").first().innerText()).trim();
       const items = page.locator("li[data-message-id]");
       const count = await items.count();
-      const messages = [];
+      const messages: NormalizedMessage[] = [];
       for (let i = 0; i < count; i++) {
         const li = items.nth(i);
         const [sourceMessageId, sender, receivedAt] = await Promise.all([

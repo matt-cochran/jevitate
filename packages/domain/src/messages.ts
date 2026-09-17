@@ -19,7 +19,7 @@ export const NormalizedMessageSchema = z.object({
   sourceMessageId: z.string().min(1),
   sourceThreadId: z.string().min(1),
   sender: z.string().min(1),
-  receivedAt: z.string().min(1),
+  receivedAt: z.string().datetime(),
   text: z.string(),
 });
 

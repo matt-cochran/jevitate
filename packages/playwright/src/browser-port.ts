@@ -10,6 +10,7 @@ export interface BrowserSession {
 export interface OpenOptions {
   profileDir: string;
   headless: boolean;
+  /** TODO(M3): inert until route-level enforcement lands — not yet a navigation guard. */
   allowedOrigins: string[];
   baseUrl: string;
 }
