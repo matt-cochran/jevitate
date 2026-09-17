@@ -15,3 +15,16 @@ test("migration creates command table with idempotency uniqueness", async () => 
   ).rejects.toThrow(); // UNIQUE(site, account_id, idempotency_key)
   await db.destroy();
 });
+
+test("incoming_message dedups on (site, account_id, source_message_id)", async () => {
+  const db = openDatabase(":memory:");
+  await migrateToLatest(db);
+  const now = new Date().toISOString();
+  const row = { id: "im_1", site: "s", account_id: "a", source_thread_id: "t1", source_message_id: "m1",
+    sender: "jane", received_at: now, text: "hi", first_seen_at: now, processing_status: "new" };
+  await db.insertInto("incoming_message").values(row).execute();
+  await expect(
+    db.insertInto("incoming_message").values({ ...row, id: "im_2" }).execute(),
+  ).rejects.toThrow();
+  await db.destroy();
+});

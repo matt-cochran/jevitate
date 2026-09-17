@@ -26,7 +26,21 @@ export interface EventTable {
   correlation_id: string;
 }
 
+export interface IncomingMessageTable {
+  id: string;
+  site: string;
+  account_id: string;
+  source_thread_id: string;
+  source_message_id: string;
+  sender: string;
+  received_at: string;
+  text: string;
+  first_seen_at: string;
+  processing_status: string;
+}
+
 export interface Database {
   command: CommandTable;
   event: EventTable;
+  incoming_message: IncomingMessageTable;
 }
