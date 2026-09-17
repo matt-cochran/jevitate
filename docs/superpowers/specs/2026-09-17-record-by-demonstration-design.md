@@ -93,12 +93,41 @@ The post-recording workspace (CLI/TUI + LLM conversation) turns the merged, anno
 4. **Replay-to-point + record-a-patch:** when a chunk is ambiguous or under-determined, the **interpreter replays the recording up to that checkpoint**, pausing at the live browser state; the human **records a small supplemental segment** from there (§5 start-from-state), which is **spliced** into the trace at that position (insert/replace, with re-alignment). Then authoring resumes. This lets you clarify with small recordings instead of redoing the journey.
 5. **Iterate** chunk-by-chunk until the whole journey is chunked, parameterized, and each piece dry-run-approved.
 
-## 8. Chunking & transpilation
+## 8. Executable projection — declarative-first (revised)
 
-- **Deterministic literal transpile (LLM-free):** a recording (or a confirmed chunk) compiles directly to Screenplay TypeScript — `Target`s from the descriptors, `Interaction`s from the steps, grouped into a `Task`/`Action`. The constant single-shot case needs no LLM at all.
-- **LLM generalization:** variables/templates/enumeration become typed action inputs and loops layered onto the literal transpile.
-- **Authoring interpreter:** a data-driven runtime replays a `Recording` (and replays-to-a-checkpoint) for dry-runs and golden tests — authoring-only, never production.
-- **Production:** the transpiled, bundled, content-addressed, **approved** artifacts run through the normal Screenplay runner (CONOPS §5.7). The workflow composes the per-page actions.
+**Decision (revised after a TRIZ / Poka-Yoke / FMEA analysis — supersedes the earlier "transpile to TS; production = compiled TS" lean):** the executable action is a **declarative, closed-schema JSON/YAML artifact** run by **one hardened, tested interpreter** that maps each step primitive onto the Screenplay interactions/questions from M2. The interpreter (reviewed, compiled) is the trust boundary; the per-site action **data** is content-addressed + approved. TypeScript transpile is kept only as an **escape hatch** for sites that genuinely need custom logic.
+
+- **Closed step vocabulary (data, not code):** `navigate · click · fill · select · waitFor · extract · forEach · assert · handback`. Power comes from composing typed primitives, not arbitrary code — so there is no per-step custom code to maintain (TRIZ ideality/segmentation). This is one level below the CONOPS §5.6 composition layer and stays inside the guardrail *because the schema is closed* (no raw JS, no undeclared origins, no unjustified raw selectors).
+- **Poka-Yoke (mistake-proofed schema):** every step REQUIRES a resolved target + a postcondition (can't act blindly or skip verification); variables must be explicitly declared/typed (can't silently hardcode a parameter); secret/`human-only` steps pause capture (can't leak). Validated by a zod schema.
+- **Selector priority ladder:** `testId > role+name > label > text > CSS (with justification)`. The recorder emits the most stable available locator and **flags low-stability locators** for review.
+- **One source, multiple projections:** the same declarative artifact is (a) **interpreted** for authoring, dry-run, replay-to-checkpoint, and production; (b) optionally **transpiled to TS** as an escape hatch. Self-healing/variation-merging operate on data (diffing data, not code).
+- **Constant single-shot case is fully LLM-free:** record → confirm → declarative artifact → interpret. The LLM only adds generalizations (variables/templates/`forEach`).
+
+### FMEA (failure mode → mitigation)
+| Failure mode | Mitigation |
+|---|---|
+| Fragile/dynamic-id locator | selector ladder + multi-take corroboration + self-healing re-record; low-stability flagged at authoring |
+| Element ambiguity (multi-match) | require unique resolution; assert expected identity; fail-closed |
+| Timing/race | actionability precondition baked into every primitive; humanized delay never substitutes for it |
+| Variable mis-classification | multi-take diff + user confirmation + confidence; default constant unless corroborated |
+| Site drift | self-healing detect → quarantine → alert → re-record; variation accumulation |
+| Interpreter overreach | closed schema, no arbitrary code, content-addressed + approved |
+| Extraction empty/wrong (lists) | typed `extract` + required shape/non-empty `assert` |
+| Handback never completes | timeout → fail-closed + alert |
+
+**Production:** the interpreter runs the content-addressed, **approved** action data through the Screenplay runner (CONOPS §5.7); the workflow composes the per-page actions.
+
+## 8b. Elicitation-driven authoring (generative)
+
+Recording is a **generative dialogue**, not passive capture. The LLM drives discovery: it replays, and where the trace is ambiguous or a step's purpose is unclear, it **interviews** the user ("what are you trying to accomplish here?"), capturing the answer as labeled intent on the step and, if needed, prompting the user to demonstrate the next step live.
+- **#1 checkpoints / mental model:** replay-to-point is paired with elicitation of the user's mental model at that point.
+- **#2 trace alignment:** matching steps across takes is **LLM-mediated + user-confirmed**, not a purely algorithmic diff — the LLM proposes matches and resolves ambiguity by dialogue.
+- **#5 enumeration/extraction:** recognized from the pre-step `intent` description, a later refinement, or the LLM spotting a repeated block and eliciting the loop/extraction intent.
+
+### Postdoc UX — build vs buy
+- **Reuse** Playwright's **Inspector** (`page.pause()`) + **codegen** for the low-level record/pause/step primitive and semantic-locator generation.
+- **Build v1 as a TUI** (fastest, CLI-first): `@clack/prompts` or **Ink** to walk steps, confirm variables, mark human-only, and run the LLM Q&A.
+- **Optional later:** a local web sidebar / pre-post page — reuse **Fastify** + `@fastify/websocket` serving a small Vite+Svelte/React panel; in-page sidebar injected via `addInitScript` into an isolated shadow-DOM overlay (excluded from capture). No off-the-shelf package covers the whole elicitation-over-a-recording flow; it's bespoke glue over these mature pieces.
 
 ## 9. Humanization integration (reuses M2.5)
 
