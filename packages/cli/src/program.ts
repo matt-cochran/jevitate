@@ -236,11 +236,16 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_INVALID_SCRIPT", String(err)));
         return;
       }
+      const seedNum = Number(seed);
+      if (!Number.isFinite(seedNum)) {
+        emitJson(program, fail("E_INVALID_SEED", `--seed must be a finite number, got ${JSON.stringify(seed)}`));
+        return;
+      }
       try {
         const dbPath = resolveDbPath(deps, db);
         const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(siteId, account));
         const interaction = policy?.interaction ?? {};
-        const profile = simulateTiming(interaction, Number(seed), plannedScript);
+        const profile = simulateTiming(interaction, seedNum, plannedScript);
         const envelope = ok(profile);
         if (json) {
           emitJson(program, envelope);

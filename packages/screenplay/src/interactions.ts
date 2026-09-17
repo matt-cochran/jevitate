@@ -39,6 +39,10 @@ export const Enter = {
             const locator = target.resolve(page);
             const pace = tryAbility(actor, PaceInteractionsToken);
             if (pace && pace.policy.typing) {
+              // Clear the field first so paced typing has replace semantics matching
+              // the unpaced fill() path below (pressSequentially appends at the caret
+              // rather than replacing). Mechanical setup, not a paced delay: no sleep.
+              await locator.fill("");
               if (pace.policy.thinkBeforeActionMs) await pace.sleep(pace.pacer.think(pace.policy));
               const delays = pace.pacer.typingDelays(value, pace.policy.typing);
               for (let i = 0; i < value.length; i++) {

@@ -50,8 +50,42 @@ test("Enter.theText types char-by-char with pacing sleeps when actor is paced wi
     );
   const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
   await actor.attemptsTo(Enter.theText("hi").into(Box));
-  expect(calls).toEqual(["type:h:0", "type:i:0"]);
+  expect(calls).toEqual(["fill:", "type:h:0", "type:i:0"]);
   expect(sleeps).toEqual([100, 100]);
+});
+
+test("Enter.theText clears the field (fill('')) BEFORE any pressSequentially calls when paced with a typing model", async () => {
+  const calls: string[] = [];
+  const locator = {
+    fill: async (v: string) => { calls.push(`fill:${v}`); },
+    pressSequentially: async (c: string) => { calls.push(`type:${c}`); },
+  };
+  const page: any = { getByRole: () => locator };
+  const actor = CastActor.named("T")
+    .whoCan(
+      new BrowseTheWeb(fakeSessionWithPage(page), []),
+      new PaceInteractions(TYPING_POLICY, new Pacer(() => 0.5), async () => {}),
+    );
+  const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
+  await actor.attemptsTo(Enter.theText("hi").into(Box));
+  expect(calls).toEqual(["fill:", "type:h", "type:i"]);
+});
+
+test("Enter.theText('') still clears the field when paced (no longer a no-op)", async () => {
+  const calls: string[] = [];
+  const locator = {
+    fill: async (v: string) => { calls.push(`fill:${v}`); },
+    pressSequentially: async (c: string) => { calls.push(`type:${c}`); },
+  };
+  const page: any = { getByRole: () => locator };
+  const actor = CastActor.named("T")
+    .whoCan(
+      new BrowseTheWeb(fakeSessionWithPage(page), []),
+      new PaceInteractions(TYPING_POLICY, new Pacer(() => 0.5), async () => {}),
+    );
+  const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
+  await actor.attemptsTo(Enter.theText("").into(Box));
+  expect(calls).toEqual(["fill:"]);
 });
 
 test("Enter.theText falls back to fill() with zero sleeps when actor is paced but has no typing model", async () => {

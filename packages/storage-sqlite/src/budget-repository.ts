@@ -26,6 +26,13 @@ async function reserveWindow(
   windowStart: string,
   limit: number
 ): Promise<void> {
+  // A limit of 0 (or negative) means "block entirely." The ON CONFLICT ... WHERE
+  // guard below only protects the update path for an existing row; the initial
+  // INSERT of a brand-new row/window is otherwise unconditional and would let
+  // exactly one action through per fresh window. Guard explicitly, up front.
+  if (limit <= 0) {
+    throw new AtLimitError();
+  }
   const result = await tx
     .insertInto("budget_counter")
     .values({ site, account_id: account, throttle_class: cls, window_kind: windowKind, window_start: windowStart, used: 1 })

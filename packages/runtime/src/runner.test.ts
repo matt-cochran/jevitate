@@ -188,6 +188,12 @@ test("(c) budget exhausted: denied, action NOT executed", async () => {
   expect(executeCalls).toBe(0);
   expect(openCalls).toBe(0);
   expect(budgets.calls.length).toBe(1);
+  // retryAfter must be an actionable future bound, not "right now" (NOW itself) --
+  // specifically the start of the next UTC calendar day (both hourly and daily
+  // budget windows will have reset by then).
+  expect(res.retryAfter).not.toBe(NOW);
+  expect(new Date(res.retryAfter).getTime()).toBeGreaterThan(new Date(NOW).getTime());
+  expect(res.retryAfter).toBe("2026-09-18T00:00:00.000Z");
 });
 
 test("(d) min-interval shortfall within maxInlineWaitMs: sleep called with the shortfall, then ok", async () => {

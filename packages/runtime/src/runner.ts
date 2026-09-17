@@ -41,6 +41,13 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Midnight UTC of the day after `nowIso`. A simple, safe conservative upper bound
+ * for "when might this budget denial have cleared" — see call site in `run()`. */
+function nextUtcMidnightAfter(nowIso: string): string {
+  const d = new Date(nowIso);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString();
+}
+
 export class ActionRunner {
   constructor(
     private readonly browser: BrowserPort,
@@ -93,10 +100,12 @@ export class ActionRunner {
         nowIso(),
       );
       if (!allowed) {
-        // No dedicated "next budget window" computation at M2.5; `nowIso()` is an
-        // acceptable minimal placeholder for retryAfter on a budget denial (unlike
-        // quiet-hours/min-interval, which have a well-defined next-open instant).
-        return { outcome: "denied", reason: "budget", retryAfter: nowIso() };
+        // We don't currently know whether the hourly or the daily window caused the
+        // denial (that would require expanding BudgetRepository's return contract,
+        // out of scope here), so use a simple, safe conservative bound: the start of
+        // the next UTC calendar day. By then BOTH the hourly and daily windows will
+        // have reset, so this is always correct-by-the-time-it-arrives.
+        return { outcome: "denied", reason: "budget", retryAfter: nextUtcMidnightAfter(nowIso()) };
       }
     }
 

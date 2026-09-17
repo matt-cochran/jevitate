@@ -65,6 +65,34 @@ test("hour limit exhausted denies even though day limit still has room", async (
   expect(r2).toEqual({ allowed: false }); // hour bucket exhausted, despite day having plenty of room
 });
 
+test("hourlyLimit:0 denies the VERY FIRST reserve, not just the second (limit-0 must not leak one through)", async () => {
+  const db = openDatabase(":memory:");
+  await migrateToLatest(db);
+  const repo = new SqliteBudgetRepository(db);
+
+  const r1 = await repo.reserve("example-network", "primary", "default", { hourlyLimit: 0 }, T1);
+
+  expect(r1).toEqual({ allowed: false });
+
+  const hourRow = await db.selectFrom("budget_counter").selectAll()
+    .where("window_kind", "=", "hour").executeTakeFirst();
+  expect(hourRow).toBeUndefined();
+});
+
+test("dailyLimit:0 denies the VERY FIRST reserve, not just the second (limit-0 must not leak one through)", async () => {
+  const db = openDatabase(":memory:");
+  await migrateToLatest(db);
+  const repo = new SqliteBudgetRepository(db);
+
+  const r1 = await repo.reserve("example-network", "primary", "default", { dailyLimit: 0 }, T1);
+
+  expect(r1).toEqual({ allowed: false });
+
+  const dayRow = await db.selectFrom("budget_counter").selectAll()
+    .where("window_kind", "=", "day").executeTakeFirst();
+  expect(dayRow).toBeUndefined();
+});
+
 test("denied reserve rolls back the WHOLE transaction: an already-incremented window is undone", async () => {
   const db = openDatabase(":memory:");
   await migrateToLatest(db);

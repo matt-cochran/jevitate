@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DateTime } from "luxon";
 
 const Dist = z.object({
   mean: z.number().min(0),
@@ -40,8 +41,18 @@ export const SitePolicySchema = z.object({
   throttles: z.record(z.string(), Throttle).optional(),
   quietHours: z
     .object({
-      timezone: z.string().min(1),
-      windows: z.array(z.object({ start: z.string(), end: z.string() })),
+      timezone: z
+        .string()
+        .min(1)
+        .refine((tz) => DateTime.local().setZone(tz).isValid, {
+          message: "must be a valid IANA timezone",
+        }),
+      windows: z.array(
+        z.object({
+          start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be HH:MM in 24-hour time"),
+          end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be HH:MM in 24-hour time"),
+        })
+      ),
     })
     .optional(),
 });

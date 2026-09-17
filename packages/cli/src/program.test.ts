@@ -142,3 +142,29 @@ test("site simulate prints a timing profile with totalMs, using an empty interac
   // no stored policy => empty interaction => zero delay
   expect(parsed.data.totalMs).toBe(0);
 });
+
+test("site simulate --seed abc returns a failure envelope and sets exit code 1 (invalid seed must not silently become 0)", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+    const profiles = new ProfileManager(root);
+    const dbPath = join(root, "db.sqlite");
+    const scriptPath = join(root, "script.json");
+    const script = [{ kind: "click", label: "open menu" }];
+    await writeFile(scriptPath, JSON.stringify(script));
+
+    const lines: string[] = [];
+    const program = buildProgram({ profiles });
+    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.exitOverride();
+    await program.parseAsync(
+      ["site", "simulate", "example.com", "--script", scriptPath, "--db", dbPath, "--seed", "abc", "--json"],
+      { from: "user" }
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_SEED" } });
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});

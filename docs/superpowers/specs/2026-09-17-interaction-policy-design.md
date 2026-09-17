@@ -148,6 +148,7 @@ Before executing an action (after input parse, before/around `browser.open`), th
 - A daemon scheduling loop that consumes `throttled/denied` retry-after (M1 has the command queue + `not_before`; wiring the gate into that loop is a later step — M2.5 returns the decision; the direct `ActionRunner` caller honors it).
 - Cross-process budget correctness beyond the single better-sqlite3 connection (matches M1's current model).
 - Scrolling realism beyond `maxViewportsPerStep` (basic increment only for now).
+- Live (real-run) pacing of reading dwell and of Click/Navigate think-time: M2.5's runtime (@doit/screenplay) paces only Enter.theText's typing cadence and the inter-activity gap in attemptsTo. InteractionPolicy.readingMsPerChar/maxReadingMs are validated, stored, and reflected in the offline simulateTiming/CLI site simulate output, but have no effect on a real run — as with Click/Navigate think-time, this is reserved for a future milestone if live pacing of these becomes a priority.
 
 ## 9. Self-review
 - **Guardrail preserved:** deterministic/seeded, hard limits enforced, explicitly not evasion, postconditions still gate. ✅
