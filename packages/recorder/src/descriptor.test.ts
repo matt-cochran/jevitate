@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import type { ElementHandle, Page } from "playwright";
 import { PlaywrightBrowserPort } from "@doit/playwright";
-import { computeDescriptor, looksGenerated, resolvesToSameElement } from "./descriptor.js";
+import {
+  computeDescriptor,
+  looksGenerated,
+  readElementFacts,
+  resolvesToSameElement,
+} from "./descriptor.js";
 
 const port = new PlaywrightBrowserPort();
 
@@ -279,3 +284,61 @@ test("looksGenerated flags uuids, long hex runs and digit runs, and leaves human
   expect(looksGenerated("step-3")).toBe(false);
   expect(looksGenerated("h2")).toBe(false);
 });
+
+// === Scenario: the in-page fact reader never touches a secret value ===
+
+test(
+  "reads an <input>'s value only when the accessible name comes from it, so a password's value never crosses into Node",
+  async () => {
+    const secret = "pw-must-never-cross-the-wire";
+    const otp = "one-time-424242-never-crosses";
+    await withPage(
+      `<form>
+         <label>Password <input id="pw" type="password" value="${secret}" /></label>
+         <label>Code <input id="otp" type="text" autocomplete="one-time-code" value="${otp}" /></label>
+         <label>Notes <input id="notes" type="text" value="a draft nobody asked to keep" /></label>
+         <input id="send" type="submit" value="Send it" />
+       </form>`,
+      async (page) => {
+        const options = {
+          generatedPatterns: ["[0-9]{4}"],
+          valueNamedInputTypes: ["button", "submit", "reset"],
+        };
+        const factsFor = async (selector: string): Promise<{ value: string | null; inputType: string | null }> => {
+          const handle = await handleFor(page, selector);
+          return handle.evaluate(readElementFacts, options);
+        };
+
+        // The value is read ONLY where the accessible name genuinely comes from
+        // it. `<input type=submit>` has no text content at all, so without this
+        // it could never reach the role+name rung.
+        expect(await factsFor("#send")).toMatchObject({ inputType: "submit", value: "Send it" });
+
+        // Everything else: not read, not returned, never on the CDP wire —
+        // where DEBUG=pw:protocol or a Playwright trace could put it on disk.
+        for (const selector of ["#pw", "#otp", "#notes"]) {
+          const facts = await factsFor(selector);
+          expect(facts.value, `${selector} leaked its value`).toBeNull();
+        }
+
+        // And nothing else in the facts smuggles it either (a `value` attribute
+        // is serialized into the DOM, so a css path or text could in principle
+        // carry it).
+        for (const selector of ["#pw", "#otp"]) {
+          const handle = await handleFor(page, selector);
+          const facts = await handle.evaluate(readElementFacts, options);
+          const serialized = JSON.stringify(facts);
+          expect(serialized).not.toContain(secret);
+          expect(serialized).not.toContain(otp);
+        }
+
+        // The whole descriptor pipeline stays clean too, and still works: the
+        // password field is identified by its label.
+        const pw = await computeDescriptor(page, await handleFor(page, "#pw"));
+        expect(pw.descriptor).toEqual({ label: "Password" });
+        expect(JSON.stringify(pw)).not.toContain(secret);
+      },
+    );
+  },
+  120_000,
+);

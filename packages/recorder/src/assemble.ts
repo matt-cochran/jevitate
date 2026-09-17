@@ -8,7 +8,12 @@ import {
   type StepTiming,
   type TargetDescriptor,
 } from "@doit/recording";
-import type { ActionCaptureEvent, CaptureEvent, CapturedActionPayload } from "./recorder.js";
+import type {
+  ActionCaptureEvent,
+  CaptureEvent,
+  CapturedActionPayload,
+  ResolutionFailureCause,
+} from "./recorder.js";
 
 /**
  * Translation: a buffer of captured events → a schema-valid `Recording`.
@@ -38,9 +43,31 @@ export const RECORDING_VERSION = "1.0.0";
 const SECRET_PROMPT =
   "This field holds a secret (a password or one-time code). Its value was never captured, " +
   "so it cannot be replayed: enter it in the browser yourself, then the run continues.";
-const UNDESCRIBABLE_PROMPT =
-  "This action could not be described by a selector that provably resolves back to the element " +
-  "that was acted on, so it cannot be replayed: perform it in the browser yourself, then the run continues.";
+
+/**
+ * One wording per cause. A human taking over mid-run is owed the actual reason
+ * — "the page changed before I could describe this" and "this element has
+ * nothing stable to identify it by" call for different judgements from them,
+ * and they are the difference between a recording worth re-taking and one worth
+ * fixing. Every wording ends the same way, because the required action is
+ * always the same.
+ */
+const UNDESCRIBABLE_PROMPTS: Readonly<Record<ResolutionFailureCause, string>> = {
+  "sub-frame":
+    "This action happened inside an embedded frame, which the recorder cannot describe yet",
+  "document-replaced":
+    "This action loaded a new page before the recorder could describe what was acted on",
+  "element-gone":
+    "The element acted on here had already left the page before the recorder could describe it",
+  "not-identifiable":
+    "Nothing about this element identifies it reliably enough to find it again on a later run",
+};
+
+const UNDESCRIBABLE_SUFFIX =
+  ", so it cannot be replayed: perform it in the browser yourself, then the run continues.";
+
+const undescribablePrompt = (cause: ResolutionFailureCause): string =>
+  UNDESCRIBABLE_PROMPTS[cause] + UNDESCRIBABLE_SUFFIX;
 
 /** Event kinds that never become a `Step` (design ruling: see `translate`). */
 const NON_STEP_KINDS: ReadonlySet<string> = new Set(["keydown", "submit"]);
@@ -62,9 +89,21 @@ export interface AssembleOptions {
 }
 
 /**
- * The path a URL contributes to the recording: `pathname` + `search`, matching
- * `golden-replay.test.ts`'s `"/login"` / `"/thread/t-1"` convention (and
- * `NavigateUrlSchema`, which requires a leading `/`).
+ * The path a URL contributes to the recording: `pathname` and **nothing else**,
+ * matching `golden-replay.test.ts`'s `"/login"` / `"/thread/t-1"` convention
+ * (and `NavigateUrlSchema`, which requires a leading `/`).
+ *
+ * The query string is dropped deliberately, and it is a redaction decision
+ * rather than a formatting one. A magic link, a password-reset link or a
+ * session hand-off puts its credential in the query — `?token=…` — and this
+ * value is persisted verbatim into `PageSegment.url`, into the leading
+ * `navigate.url`, and into every `urlIncludes` assertion inferred from it.
+ * Keeping the query would route exactly the class of secret the recorder
+ * refuses to read out of a password field straight back into the artifact
+ * through the URL. The cost is that two pages distinguished only by their
+ * query (`/search?q=a` vs `/search?q=b`) record the same `url` string; they
+ * are still separate `PageSegment`s, because segmentation follows navigation
+ * events rather than URL equality.
  *
  * Returns `null` for anything that is not http(s) — `about:blank`,
  * `chrome-error://…`, `data:` — because such a URL has no meaningful path
@@ -79,7 +118,7 @@ export function pathOf(rawUrl: string): string | null {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  return url.pathname + url.search;
+  return url.pathname;
 }
 
 /** `pathOf`, degrading to the raw URL — for `PageSegment.url`/`urlIncludes`, which accept any string. */
@@ -276,8 +315,16 @@ function buildStep(event: ActionCaptureEvent): Step {
     // always constructible — the URL the action happened on. Inventing a
     // plausible-looking descriptor would be strictly worse: it would replay,
     // and it would act on the wrong element.
+    // A missing resolution means the description was never attempted at all
+    // (no recording was running when the event arrived), which is the same
+    // predicament for the human as an element that had already gone.
     const text = resolution === undefined ? pathOrRaw(event.frameUrl) : resolution.resumePath;
-    return { kind: "handback", prompt: UNDESCRIBABLE_PROMPT, resume: { kind: "urlIncludes", text } };
+    const cause = resolution === undefined ? "element-gone" : resolution.cause;
+    return {
+      kind: "handback",
+      prompt: undescribablePrompt(cause),
+      resume: { kind: "urlIncludes", text },
+    };
   }
 
   const target = { ...resolution.descriptor };

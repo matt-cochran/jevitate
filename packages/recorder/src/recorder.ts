@@ -37,6 +37,21 @@ export interface CapturedActionPayload {
  * computing its descriptor. Computed **while the recording is running**, not at
  * `stop()` time — see `Recorder.resolve`.
  */
+/**
+ * Why an action could not be described. Assembly turns each of these into its
+ * own `handback` wording, so the human who has to take over is told what
+ * actually went wrong rather than "something did".
+ */
+export type ResolutionFailureCause =
+  /** The action happened in a nested frame, which descriptor computation does not cover. */
+  | "sub-frame"
+  /** The page navigated while the description was being computed. */
+  | "document-replaced"
+  /** Nothing carries the capture tag any more — the element was removed, or the page moved on. */
+  | "element-gone"
+  /** The element is there, but no descriptor provably resolves back to it. */
+  | "not-identifiable";
+
 export type DescriptorResolution =
   | {
       readonly ok: true;
@@ -46,7 +61,8 @@ export type DescriptorResolution =
     }
   | {
       readonly ok: false;
-      /** Why no descriptor could be computed; diagnostic, and surfaced in review. */
+      readonly cause: ResolutionFailureCause;
+      /** The underlying detail; diagnostic, and surfaced in review. */
       readonly reason: string;
       /**
        * The path the action happened on, captured at failure time. With no
@@ -303,6 +319,7 @@ export class Recorder {
       // rather than described wrongly.
       event.resolution = {
         ok: false,
+        cause: "sub-frame",
         reason: "action happened in a sub-frame; descriptor computation is main-frame only",
         resumePath: pathOrRaw(source.page.url()),
       };
@@ -314,15 +331,16 @@ export class Recorder {
     // starting a doomed second one against an already-stripped tag.
     let pending = this.resolutions.get(key);
     if (pending === undefined) {
-      pending = this.compute(page, eid);
+      pending = this.compute(page, eid, epoch);
       this.resolutions.set(key, pending);
     }
     event.resolution = await pending;
   }
 
-  private async compute(page: Page, eid: string): Promise<DescriptorResolution> {
-    const fail = (reason: string): DescriptorResolution => ({
+  private async compute(page: Page, eid: string, epoch: number): Promise<DescriptorResolution> {
+    const fail = (cause: ResolutionFailureCause, reason: string): DescriptorResolution => ({
       ok: false,
+      cause,
       reason,
       resumePath: pathOrRaw(page.url()),
     });
@@ -331,7 +349,9 @@ export class Recorder {
     // from the page — where any script can call `window.__doitRecord` with an
     // `eid` crafted to break out of the quotes. The injected listener only ever
     // sends a decimal counter, so anything else is refused outright.
-    if (!/^[0-9]+$/.test(eid)) return fail(`refusing to resolve a malformed eid: ${JSON.stringify(eid)}`);
+    if (!/^[0-9]+$/.test(eid)) {
+      return fail("not-identifiable", `refusing to resolve a malformed eid: ${JSON.stringify(eid)}`);
+    }
 
     let handle;
     try {
@@ -339,9 +359,29 @@ export class Recorder {
         .locator(`[${EID_ATTRIBUTE}="${eid}"]`)
         .elementHandle({ timeout: RESOLVE_TIMEOUT_MS });
     } catch (err) {
-      return fail(`could not resolve ${EID_ATTRIBUTE}="${eid}": ${messageOf(err)}`);
+      return fail("element-gone", `could not resolve ${EID_ATTRIBUTE}="${eid}": ${messageOf(err)}`);
     }
-    if (handle === null) return fail(`no element carries ${EID_ATTRIBUTE}="${eid}" any more`);
+    if (handle === null) {
+      return fail("element-gone", `no element carries ${EID_ATTRIBUTE}="${eid}" any more`);
+    }
+
+    // The document must not have been replaced while that query was running,
+    // and checking is not paranoia: `eid`s restart at 1 in every document, so a
+    // query left over from the page we just left keeps polling and can match a
+    // *different* element that the new page has since tagged with the same
+    // number. `computeDescriptor` would then succeed — against the wrong
+    // element, on the wrong page — and that descriptor would be written onto
+    // the previous page's step, where it parses, replays, and clicks the wrong
+    // thing. Silently describing the wrong element is far worse than admitting
+    // we could not describe this one, so a changed epoch fails the resolution.
+    if (this.epoch !== epoch) {
+      await handle.dispose().catch(() => undefined);
+      return fail(
+        "document-replaced",
+        `the document was replaced while describing ${EID_ATTRIBUTE}="${eid}"; ` +
+          "refusing to describe a same-numbered element of the page that followed",
+      );
+    }
 
     try {
       const computed = await computeDescriptor(page, handle);
@@ -352,7 +392,7 @@ export class Recorder {
         alternates: computed.alternates,
       };
     } catch (err) {
-      return fail(messageOf(err));
+      return fail("not-identifiable", messageOf(err));
     } finally {
       // Put the capture tag back. `computeDescriptor` strips it — correctly, as
       // cleanup — but the recording is still running, and Task 3's in-page

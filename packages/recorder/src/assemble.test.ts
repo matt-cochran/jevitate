@@ -69,7 +69,7 @@ test("collapses a redirect chain onto its final URL instead of emitting a PageSe
     [
       nav("about:blank"),
       nav("http://site.test/login"),
-      nav("http://site.test/login?redirected=1"),
+      nav("http://site.test/login-final"),
       act("click", "1", { tag: "button", rawText: "Go", resolution: ok({ role: "button", name: "Go" }) }),
     ],
     { site: "site" },
@@ -77,13 +77,13 @@ test("collapses a redirect chain onto its final URL instead of emitting a PageSe
 
   // about:blank contributes nothing (it has no usable pathname), and the two
   // real hops are one page, not two.
-  expect(recording.pages.map((p) => p.url)).toEqual(["/login?redirected=1"]);
+  expect(recording.pages.map((p) => p.url)).toEqual(["/login-final"]);
   // The leading navigate step was rewritten to the URL the chain settled on,
   // rather than aiming the replay at a URL that only ever redirects.
   expect(recording.pages[0]!.steps[0]!.step).toEqual({
     kind: "navigate",
-    url: "/login?redirected=1",
-    expect: { kind: "urlIncludes", text: "/login?redirected=1" },
+    url: "/login-final",
+    expect: { kind: "urlIncludes", text: "/login-final" },
   });
 });
 
@@ -176,7 +176,7 @@ test("an action whose descriptor was never computed becomes a handback resuming 
   const step = recording.pages[0]!.steps[1]!.step;
   expect(step).toEqual({
     kind: "handback",
-    prompt: expect.stringContaining("could not be described"),
+    prompt: expect.stringContaining("perform it in the browser yourself"),
     resume: { kind: "urlIncludes", text: "/a" },
   });
 });
@@ -211,12 +211,69 @@ test("an empty buffer assembles to a schema-valid recording with no pages", () =
   expect(() => RecordingSchema.parse(recording)).not.toThrow();
 });
 
-test("pathOf keeps path and query, and refuses anything that is not http(s)", () => {
-  expect(pathOf("http://site.test/inbox?page=2")).toBe("/inbox?page=2");
+test("pathOf keeps the pathname, drops the query, and refuses anything that is not http(s)", () => {
+  expect(pathOf("http://site.test/inbox?page=2")).toBe("/inbox");
   expect(pathOf("https://site.test/")).toBe("/");
+  // The query is dropped as redaction, not tidiness: a magic link or a
+  // password-reset link carries its credential there, and this value is
+  // persisted into PageSegment.url, navigate.url and every urlIncludes.
+  expect(pathOf("https://site.test/auth/callback?token=super-secret-value")).toBe("/auth/callback");
+  expect(pathOf("https://site.test/r?reset_token=abc123#frag")).toBe("/r");
   // `new URL("about:blank").pathname` is the bare string "blank", which would
   // fail NavigateUrlSchema's leading-slash rule — hence the protocol guard.
   expect(pathOf("about:blank")).toBeNull();
   expect(pathOf("data:text/html,<p>x")).toBeNull();
   expect(pathOf("not a url")).toBeNull();
+});
+
+test("a magic-link token in the query never reaches the assembled recording", () => {
+  reset();
+  const token = "tok-live-do-not-persist-4815162342";
+  const recording = assembleRecording(
+    [
+      nav(`http://site.test/auth/callback?token=${token}`),
+      act("click", "1", { tag: "button", rawText: "Continue", resolution: ok({ role: "button", name: "Continue" }) }),
+      nav(`http://site.test/inbox?session=${token}`),
+    ],
+    { site: "site" },
+  );
+
+  // Not "it is not in pages[0].url" — nowhere at all: not the segment urls,
+  // not the leading navigate step, not the urlIncludes folded onto the click.
+  expect(JSON.stringify(recording)).not.toContain(token);
+  expect(recording.pages.map((p) => p.url)).toEqual(["/auth/callback", "/inbox"]);
+  const click = recording.pages[0]!.steps[1]!.step;
+  if (click.kind !== "click") throw new Error("expected click");
+  expect(click.expect).toEqual({ kind: "urlIncludes", text: "/inbox" });
+});
+
+test("each resolution failure cause gets its own handback wording", () => {
+  const causes = ["sub-frame", "document-replaced", "element-gone", "not-identifiable"] as const;
+  const prompts = causes.map((cause) => {
+    reset();
+    const recording = assembleRecording(
+      [
+        nav("http://site.test/a"),
+        act("click", "1", {
+          tag: "button",
+          rawText: "Go",
+          resolution: { ok: false, cause, reason: `raw diagnostic for ${cause}`, resumePath: "/a" },
+        }),
+      ],
+      { site: "site" },
+    );
+    const step = recording.pages[0]!.steps[1]!.step;
+    if (step.kind !== "handback") throw new Error("expected handback");
+    return step.prompt;
+  });
+
+  // Four distinct, human-readable explanations rather than one generic one:
+  // "the page changed before I could describe this" and "this element has
+  // nothing stable to identify it by" call for different judgements from the
+  // person taking over.
+  expect(new Set(prompts).size).toBe(4);
+  for (const prompt of prompts) expect(prompt).toContain("perform it in the browser yourself");
+  // The raw diagnostic stays out of the prompt: it is for review tooling, not
+  // for the human who has to act.
+  for (const prompt of prompts) expect(prompt).not.toContain("raw diagnostic");
 });

@@ -263,6 +263,29 @@ const INBOX_BODY = `
 const LOGIN_JOURNEY: Readonly<Record<string, string>> = { "/login": LOGIN_BODY, "/inbox": INBOX_BODY };
 
 const stepsOf = (pageSteps: readonly RecordedStep[]): Step[] => pageSteps.map((s) => s.step);
+
+/** Kinds the Recorder computes a descriptor for; mirrors its own NEEDS_DESCRIPTOR. */
+const DESCRIBED_KINDS: ReadonlySet<string> = new Set(["click", "input", "change"]);
+
+/**
+ * Waits until every action captured so far has been described.
+ *
+ * Descriptions are computed in parallel with the demonstration and cost
+ * hundreds of milliseconds of DOM round trips, so a test that drives the page
+ * at machine speed and then asserts on descriptors is asserting on a race — and
+ * one that is lost under load, which is how this first showed up. A human
+ * demonstrating a journey pauses between actions; this is that pause, made a
+ * condition instead of a guess. A trailing `change` fires on blur and so
+ * arrives after the action that caused it, hence the small settle first.
+ */
+async function describedSoFar(recorder: Recorder, page: import("playwright").Page): Promise<void> {
+  await page.waitForTimeout(150);
+  await waitUntil("every captured action to be described", () =>
+    actions(recorder).every(
+      (a) => !DESCRIBED_KINDS.has(a.payload.kind) || a.resolution !== undefined,
+    ),
+  );
+}
 const ACTING_KINDS: ReadonlySet<string> = new Set(["click", "fill", "select", "handback", "navigate"]);
 
 test(
@@ -274,11 +297,13 @@ test(
       await recorder.start("sign in and open the inbox");
       await page.goto(`${ORIGIN}/login`);
       await page.getByLabel("Username").fill("jane");
+      await describedSoFar(recorder, page);
       await page.getByLabel("Password").fill(secret);
+      await describedSoFar(recorder, page);
       await page.getByRole("button", { name: "Sign in" }).click();
       await page.waitForURL(/\/inbox$/);
       await page.getByRole("button", { name: "Refresh" }).click();
-      await page.waitForTimeout(250);
+      await describedSoFar(recorder, page);
 
       const recording = await recorder.stop("went fine");
 
@@ -384,7 +409,7 @@ test(
       await page.getByLabel("Username").pressSequentially("ada");
       await page.getByLabel("Mode").selectOption("slow");
       await page.getByLabel("Remember me").check();
-      await page.waitForTimeout(250);
+      await describedSoFar(recorder, page);
 
       const recording = await recorder.stop();
       const steps = stepsOf(recording.pages[0]!.steps);
@@ -426,7 +451,7 @@ test(
         await recorder.start();
         await page.goto(`${ORIGIN}/outer`);
         await page.frameLocator("iframe").getByRole("button", { name: "Inner button" }).click();
-        await page.waitForTimeout(250);
+        await describedSoFar(recorder, page);
 
         const recording = await recorder.stop();
         // Only the main frame's navigation segments the recording; the iframe's
@@ -483,6 +508,71 @@ test(
       // buttons, clicks or the descriptor ladder.
       expect(stepsOf(recording.pages[1]!.steps)).toEqual([]);
     });
+  },
+  120_000,
+);
+
+test(
+  "never lets a resolution that outlived its document describe an element of the NEXT one",
+  async () => {
+    // The nastiest failure this recorder can have, and the only one that is
+    // worse than a handback: `eid`s restart at 1 in every document, so the
+    // doomed `[data-doit-eid="1"]` query left over from the page we just left
+    // can match a DIFFERENT element that the NEW page has since tagged 1. The
+    // description then succeeds — against the wrong element, on the wrong page
+    // — and is written onto the previous page's step. It parses, it replays,
+    // and it clicks the wrong thing.
+    //
+    // The fixture forces the collision rather than hoping for it: /inbox clicks
+    // a button from a load-time script, so the new document mints eid 1 within
+    // milliseconds of committing, while the /login click's query is still
+    // polling.
+    await withSite(
+      {
+        "/login": `<form method="post" action="/inbox"><button type="submit">Sign in</button></form>`,
+        "/inbox": `<h1>Inbox</h1><button type="button" id="auto">Refresh</button>
+                   <script>document.getElementById('auto').click()</script>`,
+      },
+      async ({ recorder, page }) => {
+        await recorder.start();
+        await page.goto(`${ORIGIN}/login`);
+        await page.getByRole("button", { name: "Sign in" }).click();
+        await page.waitForURL(/\/inbox$/);
+        await page.waitForTimeout(750);
+
+        // Non-vacuity first, from the raw capture buffer rather than from the
+        // assembled output: two clicks, on two different documents, that the
+        // page numbered identically. That is the collision, and asserting it
+        // here means this test cannot quietly pass by never setting one up.
+        const clicks = actions(recorder).filter((a) => a.payload.kind === "click");
+        expect(clicks.map((c) => c.payload.eid)).toEqual(["1", "1"]);
+        expect(clicks.map((c) => new URL(c.frameUrl).pathname)).toEqual(["/login", "/inbox"]);
+
+        const recording = await recorder.stop();
+        expect(recording.pages.map((p) => p.url)).toEqual(["/login", "/inbox"]);
+
+        // The load-bearing assertion: /login's step must not have borrowed the
+        // element /inbox tagged 1. A handback is the honest answer; describing
+        // it as "Refresh" would be a lie about which button was clicked, and
+        // one that parses, replays and clicks the wrong thing.
+        const login = stepsOf(recording.pages[0]!.steps);
+        const diagnostic = JSON.stringify(
+          clicks.map((c) => ({ url: c.frameUrl, resolution: c.resolution })),
+        );
+        expect(login.map((s) => s.kind), diagnostic).toEqual(["navigate", "handback"]);
+        expect(JSON.stringify(login), diagnostic).not.toContain("Refresh");
+
+        // /inbox's own click is described normally — the guard rejects the
+        // cross-document borrow, not the new page's genuine action.
+        expect(stepsOf(recording.pages[1]!.steps), diagnostic).toEqual([
+          {
+            kind: "click",
+            target: { role: "button", name: "Refresh" },
+            expect: { kind: "visible", target: { role: "button", name: "Refresh" } },
+          },
+        ]);
+      },
+    );
   },
   120_000,
 );

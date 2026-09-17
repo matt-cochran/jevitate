@@ -156,7 +156,12 @@ const KNOWN_INPUT_TYPES: ReadonlySet<string> = new Set([
   "search", "submit", "tel", "text", "time", "url", "week",
 ]);
 
-/** `<input type=…>` values whose accessible name comes from `value`. */
+/**
+ * `<input type=…>` values whose accessible name comes from `value` — and, by
+ * the same token, the ONLY input types whose `value` the in-page fact reader is
+ * allowed to touch. Every other input's value (a password, a one-time code, a
+ * message being composed) is never read at all.
+ */
 const VALUE_NAMED_INPUT_TYPES: ReadonlySet<string> = new Set(["button", "submit", "reset"]);
 
 // === In-page fact gathering ===
@@ -166,7 +171,7 @@ const VALUE_NAMED_INPUT_TYPES: ReadonlySet<string> = new Set(["button", "submit"
  * Node does the interpretation (role mapping, name priority, stability) and
  * the browser only reports what it can see.
  */
-interface ElementFacts {
+export interface ElementFacts {
   readonly tag: string;
   /** First token of an explicit `role` attribute, if any. */
   readonly roleAttr: string | null;
@@ -187,10 +192,26 @@ interface ElementFacts {
 }
 
 /**
+ * The knowledge `readElementFacts` needs but cannot close over. Both lists have
+ * exactly one definition in this module and are handed to the page as data,
+ * because browser code cannot reference module scope.
+ */
+export interface ReadFactsOptions {
+  readonly generatedPatterns: string[];
+  /** `<input type=…>` values whose accessible name comes from `value`. */
+  readonly valueNamedInputTypes: string[];
+}
+
+/**
  * THIS FUNCTION IS BROWSER CODE. It is serialized by `handle.evaluate`, so it
  * must have zero imports and zero references to anything outside its own body
- * — hence the inlined helpers and the `generatedPatterns` argument (the one
- * piece of shared knowledge it needs, passed in rather than closed over).
+ * — hence the inlined helpers and the `options` argument (the shared knowledge
+ * it needs, passed in rather than closed over).
+ *
+ * Exported for `descriptor.test.ts`, which asserts directly that a password
+ * field's value is never among the facts this returns. That guarantee is not
+ * observable from `computeDescriptor`'s return value — the point is what is
+ * *not* read, not what is emitted — so the only honest test calls this.
  *
  * The css path is built here rather than in Node because proving a path unique
  * requires `document.querySelectorAll` *and* a node-identity comparison, both
@@ -202,12 +223,12 @@ interface ElementFacts {
  * otherwise it is the tag name, with `:nth-of-type(n)` added only when the
  * element has same-tag siblings.
  */
-function readElementFacts(node: Node, generatedPatterns: string[]): ElementFacts {
+export function readElementFacts(node: Node, options: ReadFactsOptions): ElementFacts {
   const el = node as Element;
   const norm = (s: string | null): string => (s === null ? "" : s.replace(/\s+/g, " ").trim());
   const attr = (name: string): string | null => el.getAttribute(name);
   const isGenerated = (v: string): boolean =>
-    generatedPatterns.some((p) => new RegExp(p).test(v));
+    options.generatedPatterns.some((p) => new RegExp(p).test(v));
   const CSS_IDENT = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
   const segmentFor = (target: Element): { text: string; anchor: boolean } => {
@@ -266,12 +287,23 @@ function readElementFacts(node: Node, generatedPatterns: string[]): ElementFacts
 
   const tag = el.tagName.toLowerCase();
   const roleAttr = norm(attr("role")).split(" ")[0] ?? "";
+  const inputType = tag === "input" ? String((el as HTMLInputElement).type || "").toLowerCase() : null;
+
+  // `value` is read ONLY for the handful of input types whose accessible name
+  // comes from it (button/submit/reset). Reading it for every `<input>` — as
+  // this once did — meant a password field's value was pulled into this return
+  // object and shipped back over the CDP connection, where `DEBUG=pw:protocol`,
+  // a Playwright trace or any protocol-level logging could put it on disk.
+  // Nothing downstream ever used it, so it was a secret in flight for no
+  // reason. Task 3's "the value is never read in the page" guarantee is only
+  // absolute if this respects it too.
+  const namedByValue = inputType !== null && options.valueNamedInputTypes.indexOf(inputType) !== -1;
 
   return {
     tag: tag,
     roleAttr: roleAttr === "" ? null : roleAttr,
     hasHref: el.hasAttribute("href"),
-    inputType: tag === "input" ? String((el as HTMLInputElement).type || "").toLowerCase() : null,
+    inputType: inputType,
     selectIsMulti:
       tag === "select" &&
       (el.hasAttribute("multiple") || Number(attr("size") ?? "1") > 1),
@@ -279,7 +311,7 @@ function readElementFacts(node: Node, generatedPatterns: string[]): ElementFacts
     text: norm(el.textContent),
     alt: attr("alt"),
     title: attr("title"),
-    value: tag === "input" ? String((el as HTMLInputElement).value ?? "") : null,
+    value: namedByValue ? String((el as HTMLInputElement).value ?? "") : null,
     labelText: labelText === "" ? null : labelText,
     testId: attr("data-testid") ?? attr("data-test"),
     css: cssPath(),
@@ -464,7 +496,10 @@ export async function computeDescriptor(
   handle: ElementHandle<Node>,
 ): Promise<ComputedDescriptor> {
   try {
-    const facts = await handle.evaluate(readElementFacts, [...GENERATED_PATTERNS]);
+    const facts = await handle.evaluate(readElementFacts, {
+      generatedPatterns: [...GENERATED_PATTERNS],
+      valueNamedInputTypes: [...VALUE_NAMED_INPUT_TYPES],
+    });
     const passing: DescriptorCandidate[] = [];
     for (const candidate of buildCandidates(facts)) {
       const locator = descriptorToLocator(page, candidate.descriptor);
