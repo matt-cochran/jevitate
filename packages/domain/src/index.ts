@@ -4,3 +4,4 @@ export function hello(): string {
 
 export * from "./primitives.js";
 export * from "./command-state.js";
+export * from "./policy.js";
