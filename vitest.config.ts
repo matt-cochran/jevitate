@@ -13,6 +13,7 @@ export default defineConfig({
       "@doit/daemon": pkg("daemon"),
       "@doit/mcp-facade": pkg("mcp-facade"),
       "@doit/cli": pkg("cli"),
+      "@doit/playwright": pkg("playwright"),
       // Add one line per new package here, e.g.:
     },
   },
