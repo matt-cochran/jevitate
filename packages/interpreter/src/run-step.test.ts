@@ -273,19 +273,294 @@ test("runStep: assert rejects with PostconditionFailed when check is false", asy
   await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
 });
 
-test("runStep: out-of-scope kinds (extract/forEach/handback) throw a not-yet-supported error", async () => {
+test("runStep: out-of-scope kinds (handback) throw a not-yet-supported error", async () => {
   const locator = fakeLocator();
   const actor = actorWithPage(fakePage(locator));
-  const recExtract: RecordedStep = {
-    step: { kind: "extract", target: { testId: "x" }, as: "y", expect: { kind: "visible", target: { testId: "x" } } },
-  };
-  const recForEach: RecordedStep = {
-    step: { kind: "forEach", items: { testId: "x" }, as: "y", steps: [] },
-  };
   const recHandback: RecordedStep = {
     step: { kind: "handback", prompt: "help", resume: { kind: "urlIncludes", text: "/done" } },
   };
-  await expect(runStep(actor as any, recExtract, new Map())).rejects.toThrow(/not yet supported/i);
-  await expect(runStep(actor as any, recForEach, new Map())).rejects.toThrow(/not yet supported/i);
   await expect(runStep(actor as any, recHandback, new Map())).rejects.toThrow(/not yet supported/i);
+});
+
+// === runStep: extract (top-level) ===
+
+test("runStep: extract stores innerText into vars and checks expect", async () => {
+  const locator = fakeLocator({
+    innerText: vi.fn(async () => "hello"),
+    isVisible: vi.fn(async () => true),
+  });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "extract",
+      target: { testId: "greeting-el" },
+      as: "greeting",
+      expect: { kind: "visible", target: { testId: "greeting-el" } },
+    },
+  };
+  const vars = new Map<string, string>();
+  await expect(runStep(actor as any, rec, vars)).resolves.toBeUndefined();
+  expect(vars.get("greeting")).toBe("hello");
+});
+
+test("runStep: extract with attr uses getAttribute instead of innerText", async () => {
+  const locator = fakeLocator({
+    getAttribute: vi.fn(async () => "https://example.test/target"),
+    innerText: vi.fn(async () => "should not be used"),
+    isVisible: vi.fn(async () => true),
+  });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "extract",
+      target: { testId: "link" },
+      as: "href",
+      attr: "href",
+      expect: { kind: "visible", target: { testId: "link" } },
+    },
+  };
+  const vars = new Map<string, string>();
+  await runStep(actor as any, rec, vars);
+  expect(vars.get("href")).toBe("https://example.test/target");
+  expect(locator.getAttribute).toHaveBeenCalledWith("href");
+  expect(locator.innerText).not.toHaveBeenCalled();
+});
+
+test("runStep: extract rejects with a clear error when getAttribute resolves null", async () => {
+  const locator = fakeLocator({
+    getAttribute: vi.fn(async () => null),
+  });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "extract",
+      target: { testId: "link" },
+      as: "href",
+      attr: "href",
+      expect: { kind: "visible", target: { testId: "link" } },
+    },
+  };
+  const vars = new Map<string, string>();
+  const err = await runStep(actor as any, rec, vars).catch((e) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect(err).not.toBeInstanceOf(PostconditionFailed);
+  expect(err.message).toMatch(/href/);
+  expect(vars.has("href")).toBe(false);
+});
+
+test("runStep: extract whose expect is false rejects with PostconditionFailed", async () => {
+  const locator = fakeLocator({
+    innerText: vi.fn(async () => "hello"),
+    isVisible: vi.fn(async () => false),
+  });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: RecordedStep = {
+    step: {
+      kind: "extract",
+      target: { testId: "greeting-el" },
+      as: "greeting",
+      expect: { kind: "visible", target: { testId: "greeting-el" } },
+    },
+  };
+  const vars = new Map<string, string>();
+  await expect(runStep(actor as any, rec, vars)).rejects.toBeInstanceOf(PostconditionFailed);
+  // The value is still stored before the postcondition check runs.
+  expect(vars.get("greeting")).toBe("hello");
+});
+
+// === runStep: forEach (row-scoped) ===
+
+function fakeRowRoot(leaf: ReturnType<typeof fakeLocator>) {
+  return {
+    getByTestId: vi.fn(() => leaf),
+    getByRole: vi.fn(() => leaf),
+    getByLabel: vi.fn(() => leaf),
+    getByText: vi.fn(() => leaf),
+    locator: vi.fn(() => leaf),
+  };
+}
+
+function fakeItemsLocator(rows: any[]) {
+  return {
+    count: vi.fn(async () => rows.length),
+    nth: vi.fn((i: number) => rows[i]),
+  };
+}
+
+function fakePageReturning(itemsLocator: any, url = "https://example.test/list") {
+  return {
+    goto: vi.fn(async () => {}),
+    url: vi.fn(() => url),
+    getByTestId: vi.fn(() => itemsLocator),
+    getByRole: vi.fn(() => itemsLocator),
+    getByLabel: vi.fn(() => itemsLocator),
+    getByText: vi.fn(() => itemsLocator),
+    locator: vi.fn(() => itemsLocator),
+  };
+}
+
+test("runStep: forEach runs a child extract per row, scoped to each row's own locator (last-row-wins)", async () => {
+  const order: string[] = [];
+  const leaf0 = fakeLocator({
+    innerText: vi.fn(async () => {
+      order.push("Alice");
+      return "Alice";
+    }),
+    isVisible: vi.fn(async () => true),
+  });
+  const leaf1 = fakeLocator({
+    innerText: vi.fn(async () => {
+      order.push("Bob");
+      return "Bob";
+    }),
+    isVisible: vi.fn(async () => true),
+  });
+  const row0 = fakeRowRoot(leaf0);
+  const row1 = fakeRowRoot(leaf1);
+  const itemsLocator = fakeItemsLocator([row0, row1]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [
+        {
+          kind: "extract",
+          target: { role: "cell", name: "name" },
+          as: "name",
+          expect: { kind: "visible", target: { role: "cell", name: "name" } },
+        },
+      ],
+    },
+  };
+  const vars = new Map<string, string>();
+  await expect(runStep(actor as any, rec, vars)).resolves.toBeUndefined();
+
+  expect(itemsLocator.count).toHaveBeenCalledTimes(1);
+  expect(itemsLocator.nth).toHaveBeenNthCalledWith(1, 0);
+  expect(itemsLocator.nth).toHaveBeenNthCalledWith(2, 1);
+
+  // Proves row-scoped resolution: each row's OWN getByRole was used, not the page's.
+  expect(row0.getByRole).toHaveBeenCalledWith("cell", { name: "name" });
+  expect(row1.getByRole).toHaveBeenCalledWith("cell", { name: "name" });
+  expect(page.getByRole).not.toHaveBeenCalled();
+
+  // Proves per-row distinctness in order, not just "ran twice and kept the last by luck".
+  expect(order).toEqual(["Alice", "Bob"]);
+
+  // Last-row-wins, per the design ruling.
+  expect(vars.get("name")).toBe("Bob");
+});
+
+test("runStep: forEach runs a child click per row, scoped to each row's own locator", async () => {
+  const leaf0 = fakeLocator({ isVisible: vi.fn(async () => true) });
+  const leaf1 = fakeLocator({ isVisible: vi.fn(async () => true) });
+  const row0 = fakeRowRoot(leaf0);
+  const row1 = fakeRowRoot(leaf1);
+  const itemsLocator = fakeItemsLocator([row0, row1]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [
+        {
+          kind: "click",
+          target: { testId: "delete-btn" },
+          expect: { kind: "visible", target: { testId: "delete-btn" } },
+        },
+      ],
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).resolves.toBeUndefined();
+
+  expect(leaf0.click).toHaveBeenCalledTimes(1);
+  expect(leaf1.click).toHaveBeenCalledTimes(1);
+});
+
+test("runStep: forEach rejects with PostconditionFailed when a child click's row-scoped expect is false", async () => {
+  const leaf0 = fakeLocator({ isVisible: vi.fn(async () => false) });
+  const row0 = fakeRowRoot(leaf0);
+  const itemsLocator = fakeItemsLocator([row0]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [
+        {
+          kind: "click",
+          target: { testId: "delete-btn" },
+          expect: { kind: "visible", target: { testId: "delete-btn" } },
+        },
+      ],
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
+  expect(leaf0.click).toHaveBeenCalledTimes(1);
+});
+
+test("runStep: forEach throws for an unsupported child step kind", async () => {
+  const leaf0 = fakeLocator();
+  const row0 = fakeRowRoot(leaf0);
+  const itemsLocator = fakeItemsLocator([row0]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [{ kind: "navigate", url: "/x", expect: { kind: "urlIncludes", text: "/x" } }],
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toThrow(/not supported in A\.1/);
+});
+
+test("runStep: forEach sets ${as}.__index for each row, ending at the last index", async () => {
+  const leaf0 = fakeLocator();
+  const leaf1 = fakeLocator();
+  const row0 = fakeRowRoot(leaf0);
+  const row1 = fakeRowRoot(leaf1);
+  const itemsLocator = fakeItemsLocator([row0, row1]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [
+        {
+          kind: "extract",
+          target: { testId: "cell" },
+          as: "cell",
+          expect: { kind: "visible", target: { testId: "cell" } },
+        },
+      ],
+    },
+  };
+  const vars = new Map<string, string>();
+  const seenIndexes: string[] = [];
+  const originalSet = vars.set.bind(vars);
+  vi.spyOn(vars, "set").mockImplementation((key: string, value: string) => {
+    if (key === "row.__index") seenIndexes.push(value);
+    return originalSet(key, value);
+  });
+
+  await runStep(actor as any, rec, vars);
+
+  expect(seenIndexes).toEqual(["0", "1"]);
+  expect(vars.get("row.__index")).toBe("1");
 });
