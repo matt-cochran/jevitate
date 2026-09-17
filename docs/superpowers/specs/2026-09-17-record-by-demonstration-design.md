@@ -82,6 +82,16 @@ Recording is **always on for every interaction — human *and* LLM/automation** 
   - **Human demonstrations → retain while needed** for authoring/variation, then GC (bounded TTL or explicit "done").
 - **Guardrail (unchanged):** always-on never loosens redaction — recordings are redacted, **secrets / `human-only` steps never captured**, access-controlled, size-capped, background-GC'd (CONOPS §9 retention, §6.5 redacted evidence). Our semantic recording is the diffable/replayable artifact; Playwright's binary trace remains optional deep-debug evidence on failures.
 
+## 5c. Recorder mechanics (detailed — informs the A.2 plan)
+
+- **Transport:** `page.addInitScript` injects an all-frames listener (click/input/change/submit/keydown/navigation); on each action it **temp-tags the acted element** (`data-doit-eid=N`) and calls a `page.exposeBinding("__doitRecord", …)` into Node, which buffers events.
+- **Descriptor computed Node-side, validated as Playwright resolves it:** Node resolves `[data-doit-eid=N]` → `ElementHandle`, walks the ladder (`testId > role+name > label > text > css`), and picks the **highest rung that uniquely resolves (`count()===1`) to that same handle**; removes the temp attribute; stores a **stability score** + **alternates** (for self-healing). This guarantees the stored descriptor points back at the acted element using Playwright's own `getByRole/Label/Text`.
+- **Stability heuristics:** avoid generated-looking ids (uuid / long-hex / digit-runs); prefer role+name; **flag css-only or dynamic-id descriptors low-stability** for review.
+- **Auto-inserted postconditions (Poka-Yoke):** infer each acting step's `expect` from the observed change (navigation → `urlIncludes`; revealed element → `visible`; text change → `textIncludes`), so recordings are self-verifying; postdoc/LLM confirm.
+- **Exclusions:** never capture values for `password`/`one-time-code`/sensitive fields (record the fill *action*, redact the value, suggest `human-only`); ignore events on our own (shadow-rooted/marked) recorder UI; **all fill values redacted by default**.
+- **Frames/shadow/canvas:** descriptor carries `frameUrl`; `getByRole/Label/Text` pierce **open** shadow DOM; **closed shadow / canvas** flagged low-stability or routed to `human-only` (known hard limit).
+- **Start-from-state:** attach to a paused session and capture a delimited segment for patch recordings; per-step timing (incl. inter-keystroke intervals) kept to fit the M2.5 typing model.
+
 ## 6. Multiple recordings & variable inference
 
 - The user records the **same journey 1–3 times**. For a constant single-shot task, one recording suffices. For variable tasks, 2–3 takes with *different* values.
@@ -92,6 +102,15 @@ Recording is **always on for every interaction — human *and* LLM/automation** 
   - **Enumeration candidate** — a sub-sequence repeats within a take (per list row) → a loop over an extracted list.
   - **Incidental/noise** — differs but looks like a session id/timestamp → flagged low-confidence, resolved by user/LLM.
 - The diff is a *proposal*; the human confirms in review and/or the LLM interviews to name and type each variable.
+
+## 6a. Trace alignment & diff (detailed — informs the A.3 plan)
+
+- **Value-independent step signature** (for alignment): `(kind, url-template, descriptor structural key [role/testId/label + container + ordinal])`, **excluding** the concrete name/text/value — so takes with different values still align, and a differing concrete value at an aligned position is the **variable signal**.
+- **Alignment:** Needleman–Wunsch (edit-distance) over signature sequences for 2 takes; **progressive MSA** for 3 (align 1+2 → profile, then 3). Gap penalties tolerate a stray/extra step.
+- **Classification per aligned column:** *constant* (identical across takes) · *variable* (differing, non-noise → parameter + inferred type from the values) · *enumeration* (a repeated aligned sub-sequence over sibling `nth` targets → `forEach`) · *incidental/noise* (uuid/timestamp/high-entropy → low-confidence; defaults to constant/ignore).
+- **Confidence & thresholds:** rises with #corroborating takes, clean alignment (no adjacent gaps), value distinguishability, low noise-match. **Confident-variable** = ≥2 takes give distinct non-noise values at a cleanly-aligned column; **confident-constant** = all identical; else **ambiguous → surfaced to the LLM/user**. **Default constant unless corroborated** (conservative — Poka-Yoke against over-generalization).
+- **Output:** a pure, deterministic `DiffResult` per column `{ classification, confidence, values[], inferredType?, enumerationGroup? }` feeding the postdoc confirm step and Phase-B naming. The diff engine is LLM-free; the LLM only resolves *ambiguous* columns.
+- **FMEA:** mis-alignment → conservative gaps + structural (not value) signature + corroboration; over-generalization → default constant + user confirm; under-generalization → multi-take is the point (single take = no variables unless user marks one); noise-as-variable → entropy/uuid/timestamp detection + confidence.
 
 ## 7. "Postdoc" — review & interactive authoring
 
