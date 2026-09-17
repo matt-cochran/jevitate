@@ -10,3 +10,4 @@ export * from "./events.js";
 export * from "./messages.js";
 export * from "./interaction-policy.js";
 export * from "./rng.js";
+export * from "./throttle-resolver.js";
