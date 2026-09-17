@@ -116,6 +116,9 @@ importers:
 
   packages/screenplay:
     dependencies:
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright
