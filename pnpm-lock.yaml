@@ -33,6 +33,15 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/daemon:
+    dependencies:
+      '@doit/application':
+        specifier: workspace:*
+        version: link:../application
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/domain:
     dependencies:
       nanoid:

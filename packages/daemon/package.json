@@ -1,0 +1,13 @@
+{
+  "name": "@doit/daemon",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": {
+    "@doit/application": "workspace:*",
+    "@doit/domain": "workspace:*"
+  },
+  "scripts": { "build": "tsc --build" }
+}

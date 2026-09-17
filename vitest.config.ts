@@ -10,6 +10,7 @@ export default defineConfig({
       "@doit/domain": pkg("domain"),
       "@doit/application": pkg("application"),
       "@doit/storage-sqlite": pkg("storage-sqlite"),
+      "@doit/daemon": pkg("daemon"),
       // Add one line per new package here, e.g.:
     },
   },
