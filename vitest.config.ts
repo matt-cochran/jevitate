@@ -12,6 +12,7 @@ export default defineConfig({
       "@doit/storage-sqlite": pkg("storage-sqlite"),
       "@doit/daemon": pkg("daemon"),
       "@doit/mcp-facade": pkg("mcp-facade"),
+      "@doit/cli": pkg("cli"),
       // Add one line per new package here, e.g.:
     },
   },
