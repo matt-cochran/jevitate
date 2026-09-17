@@ -98,6 +98,9 @@ importers:
         specifier: workspace:*
         version: link:../screenplay
     devDependencies:
+      '@doit/example-site':
+        specifier: workspace:*
+        version: link:../../apps/example-site
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright
