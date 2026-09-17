@@ -14,3 +14,4 @@ export * from "./throttle-resolver.js";
 export * from "./quiet-hours.js";
 export * from "./pacer.js";
 export * from "./simulate-timing.js";
+export * from "./throttle-gate.js";
