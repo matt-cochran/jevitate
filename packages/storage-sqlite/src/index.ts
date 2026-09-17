@@ -3,3 +3,4 @@ export * from "./schema.js";
 export * from "./migrator.js";
 export * from "./command-repository.js";
 export * from "./event-log.js";
+export * from "./incoming-message-repository.js";

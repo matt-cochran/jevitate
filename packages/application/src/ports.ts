@@ -1,4 +1,4 @@
-import type { CommandState, RiskClass, DomainEvent, DomainEventInput } from "@doit/domain";
+import type { CommandState, RiskClass, DomainEvent, DomainEventInput, NormalizedMessage } from "@doit/domain";
 
 export interface Clock {
   nowIso(): string;
@@ -34,4 +34,17 @@ export interface CommandRepository {
 export interface EventLog {
   append(e: DomainEventInput): Promise<number>;
   since(seq: number): Promise<DomainEvent[]>;
+}
+
+export interface IncomingMessageRecord extends NormalizedMessage {
+  id: string;
+  site: string;
+  account: string;
+  firstSeenAt: string;
+  processingStatus: string;
+}
+
+export interface IncomingMessageRepository {
+  upsert(site: string, account: string, msg: NormalizedMessage): Promise<{ inserted: boolean; id: string }>;
+  listBySite(site: string, account: string): Promise<IncomingMessageRecord[]>;
 }
