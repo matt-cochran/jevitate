@@ -79,6 +79,25 @@ test("site policy set then site policy get --json round-trips via a temp --db", 
   expect(getParsed).toMatchObject({ v: 1, ok: true, data: { version: "1" } });
 });
 
+test("site policy get --json succeeds when the --db parent directory does not yet exist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  // Only `root` exists; `nested/subdir` must be created by the command itself,
+  // matching ProfileManager.create()'s mkdir(dir, { recursive: true }) pattern.
+  const dbPath = join(root, "nested", "subdir", "db.sqlite");
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(
+    ["site", "policy", "get", "example.com", "--db", dbPath, "--json"],
+    { from: "user" }
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed).toMatchObject({ v: 1, ok: true, data: null });
+});
+
 test("site policy get --json reports null data when no policy is stored", async () => {
   const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
   const profiles = new ProfileManager(root);

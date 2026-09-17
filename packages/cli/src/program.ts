@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, mkdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { Command } from "commander";
 import type { ProfileManager } from "@doit/daemon";
@@ -29,6 +29,7 @@ async function withSitePolicyRepository<T>(
   dbPath: string,
   fn: (repository: SqliteSitePolicyRepository) => Promise<T>
 ): Promise<T> {
+  await mkdir(dirname(dbPath), { recursive: true });
   const db = openDatabase(dbPath);
   try {
     await migrateToLatest(db);
