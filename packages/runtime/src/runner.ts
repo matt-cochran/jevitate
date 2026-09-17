@@ -35,14 +35,18 @@ export class ActionRunner {
       allowedOrigins: req.allowedOrigins,
       baseUrl: req.baseUrl,
     });
-    if (req.traceDir) await session.startTracing();
     try {
+      if (req.traceDir) await session.startTracing();
       const actor = CastActor.named(req.account).whoCan(new BrowseTheWeb(session, req.allowedOrigins));
       const raw = await action.execute(actor, input);
       return { output: action.output.parse(raw) };
     } catch (err) {
       if (req.traceDir) {
-        await session.stopTracingToFile(join(req.traceDir, `trace-${req.actionId}.zip`));
+        try {
+          await session.stopTracingToFile(join(req.traceDir, `trace-${req.actionId}.zip`));
+        } catch {
+          /* don't mask the original error */
+        }
       }
       throw err;
     } finally {
