@@ -354,10 +354,11 @@ test(
       }
 
       // 7. The navigating click's postcondition is the URL it produced —
-      //    whatever kind of step it ended up as. See the dedicated test below
-      //    for why a *navigating* click is currently a handback rather than a
-      //    click; either way the navigation is folded into its postcondition
-      //    rather than emitted as a step of its own.
+      //    whatever kind of step it ended up as. That it is a real `click`
+      //    rather than a handback is the dedicated test's business (see "a
+      //    click that navigates is still recorded as a real click"); what this
+      //    end-to-end assembly test pins is that either way the navigation is
+      //    folded into its postcondition rather than emitted as a step.
       const navigating = login[3]!;
       const postcondition = navigating.kind === "handback" ? navigating.resume : (navigating as { expect: unknown }).expect;
       expect(postcondition).toEqual({ kind: "urlIncludes", text: "/inbox" });
@@ -472,20 +473,19 @@ test(
 );
 
 test(
-  "KNOWN LIMITATION: a click that navigates cannot be described, so it degrades to a handback that still carries the right postcondition",
+  "a click that navigates is still recorded as a real click: its facts were captured in-page, synchronously, before the document went away",
   async () => {
-    // This characterizes a real limit, it does not endorse it. A click on a
-    // submit button starts a navigation at once; the new document commits in
-    // tens of milliseconds, while describing the clicked element costs many DOM
-    // round trips (measured at 700-2100ms cold). The query lands on the new
-    // document, finds no `data-doit-eid`, and there is no descriptor to record.
+    // This replaces Task 5's "KNOWN LIMITATION" test, which characterized the
+    // opposite behaviour. A click on a submit button starts a navigation at
+    // once, and the new document commits in tens of milliseconds — far sooner
+    // than Node can finish the DOM round trips a description used to need
+    // (measured at 700-2100ms), so the step degraded to a `handback`. The fix
+    // reads the element's facts inside the capture listener, in the same tick
+    // as the click and before the browser's default action runs, so there is
+    // nothing left to race: the facts are always the pre-navigation element's.
     //
-    // Recording it as a `handback` is the honest degradation: a human is asked
-    // to perform the step, and `resume` still says exactly how to tell it
-    // worked. What it is NOT is replayable without a human, which is why this
-    // is escalated rather than papered over. When the fix lands (capturing the
-    // element's facts in-page, synchronously, in the capture listener) this
-    // test should fail and be rewritten to assert a `click` step.
+    // This is the one step a login journey cannot do without, so "a real
+    // `click` on Sign in" is the assertion that matters, not "some step".
     await withSite(LOGIN_JOURNEY, async ({ recorder, page }) => {
       await recorder.start();
       await page.goto(`${ORIGIN}/login`);
@@ -497,16 +497,62 @@ test(
       expect(recording.pages.map((p) => p.url)).toEqual(["/login", "/inbox"]);
 
       const steps = stepsOf(recording.pages[0]!.steps);
-      expect(steps.map((s) => s.kind)).toEqual(["navigate", "handback"]);
-      const handback = steps[1]!;
-      if (handback.kind !== "handback") throw new Error("expected handback");
-      // The navigation still folds into the step it caused, so the recording
-      // knows where the journey went even though it cannot click for itself.
-      expect(handback.resume).toEqual({ kind: "urlIncludes", text: "/inbox" });
-      // And a click on a button that does NOT navigate is described perfectly
-      // well, which is what pins the cause to the navigation and not to
-      // buttons, clicks or the descriptor ladder.
+      expect(steps.map((s) => s.kind)).toEqual(["navigate", "click"]);
+      // A real, replayable click — and the navigation it caused is still folded
+      // into its postcondition rather than emitted as a step of its own.
+      expect(steps[1]).toEqual({
+        kind: "click",
+        target: { role: "button", name: "Sign in" },
+        expect: { kind: "urlIncludes", text: "/inbox" },
+      });
       expect(stepsOf(recording.pages[1]!.steps)).toEqual([]);
+    });
+  },
+  120_000,
+);
+
+test(
+  "when the document has moved on, the descriptor is trusted from the captured facts alone: stability capped one notch, no alternates",
+  async () => {
+    // The other half of the fix, asserted where it is observable. Live
+    // validation (does this selector resolve to exactly this node?) genuinely
+    // needs the document to still exist, so it is best-effort: skipped once the
+    // page has demonstrably moved on. What the recorder reports then must say
+    // so — the top facts-derived candidate, one notch less stable because
+    // nothing corroborated it, and no alternates because nothing else was
+    // corroborated either.
+    await withSite(LOGIN_JOURNEY, async ({ recorder, page }) => {
+      await recorder.start();
+      await page.goto(`${ORIGIN}/login`);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.waitForURL(/\/inbox$/);
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await describedSoFar(recorder, page);
+
+      const clicks = actions(recorder).filter((a) => a.payload.kind === "click");
+      expect(clicks.length).toBe(2);
+
+      // The navigating click: unvalidated, so `high` (an ungenerated role+name)
+      // is reported as `medium`, and the text/css rungs that were never proven
+      // are not offered as alternates.
+      const navigating = clicks[0]!.resolution;
+      expect(navigating?.ok).toBe(true);
+      if (navigating?.ok !== true) throw new Error("expected the navigating click to be described");
+      expect(navigating.descriptor).toEqual({ role: "button", name: "Sign in" });
+      expect(navigating.stability).toBe("medium");
+      expect(navigating.alternates).toEqual([]);
+
+      // The click that changed nothing: validated against the live page, so it
+      // keeps its full stability and carries the lower rungs that also proved
+      // out. Without this the test could pass by capping everything.
+      const settled = clicks[1]!.resolution;
+      expect(settled?.ok).toBe(true);
+      if (settled?.ok !== true) throw new Error("expected the settled click to be described");
+      expect(settled.descriptor).toEqual({ role: "button", name: "Refresh" });
+      expect(settled.stability).toBe("high");
+      expect(settled.alternates.length).toBeGreaterThan(0);
+
+      await recorder.stop();
     });
   },
   120_000,
@@ -522,6 +568,12 @@ test(
     // description then succeeds — against the wrong element, on the wrong page
     // — and is written onto the previous page's step. It parses, it replays,
     // and it clicks the wrong thing.
+    //
+    // Task 5b moved the goalposts in the right direction: the facts now come
+    // from the capture handler, so /login's click is described correctly rather
+    // than handed back — but the *validation* query is still the one that can
+    // stray onto /inbox, so the guard it is checking is still load-bearing, and
+    // the wrong answer it must never produce is still "Refresh".
     //
     // The fixture forces the collision rather than hoping for it: /inbox clicks
     // a button from a load-time script, so the new document mints eid 1 within
@@ -552,15 +604,23 @@ test(
         expect(recording.pages.map((p) => p.url)).toEqual(["/login", "/inbox"]);
 
         // The load-bearing assertion: /login's step must not have borrowed the
-        // element /inbox tagged 1. A handback is the honest answer; describing
-        // it as "Refresh" would be a lie about which button was clicked, and
-        // one that parses, replays and clicks the wrong thing.
+        // element /inbox tagged 1. Describing it as "Refresh" would be a lie
+        // about which button was clicked, and one that parses, replays and
+        // clicks the wrong thing. It is described as the button that was
+        // actually clicked — from facts read before /inbox existed — and the
+        // capped stability says out loud that nothing on a live page proved it.
         const login = stepsOf(recording.pages[0]!.steps);
         const diagnostic = JSON.stringify(
           clicks.map((c) => ({ url: c.frameUrl, resolution: c.resolution })),
         );
-        expect(login.map((s) => s.kind), diagnostic).toEqual(["navigate", "handback"]);
+        expect(login.map((s) => s.kind), diagnostic).toEqual(["navigate", "click"]);
         expect(JSON.stringify(login), diagnostic).not.toContain("Refresh");
+        expect(login[1], diagnostic).toEqual({
+          kind: "click",
+          target: { role: "button", name: "Sign in" },
+          expect: { kind: "urlIncludes", text: "/inbox" },
+        });
+        expect(clicks[0]!.resolution, diagnostic).toMatchObject({ ok: true, stability: "medium" });
 
         // /inbox's own click is described normally — the guard rejects the
         // cross-document borrow, not the new page's genuine action.

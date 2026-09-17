@@ -208,6 +208,17 @@ export interface ReadFactsOptions {
  * — hence the inlined helpers and the `options` argument (the shared knowledge
  * it needs, passed in rather than closed over).
  *
+ * DUPLICATED — KEEP IN STEP WITH `inject.ts`. `gatherFacts` in `inject.ts` is a
+ * copy of this function that runs *synchronously inside the capture-phase event
+ * handler*, which is the only way to read the facts of an element whose own
+ * click is about to replace the document. The two must keep producing the same
+ * object for the same element, because a descriptor built from one is validated
+ * against a page queried by the other. `inject.ts` cannot import this (its
+ * source is serialized by `addInitScript`, so it may not reference anything
+ * outside its own body, and a function cannot be passed in as a JSON argument
+ * either). Change one, check the other; this copy is the one Task 4's ladder
+ * tests exercise, so it is the reference.
+ *
  * Exported for `descriptor.test.ts`, which asserts directly that a password
  * field's value is never among the facts this returns. That guarantee is not
  * observable from `computeDescriptor`'s return value — the point is what is
@@ -367,8 +378,14 @@ function accessibleNameOf(facts: ElementFacts): string | undefined {
  * with no underlying data is simply skipped — nothing is invented, and
  * nothing is filtered yet: validation is a separate step on purpose, so a
  * heuristic that guessed wrong is caught by the page rather than trusted.
+ *
+ * Exported because facts no longer only come from a live `ElementHandle`: the
+ * capture listener gathers them in-page at the moment of the action (see
+ * `inject.ts`), and `Recorder` builds the ladder from those directly, so that
+ * an action which replaces its own document can still be described. Pure — it
+ * touches no page — which is exactly what makes it usable there.
  */
-function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
+export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
   const candidates: DescriptorCandidate[] = [];
 
   if (facts.testId !== null && facts.testId !== "") {
@@ -421,8 +438,13 @@ function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
  * interpreter are meant to meet only through the recording schema. The two
  * must be changed together; the ladder order is fixed by the design spec
  * (§4/§8), which is what actually keeps them in step.
+ *
+ * Exported alongside `resolvesToSameElement` so a caller that builds its own
+ * candidates (see `buildCandidates`) can validate them the same way
+ * `computeDescriptor` does, instead of reimplementing the rung order and
+ * drifting from it.
  */
-function descriptorToLocator(page: Page, d: TargetDescriptor): Locator {
+export function descriptorToLocator(page: Page, d: TargetDescriptor): Locator {
   if (d.testId !== undefined) return page.getByTestId(d.testId);
   if (d.role !== undefined && d.name !== undefined) {
     return page.getByRole(d.role as Parameters<Page["getByRole"]>[0], { name: d.name });

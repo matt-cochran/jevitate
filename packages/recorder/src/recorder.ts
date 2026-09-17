@@ -1,8 +1,16 @@
-import type { Frame, Page } from "playwright";
+import type { ElementHandle, Frame, Page } from "playwright";
 import type { BrowserSession } from "@doit/playwright";
 import type { Recording, TargetDescriptor } from "@doit/recording";
 import { assembleRecording, pathOrRaw } from "./assemble.js";
-import { computeDescriptor, EID_ATTRIBUTE, type Stability } from "./descriptor.js";
+import {
+  buildCandidates,
+  descriptorToLocator,
+  resolvesToSameElement,
+  EID_ATTRIBUTE,
+  type DescriptorCandidate,
+  type ElementFacts,
+  type Stability,
+} from "./descriptor.js";
 import { installRecorderListener } from "./inject.js";
 
 /** The name the injected script calls: `window.__doitRecord(payload)`. */
@@ -28,6 +36,23 @@ export interface CapturedActionPayload {
   readonly typeAttr?: string;
   /** Trimmed text for click/submit; current value for input/change. */
   readonly rawText?: string;
+  /**
+   * The acted element's DOM facts, read **in the page, synchronously, in the
+   * same tick as the action** (see `inject.ts`). Present for the kinds that
+   * become a Step (`click`/`input`/`change`); absent for `keydown`/`submit`,
+   * which never need a descriptor.
+   *
+   * These are what the descriptor ladder is built from, and gathering them at
+   * capture time rather than asking the page afterwards is what lets an action
+   * that destroys its own document still be described.
+   */
+  readonly facts?: ElementFacts;
+  /**
+   * `location.href` of the document the action happened in. Node compares it
+   * against the frame's current URL to decide whether live validation of the
+   * facts is still meaningful.
+   */
+  readonly docUrl?: string;
   /** Page-side `Date.now()` — authoritative for ordering and timing. */
   readonly ts: number;
 }
@@ -45,9 +70,20 @@ export interface CapturedActionPayload {
 export type ResolutionFailureCause =
   /** The action happened in a nested frame, which descriptor computation does not cover. */
   | "sub-frame"
-  /** The page navigated while the description was being computed. */
+  /**
+   * The page navigated while the description was being computed.
+   *
+   * No longer produced: the facts a descriptor is built from are now read
+   * in-page at the moment of the action, so a navigation costs the *validation*
+   * of those facts, not the description itself (see `compute`). Kept because it
+   * remains part of `assemble.ts`'s handback vocabulary and describes a real
+   * predicament a future capture path could still land in.
+   */
   | "document-replaced"
-  /** Nothing carries the capture tag any more — the element was removed, or the page moved on. */
+  /**
+   * No descriptor was ever attempted for this action — nothing was recording
+   * when it arrived. `assemble.ts` uses this cause for that case.
+   */
   | "element-gone"
   /** The element is there, but no descriptor provably resolves back to it. */
   | "not-identifiable";
@@ -83,9 +119,9 @@ export interface ActionCaptureEvent {
   readonly payload: CapturedActionPayload;
   /**
    * Deliberately mutable, and deliberately optional. The event is buffered
-   * synchronously so the buffer preserves true arrival order; the DOM round
-   * trip that computes the descriptor cannot be synchronous, so it fills this
-   * in a moment later. `undefined` means the descriptor was never attempted —
+   * synchronously so the buffer preserves true arrival order; the descriptor is
+   * settled a moment later, once its best-effort validation against the live
+   * page has run (or been abandoned). `undefined` means it was never attempted —
    * either the kind needs none (`keydown`/`submit`) or no recording was running.
    */
   resolution?: DescriptorResolution;
@@ -113,11 +149,13 @@ export type CaptureEvent = ActionCaptureEvent | NavigationCaptureEvent;
  *
  *  1. `install()` arms capture. Raw events are buffered and the DOM is left
  *     exactly as it was found.
- *  2. `start()`…`stop()` is a recording. Each action's descriptor is computed
- *     **as it arrives**, not at the end — by `stop()` the journey has crossed
- *     several documents and `[data-doit-eid=N]` cannot be resolved on a page
- *     that was navigated away from three steps ago. Resolving per action also
- *     disposes of the "an `eid` is only unique per document" hazard.
+ *  2. `start()`…`stop()` is a recording. Each action arrives carrying the facts
+ *     the page read about the acted element *synchronously, in the event
+ *     handler* (see `inject.ts`), and its descriptor is settled **as it
+ *     arrives**, not at the end — by `stop()` the journey has crossed several
+ *     documents and `[data-doit-eid=N]` cannot be queried on a page that was
+ *     navigated away from three steps ago. Resolving per action also disposes
+ *     of the "an `eid` is only unique per document" hazard.
  *  3. `stop()` translates the buffer (see `assemble.ts`). Pure: no DOM is
  *     touched, because every DOM question was already answered in phase 2.
  */
@@ -225,10 +263,11 @@ export class Recorder {
     // descriptor; assembling without it would silently demote a real step to
     // a handback.
     await Promise.allSettled([...this.inFlight]);
-    // The capture tags exist only for the duration of a recording (`compute`
-    // puts back the one it consumed so a field stays recognizable across its
-    // own events). Now that no further event can arrive, the page the user is
-    // still looking at gets its DOM back.
+    // The capture tags exist only for the duration of a recording: the in-page
+    // listener reuses an element's `eid` for as long as the attribute is there,
+    // which is what keeps a field's many events reading as one element. Now
+    // that no further event can arrive, the page the user is still looking at
+    // gets its DOM back.
     await this.untagAll();
     return assembleRecording(this.buffer, {
       site: this.site,
@@ -275,37 +314,19 @@ export class Recorder {
   }
 
   /**
-   * Resolves `payload.eid` back to the live element and computes its
-   * descriptor — **now, while the recording is running**, not at `stop()`.
+   * Turns an action's captured facts into a descriptor — **now, while the
+   * recording is running**, not at `stop()`.
    *
    * This is the whole reason capture and assembly are split the way they are.
    * By the time `stop()` runs, the user has demonstrated a journey across
-   * several documents, and `[data-doit-eid=N]` cannot be resolved on a page
-   * that was navigated away from three steps ago. Resolving per action also
-   * disposes of the "an `eid` is only unique per document" hazard: the tag is
-   * read and stripped before the page's counter can hand the same number to a
-   * different element.
+   * several documents, and no question can be asked of a page that was
+   * navigated away from three steps ago. Validating per action also disposes of
+   * the "an `eid` is only unique per document" hazard: the tag is queried while
+   * the document that minted it is still the one on screen.
    *
    * Never throws. A failure is recorded as data (`{ok: false}`) and becomes a
    * `handback` at assembly time, because "this action is not reliably
    * replayable" is a fact about the recording, not an error in taking it.
-   *
-   * KNOWN LIMITATION — an action that destroys its own document cannot be
-   * described. A click on a submit button (or a link) starts a navigation
-   * immediately; the new document commits in tens of milliseconds, while
-   * describing the clicked element needs a `locator.elementHandle`, an
-   * `evaluate` for the element's facts and a uniqueness-plus-identity probe per
-   * ladder rung — measured at 700–2100ms cold and well over the commit time
-   * even warm. The query then runs against the *new* document, finds no
-   * `data-doit-eid`, and the step degrades to a `handback`.
-   *
-   * Pausing the navigation request with `page.route` was tried and does not
-   * work: while a navigation is pending Playwright's locator auto-waiting
-   * blocks, so holding the request also holds every query the description
-   * needs (measured: 4 of 5 descriptions still unfinished after a 10s hold).
-   * A real fix has to capture the element's facts **in the page, synchronously,
-   * inside the capture listener** — i.e. in `inject.ts`/`descriptor.ts`, not
-   * here. Escalated rather than worked around; see the task-5 report.
    */
   private async resolve(source: { page: Page; frame: Frame }, event: ActionCaptureEvent): Promise<void> {
     const page = this.session.page;
@@ -314,9 +335,10 @@ export class Recorder {
     const key = `${epoch}:${eid}`;
 
     if (source.frame !== source.page.mainFrame()) {
-      // Descriptor computation is main-frame only (`computeDescriptor` queries
-      // the page, not the frame), so a sub-frame action is routed to a human
-      // rather than described wrongly.
+      // Descriptor computation is main-frame only — `compute` validates against
+      // the page, not the frame, and `docUrl`/epoch only track the main frame —
+      // so a sub-frame action is routed to a human rather than described
+      // wrongly.
       event.resolution = {
         ok: false,
         cause: "sub-frame",
@@ -327,17 +349,49 @@ export class Recorder {
     }
 
     // Registered *before* the first await, so every event for this element
-    // that arrives while the computation is running shares it rather than
-    // starting a doomed second one against an already-stripped tag.
+    // that arrives while the computation is running shares its answer instead
+    // of starting a second, identical set of validation probes.
     let pending = this.resolutions.get(key);
     if (pending === undefined) {
-      pending = this.compute(page, eid, epoch);
+      pending = this.compute(page, event.payload, epoch);
       this.resolutions.set(key, pending);
     }
     event.resolution = await pending;
   }
 
-  private async compute(page: Page, eid: string, epoch: number): Promise<DescriptorResolution> {
+  /**
+   * Builds the descriptor ladder from the facts the page already sent, then
+   * validates it against the live page **if the live page is still the one the
+   * action happened on**.
+   *
+   * The order matters and is the fix Task 5 could not make. Facts first, from
+   * `payload.facts`: they were read inside the capture handler, in the same
+   * tick as the action, so they describe the element the user acted on and
+   * nothing can take that away afterwards — not a navigation, not a re-render.
+   * A descriptor therefore always exists.
+   *
+   * Validation second, and best-effort. Proving that a candidate resolves to
+   * exactly this node genuinely needs the node, so it is attempted only while
+   * the document is demonstrably still there, and abandoned (not failed) the
+   * moment it is not. What "still there" means is the conjunction of two cheap
+   * checks: the frame's URL still equals the one captured with the action, and
+   * the main-frame epoch has not advanced. Either alone has a blind spot — a
+   * POST to the same URL keeps the URL, and the epoch ticks slightly after the
+   * document actually changes — and both are answered from memory, with no
+   * round trip to race against.
+   *
+   * An abandoned validation costs stability, not the step: the top facts-derived
+   * candidate is reported one notch less stable, with no alternates, because
+   * nothing corroborated it. Only an action that arrived with no facts at all
+   * — which `buildCandidates`'s near-universal css rung makes very rare — is
+   * left undescribable.
+   */
+  private async compute(
+    page: Page,
+    payload: CapturedActionPayload,
+    epoch: number,
+  ): Promise<DescriptorResolution> {
+    const { eid, facts, docUrl } = payload;
     const fail = (cause: ResolutionFailureCause, reason: string): DescriptorResolution => ({
       ok: false,
       cause,
@@ -345,69 +399,93 @@ export class Recorder {
       resumePath: pathOrRaw(page.url()),
     });
 
-    // The `eid` is interpolated into a css attribute selector, and it arrives
-    // from the page — where any script can call `window.__doitRecord` with an
-    // `eid` crafted to break out of the quotes. The injected listener only ever
-    // sends a decimal counter, so anything else is refused outright.
+    if (facts === undefined) {
+      return fail("not-identifiable", "the action arrived with no element facts to describe it by");
+    }
+
+    const candidates = buildCandidates(facts);
+    const top = candidates[0];
+    if (top === undefined) {
+      return fail(
+        "not-identifiable",
+        `nothing about the acted <${facts.tag}> element identifies it: no ladder rung applies`,
+      );
+    }
+
+    /** The facts are trusted as they stand: unproven, so one notch less stable. */
+    const unproven = (): DescriptorResolution => ({
+      ok: true,
+      descriptor: top.descriptor,
+      stability: CAPPED_STABILITY[top.stability],
+      alternates: [],
+    });
+
+    // `eid` is interpolated into a css attribute selector and arrives from the
+    // page, where any script can call `window.__doitRecord` with one crafted to
+    // break out of the quotes. The injected listener only ever sends a decimal
+    // counter; anything else is refused rather than queried.
     if (!/^[0-9]+$/.test(eid)) {
       return fail("not-identifiable", `refusing to resolve a malformed eid: ${JSON.stringify(eid)}`);
     }
 
-    let handle;
+    const movedOn = (): boolean =>
+      this.epoch !== epoch || (docUrl !== undefined && page.mainFrame().url() !== docUrl);
+
+    if (movedOn()) return unproven();
+
+    let handle: ElementHandle<Node> | null = null;
     try {
       handle = await page
         .locator(`[${EID_ATTRIBUTE}="${eid}"]`)
         .elementHandle({ timeout: RESOLVE_TIMEOUT_MS });
-    } catch (err) {
-      return fail("element-gone", `could not resolve ${EID_ATTRIBUTE}="${eid}": ${messageOf(err)}`);
+    } catch {
+      handle = null;
     }
-    if (handle === null) {
-      return fail("element-gone", `no element carries ${EID_ATTRIBUTE}="${eid}" any more`);
+    // Both readings of "no handle" end the same way. The page moved on while
+    // the query ran, or the element itself is gone (a menu that closed, a row
+    // that re-rendered) — either way there is nothing left to prove a candidate
+    // against, and the facts remain the best answer available.
+    if (handle === null) return unproven();
+
+    const passing: DescriptorCandidate[] = [];
+    try {
+      if (movedOn()) return unproven();
+      for (const candidate of candidates) {
+        const locator = descriptorToLocator(page, candidate.descriptor);
+        if (await resolvesToSameElement(page, locator, handle)) passing.push(candidate);
+      }
+    } finally {
+      await handle.dispose().catch(() => undefined);
     }
 
-    // The document must not have been replaced while that query was running,
-    // and checking is not paranoia: `eid`s restart at 1 in every document, so a
-    // query left over from the page we just left keeps polling and can match a
-    // *different* element that the new page has since tagged with the same
-    // number. `computeDescriptor` would then succeed — against the wrong
-    // element, on the wrong page — and that descriptor would be written onto
-    // the previous page's step, where it parses, replays, and clicks the wrong
-    // thing. Silently describing the wrong element is far worse than admitting
-    // we could not describe this one, so a changed epoch fails the resolution.
-    if (this.epoch !== epoch) {
-      await handle.dispose().catch(() => undefined);
+    // Re-checked after the probes, and this is the guard that keeps a stale
+    // resolution honest: `eid`s restart at 1 in every document, so a query left
+    // over from the page we just left can match a *different* element the new
+    // page has since tagged with the same number. Validating the old page's
+    // facts against the new page's element would either reject a perfectly good
+    // descriptor or — far worse — bless one that was proven against the wrong
+    // thing. Anything learned after the document changed is discarded.
+    if (movedOn()) return unproven();
+
+    const primary = passing[0];
+    if (primary === undefined) {
+      // The document is still here and so is the element, and *still* no rung
+      // resolves uniquely back to it. That is a real "cannot describe this",
+      // not a race, and inventing an unproven descriptor for an element we can
+      // see is ambiguous would produce a step that replays onto the wrong node.
       return fail(
-        "document-replaced",
-        `the document was replaced while describing ${EID_ATTRIBUTE}="${eid}"; ` +
-          "refusing to describe a same-numbered element of the page that followed",
+        "not-identifiable",
+        `no descriptor uniquely resolves to the acted <${facts.tag}> element ` +
+          `(tried: ${candidates.map((c) => c.rung).join(", ")})`,
       );
     }
 
-    try {
-      const computed = await computeDescriptor(page, handle);
-      return {
-        ok: true,
-        descriptor: computed.descriptor,
-        stability: computed.stability,
-        alternates: computed.alternates,
-      };
-    } catch (err) {
-      return fail("not-identifiable", messageOf(err));
-    } finally {
-      // Put the capture tag back. `computeDescriptor` strips it — correctly, as
-      // cleanup — but the recording is still running, and Task 3's in-page
-      // listener only reuses an `eid` while the attribute is still on the
-      // element: strip it and the field's next event (the blur-time `change`,
-      // or the next keystroke) mints a *fresh* `eid`, which reads as a second,
-      // different element and duplicates the step. `stop()` does the real
-      // cleanup, once, when no further events can arrive.
-      await handle
-        .evaluate((node, [name, value]) => {
-          (node as Element).setAttribute(name!, value!);
-        }, [EID_ATTRIBUTE, eid])
-        .catch(() => undefined);
-      await handle.dispose().catch(() => undefined);
-    }
+    return {
+      ok: true,
+      descriptor: primary.descriptor,
+      stability: primary.stability,
+      alternates: passing.slice(1).map((c) => c.descriptor),
+    };
   }
 
   /** Best-effort removal of every remaining capture tag, in every live frame. */
@@ -436,15 +514,27 @@ export class Recorder {
 const NEEDS_DESCRIPTOR: ReadonlySet<string> = new Set(["click", "input", "change"]);
 
 /**
- * Short on purpose. This resolution races the consequences of the action that
+ * Short on purpose. This query races the consequences of the action that
  * triggered it, and waiting longer cannot improve the odds: either the tag is
  * in the current document and the query answers at once, or the document has
  * been replaced and no amount of waiting will bring the element back. The only
- * thing a generous timeout buys is a `stop()` that hangs on doomed queries.
+ * thing a generous timeout buys is a `stop()` that hangs on doomed queries —
+ * and nothing is lost by giving up early, because the descriptor itself no
+ * longer depends on this query, only its corroboration does.
  */
 const RESOLVE_TIMEOUT_MS = 500;
 
-const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/**
+ * What a rung's stability becomes when nothing could corroborate it. One notch,
+ * not a floor: a `high` role+name read off the real element a moment before the
+ * page moved on is genuinely better evidence than a css path, and flattening
+ * both to `low` would tell the reviewer the opposite.
+ */
+const CAPPED_STABILITY: Readonly<Record<Stability, Stability>> = {
+  high: "medium",
+  medium: "low",
+  low: "low",
+};
 
 /**
  * Validates what the page sent. Copies `typeAttr`/`rawText` only when present,
@@ -462,9 +552,46 @@ function toPayload(raw: unknown): CapturedActionPayload | undefined {
     tag: string;
     typeAttr?: string;
     rawText?: string;
+    facts?: ElementFacts;
+    docUrl?: string;
     ts: number;
   } = { eid: r.eid, kind: r.kind as DomEventKind, tag: r.tag, ts: r.ts };
   if (typeof r.typeAttr === "string") payload.typeAttr = r.typeAttr;
   if (typeof r.rawText === "string") payload.rawText = r.rawText;
+  if (typeof r.docUrl === "string") payload.docUrl = r.docUrl;
+  const facts = toFacts(r.facts);
+  if (facts !== undefined) payload.facts = facts;
   return payload;
+}
+
+/**
+ * Rebuilds `ElementFacts` field by field from whatever the page sent.
+ *
+ * Nothing is spread through: these facts are the sole input to the descriptor
+ * ladder now, they arrive over a binding any page script can call, and every
+ * one of them ends up either in a persisted recording or in a locator. A field
+ * of the wrong type is dropped to its neutral value rather than carried, and a
+ * payload that is not an object at all yields no facts — which the caller reads
+ * as "this action cannot be described", never as "describe it with junk".
+ */
+function toFacts(raw: unknown): ElementFacts | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.tag !== "string" || f.tag === "") return undefined;
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return {
+    tag: f.tag,
+    roleAttr: str(f.roleAttr),
+    hasHref: f.hasHref === true,
+    inputType: str(f.inputType),
+    selectIsMulti: f.selectIsMulti === true,
+    ariaLabel: str(f.ariaLabel),
+    text: str(f.text) ?? "",
+    alt: str(f.alt),
+    title: str(f.title),
+    value: str(f.value),
+    labelText: str(f.labelText),
+    testId: str(f.testId),
+    css: str(f.css),
+  };
 }
