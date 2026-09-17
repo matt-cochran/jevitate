@@ -5,3 +5,5 @@ export * from "./command-repository.js";
 export * from "./event-log.js";
 export * from "./incoming-message-repository.js";
 export * from "./site-policy-repository.js";
+export * from "./budget-repository.js";
+export * from "./activity-repository.js";
