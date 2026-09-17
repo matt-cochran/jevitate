@@ -123,6 +123,18 @@ importers:
         specifier: ^1.49.0
         version: 1.63.0
 
+  packages/recorder:
+    dependencies:
+      '@doit/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      '@doit/recording':
+        specifier: workspace:*
+        version: link:../recording
+      playwright:
+        specifier: ^1.49.0
+        version: 1.63.0
+
   packages/recording:
     dependencies:
       zod:

@@ -1,0 +1,10 @@
+{
+  "name": "@doit/recorder",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": { "@doit/playwright": "workspace:*", "@doit/recording": "workspace:*", "playwright": "^1.49.0" },
+  "scripts": { "build": "tsc --build" }
+}
