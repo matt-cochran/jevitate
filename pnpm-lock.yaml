@@ -104,6 +104,12 @@ importers:
         specifier: ^1.49.0
         version: 1.63.0
 
+  packages/recording:
+    dependencies:
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
   packages/runtime:
     dependencies:
       '@doit/application':
