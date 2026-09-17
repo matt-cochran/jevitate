@@ -10,6 +10,7 @@ export default defineConfig({
       "@doit/domain": pkg("domain"),
       "@doit/application": pkg("application"),
       "@doit/recording": pkg("recording"),
+      "@doit/interpreter": pkg("interpreter"),
       "@doit/storage-sqlite": pkg("storage-sqlite"),
       "@doit/daemon": pkg("daemon"),
       "@doit/mcp-facade": pkg("mcp-facade"),

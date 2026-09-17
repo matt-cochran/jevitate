@@ -1,0 +1,11 @@
+{
+  "name": "@doit/interpreter",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": { "@doit/recording": "workspace:*", "@doit/screenplay": "workspace:*" },
+  "devDependencies": { "@doit/playwright": "workspace:*", "playwright": "^1.49.0" },
+  "scripts": { "build": "tsc --build" }
+}

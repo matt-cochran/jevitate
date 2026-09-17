@@ -89,6 +89,22 @@ importers:
         specifier: ^3.7.5
         version: 3.7.5
 
+  packages/interpreter:
+    dependencies:
+      '@doit/recording':
+        specifier: workspace:*
+        version: link:../recording
+      '@doit/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
+    devDependencies:
+      '@doit/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      playwright:
+        specifier: ^1.49.0
+        version: 1.63.0
+
   packages/mcp-facade:
     dependencies:
       '@doit/application':
