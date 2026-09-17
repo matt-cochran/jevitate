@@ -9,6 +9,7 @@
     { "path": "packages/cli" },
     { "path": "packages/playwright" },
     { "path": "packages/screenplay" },
-    { "path": "packages/site-sdk" }
+    { "path": "packages/site-sdk" },
+    { "path": "apps/example-site" }
   ]
 }
