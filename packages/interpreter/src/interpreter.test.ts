@@ -240,3 +240,60 @@ test("runToCheckpoint with a negative stepIndex throws a clear Error", async () 
   const interp = new RecordingInterpreter();
   await expect(interp.runToCheckpoint(actor as any, rec, -1)).rejects.toThrow(/stepIndex/i);
 });
+
+// === run: pre-flight validation (trust boundary) ===
+
+test("run: a forEach with an unsupported child kind (navigate) rejects BEFORE row 0's real action runs", async () => {
+  const locator = fakeLocator({ isVisible: vi.fn(async () => true) });
+  const page = fakePage(locator);
+  const actor = actorWithPage(page);
+  // Two+ rows, and the forEach's children include a real action (click) so
+  // that, if the pre-flight check did NOT run first, row 0's click would
+  // fire before the "not supported" error ever surfaced.
+  const itemsLocator = {
+    count: vi.fn(async () => 2),
+    nth: vi.fn(() => locator),
+  };
+  page.getByTestId = vi.fn(() => itemsLocator) as any;
+
+  const rec = recording([
+    [
+      {
+        step: {
+          kind: "forEach",
+          items: { testId: "rows" },
+          as: "row",
+          steps: [
+            { kind: "click", target: { testId: "delete-btn" }, expect: { kind: "visible", target: { testId: "delete-btn" } } },
+            { kind: "navigate", url: "/x", expect: { kind: "urlIncludes", text: "/x" } },
+          ],
+        },
+      },
+    ],
+  ]);
+
+  const interp = new RecordingInterpreter();
+  await expect(interp.run(actor as any, rec)).rejects.toThrow(/unsupported child kind/i);
+
+  // The core proof: no fake locator method was ever called, meaning
+  // runStep/forEach never even started executing row 0.
+  expect(itemsLocator.count).not.toHaveBeenCalled();
+  expect(itemsLocator.nth).not.toHaveBeenCalled();
+  expect(locator.click).not.toHaveBeenCalled();
+  expect(locator.isVisible).not.toHaveBeenCalled();
+});
+
+test("run: a schema-invalid recording rejects with a zod error before any step executes", async () => {
+  const locator = fakeLocator({ isVisible: vi.fn(async () => true) });
+  const actor = actorWithPage(fakePage(locator));
+  const rec: any = recording([
+    [{ step: { kind: "click", target: { testId: "x" }, expect: { kind: "visible", target: { testId: "x" } } } }],
+  ]);
+  // Corrupt it after construction so it's schema-invalid but still shaped
+  // like our test helper's output.
+  rec.pages[0].steps[0].step.kind = "notAKind";
+
+  const interp = new RecordingInterpreter();
+  await expect(interp.run(actor as any, rec)).rejects.toThrow();
+  expect(locator.click).not.toHaveBeenCalled();
+});

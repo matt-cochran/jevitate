@@ -60,3 +60,8 @@ test("role without name does not satisfy the role+name rung and falls through to
 test("throws a clear error when the descriptor has no usable selector", () => {
   expect(() => descriptorToTarget({})).toThrow(/no usable selector/i);
 });
+
+test("frameUrl set throws unconditionally, even when testId is also set (not a last-resort fallback)", () => {
+  const d: TargetDescriptor = { testId: "send", frameUrl: "https://example.com/iframe" };
+  expect(() => descriptorToTarget(d)).toThrow(/frameUrl is not supported in A\.1/);
+});

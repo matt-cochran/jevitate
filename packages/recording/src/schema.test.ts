@@ -110,4 +110,137 @@ describe("RecordingSchema", () => {
     const result = RecordingSchema.parse(validRecording);
     expect(result).toBeDefined();
   });
+
+  // === Fix scope D: navigate.url scheme constraint ===
+
+  function withNavigateUrl(url: string) {
+    return {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "navigate",
+                url,
+                expect: { kind: "urlIncludes", text: "x" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("parses navigate.url as a relative path starting with '/'", () => {
+    expect(() => RecordingSchema.parse(withNavigateUrl("/inbox"))).not.toThrow();
+  });
+
+  it("parses navigate.url as an absolute https:// URL", () => {
+    expect(() => RecordingSchema.parse(withNavigateUrl("https://example.com/x"))).not.toThrow();
+  });
+
+  it("rejects navigate.url with a javascript: scheme", () => {
+    expect(() => RecordingSchema.parse(withNavigateUrl("javascript:alert(1)"))).toThrow();
+  });
+
+  it("rejects navigate.url with a data: scheme", () => {
+    expect(() => RecordingSchema.parse(withNavigateUrl("data:text/html,x"))).toThrow();
+  });
+
+  // === Fix scope E: TargetDescriptor .strict() + non-empty refinement ===
+
+  function withClickTarget(target: unknown) {
+    return {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: {
+                kind: "click",
+                target,
+                expect: { kind: "visible", target: { testId: "x" } },
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("rejects an empty TargetDescriptor ({}) — no usable selector at all", () => {
+    expect(() => RecordingSchema.parse(withClickTarget({}))).toThrow();
+  });
+
+  it("rejects a TargetDescriptor with only frameUrl set — still no usable selector", () => {
+    expect(() =>
+      RecordingSchema.parse(withClickTarget({ frameUrl: "https://example.com/iframe" })),
+    ).toThrow();
+  });
+
+  it("rejects a TargetDescriptor with a typo'd key (testid instead of testId)", () => {
+    expect(() => RecordingSchema.parse(withClickTarget({ testid: "x" }))).toThrow();
+  });
+
+  it("accepts a TargetDescriptor with role set but no name (pairing is an interpreter-level rule, not schema-level)", () => {
+    expect(() => RecordingSchema.parse(withClickTarget({ role: "button" }))).not.toThrow();
+  });
+
+  it("rejects a RecordedStep with an unexpected extra field", () => {
+    const invalid = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: { kind: "assert", check: { kind: "visible", target: { testId: "x" } } },
+              bogusField: "oops",
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => RecordingSchema.parse(invalid)).toThrow();
+  });
+
+  it("rejects a PageSegment with an unexpected extra field", () => {
+    const invalid = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [],
+          bogusField: "oops",
+        },
+      ],
+    };
+    expect(() => RecordingSchema.parse(invalid)).toThrow();
+  });
+
+  it("rejects a StepTiming with an unexpected extra field", () => {
+    const invalid = {
+      version: "1.0",
+      site: "https://example.com",
+      pages: [
+        {
+          url: "https://example.com",
+          steps: [
+            {
+              step: { kind: "assert", check: { kind: "visible", target: { testId: "x" } } },
+              timing: { atMs: 0, durationMs: 0, gapBeforeMs: 0, bogusField: "oops" },
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => RecordingSchema.parse(invalid)).toThrow();
+  });
 });

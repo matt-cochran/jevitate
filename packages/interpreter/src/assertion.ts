@@ -12,6 +12,16 @@ import { descriptorToTarget } from "./descriptor.js";
 export async function checkAssertion(actor: Actor, a: Assertion): Promise<boolean> {
   switch (a.kind) {
     case "visible":
+      // NOTE (deferred to a future milestone, documentation-only): this is a
+      // ONE-SHOT sample — the underlying `locator.isVisible()` (and, for
+      // `urlIncludes` below, `page.url()`) do not retry/wait, unlike
+      // Playwright's own action auto-waiting. A postcondition check here
+      // does not poll, so a `visible`/`urlIncludes` expect immediately
+      // after an async-rendering action can race and fail-closed-but-falsely
+      // (the real outcome held, but wasn't observable yet at check time).
+      // Flag as a known gap to resolve (e.g. via bounded polling) before a
+      // future milestone relies on generated recordings with auto-inserted
+      // postconditions at scale.
       return actor.asks(IsVisible.target(descriptorToTarget(a.target)));
     case "urlIncludes": {
       const page = actor.ability(BrowseTheWebToken).session.page;

@@ -65,15 +65,38 @@ export interface Recording {
 
 // === Zod Schemas ===
 
-const TargetDescriptorSchema = z.object({
-  testId: z.string().optional(),
-  role: z.string().optional(),
-  name: z.string().optional(),
-  label: z.string().optional(),
-  text: z.string().optional(),
-  css: z.string().optional(),
-  frameUrl: z.string().optional(),
-});
+/**
+ * `.strict()` rejects unknown/typo'd keys (e.g. `{testid: "send"}` — lowercase
+ * `d` — would otherwise silently parse as `{}` instead of being caught at
+ * authoring time). The `.refine()` requires at least one of `testId`, `role`,
+ * `label`, `text`, `css` to be a non-empty truthy value, so a fully-empty (or
+ * `frameUrl`-only) descriptor — which has no usable selector at all — fails
+ * validation instead of only failing much later at interpreter runtime.
+ *
+ * Deliberately NOT required here: `role`+`name` pairing. A descriptor with
+ * `role` set but no `name` is still schema-valid (this refine is satisfied by
+ * `role` alone) — it just won't hit the role+name ladder rung at resolution
+ * time and falls through to lower rungs. That pairing rule lives in the
+ * interpreter's selector-ladder fallthrough logic, not the schema.
+ */
+const TargetDescriptorSchema = z
+  .object({
+    testId: z.string().optional(),
+    role: z.string().optional(),
+    name: z.string().optional(),
+    label: z.string().optional(),
+    text: z.string().optional(),
+    css: z.string().optional(),
+    frameUrl: z.string().optional(),
+  })
+  .strict()
+  .refine(
+    (d) => Boolean(d.testId || d.role || d.label || d.text || d.css),
+    {
+      message:
+        "TargetDescriptor must set at least one of testId, role, label, text, or css",
+    },
+  );
 
 const RedactedValueSchema = z.discriminatedUnion("redacted", [
   z.object({ redacted: z.literal(true), length: z.number() }).strict(),
@@ -115,13 +138,31 @@ const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/**
+ * `navigate.url` must be either a relative path (starting with `/`) or an
+ * absolute `http://`/`https://` URL — never a dangerous scheme like
+ * `javascript:`/`data:`/`file:`, and never a bare string with no leading
+ * `/` (which would be ambiguous/unactionable navigation intent). This is
+ * the schema-level half of the design's "no undeclared origins" closed-
+ * schema guardrail; actual origin/allowlist enforcement against the site's
+ * declared origin happens at the browser-port level (pre-existing, tracked
+ * separately as TODO(M3) — not addressed here).
+ */
+const SAFE_NAVIGATE_URL = /^(\/|https?:\/\/)/;
+
+const NavigateUrlSchema = z
+  .string()
+  .refine((url) => SAFE_NAVIGATE_URL.test(url), {
+    message: "navigate.url must be a relative path starting with '/' or an absolute http(s):// URL",
+  });
+
 // Forward declaration for recursive Step schema
 const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("navigate"),
       label: z.string().optional(),
-      url: z.string(),
+      url: NavigateUrlSchema,
       expect: AssertionSchema,
     })
     .strict(),
@@ -187,25 +228,31 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-const StepTimingSchema = z.object({
-  atMs: z.number(),
-  durationMs: z.number(),
-  gapBeforeMs: z.number(),
-});
+const StepTimingSchema = z
+  .object({
+    atMs: z.number(),
+    durationMs: z.number(),
+    gapBeforeMs: z.number(),
+  })
+  .strict();
 
-const RecordedStepSchema = z.object({
-  step: StepSchema,
-  timing: StepTimingSchema.optional(),
-  marker: z.enum(["narration", "checkpoint"]).optional(),
-  variableName: z.string().optional(),
-  enumerationId: z.string().optional(),
-});
+const RecordedStepSchema = z
+  .object({
+    step: StepSchema,
+    timing: StepTimingSchema.optional(),
+    marker: z.enum(["narration", "checkpoint"]).optional(),
+    variableName: z.string().optional(),
+    enumerationId: z.string().optional(),
+  })
+  .strict();
 
-const PageSegmentSchema = z.object({
-  url: z.string(),
-  title: z.string().optional(),
-  steps: z.array(RecordedStepSchema),
-});
+const PageSegmentSchema = z
+  .object({
+    url: z.string(),
+    title: z.string().optional(),
+    steps: z.array(RecordedStepSchema),
+  })
+  .strict();
 
 export const RecordingSchema: ZodType<Recording> = z.object({
   version: z.string(),

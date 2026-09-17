@@ -54,6 +54,21 @@ test(
             { step: { kind: "waitFor", target: { role: "heading", name: "Inbox" }, state: "visible" } },
             {
               step: {
+                kind: "forEach",
+                items: { css: "li[data-thread-id]" },
+                as: "thread",
+                steps: [
+                  {
+                    kind: "extract",
+                    target: { css: "a" },
+                    as: "threadSubject",
+                    expect: { kind: "visible", target: { css: "a" } },
+                  },
+                ],
+              },
+            },
+            {
+              step: {
                 kind: "click",
                 target: { role: "link", name: "Welcome" },
                 expect: { kind: "urlIncludes", text: "/thread/t-1" },
@@ -93,6 +108,13 @@ test(
       const result = await new RecordingInterpreter().run(actor, parsed);
       expect(result.outcome).toBe("completed");
       if (result.outcome !== "completed") throw new Error(`expected completed, got ${JSON.stringify(result)}`);
+      // forEach iterated both /inbox rows in real-DOM order (t-1 "Welcome"
+      // first, t-2 "Follow up" second, per SEED_THREADS) and, per A.1's
+      // documented last-row-wins semantics, the LAST row's extraction is
+      // what remains in vars — proving both that the loop genuinely
+      // iterated real rows (not the same element resolved twice) and that
+      // the last-row-wins contract holds against a real browser.
+      expect(result.vars.threadSubject).toBe("Follow up");
       expect(result.vars.messageText).toBe("Hello there");
     } finally {
       await session.close();

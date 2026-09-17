@@ -10,6 +10,13 @@ import type { Assertion } from "@doit/recording";
  * before continuing (runStep does NOT check it), and the step's `index`
  * within the recording (see `runStep`'s doc comment for why that's a
  * parameter rather than something `runStep` computes).
+ *
+ * NOTE (deferred to a future milestone, documentation-only): the originating
+ * `handback` step's schema also carries an optional `timeoutMs`, but it is
+ * accepted by `RecordingSchema` and not enforced or even read anywhere in
+ * A.1 — `runStep`'s `handback` case (see run-step.ts) never looks at it, and
+ * nothing here times a pending `awaiting_human` out. Timeout handling is
+ * real HITL-execution-milestone work, not yet implemented.
  */
 export type StepOutcome =
   | { kind: "done" }

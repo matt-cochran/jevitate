@@ -7,6 +7,17 @@ import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
 
 /**
+ * NOTE (deferred to a future milestone, documentation-only): every step
+ * below invokes its Screenplay `Activity` directly via `.performAs(actor)`
+ * (e.g. `Click.on(...).performAs(actor)`), never via
+ * `actor.attemptsTo(...)`. That means `PaceInteractionsToken`-based
+ * humanization/pacing (inter-interaction delays) never applies to
+ * interpreter-run steps. A future milestone wiring a Recording-backed
+ * action into the paced production runner needs to explicitly add this —
+ * it will not happen automatically just by reusing `runStep`.
+ */
+
+/**
  * Resolves a `ValueOrVar` to a plain string ready for typing.
  *
  * A `{var}` reference is looked up in `vars`; a missing variable throws
@@ -110,8 +121,15 @@ export async function runStep(
     }
     case "forEach": {
       const page = actor.ability(BrowseTheWebToken).session.page;
-      const itemsLocator = descriptorToTarget(step.items).resolve(page);
+      const target = descriptorToTarget(step.items);
+      const itemsLocator = target.resolve(page);
       const count = await itemsLocator.count();
+      if (count === 0) {
+        throw new PostconditionFailed(
+          { kind: "count", target: step.items, min: 1 },
+          `forEach: 0 rows matched for items target ${target.description} (expected at least 1)`,
+        );
+      }
       for (let i = 0; i < count; i++) {
         const rowLocator = itemsLocator.nth(i);
         vars.set(`${step.as}.__index`, String(i));
@@ -187,6 +205,10 @@ async function runRowScopedChildStep(
  * a deliberate, accepted tradeoff (see task design ruling).
  */
 function resolveInRoot(root: Page | Locator, d: TargetDescriptor): Locator {
+  if (d.frameUrl) {
+    throw new Error("frameUrl is not supported in A.1");
+  }
+
   if (d.testId) {
     return root.getByTestId(d.testId);
   }
@@ -214,6 +236,14 @@ function resolveInRoot(root: Page | Locator, d: TargetDescriptor): Locator {
 async function checkAssertionInRow(actor: Actor, a: Assertion, rowLocator: Locator): Promise<boolean> {
   switch (a.kind) {
     case "visible":
+      // NOTE (deferred to a future milestone, documentation-only): this is a
+      // ONE-SHOT sample — `Locator.isVisible()` does not retry/wait, unlike
+      // Playwright's own action auto-waiting. A `visible` postcondition
+      // checked immediately after an async-rendering row action can race
+      // and fail-closed-but-falsely (a real row update that just hasn't
+      // painted yet reads as "not visible"). Flag as a known gap to resolve
+      // (e.g. via bounded polling) before a future milestone relies on
+      // generated recordings with auto-inserted postconditions at scale.
       return resolveInRoot(rowLocator, a.target).isVisible();
     case "urlIncludes": {
       const page = actor.ability(BrowseTheWebToken).session.page;

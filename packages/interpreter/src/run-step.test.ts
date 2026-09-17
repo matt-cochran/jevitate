@@ -561,6 +561,58 @@ test("runStep: forEach throws for an unsupported child step kind", async () => {
   await expect(runStep(actor as any, rec, new Map())).rejects.toThrow(/not supported in A\.1/);
 });
 
+test("runStep: forEach over 0 matched rows rejects with PostconditionFailed (fails closed instead of no-op completed)", async () => {
+  const itemsLocator = fakeItemsLocator([]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [
+        {
+          kind: "extract",
+          target: { testId: "cell" },
+          as: "cell",
+          expect: { kind: "visible", target: { testId: "cell" } },
+        },
+      ],
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toBeInstanceOf(PostconditionFailed);
+  expect(itemsLocator.count).toHaveBeenCalledTimes(1);
+  expect(itemsLocator.nth).not.toHaveBeenCalled();
+});
+
+// === resolveInRoot (via forEach child steps): frameUrl guard ===
+
+test("runStep: forEach child target with frameUrl set throws even when testId is also set (unconditional, not a fallback)", async () => {
+  const leaf0 = fakeLocator();
+  const row0 = fakeRowRoot(leaf0);
+  const itemsLocator = fakeItemsLocator([row0]);
+  const page = fakePageReturning(itemsLocator);
+  const actor = actorWithPage(page);
+
+  const rec: RecordedStep = {
+    step: {
+      kind: "forEach",
+      items: { testId: "rows" },
+      as: "row",
+      steps: [
+        {
+          kind: "click",
+          target: { testId: "delete-btn", frameUrl: "https://example.test/iframe" },
+          expect: { kind: "visible", target: { testId: "delete-btn" } },
+        },
+      ],
+    },
+  };
+  await expect(runStep(actor as any, rec, new Map())).rejects.toThrow(/frameUrl is not supported in A\.1/);
+  expect(row0.getByTestId).not.toHaveBeenCalled();
+});
+
 test("runStep: forEach sets ${as}.__index for each row, ending at the last index", async () => {
   const leaf0 = fakeLocator();
   const leaf1 = fakeLocator();
