@@ -135,6 +135,21 @@ importers:
         specifier: ^7.6.0
         version: 7.6.13
 
+  site-integrations/example-network:
+    dependencies:
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@doit/screenplay':
+        specifier: workspace:*
+        version: link:../../packages/screenplay
+      '@doit/site-sdk':
+        specifier: workspace:*
+        version: link:../../packages/site-sdk
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
 packages:
 
   '@esbuild/aix-ppc64@0.21.5':

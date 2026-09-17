@@ -1,0 +1,11 @@
+{
+  "name": "@doit/site-example-network",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "dependencies": { "@doit/domain": "workspace:*", "@doit/screenplay": "workspace:*", "@doit/site-sdk": "workspace:*", "zod": "^4.6.5" },
+  "scripts": { "build": "tsc --build" }
+}

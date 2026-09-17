@@ -18,6 +18,7 @@ export default defineConfig({
       "@doit/site-sdk": pkg("site-sdk"),
       // Add one line per new package here, e.g.:
       "@doit/example-site": fileURLToPath(new URL("./apps/example-site/src/index.ts", import.meta.url)),
+      "@doit/site-example-network": fileURLToPath(new URL("./site-integrations/example-network/src/index.ts", import.meta.url)),
     },
   },
   test: { include: ["packages/**/*.test.ts", "site-integrations/**/*.test.ts", "apps/**/*.test.ts"] },
