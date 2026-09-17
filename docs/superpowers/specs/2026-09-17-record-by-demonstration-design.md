@@ -40,6 +40,8 @@ interface Recording {
   version: string;
   site: string;
   startedAtIso: string;
+  intent?: string;                // pre-recording natural language: "what I'm about to do"
+  retro?: string;                 // post-recording natural language: "how it went"
   pages: PageSegment[];           // journey split at navigations/page boundaries
   timingSummary: TimingSummary;   // derived cadence stats (feeds InteractionPolicy)
 }
@@ -84,6 +86,7 @@ interface RedactedValue { redacted: true; length: number; sample?: string /* onl
 
 The post-recording workspace (CLI/TUI + LLM conversation) turns the merged, annotated trace into chunked, generalized, tested actions. **Careful and staged; nothing irreversible.**
 
+0. **Natural-language framing:** before recording the user types an **intent** ("what I'm about to do"); after, a **retro** ("how it went" — what was tricky, what varied, what to watch). Both are stored on the `Recording` and given to the LLM as first-class context for chunking, naming variables/enumerations, and explaining failures — cheap human signal that sharpens the breakdown.
 1. **Review (LLM-free):** walk the merged trace — rename/label steps, **combine/merge** consecutive low-level steps into a named higher-level chunk (a Screenplay Task/Action), confirm the diff's variable/enumeration proposals, redact values, drop steps.
 2. **Chunk per page → actions:** segment the journey into a **series** of Screenplay actions (one or more per page), composed into a workflow.
 3. **Staged LLM conversation** (needs M3 gateway): the LLM ingests the redacted, annotated trace + variable/enumeration candidates and proposes, one chunk at a time: chunk boundaries, parameter **templates** (e.g. a message-body template, a recipient drawn from an enumerated list, a detail **extracted** from a row), and loops. **Each proposal is transpiled → typechecked → dry-run (writes disabled) against the recording/fixture → you approve** before continuing to the next chunk.
