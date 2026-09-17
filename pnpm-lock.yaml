@@ -84,6 +84,10 @@ importers:
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright
+    devDependencies:
+      playwright:
+        specifier: ^1.49.0
+        version: 1.63.0
 
   packages/storage-sqlite:
     dependencies:
