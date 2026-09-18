@@ -3,7 +3,55 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@doit/daemon";
+import { SitePolicySchema } from "@doit/domain";
+import type { Recording, Step } from "@doit/recording";
 import { buildProgram } from "./program.js";
+
+// === recording command fixture helpers ===
+
+function fillStep(testId: string, value: string): Step {
+  return {
+    kind: "fill",
+    target: { testId },
+    value: { redacted: false, value },
+    expect: { kind: "visible", target: { testId } },
+  };
+}
+
+function clickStep(testId: string): Step {
+  return {
+    kind: "click",
+    target: { testId },
+    expect: { kind: "visible", target: { testId } },
+  };
+}
+
+/**
+ * Builds a local `{recording, values}` authoring-take JSON object (the
+ * shape `recording diff` reads from disk) from a flat list of steps (single
+ * page), auto-populating `values` (a plain object, NOT a Map — see
+ * `recording diff`'s doc) for fill/select steps from their captured
+ * (non-redacted) `value`, keyed `"page:stepInPage"` per Task 1's convention.
+ */
+function authoringTakeJson(steps: Step[]): { recording: Recording; values: Record<string, string> } {
+  const values: Record<string, string> = {};
+  steps.forEach((step, i) => {
+    if ((step.kind === "fill" || step.kind === "select") && step.value && "value" in step.value) {
+      values[`0:${i}`] = step.value.value;
+    }
+  });
+  const recording: Recording = {
+    version: "1.0",
+    site: "https://example.test",
+    pages: [
+      {
+        url: "https://example.test/login",
+        steps: steps.map((step) => ({ step })),
+      },
+    ],
+  };
+  return { recording, values };
+}
 
 test("profile create prints a success envelope", async () => {
   const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
@@ -163,6 +211,125 @@ test("site simulate --seed abc returns a failure envelope and sets exit code 1 (
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_SEED" } });
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("recording diff of two JSON takes prints a variable column", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+
+  const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+  const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+  await writeFile(takeAPath, JSON.stringify(takeA));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "diff", takeAPath, takeBPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.ok).toBe(true);
+  expect(Array.isArray(parsed.data.columns)).toBe(true);
+  const variableColumns = parsed.data.columns.filter((c: { kind: string }) => c.kind === "variable");
+  expect(variableColumns.length).toBeGreaterThan(0);
+  expect(variableColumns[0].values).toEqual(["jane", "bob"]);
+});
+
+test("recording fit prints a policy whose full output round-trips through SitePolicySchema", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const recPath = join(root, "rec.json");
+
+  const rec: Recording = {
+    version: "1",
+    site: "https://example.com",
+    pages: [
+      {
+        url: "/a",
+        steps: [
+          {
+            step: fillStep("field", "hello"),
+            timing: { atMs: 0, durationMs: 1000, gapBeforeMs: 0 },
+          },
+        ],
+      },
+    ],
+  };
+  await writeFile(recPath, JSON.stringify(rec));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "fit", recPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.interaction.typing.charsPerSecond).toBeCloseTo(5, 5);
+
+  // The claim "ready to `site policy set`" requires the WHOLE emitted `data`
+  // to be a valid SitePolicy, not just the nested `interaction` field.
+  const result = SitePolicySchema.safeParse(parsed.data);
+  expect(result.success).toBe(true);
+});
+
+test("recording promote sets value:{var:...} at the targeted fill step", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const recPath = join(root, "rec.json");
+
+  const rec: Recording = {
+    version: "1",
+    site: "https://example.com",
+    pages: [{ url: "/login", steps: [{ step: fillStep("username", "jane") }] }],
+  };
+  await writeFile(recPath, JSON.stringify(rec));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(
+    ["recording", "promote", recPath, "--page", "0", "--step", "0", "--var", "username"],
+    { from: "user" }
+  );
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.pages[0].steps[0].step.value).toEqual({ var: "username" });
+  expect(parsed.pages[0].steps[0].variableName).toBe("username");
+});
+
+test("recording promote on a click step returns a fail envelope and sets exit code 1", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+    const profiles = new ProfileManager(root);
+    const recPath = join(root, "rec.json");
+
+    const rec: Recording = {
+      version: "1",
+      site: "https://example.com",
+      pages: [{ url: "/login", steps: [{ step: clickStep("submit") }] }],
+    };
+    await writeFile(recPath, JSON.stringify(rec));
+
+    const lines: string[] = [];
+    const program = buildProgram({ profiles });
+    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.exitOverride();
+    await program.parseAsync(
+      ["recording", "promote", recPath, "--page", "0", "--step", "0", "--var", "x"],
+      { from: "user" }
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ v: 1, ok: false });
     expect(process.exitCode).toBe(1);
   } finally {
     process.exitCode = savedExitCode;

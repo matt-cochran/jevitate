@@ -9,6 +9,7 @@
   "dependencies": {
     "@doit/daemon": "workspace:*",
     "@doit/domain": "workspace:*",
+    "@doit/recording": "workspace:*",
     "@doit/storage-sqlite": "workspace:*",
     "commander": "^12.0.0"
   },

@@ -5,6 +5,15 @@ import { Command } from "commander";
 import type { ProfileManager } from "@doit/daemon";
 import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } from "@doit/domain";
 import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@doit/storage-sqlite";
+import {
+  RecordingSchema,
+  promoteToVariable,
+  diffTakes,
+  fitInteractionPolicy,
+  type Recording,
+  type AuthoringRecording,
+  type ColumnClass,
+} from "@doit/recording";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 
 export interface CliDeps {
@@ -259,6 +268,81 @@ export function buildProgram(deps: CliDeps): Command {
         }
       } catch (err) {
         emitJson(program, fail("E_SITE_SIMULATE", String(err)));
+      }
+    });
+
+  const recording = program.command("recording");
+
+  recording
+    .command("promote <file>")
+    .requiredOption("--page <n>", "page index")
+    .requiredOption("--step <n>", "step index within the page")
+    .requiredOption("--var <name>", "variable name to bind")
+    .action(async function (this: Command, file: string) {
+      const { page, step, var: varName } = this.opts<{ page: string; step: string; var: string }>();
+      try {
+        const raw = await readFile(file, "utf8");
+        const rec: Recording = RecordingSchema.parse(JSON.parse(raw));
+        const result = promoteToVariable(rec, { page: Number(page), step: Number(step) }, varName);
+        program.configureOutput().writeOut?.(`${JSON.stringify(result, null, 2)}\n`);
+        process.exitCode = 0;
+      } catch (err) {
+        emitJson(program, fail("E_INVALID_RECORDING", String(err)));
+      }
+    });
+
+  recording
+    .command("diff <takeA> <takeB> [more...]")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, takeA: string, takeB: string, more: string[]) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const files = [takeA, takeB, ...more];
+        const takes: AuthoringRecording[] = await Promise.all(
+          files.map(async (f) => {
+            const raw = await readFile(f, "utf8");
+            const parsed = JSON.parse(raw) as { recording: unknown; values: Record<string, string> };
+            const rec: Recording = RecordingSchema.parse(parsed.recording);
+            return { recording: rec, values: new Map(Object.entries(parsed.values ?? {})) };
+          })
+        );
+        const diffResult = diffTakes(takes);
+        const envelope = ok(diffResult);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          diffResult.columns.forEach((col: ColumnClass, i: number) => {
+            const type = col.inferredType ? `, type=${col.inferredType}` : "";
+            out?.(
+              `column ${i}: ${col.kind} (confidence ${col.confidence.toFixed(2)}${type}) values=${JSON.stringify(col.values)}\n`
+            );
+          });
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_INVALID_TAKE", String(err)));
+      }
+    });
+
+  recording
+    .command("fit <file>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, file: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const raw = await readFile(file, "utf8");
+        const rec: Recording = RecordingSchema.parse(JSON.parse(raw));
+        const interaction = fitInteractionPolicy(rec);
+        const policy: SitePolicy = { version: "1.0.0", interaction };
+        if (json) {
+          emitJson(program, ok(policy));
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(policy, null, 2)}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_INVALID_RECORDING", String(err)));
       }
     });
 

@@ -53,6 +53,9 @@ importers:
       '@doit/domain':
         specifier: workspace:*
         version: link:../domain
+      '@doit/recording':
+        specifier: workspace:*
+        version: link:../recording
       '@doit/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
