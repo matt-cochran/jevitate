@@ -150,6 +150,13 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
+    devDependencies:
+      '@doit/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
+      '@doit/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
 
   packages/runtime:
     dependencies:

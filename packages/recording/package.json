@@ -12,5 +12,9 @@
   },
   "dependencies": {
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@doit/interpreter": "workspace:*",
+    "@doit/screenplay": "workspace:*"
   }
 }
