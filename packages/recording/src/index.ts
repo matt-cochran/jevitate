@@ -4,3 +4,4 @@ export * from "./retention.js";
 export * from "./promote.js";
 export * from "./signature.js";
 export * from "./align.js";
+export * from "./classify.js";
