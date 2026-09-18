@@ -249,11 +249,11 @@ describe("promoteToVariable", () => {
 
     const promoted = promoteToVariable(recording, { page: 0, step: 0 }, "username");
 
-    // First page, second step should be unchanged (same reference)
-    expect(promoted.pages[0].steps[1]).toBe(recording.pages[0].steps[1]);
+    // First page, second step should be unchanged (structurally equal)
+    expect(promoted.pages[0].steps[1]).toEqual(recording.pages[0].steps[1]);
 
-    // Second page should be unchanged (same reference)
-    expect(promoted.pages[1]).toBe(recording.pages[1]);
+    // Second page should be unchanged (structurally equal)
+    expect(promoted.pages[1]).toEqual(recording.pages[1]);
 
     // But other pages/steps should not be mutated
     expect(recording.pages[0].steps[0].variableName).toBeUndefined();

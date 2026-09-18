@@ -1,4 +1,4 @@
-import type { Recording, RecordedStep, Step, PageSegment } from "./schema.js";
+import type { Recording, RecordedStep, PageSegment } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
 
 export interface StepRef {
@@ -75,12 +75,12 @@ export function promoteToVariable(
     pages: newPages,
   };
 
-  // Validate the result against the schema (without reconstruction to preserve references)
+  // Validate the result against the schema
   const validation = RecordingSchema.safeParse(newRecording);
   if (!validation.success) {
     throw new Error(`Recording validation failed: ${validation.error.message}`);
   }
-  return newRecording;
+  return validation.data;
 }
 
 /**
@@ -92,7 +92,7 @@ export function boundVariables(rec: Recording): string[] {
 
   for (const page of rec.pages) {
     for (const recordedStep of page.steps) {
-      if (recordedStep.variableName) {
+      if (recordedStep.variableName !== undefined) {
         vars.push(recordedStep.variableName);
       }
     }
