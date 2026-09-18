@@ -6,3 +6,4 @@ export * from "./signature.js";
 export * from "./align.js";
 export * from "./classify.js";
 export * from "./diff.js";
+export * from "./reference-diff.js";
