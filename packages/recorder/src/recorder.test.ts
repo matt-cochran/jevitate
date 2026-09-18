@@ -650,3 +650,62 @@ test(
   },
   120_000,
 );
+
+// === Authoring value side-channel (RxD Phase A.3a, Task 1) ===
+
+test(
+  "stopAuthoring() retains the real value for a non-secret field only, correlated to its exact step, while .recording stays fully redacted and stop() is unaffected",
+  async () => {
+    const secret = "pw-never-recorded-77331";
+
+    await withSite(LOGIN_JOURNEY, async ({ recorder, page }) => {
+      await recorder.start();
+      await page.goto(`${ORIGIN}/login`);
+      await page.getByLabel("Username").fill("jane");
+      await describedSoFar(recorder, page);
+      await page.getByLabel("Password").fill(secret);
+      await describedSoFar(recorder, page);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.waitForURL(/\/inbox$/);
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await describedSoFar(recorder, page);
+
+      const { recording, values } = await recorder.stopAuthoring();
+
+      // 1. `.recording` looks exactly like what `stop()` produces for the same
+      //    buffer (same shapes the dedicated assembly test already pins).
+      expect(recording.pages.map((p) => p.url)).toEqual(["/login", "/inbox"]);
+      const login = stepsOf(recording.pages[0]!.steps);
+      expect(login[1]).toEqual({
+        kind: "fill",
+        target: { role: "textbox", name: "Username" },
+        value: { redacted: true, length: 4 },
+        expect: { kind: "visible", target: { role: "textbox", name: "Username" } },
+      });
+      expect(login[2]!.kind).toBe("handback");
+
+      // 2. The load-bearing redaction guarantee, unchanged: no captured value
+      //    anywhere in the serialized artifact, secret or otherwise.
+      const serializedRecording = JSON.stringify(recording);
+      expect(serializedRecording).not.toContain("jane");
+      expect(serializedRecording).not.toContain(secret);
+
+      // 3. `values` has exactly one entry: the username field's real,
+      //    pre-redaction value, keyed to page 0 / step 1 — the fill step
+      //    asserted above (`${pageIndex}:${stepIndexInPage}`).
+      expect(values.size).toBe(1);
+      expect(values.get("0:1")).toBe("jane");
+
+      // 4. No entry at all for the secret field — not an empty string, not
+      //    under any other key — and the raw secret is nowhere in the map.
+      expect([...values.values()]).not.toContain(secret);
+      expect([...values.values()].some((v) => v.includes(secret))).toBe(false);
+
+      // 5. `stop()` is unaffected by `stopAuthoring()` having already run: the
+      //    identical redacted Recording comes back (regression check).
+      const plainRecording = await recorder.stop();
+      expect(plainRecording).toEqual(recording);
+    });
+  },
+  120_000,
+);

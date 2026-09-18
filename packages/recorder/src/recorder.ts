@@ -1,7 +1,7 @@
 import type { ElementHandle, Frame, Page } from "playwright";
 import type { BrowserSession } from "@doit/playwright";
 import type { Recording, TargetDescriptor } from "@doit/recording";
-import { assembleRecording, pathOrRaw } from "./assemble.js";
+import { assembleRecording, assembleWithValues, pathOrRaw } from "./assemble.js";
 import {
   buildCandidates,
   descriptorToLocator,
@@ -138,6 +138,29 @@ export interface NavigationCaptureEvent {
 export type CaptureEvent = ActionCaptureEvent | NavigationCaptureEvent;
 
 /**
+ * `Recorder.stopAuthoring()`'s result: the same redacted `Recording`
+ * `stop()` would produce for the same buffer, plus a **local-only** map of
+ * the actual (pre-redaction) value captured for every non-secret fill/select
+ * step, for future authoring tooling (diff / variable-binding — RxD Phase
+ * A.3a) that needs the real values a persisted `Recording` deliberately never
+ * carries.
+ *
+ * `values` is keyed `` `${pageIndex}:${stepIndexInPage}` `` — see
+ * `assembleWithValues` in `assemble.ts` for the exact contract, including
+ * what does and does not get an entry.
+ *
+ * **This object is local-authoring-only.** `.values` must never be
+ * persisted (it never touches `RecordingStore`), never serialized into a
+ * `Recording`, and never sent to a model — treat it exactly the way
+ * `.recording` already treats a secret field's value: as something that does
+ * not leave this process.
+ */
+export interface AuthoringRecording {
+  readonly recording: Recording;
+  readonly values: Map<string, string>;
+}
+
+/**
  * Records a demonstrated journey as a schema-valid `Recording`.
  *
  * Transport: `page.addInitScript` injects the listener into every document of
@@ -258,10 +281,52 @@ export class Recorder {
    * exposed binding, and re-arming for a second take is `start()`'s job.
    */
   async stop(retro?: string): Promise<Recording> {
+    await this.finalize();
+    return assembleRecording(this.buffer, {
+      site: this.site,
+      startedAtIso: this.startedAtIso,
+      intent: this.intent,
+      retro,
+    });
+  }
+
+  /**
+   * Like `stop()`, but additionally returns the actual (pre-redaction) value
+   * captured for every non-secret fill/select step — see `AuthoringRecording`.
+   *
+   * `.recording` here is produced by the exact same assembly pass `stop()`
+   * uses: `assembleWithValues` *is* `assembleRecording`'s implementation, with
+   * the value side-channel tapped off internally, so this method cannot make
+   * `.recording` diverge from what `stop()` would have returned for the same
+   * buffer, and there is no separate re-derivation of page/step segmentation
+   * to drift out of sync with it.
+   *
+   * Local-authoring-only: see `AuthoringRecording`'s doc comment for what must
+   * never happen to `.values` (never persisted, never sent to a model, never
+   * touches `RecordingStore`).
+   */
+  async stopAuthoring(retro?: string): Promise<AuthoringRecording> {
+    await this.finalize();
+    return assembleWithValues(this.buffer, {
+      site: this.site,
+      startedAtIso: this.startedAtIso,
+      intent: this.intent,
+      retro,
+    });
+  }
+
+  /**
+   * The shared tail of `stop()`/`stopAuthoring()`: stops accepting new
+   * actions as steps, waits out any descriptor computation still in flight,
+   * and removes the capture tags. Assembly itself is each caller's own job,
+   * because `stop()` and `stopAuthoring()` differ only in which assembly
+   * function they hand the (now-final) buffer to.
+   */
+  private async finalize(): Promise<void> {
     this.recording = false;
-    // An action captured a moment before `stop()` may still be resolving its
-    // descriptor; assembling without it would silently demote a real step to
-    // a handback.
+    // An action captured a moment before `stop()`/`stopAuthoring()` may still
+    // be resolving its descriptor; assembling without it would silently
+    // demote a real step to a handback.
     await Promise.allSettled([...this.inFlight]);
     // The capture tags exist only for the duration of a recording: the in-page
     // listener reuses an element's `eid` for as long as the attribute is there,
@@ -269,12 +334,6 @@ export class Recorder {
     // that no further event can arrive, the page the user is still looking at
     // gets its DOM back.
     await this.untagAll();
-    return assembleRecording(this.buffer, {
-      site: this.site,
-      startedAtIso: this.startedAtIso,
-      intent: this.intent,
-      retro,
-    });
   }
 
   /** Everything captured so far, in arrival order. */

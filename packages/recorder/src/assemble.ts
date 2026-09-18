@@ -151,16 +151,41 @@ const isValueEvent = (payload: CapturedActionPayload): boolean =>
   payload.kind === "input" || payload.kind === "change";
 
 /**
- * Turns the buffer into a `Recording` and **validates it before returning**.
- * A buffer that assembles into something `RecordingSchema` rejects is a bug in
- * this module, and throwing is the only honest answer: a recording that does
- * not parse cannot be replayed, reviewed or stored.
+ * `assembleRecording`'s own implementation, with a **local-only** value
+ * side-channel tapped off internally — see `AuthoringRecording` in
+ * `recorder.ts`, which is what this powers via `Recorder.stopAuthoring()`.
+ * `assembleRecording` itself is a thin wrapper (below) that discards
+ * `.values`; the two therefore can never disagree about page/step layout,
+ * because there is only ever one assembly pass.
+ *
+ * `.values` is filled at the exact point this pass already decides which
+ * step a value event belongs to (the `valueSteps` map below) — never by a
+ * second, independently-derived segmentation. That is deliberate: page
+ * boundaries here account for redirect collapsing and navigation-triggered
+ * splits, and re-deriving that logic elsewhere would risk the value map
+ * pointing at the wrong step.
+ *
+ * **Key format**: `` `${pageIndex}:${stepIndexInPage}` `` (both 0-based),
+ * i.e. exactly the coordinates of `recording.pages[pageIndex].steps[stepIndexInPage]`.
+ *
+ * **What gets an entry**: only a `fill`/`select` step whose triggering
+ * action carried `payload.rawText` — a non-secret field. A secret field's
+ * `rawText` is absent at the source (the in-page listener never reads it;
+ * see `CapturedActionPayload`), so it is never read here either, and its
+ * step (a `handback`) gets no entry at all — not even an empty string.
  */
-export function assembleRecording(events: readonly CaptureEvent[], opts: AssembleOptions): Recording {
+export function assembleWithValues(
+  events: readonly CaptureEvent[],
+  opts: AssembleOptions,
+): { readonly recording: Recording; readonly values: Map<string, string> } {
   const pages: PageSegment[] = [];
   const t0 = events.length > 0 ? timeOf(events[0]!) : 0;
+  /** Local-only: never attached to `recording`, never returned from it. */
+  const values = new Map<string, string>();
 
   let current: PageSegment | null = null;
+  /** Index of `current` within `pages`; kept in step with every `pages.push`. */
+  let currentPageIndex = -1;
   /** The most recently emitted step: a navigation folds into *its* postcondition. */
   let lastStep: RecordedStep | null = null;
   /**
@@ -178,8 +203,16 @@ export function assembleRecording(events: readonly CaptureEvent[], opts: Assembl
    * when focus moves, which can be after another field's events. Keying by
    * `eid` (unique per document, so this is cleared on every main-frame
    * navigation) folds them all into the single step they describe.
+   *
+   * `stepKey` is captured once, at first emission, and reused on every later
+   * update to the same field — it must stay the coordinates of the step this
+   * `eid` was *first* folded into, not wherever `current.steps` ends up being
+   * longest, since other fields' steps can be emitted in between.
    */
-  let valueSteps = new Map<string, { readonly recorded: RecordedStep; readonly firstTime: number }>();
+  let valueSteps = new Map<
+    string,
+    { readonly recorded: RecordedStep; readonly firstTime: number; readonly stepKey: string }
+  >();
 
   const timingFor = (time: number, durationMs = 0): StepTiming => ({
     // Clamped: page-side and Node-side clocks are the same wall clock, but
@@ -209,6 +242,7 @@ export function assembleRecording(events: readonly CaptureEvent[], opts: Assembl
       const step: Step = { kind: "navigate", url: path, expect: { kind: "urlIncludes", text: path } };
       current = { url: path, steps: [] };
       pages.push(current);
+      currentPageIndex = pages.length - 1;
       collapseTarget = emit(current, step, time);
       navSinceStep = true;
       valueSteps = new Map();
@@ -233,6 +267,7 @@ export function assembleRecording(events: readonly CaptureEvent[], opts: Assembl
     collapseTarget = lastStep;
     current = { url: path, steps: [] };
     pages.push(current);
+    currentPageIndex = pages.length - 1;
     navSinceStep = true;
     valueSteps = new Map();
   };
@@ -258,6 +293,10 @@ export function assembleRecording(events: readonly CaptureEvent[], opts: Assembl
           ...existing.recorded.timing!,
           durationMs: Math.max(0, payload.ts - existing.firstTime),
         };
+        // Side-channel only, mirroring `updateValue`'s own "last value wins":
+        // absent `rawText` (a secret field) never creates or overwrites an
+        // entry, matching `buildStep`'s redaction of the same payload.
+        if (payload.rawText !== undefined) values.set(existing.stepKey, payload.rawText);
         return;
       }
     }
@@ -267,10 +306,15 @@ export function assembleRecording(events: readonly CaptureEvent[], opts: Assembl
       // observed, so the frame's own URL names the segment.
       current = { url: pathOrRaw(event.frameUrl), steps: [] };
       pages.push(current);
+      currentPageIndex = pages.length - 1;
     }
 
     const recorded = emit(current, buildStep(event), payload.ts);
-    if (isValue) valueSteps.set(payload.eid, { recorded, firstTime: payload.ts });
+    if (isValue) {
+      const stepKey = `${currentPageIndex}:${current.steps.length - 1}`;
+      valueSteps.set(payload.eid, { recorded, firstTime: payload.ts, stepKey });
+      if (payload.rawText !== undefined) values.set(stepKey, payload.rawText);
+    }
   };
 
   for (const event of events) {
@@ -294,7 +338,21 @@ export function assembleRecording(events: readonly CaptureEvent[], opts: Assembl
     ...(opts.intent === undefined ? {} : { intent: opts.intent }),
     ...(opts.retro === undefined ? {} : { retro: opts.retro }),
   };
-  return RecordingSchema.parse(recording);
+  return { recording: RecordingSchema.parse(recording), values };
+}
+
+/**
+ * Turns the buffer into a `Recording` and **validates it before returning**.
+ * A buffer that assembles into something `RecordingSchema` rejects is a bug in
+ * this module, and throwing is the only honest answer: a recording that does
+ * not parse cannot be replayed, reviewed or stored.
+ *
+ * A thin wrapper over `assembleWithValues`, discarding its local-only value
+ * side-channel — see that function's doc comment for what it is and why it
+ * exists.
+ */
+export function assembleRecording(events: readonly CaptureEvent[], opts: AssembleOptions): Recording {
+  return assembleWithValues(events, opts).recording;
 }
 
 /**
