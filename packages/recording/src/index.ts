@@ -7,3 +7,4 @@ export * from "./align.js";
 export * from "./classify.js";
 export * from "./diff.js";
 export * from "./reference-diff.js";
+export * from "./fit.js";

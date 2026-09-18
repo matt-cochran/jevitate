@@ -151,6 +151,9 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@doit/interpreter':
         specifier: workspace:*
         version: link:../interpreter
