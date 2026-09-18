@@ -1,4 +1,6 @@
+import { z } from "zod";
 import type { Recording } from "./schema.js";
+import { RecordingSchema } from "./schema.js";
 import { alignTraces } from "./align.js";
 import type { AlignedColumn } from "./align.js";
 import { classifyColumns } from "./classify.js";
@@ -18,6 +20,36 @@ export interface AuthoringRecording {
   recording: Recording;
   values: Map<string, string>;
 }
+
+/**
+ * The canonical schema for one "take file" on disk: a JSON object with a
+ * schema-valid `Recording` and its captured authoring `values`, keyed
+ * `` `${pageIndex}:${stepIndexInPage}` `` per `AuthoringRecording`'s
+ * convention (see above) — but as a plain JSON object/record here, not a
+ * `Map` (JSON has no Map literal; callers convert via
+ * `new Map(Object.entries(parsed.values))` after parsing).
+ *
+ * `.strict()` (matching `RecordingSchema`'s own nested-object convention)
+ * rejects unknown keys, and `values` is REQUIRED (not `.optional()` /
+ * `.default({})`) — a take file must explicitly declare its values, even if
+ * genuinely empty (`{}` is a valid explicit value; a missing `values` key is
+ * not). This is deliberately fail-closed: a missing/malformed `values` field
+ * must reject the whole take file rather than silently falling back to an
+ * empty map, which would make `diffTakes` classify every column as
+ * `"constant"` with full confidence — the single worst possible wrong answer
+ * for a feature whose entire job is detecting variables.
+ *
+ * This is the ONE canonical definition of the take-file shape; callers that
+ * read/write take files (the CLI's `recording diff` command, and this
+ * package's own tests) should validate/build against it rather than
+ * hand-rolling the `{recording, values}` shape themselves.
+ */
+export const AuthoringTakeSchema = z
+  .object({
+    recording: RecordingSchema,
+    values: z.record(z.string(), z.string()),
+  })
+  .strict();
 
 /**
  * Composes signature -> align -> classify over N authoring takes of "the
@@ -109,6 +141,34 @@ interface DiffFillColumn {
  * are trusted as-is (not deduped against each other or against
  * default-named columns) — see the doc comment on `pickVarName` below for
  * why.
+ *
+ * **Known limitation — CONSTANT fill/select columns are not independently
+ * replayable (unresolved, flagged for a future plan):** real recorder
+ * output ALWAYS redacts fill/select values (`{redacted:true,length}` —
+ * never `{redacted:false,value}`, per the recorder's own privacy posture).
+ * A column this function classifies as `"constant"` (or leaves untouched
+ * for any other non-promoted reason — noise, ambiguous, low-confidence
+ * variable) is left completely untouched on `base`, so its step stays
+ * `{redacted:true}` in the returned `Recording`. `@doit/interpreter`'s
+ * `run-step.ts` throws `"cannot fill with a redacted constant value"` when
+ * it hits such a step during replay — so this function's output is only
+ * genuinely independently replayable when EVERY fill/select column in
+ * `diff` was promoted to a `{var}` (i.e. every one was a confident
+ * variable). This is NOT true in general — e.g. a login flow with one
+ * constant "remember me" checkbox alongside a variable username field
+ * produces an output whose "remember me" step cannot be replayed as-is.
+ *
+ * This tension is deliberate and UNRESOLVED, not a bug fixed here: the
+ * design spec (§6) says a corroborated constant should be "fixed in the
+ * artifact," while the plan's Global Constraint says the persisted/
+ * parameterized artifact must never carry example values. The controller
+ * has ruled this is a decision for a future plan (RxD Phase A.3b) to make
+ * explicitly — whether a constant corroborated across a human's OWN
+ * multiple takes (a materially different privacy posture than a single
+ * captured value) may ever be materialized into the artifact, or whether
+ * every fill/select column must instead be forced into a variable (with
+ * some default) regardless of confidence. `applyDiff`'s behavior here is
+ * unchanged pending that decision — this paragraph is documentation only.
  *
  * Pure: no clock/random/I/O.
  */

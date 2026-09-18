@@ -7,6 +7,7 @@ import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } f
 import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@doit/storage-sqlite";
 import {
   RecordingSchema,
+  AuthoringTakeSchema,
   promoteToVariable,
   diffTakes,
   fitInteractionPolicy,
@@ -301,9 +302,8 @@ export function buildProgram(deps: CliDeps): Command {
         const takes: AuthoringRecording[] = await Promise.all(
           files.map(async (f) => {
             const raw = await readFile(f, "utf8");
-            const parsed = JSON.parse(raw) as { recording: unknown; values: Record<string, string> };
-            const rec: Recording = RecordingSchema.parse(parsed.recording);
-            return { recording: rec, values: new Map(Object.entries(parsed.values ?? {})) };
+            const parsed = AuthoringTakeSchema.parse(JSON.parse(raw));
+            return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
           })
         );
         const diffResult = diffTakes(takes);

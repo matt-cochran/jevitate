@@ -157,12 +157,6 @@ importers:
       '@doit/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/interpreter':
-        specifier: workspace:*
-        version: link:../interpreter
-      '@doit/screenplay':
-        specifier: workspace:*
-        version: link:../screenplay
 
   packages/runtime:
     dependencies:

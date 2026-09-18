@@ -192,4 +192,51 @@ describe("classifyColumns", () => {
     expect(result.columns[2].kind).toBe("variable");
     expect(result.columns[2].values).toEqual(["x1", "x2"]);
   });
+
+  it("derives numTakes from cols (not values.length): classifyColumns(cols, []) does not crash or produce NaN", () => {
+    // A legitimate call with an empty side-channel values array (e.g. a
+    // diff with only structural columns, no fill/select steps captured at
+    // all) but `cols` structurally reflects 2 real takes. Before the fix,
+    // `numTakes` was derived from `values.length` (0 here), which indexed
+    // `counters` past its length and produced `undefined`/`NaN` internal
+    // counter state.
+    const cols: AlignedColumn[] = [
+      { cells: [rs(fillStep("email", "jane@example.com")), rs(fillStep("email", "jane@example.com"))] },
+      { cells: [rs(clickStep("submit")), rs(clickStep("submit"))] },
+    ];
+
+    const result = classifyColumns(cols, []);
+
+    expect(result.columns).toHaveLength(2);
+    for (const col of result.columns) {
+      expect(Number.isNaN(col.confidence)).toBe(false);
+      expect(col.confidence).toBe(1.0);
+      expect(col.kind).toBe("constant");
+      // No side-channel values at all -> both cells resolve to null, same
+      // as the "no value dimension" branch.
+      expect(col.values).toEqual([null, null]);
+    }
+  });
+
+  it("derives numTakes from cols even when values is non-empty but SHORTER than the real take count", () => {
+    // `values` only has an entry for take 0; `cols` structurally reflects 2
+    // takes. With the old `numTakes = values.length` (=1) bug, this would
+    // incorrectly hit the "single-take-input" shortcut and always report
+    // "constant" at full confidence, masking that this is actually a
+    // 2-take diff with a genuine gap in take 1's captured value.
+    const cols: AlignedColumn[] = [
+      { cells: [rs(fillStep("name", "Jane")), rs(fillStep("name", "Jane"))] },
+    ];
+    const values = [new Map([["0", "Jane"]])];
+
+    const result = classifyColumns(cols, values);
+
+    expect(result.columns).toHaveLength(1);
+    expect(Number.isNaN(result.columns[0].confidence)).toBe(false);
+    expect(result.columns[0].kind).toBe("constant");
+    // completeness = 1 present / 2 resolved = 0.5 -> confidence 0.9, NOT
+    // the single-take-shortcut's full 1.0.
+    expect(result.columns[0].confidence).toBeCloseTo(0.9, 5);
+    expect(result.columns[0].values).toEqual(["Jane", null]);
+  });
 });

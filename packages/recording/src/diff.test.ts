@@ -1,10 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import { RecordingInterpreter } from "@doit/interpreter";
+import { describe, it, expect } from "vitest";
 import type { Recording, Step } from "./schema.js";
-import { diffTakes, applyDiff } from "./diff.js";
+import { diffTakes, applyDiff, AuthoringTakeSchema } from "./diff.js";
 import type { AuthoringRecording } from "./diff.js";
-import { boundVariables } from "./promote.js";
 
 // === Fixture helpers ===
 
@@ -40,12 +37,19 @@ function clickStep(testId: string): Step {
  * Task 1's `"page:stepInPage"` convention (single page here, so always
  * `"0:${i}"`), NOT the flat-index convention `classifyColumns` wants — that
  * re-keying is exactly what `diffTakes` is responsible for doing.
+ *
+ * Builds the plain-object `values` form first and validates the whole
+ * `{recording, values}` shape against `AuthoringTakeSchema` — the ONE
+ * canonical take-file shape defined in this module — before converting
+ * `values` to the `Map` that `AuthoringRecording` (and `diffTakes`) wants,
+ * so this fixture builder can never silently drift from what a real take
+ * file must look like.
  */
 function authoringRecording(steps: Step[]): AuthoringRecording {
-  const values = new Map<string, string>();
+  const values: Record<string, string> = {};
   steps.forEach((step, i) => {
     if ((step.kind === "fill" || step.kind === "select") && step.value && "value" in step.value) {
-      values.set(`0:${i}`, step.value.value);
+      values[`0:${i}`] = step.value.value;
     }
   });
   const recording: Recording = {
@@ -58,7 +62,8 @@ function authoringRecording(steps: Step[]): AuthoringRecording {
       },
     ],
   };
-  return { recording, values };
+  const validated = AuthoringTakeSchema.parse({ recording, values });
+  return { recording: validated.recording, values: new Map(Object.entries(validated.values)) };
 }
 
 describe("diffTakes", () => {
@@ -167,45 +172,12 @@ describe("applyDiff", () => {
     expect(result.pages[0].steps[0].variableName).toBeUndefined();
   });
 
-  it("replay-level proof: interprets the applyDiff result with a fake actor, supplying the promoted var", async () => {
-    const takeA = authoringRecording([fillStep("username", "jane")]);
-    const takeB = authoringRecording([fillStep("username", "bob")]);
-
-    const diff = diffTakes([takeA, takeB]);
-    const result = applyDiff(takeA.recording, diff);
-
-    const varName = result.pages[0].steps[0].variableName!;
-    expect(boundVariables(result)).toContain(varName);
-
-    const locator = {
-      click: vi.fn(async () => {}),
-      fill: vi.fn(async () => {}),
-      pressSequentially: vi.fn(async () => {}),
-      innerText: vi.fn(async () => ""),
-      isVisible: vi.fn(async () => true),
-      count: vi.fn(async () => 0),
-      waitFor: vi.fn(async () => {}),
-    };
-    const page = {
-      goto: vi.fn(async () => {}),
-      url: vi.fn(() => "https://example.test/login"),
-      getByTestId: vi.fn(() => locator),
-      getByRole: vi.fn(() => locator),
-      getByLabel: vi.fn(() => locator),
-      getByText: vi.fn(() => locator),
-      locator: vi.fn(() => locator),
-    };
-    const actor = CastActor.named("test").whoCan(
-      new BrowseTheWeb(
-        { page, startTracing: vi.fn(), stopTracingToFile: vi.fn(), close: vi.fn() } as any,
-        [],
-      ),
-    );
-
-    const interp = new RecordingInterpreter();
-    const interpResult = await interp.run(actor as any, result, { [varName]: "supplied-value" });
-
-    expect(interpResult).toEqual({ outcome: "completed", vars: { [varName]: "supplied-value" } });
-    expect(locator.fill).toHaveBeenCalledWith("supplied-value");
-  });
+  // The replay-level proof (interpreting `applyDiff`'s output with a fake
+  // Actor via `@doit/interpreter`) now lives in
+  // `packages/interpreter/src/applyDiff-replay.test.ts` — it was moved out
+  // of this package to avoid a `@doit/recording` (dev) -> `@doit/interpreter`
+  // -> `@doit/recording` workspace dependency cycle (`@doit/recording` is
+  // meant to be a runtime leaf package; `@doit/interpreter` already depends
+  // on `@doit/recording` at runtime, so the test fits naturally there
+  // instead).
 });

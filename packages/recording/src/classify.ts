@@ -69,7 +69,15 @@ export function classifyColumns(
   cols: AlignedColumn[],
   values: Map<string, string>[],
 ): DiffResult {
-  const numTakes = values.length;
+  // Derived from `cols`, NOT `values.length`: `alignTraces`'s output
+  // guarantees `cols[c].cells.length === takes.length` for every column, so
+  // `cols[0]`'s cell count is the authoritative take count. `values` is a
+  // side channel that may legitimately be shorter than (or empty relative
+  // to) the real take count — e.g. a diff with only structural columns and
+  // no fill/select steps at all — and deriving `numTakes` from it instead
+  // would make any per-take counter below index past the end of `counters`,
+  // producing `undefined`/`NaN` internal state rather than something sane.
+  const numTakes = cols[0]?.cells.length ?? 0;
   const counters = new Array<number>(numTakes).fill(0);
 
   const columns: ColumnClass[] = cols.map((col) => {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ProfileManager } from "@doit/daemon";
 import { SitePolicySchema } from "@doit/domain";
 import type { Recording, Step } from "@doit/recording";
+import { AuthoringTakeSchema } from "@doit/recording";
 import { buildProgram } from "./program.js";
 
 // === recording command fixture helpers ===
@@ -32,6 +33,11 @@ function clickStep(testId: string): Step {
  * page), auto-populating `values` (a plain object, NOT a Map — see
  * `recording diff`'s doc) for fill/select steps from their captured
  * (non-redacted) `value`, keyed `"page:stepInPage"` per Task 1's convention.
+ *
+ * Validated against `AuthoringTakeSchema` — the ONE canonical take-file
+ * shape (`@doit/recording`'s `diff.ts`) — before being returned, so this
+ * fixture builder can never silently drift from what `recording diff`
+ * actually accepts.
  */
 function authoringTakeJson(steps: Step[]): { recording: Recording; values: Record<string, string> } {
   const values: Record<string, string> = {};
@@ -50,7 +56,7 @@ function authoringTakeJson(steps: Step[]): { recording: Recording; values: Recor
       },
     ],
   };
-  return { recording, values };
+  return AuthoringTakeSchema.parse({ recording, values });
 }
 
 test("profile create prints a success envelope", async () => {
@@ -240,6 +246,57 @@ test("recording diff of two JSON takes prints a variable column", async () => {
   const variableColumns = parsed.data.columns.filter((c: { kind: string }) => c.kind === "variable");
   expect(variableColumns.length).toBeGreaterThan(0);
   expect(variableColumns[0].values).toEqual(["jane", "bob"]);
+});
+
+test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+
+  const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+  const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+  // Simulate a malformed take file: `values` is missing entirely. This must
+  // be rejected (fail closed), NOT silently treated as an empty values map
+  // — a silently-empty map would make every column classify as "constant",
+  // the single worst possible wrong answer for a variable-detection feature.
+  const { values: _omitted, ...takeAWithoutValues } = takeA;
+  await writeFile(takeAPath, JSON.stringify(takeAWithoutValues));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "diff", takeAPath, takeBPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
+  expect(process.exitCode).toBe(1);
+});
+
+test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is malformed (wrong shape)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+
+  const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+  const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+  // `values` present but the wrong shape (an array instead of a
+  // string-keyed record of strings) — must still fail closed.
+  await writeFile(takeAPath, JSON.stringify({ recording: takeA.recording, values: ["not", "a", "record"] }));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "diff", takeAPath, takeBPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
+  expect(process.exitCode).toBe(1);
 });
 
 test("recording fit prints a policy whose full output round-trips through SitePolicySchema", async () => {
