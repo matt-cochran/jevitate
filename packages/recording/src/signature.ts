@@ -92,11 +92,13 @@ function assertionKey(assertion: Assertion): string {
  * page. Built from `(kind, urlTemplate(pageUrl), structural descriptor)`.
  *
  * Never includes: `TargetDescriptor.name`, `TargetDescriptor.text`, or any
- * step-level captured value/content (a `fill`'s `value`, an `extract`'s
- * `as`, a `forEach`'s `as`, a `handback`'s `prompt`). `press.key` is the
- * exception: for a `press` step the key itself (e.g. `"Enter"`) IS the
- * step's structural identity — there's no separate target/value to key off
- * — so it's used directly, not treated as captured content.
+ * step-level captured value/content (a `fill`'s or `select`'s `value`, an
+ * `extract`'s `as`, a `forEach`'s `as`, a `handback`'s `prompt`, an
+ * `assert`/`handback`'s nested `Assertion.text` on `textIncludes`).
+ * `press.key`, `waitFor.state`, and `extract.attr` are the exceptions: they
+ * are authored/structural fields (what to press, which state to wait for,
+ * which attribute to read), not captured/typed content, so they're folded
+ * directly into the key.
  *
  * Pure: no I/O, no randomness, deterministic for identical inputs.
  */
@@ -113,9 +115,18 @@ function structuralKey(step: Step): string {
     case "click":
     case "fill":
     case "select":
-    case "waitFor":
-    case "extract":
       return targetDescriptorKey(step.target);
+    case "waitFor":
+      // `state` is an authored/structural field (like `press.key`), not
+      // captured content — a waitFor for "visible" vs "hidden" on the same
+      // target is a structurally different step, so it belongs in the key.
+      return `${targetDescriptorKey(step.target)}|state:${step.state}`;
+    case "extract":
+      // `attr` is likewise structural (which attribute to read is authored,
+      // not typed/captured) — unlike `as` (the captured variable name),
+      // which must stay OUT of the key. `?? ""` distinguishes "omitted"
+      // from a present-but-different value so they never collide.
+      return `${targetDescriptorKey(step.target)}|attr:${step.attr ?? ""}`;
     case "forEach":
       return targetDescriptorKey(step.items);
     case "press":

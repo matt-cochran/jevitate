@@ -169,4 +169,127 @@ describe("stepSignature", () => {
 
     expect(stepSignature(click, "/page")).not.toBe(stepSignature(waitFor, "/page"));
   });
+
+  it("gives two select steps on the same target the same signature regardless of value", () => {
+    const selectA: Step = {
+      kind: "select",
+      target: { testId: "country-select" },
+      value: { redacted: false, value: "US" },
+      expect: { kind: "visible", target: { testId: "country-select" } },
+    };
+    const selectB: Step = {
+      kind: "select",
+      target: { testId: "country-select" },
+      value: { redacted: false, value: "CA" },
+      expect: { kind: "visible", target: { testId: "country-select" } },
+    };
+
+    expect(stepSignature(selectA, "/settings")).toBe(stepSignature(selectB, "/settings"));
+  });
+
+  it("gives two extract steps on the same target the same signature regardless of `as`", () => {
+    const extractA: Step = {
+      kind: "extract",
+      target: { testId: "thread-title" },
+      as: "titleA",
+      expect: { kind: "visible", target: { testId: "thread-title" } },
+    };
+    const extractB: Step = {
+      kind: "extract",
+      target: { testId: "thread-title" },
+      as: "titleB",
+      expect: { kind: "visible", target: { testId: "thread-title" } },
+    };
+
+    expect(stepSignature(extractA, "/thread/1")).toBe(stepSignature(extractB, "/thread/1"));
+  });
+
+  it("distinguishes extract steps by attr (structural), unlike `as` (captured)", () => {
+    const extractHref: Step = {
+      kind: "extract",
+      target: { testId: "thread-link" },
+      as: "link",
+      attr: "href",
+      expect: { kind: "visible", target: { testId: "thread-link" } },
+    };
+    const extractText: Step = {
+      kind: "extract",
+      target: { testId: "thread-link" },
+      as: "link",
+      attr: "textContent",
+      expect: { kind: "visible", target: { testId: "thread-link" } },
+    };
+
+    expect(stepSignature(extractHref, "/thread/1")).not.toBe(
+      stepSignature(extractText, "/thread/1"),
+    );
+  });
+
+  it("distinguishes waitFor steps by state (structural)", () => {
+    const waitVisible: Step = {
+      kind: "waitFor",
+      target: { testId: "spinner" },
+      state: "visible",
+    };
+    const waitHidden: Step = {
+      kind: "waitFor",
+      target: { testId: "spinner" },
+      state: "hidden",
+    };
+
+    expect(stepSignature(waitVisible, "/page")).not.toBe(stepSignature(waitHidden, "/page"));
+  });
+
+  it("gives two forEach steps with the same items descriptor the same signature regardless of `as`", () => {
+    const forEachA: Step = {
+      kind: "forEach",
+      items: { testId: "thread-row" },
+      as: "rowA",
+      steps: [],
+    };
+    const forEachB: Step = {
+      kind: "forEach",
+      items: { testId: "thread-row" },
+      as: "rowB",
+      steps: [],
+    };
+
+    expect(stepSignature(forEachA, "/inbox")).toBe(stepSignature(forEachB, "/inbox"));
+  });
+
+  it("gives two assert steps with the same target the same signature regardless of textIncludes.text", () => {
+    const assertA: Step = {
+      kind: "assert",
+      check: {
+        kind: "textIncludes",
+        target: { testId: "status-banner" },
+        text: "Saved",
+      },
+    };
+    const assertB: Step = {
+      kind: "assert",
+      check: {
+        kind: "textIncludes",
+        target: { testId: "status-banner" },
+        text: "Published",
+      },
+    };
+
+    expect(stepSignature(assertA, "/editor")).toBe(stepSignature(assertB, "/editor"));
+  });
+
+  it("gives two handback steps with the same resume assertion the same signature regardless of prompt", () => {
+    const handbackA: Step = {
+      kind: "handback",
+      prompt: "Please solve the captcha",
+      resume: { kind: "visible", target: { testId: "continue-button" } },
+    };
+    const handbackB: Step = {
+      kind: "handback",
+      prompt: "Please verify your identity",
+      resume: { kind: "visible", target: { testId: "continue-button" } },
+    };
+
+    expect(stepSignature(handbackA, "/checkout")).toBe(stepSignature(handbackB, "/checkout"));
+  });
 });
