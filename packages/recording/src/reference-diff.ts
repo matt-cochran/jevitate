@@ -45,8 +45,29 @@ export interface ReferenceDiffResult {
  * the two input `Recording`s' content (via `alignTraces`).
  */
 export function diffRecordings(run: Recording, reference: Recording): ReferenceDiffResult {
-  const cols = alignTraces([run, reference]);
+  return diffColumns(alignTraces([run, reference]));
+}
 
+/**
+ * The column-level core of `diffRecordings`, split out so the adjacent-gap
+ * collapse logic can be unit-tested directly against a hand-constructed
+ * `AlignedColumn[]` — including the "missing-first" ordering exercised
+ * below (a `[null, ref]` column immediately followed by a `[run, null]`
+ * column). That ordering is logically handled and symmetric by
+ * construction, but per code-review it could NOT be produced by any real
+ * `alignTraces([run, reference])` call against today's `align.ts`: for a
+ * substitution, `align.ts`'s own tie-break docstring on `needlemanWunsch`
+ * (search "Deterministic tie-breaking") guarantees `a`'s leftover element
+ * surfaces in its own column BEFORE `b`'s leftover element does — and here
+ * `a` is always `run` (`alignTraces([run, reference])` passes `run` as
+ * `sigTakes[0]`), so real output only ever produces "extra-first"
+ * (`[run, null]` then `[null, ref]`), never "missing-first". This
+ * function-level split keeps the "missing-first" branch below covered by a
+ * direct test even though it's currently unreachable end-to-end via
+ * `diffRecordings` — so a future change to `align.ts`'s tie-breaking can't
+ * silently leave it broken and untested.
+ */
+export function diffColumns(cols: AlignedColumn[]): ReferenceDiffResult {
   const c = cols.findIndex((col) => !isPerfect(col));
   if (c === -1) return { divergedAt: null };
 
@@ -61,7 +82,12 @@ export function diffRecordings(run: Recording, reference: Recording): ReferenceD
 
     // Adjacent-pair check: does the very next column hold the opposite
     // gap pattern (run has a step, reference doesn't)? If so this is a
-    // substitution, not an independent deletion.
+    // substitution, not an independent deletion. NOTE: per this file's
+    // top-of-function doc comment, this "missing-first" sub-path is not
+    // currently known to be reachable via real `alignTraces([run,
+    // reference])` output (see `diffColumns`'s doc comment) — it's covered
+    // only by a direct `diffColumns` unit test against a hand-built
+    // `AlignedColumn[]`, not by any `diffRecordings` test.
     if (next && next.cells[0] !== null && next.cells[1] === null) {
       const runStep = next.cells[0];
       return {

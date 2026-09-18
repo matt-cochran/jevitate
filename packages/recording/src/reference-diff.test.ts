@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { PageSegment, Recording, Step } from "./schema.js";
-import { diffRecordings } from "./reference-diff.js";
+import type { PageSegment, Recording, RecordedStep, Step } from "./schema.js";
+import type { AlignedColumn } from "./align.js";
+import { diffRecordings, diffColumns } from "./reference-diff.js";
 
 // === Fixture helpers ===
 // Same pattern as align.test.ts: simple, hand-authored steps with clearly
@@ -30,6 +31,10 @@ function page(url: string, steps: Step[]): PageSegment {
 
 function recording(pages: PageSegment[]): Recording {
   return { version: "1", site: "https://example.com", pages };
+}
+
+function rs(step: Step): RecordedStep {
+  return { step };
 }
 
 describe("diffRecordings", () => {
@@ -106,6 +111,34 @@ describe("diffRecordings", () => {
     // so divergedAt is 1, kind "extra".
     expect(diffRecordings(run, reference)).toEqual(
       expect.objectContaining({ divergedAt: 1, kind: "extra" }),
+    );
+  });
+
+  it("diffColumns collapses a 'missing-first' adjacent gap pair into kind: 'changed'", () => {
+    // Per code review, real alignTraces([run, reference]) output is not
+    // known to ever produce this ordering (a [null, ref] column
+    // immediately followed by a [run, null] column) — align.ts's
+    // needlemanWunsch tie-break docstring guarantees `a`'s (run's)
+    // leftover element surfaces before `b`'s (reference's) does, so real
+    // substitutions come out "extra-first" (see the test above), not
+    // "missing-first". This test bypasses alignTraces entirely and feeds
+    // a hand-built AlignedColumn[] straight into diffColumns, to prove the
+    // collapse logic itself is correct and covered even though this exact
+    // shape may never arise from a real diffRecordings call today.
+    const A = click("step-a");
+    const B = click("step-b"); // reference's expected step
+    const X = click("step-x"); // run's actual (different) step
+    const C = click("step-c");
+
+    const cols: AlignedColumn[] = [
+      { cells: [rs(A), rs(A)] },
+      { cells: [null, rs(B)] }, // missing-first: reference has B, run doesn't
+      { cells: [rs(X), null] }, // immediately followed by: run has X, reference doesn't
+      { cells: [rs(C), rs(C)] },
+    ];
+
+    expect(diffColumns(cols)).toEqual(
+      expect.objectContaining({ divergedAt: 1, kind: "changed" }),
     );
   });
 
