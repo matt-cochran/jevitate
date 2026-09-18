@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { PageSegment, Recording, RecordedStep, Step } from "./schema.js";
 import { alignTraces } from "./align.js";
+import { stepSignature } from "./signature.js";
 
 // === Fixture helpers ===
 // Deliberately simple, hand-authored steps with clearly distinguishable
@@ -111,13 +112,38 @@ describe("alignTraces", () => {
     ]);
 
     // Directly assert the invariant: no column ever holds two non-null
-    // cells with different signatures.
+    // cells with different signatures. Uses the real `stepSignature` (not
+    // a stand-in like JSON.stringify) so this is airtight against future
+    // fixtures too — every cell here is on page "/a".
     for (const column of result) {
       const nonNull = column.cells.filter((c): c is RecordedStep => c !== null);
       if (nonNull.length > 1) {
-        const sigs = new Set(nonNull.map((c) => JSON.stringify(c.step)));
+        const sigs = new Set(nonNull.map((c) => stepSignature(c.step, "/a")));
         expect(sigs.size).toBe(1);
       }
+    }
+  });
+
+  it("returns an empty column list for zero takes", () => {
+    expect(alignTraces([])).toEqual([]);
+  });
+
+  it("returns one single-cell column per step for a single take", () => {
+    const A = click("step-a");
+    const B = click("step-b");
+    const C = fill("step-c", "foo");
+
+    const singleTake = recording([page("/a", [A, B, C])]);
+
+    const result = alignTraces([singleTake]);
+
+    expect(result).toEqual([
+      { cells: [rs(A)] },
+      { cells: [rs(B)] },
+      { cells: [rs(C)] },
+    ]);
+    for (const column of result) {
+      expect(column.cells.length).toBe(1);
     }
   });
 });
