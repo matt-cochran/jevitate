@@ -4,7 +4,7 @@ import { AuthoringTakeSchema } from "./diff.js";
 import type { AuthoringRecording } from "./diff.js";
 import { diffTakes } from "./diff.js";
 import type { DiffResult } from "./classify.js";
-import { applyPostdoc } from "./postdoc.js";
+import { applyPostdoc, SecretMaterializationError } from "./postdoc.js";
 import type { PostdocDecision } from "./postdoc.js";
 
 // === Fixture helpers (same conventions as diff.test.ts) ===
@@ -119,7 +119,81 @@ describe("applyPostdoc", () => {
     const diff = emptyDiff(1);
     const decisions: PostdocDecision[] = [{ step: { page: 0, step: 0 }, classify: "constant" }];
 
-    expect(() => applyPostdoc(authoring, diff, decisions)).toThrow();
+    expect(() => applyPostdoc(authoring, diff, decisions)).toThrow(SecretMaterializationError);
+  });
+
+  it("throws a `SecretMaterializationError` (not a plain Error) for the secret/absent-value case", () => {
+    const recording: Recording = {
+      version: "1.0",
+      site: "https://example.test",
+      pages: [
+        {
+          url: "https://example.test/login",
+          steps: [
+            {
+              step: {
+                kind: "fill",
+                target: { testId: "password" },
+                value: { redacted: true, length: 8 },
+                expect: { kind: "visible", target: { testId: "password" } },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const authoring: AuthoringRecording = { recording, values: new Map() };
+    const diff = emptyDiff(1);
+    const decisions: PostdocDecision[] = [{ step: { page: 0, step: 0 }, classify: "constant" }];
+
+    try {
+      applyPostdoc(authoring, diff, decisions);
+      expect.unreachable("expected applyPostdoc to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretMaterializationError);
+      expect((err as Error).name).toBe("SecretMaterializationError");
+    }
+  });
+
+  it("a `constant` decision on a column that VARIED across takes throws SecretMaterializationError without acknowledgeVaried", () => {
+    const takeA = authoringRecording([fillStep("username", "jane")]);
+    const takeB = authoringRecording([fillStep("username", "bob")]);
+    const diff = diffTakes([takeA, takeB]);
+    // Sanity: this really is a confident-variable column, not an artifact of
+    // a miscoded fixture.
+    expect(diff.columns[0]).toMatchObject({ kind: "variable" });
+    expect(diff.columns[0].confidence).toBeGreaterThanOrEqual(0.6);
+
+    const decisions: PostdocDecision[] = [{ step: { page: 0, step: 0 }, classify: "constant" }];
+
+    expect(() => applyPostdoc(takeA, diff, decisions)).toThrow(SecretMaterializationError);
+  });
+
+  it("a `constant` decision on a varied column WITH acknowledgeVaried:true materializes take-0's authoring value", () => {
+    const takeA = authoringRecording([fillStep("username", "jane")]);
+    const takeB = authoringRecording([fillStep("username", "bob")]);
+    const diff = diffTakes([takeA, takeB]);
+
+    const decisions: PostdocDecision[] = [
+      { step: { page: 0, step: 0 }, classify: "constant", acknowledgeVaried: true },
+    ];
+
+    const result = applyPostdoc(takeA, diff, decisions);
+    const step = result.pages[0].steps[0];
+    expect(step.step).toMatchObject({ value: { redacted: false, value: "jane" } });
+  });
+
+  it("a `constant` decision on a genuinely constant column (corroborated across takes) succeeds without any acknowledgeVaried", () => {
+    const takeA = authoringRecording([fillStep("submitFlag", "yes")]);
+    const takeB = authoringRecording([fillStep("submitFlag", "yes")]);
+    const diff = diffTakes([takeA, takeB]);
+    expect(diff.columns[0]).toMatchObject({ kind: "constant" });
+
+    const decisions: PostdocDecision[] = [{ step: { page: 0, step: 0 }, classify: "constant" }];
+
+    const result = applyPostdoc(takeA, diff, decisions);
+    const step = result.pages[0].steps[0];
+    expect(step.step).toMatchObject({ value: { redacted: false, value: "yes" } });
   });
 
   it("applies `label` and `chunk` alongside a classify decision", () => {

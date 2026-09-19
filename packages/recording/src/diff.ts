@@ -95,14 +95,20 @@ function reKeyToFlatIndex(take: AuthoringRecording): Map<string, string> {
   return reKeyed;
 }
 
-const CONFIDENT_VARIABLE_THRESHOLD = 0.6;
+/**
+ * Confidence threshold above which a `"variable"`-classified column is
+ * treated as CONFIRMED to vary across takes (rather than a low-confidence
+ * guess). Shared with `postdoc.ts`'s varied-value materialization guard —
+ * see `applyPostdoc`'s doc comment for why the same threshold applies there.
+ */
+export const CONFIDENT_VARIABLE_THRESHOLD = 0.6;
 
 /**
  * One fill/select step of `base`, flattened out with its `{page, step}` ref
  * preserved (refs are needed since `promoteToVariable` addresses steps by
  * page/step-in-page index, not flat index).
  */
-interface BaseFillStep {
+export interface BaseFillStep {
   ref: StepRef;
   variableName: string | undefined;
 }
@@ -215,8 +221,12 @@ export function applyDiff(
  * addresses a step by that ref, not by flat index, so refs must be tracked
  * while flattening (same page/step-in-page-index pattern used elsewhere in
  * this codebase, e.g. `classify.ts`'s flat-index walk).
+ *
+ * Exported so `postdoc.ts`'s varied-value materialization guard can reuse
+ * this exact walk to correlate a single target step to its diff column,
+ * rather than duplicating it.
  */
-function flattenBaseFillSteps(base: Recording): BaseFillStep[] {
+export function flattenBaseFillSteps(base: Recording): BaseFillStep[] {
   const result: BaseFillStep[] = [];
   base.pages.forEach((page, pageIdx) => {
     page.steps.forEach((recordedStep, stepIdxInPage) => {

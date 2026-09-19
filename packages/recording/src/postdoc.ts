@@ -1,9 +1,36 @@
 import type { Recording, RecordedStep, PageSegment, Step, Assertion } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
 import type { AuthoringRecording } from "./diff.js";
+import { flattenBaseFillSteps, CONFIDENT_VARIABLE_THRESHOLD } from "./diff.js";
 import type { DiffResult } from "./classify.js";
 import { promoteToVariable } from "./promote.js";
 import type { StepRef } from "./promote.js";
+
+/**
+ * Thrown by `applyPostdoc` whenever a `"constant"` decision would materialize
+ * a value that must never become a literal in the persisted artifact:
+ *
+ * - No local authoring value is available for the target step at all — the
+ *   fail-closed signal for a secret/PII field (the recorder never captures
+ *   an authoring value for those; see `materializeConstant` below for why
+ *   this is currently the ONLY schema-level secrecy signal — there is no
+ *   separate `sensitive`/`redacted` flag on `RedactedValue` beyond the
+ *   presence/absence of a captured `value`).
+ * - The target step's value VARIED across the takes that produced `diff`
+ *   (a confident `"variable"` column) and the decision did not explicitly
+ *   set `acknowledgeVaried: true` to override that guard.
+ *
+ * Floor #6 (design spec): a secret value must never become a literal
+ * constant. This class exists so callers can distinguish this specific,
+ * load-bearing failure mode from any other error `applyPostdoc` might throw
+ * (out-of-range refs, wrong step kind, schema validation, ...).
+ */
+export class SecretMaterializationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SecretMaterializationError";
+  }
+}
 
 /**
  * One human decision made during postdoc review about a single fill/select
@@ -11,9 +38,12 @@ import type { StepRef } from "./promote.js";
  * optional cosmetic annotations.
  *
  * - `"constant"` — materialize the LOCAL authoring value (never a value sent
- *   to a model) as a literal, but ONLY when non-secret (Task 5: "non-secret"
- *   means an authoring value is actually available for this step; the full
- *   named-field/sensitivity guard is Task 6's `SecretMaterializationError`).
+ *   to a model) as a literal, but ONLY when non-secret AND non-varied
+ *   (Task 5: "non-secret" means an authoring value is actually available for
+ *   this step; Task 6's `SecretMaterializationError` formalizes the full
+ *   secrecy guard AND adds the "value varied across takes" guard —
+ *   `acknowledgeVaried: true` explicitly overrides the latter, never the
+ *   former).
  * - `"variable"` — promote the step's value to a `{var: name}` slot via
  *   A.3a's `promoteToVariable`.
  * - `"handback"` — convert the step into a `handback` step: the human takes
@@ -23,9 +53,13 @@ import type { StepRef } from "./promote.js";
  * resulting step's own `label` field; `chunk` tags the `RecordedStep` with a
  * human-assigned higher-level "chunk" (Screenplay Task/Action) name for
  * later grouping (see `RecordedStep.chunk` in `schema.ts`).
+ *
+ * `acknowledgeVaried` lives ONLY on this in-memory decision input — it is
+ * never persisted into the `Recording` artifact (nothing in `schema.ts`
+ * carries it), so it does not touch the closed-schema guardrail.
  */
 export type PostdocDecision = { step: StepRef } & (
-  | { classify: "constant" }
+  | { classify: "constant"; acknowledgeVaried?: true }
   | { classify: "variable"; name: string }
   | { classify: "handback"; prompt: string }
 ) & { label?: string; chunk?: string };
@@ -39,11 +73,16 @@ export type PostdocDecision = { step: StepRef } & (
  * captured it as (in practice, real recorder output redacts it:
  * `{redacted:true,length}`). This is deliberate and fail-closed: nothing is
  * ever materialized (as a constant OR promoted to a variable) without an
- * explicit decision — `diff` is accepted for API symmetry with
- * `diffTakes`/future extension (Task 6's varying-value guard, the postdoc
- * TUI's suggestions) but this function does not need to consult it to
- * satisfy that contract, since "untouched" is already the fail-closed
- * default regardless of what the diff would have suggested.
+ * explicit decision.
+ *
+ * **Precondition on `diff` (same as `applyDiff`'s — see diff.ts):**
+ * `authoring` must be `takes[0]` of the SAME `diffTakes(takes)` call that
+ * produced `diff`. A `constant` decision consults `diff` (Task 6's
+ * varied-value guard, below) by correlating the target step's position
+ * among `authoring.recording`'s flattened fill/select steps to the
+ * same-position value-bearing column of `diff.columns` — this correlation
+ * is only meaningful under that precondition, exactly as `applyDiff`
+ * documents at diff.ts:122-136.
  *
  * Decisions are applied in array order; `label`/`chunk`, when present on a
  * decision, are applied to the SAME step right after its `classify` action
@@ -54,14 +93,19 @@ export type PostdocDecision = { step: StepRef } & (
  * (every helper below clones the path from root to the target step, the
  * same pattern `promoteToVariable` uses).
  *
- * @throws if a `constant` decision targets a step with no local authoring
- *   value (the fail-closed stand-in for "secret" in this task — Task 6
- *   formalizes this into `SecretMaterializationError`), or a non-fill/select
- *   step, or if any `step` ref is out of range.
+ * @throws `SecretMaterializationError` if a `constant` decision targets a
+ *   step with no local authoring value (the fail-closed signal for a
+ *   secret/PII field), or targets a step whose value CONFIDENTLY VARIED
+ *   across the takes behind `diff` without `acknowledgeVaried: true` on the
+ *   decision.
+ * @throws a plain `Error` for any other misuse: a non-fill/select step
+ *   targeted by a `constant` decision, an out-of-range `step` ref, or a
+ *   `diff` that does not correlate with `authoring` (precondition
+ *   violation).
  */
 export function applyPostdoc(
   authoring: AuthoringRecording,
-  _diff: DiffResult,
+  diff: DiffResult,
   decisions: PostdocDecision[],
 ): Recording {
   let current = authoring.recording;
@@ -72,7 +116,7 @@ export function applyPostdoc(
     if (decision.classify === "variable") {
       current = promoteToVariable(current, ref, decision.name);
     } else if (decision.classify === "constant") {
-      current = materializeConstant(current, authoring, ref);
+      current = materializeConstant(current, authoring, diff, ref, decision.acknowledgeVaried === true);
     } else {
       current = convertToHandback(current, ref, decision.prompt);
     }
@@ -134,18 +178,31 @@ function setStepAt(rec: Recording, ref: StepRef, newRecordedStep: RecordedStep):
  * local-only authoring values, keyed `` `${page}:${step}` ``) — never a
  * value read from `diff` or from anything model-bound.
  *
- * Fails closed when no local authoring value is available for this step:
- * that is exactly the case for a secret/PII field (the recorder never
- * captures an authoring value for those) as well as any other step the
- * caller mistakenly targets. Task 6 replaces this simple `Error` with a
- * named `SecretMaterializationError` and adds the "value varies across
- * takes" guard; this task's job is only to make the happy path correct and
- * this path fail-closed.
+ * Two independent fail-closed guards, both raising `SecretMaterializationError`:
+ *
+ * 1. No local authoring value is available for this step: that is exactly
+ *    the case for a secret/PII field (the recorder never captures an
+ *    authoring value for those). Note: there is currently no separate
+ *    schema-level "sensitive"/"redacted" flag distinct from this
+ *    presence/absence signal (`RedactedValue` in schema.ts is just
+ *    `{redacted:true,length}` or `{redacted:false,value}`) — so this
+ *    absent-value check IS the whole secrecy guard, not one branch of it.
+ * 2. The target step's authoring value CONFIDENTLY VARIED across the takes
+ *    behind `diff` (a `"variable"`-classified column at
+ *    `>= CONFIDENT_VARIABLE_THRESHOLD` confidence — the same threshold
+ *    `applyDiff` uses to decide "confident enough to auto-promote") and the
+ *    caller did not pass `acknowledgeVaried: true`. This is found by
+ *    correlating the target step's position among `authoring.recording`'s
+ *    flattened fill/select steps to the same-position value-bearing column
+ *    of `diff.columns`, exactly the zip `applyDiff` performs (diff.ts:175-210)
+ *    — see `applyPostdoc`'s doc comment for the precondition this relies on.
  */
 function materializeConstant(
   current: Recording,
   authoring: AuthoringRecording,
+  diff: DiffResult,
   ref: StepRef,
+  acknowledgeVaried: boolean,
 ): Recording {
   const recordedStep = getRecordedStepAt(current, ref);
   const step = recordedStep.step;
@@ -159,15 +216,65 @@ function materializeConstant(
   const key = `${ref.page}:${ref.step}`;
   const value = authoring.values.get(key);
   if (value === undefined) {
-    throw new Error(
+    throw new SecretMaterializationError(
       `applyPostdoc: cannot materialize step ${key} as a constant — no local authoring value ` +
-        `is available for it (this is the fail-closed default for secret/absent-value fields; ` +
-        `see the full SecretMaterializationError guard added in Task 6)`,
+        `is available for it. This is the fail-closed guard for secret/PII fields: the recorder ` +
+        `never captures a local authoring value for those, so an absent value here means either ` +
+        `a secret field or a caller mistake — never something safe to guess at.`,
     );
+  }
+
+  if (!acknowledgeVaried) {
+    assertNotVariedAcrossTakes(authoring.recording, diff, ref, key);
   }
 
   const newStep: Step = { ...step, value: { redacted: false, value } };
   return setStepAt(current, ref, { ...recordedStep, step: newStep });
+}
+
+/**
+ * Throws `SecretMaterializationError` if `ref`'s authoring value CONFIDENTLY
+ * VARIED across the takes behind `diff` — see `materializeConstant`'s doc
+ * comment (guard 2) and `applyPostdoc`'s doc comment for the correlation
+ * precondition this relies on.
+ *
+ * A `base`/`diff` pair that doesn't correlate at all (mismatched lengths —
+ * i.e. `diff` wasn't produced from a `diffTakes` call where `base` was
+ * take 0) is a caller-contract violation, exactly like `applyDiff`'s own
+ * length check — this throws a plain `Error` for that case, not
+ * `SecretMaterializationError`, since it isn't a secrecy finding at all.
+ */
+function assertNotVariedAcrossTakes(
+  base: Recording,
+  diff: DiffResult,
+  ref: StepRef,
+  key: string,
+): void {
+  const baseFillSteps = flattenBaseFillSteps(base);
+  const valueBearingColumns = diff.columns.filter((c) => c.values[0] !== null);
+
+  if (baseFillSteps.length !== valueBearingColumns.length) {
+    throw new Error(
+      `applyPostdoc: base has ${baseFillSteps.length} fill/select step(s) but diff has ` +
+        `${valueBearingColumns.length} value-bearing column(s) for take 0 — authoring must be the ` +
+        `first take passed to the diffTakes(...) call that produced this diff`,
+    );
+  }
+
+  const position = baseFillSteps.findIndex((s) => s.ref.page === ref.page && s.ref.step === ref.step);
+  // Unreachable in practice: materializeConstant already confirmed `ref`
+  // addresses a fill/select step, so it must appear in `baseFillSteps`.
+  if (position === -1) return;
+
+  const column = valueBearingColumns[position];
+  if (column.kind === "variable" && column.confidence >= CONFIDENT_VARIABLE_THRESHOLD) {
+    throw new SecretMaterializationError(
+      `applyPostdoc: cannot materialize step ${key} as a constant — its authoring value VARIED ` +
+        `across takes (classified "variable" at confidence ${column.confidence.toFixed(2)}, >= the ` +
+        `${CONFIDENT_VARIABLE_THRESHOLD} confident-variable threshold). Pass ` +
+        `acknowledgeVaried: true on this decision to materialize take 0's value anyway.`,
+    );
+  }
 }
 
 /**
