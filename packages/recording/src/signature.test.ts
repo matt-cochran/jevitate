@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Step } from "./schema.js";
-import { urlTemplate, stepSignature } from "./signature.js";
+import { urlTemplate, stepSignature, strictSignature } from "./signature.js";
 
 describe("urlTemplate", () => {
   it("normalizes all-digit path segments to :id", () => {
@@ -291,5 +291,94 @@ describe("stepSignature", () => {
     };
 
     expect(stepSignature(handbackA, "/checkout")).toBe(stepSignature(handbackB, "/checkout"));
+  });
+});
+
+describe("strictSignature", () => {
+  it("gives the same stepSignature (structural) for two same-role clicks with different names", () => {
+    const clickA: Step = {
+      kind: "click",
+      target: { role: "button", name: "Delete" },
+      expect: { kind: "visible", target: { role: "button" } },
+    };
+    const clickB: Step = {
+      kind: "click",
+      target: { role: "button", name: "Save" },
+      expect: { kind: "visible", target: { role: "button" } },
+    };
+
+    expect(stepSignature(clickA, "/home")).toBe(stepSignature(clickB, "/home"));
+  });
+
+  it("distinguishes two same-role clicks by name, unlike stepSignature", () => {
+    const clickA: Step = {
+      kind: "click",
+      target: { role: "button", name: "Delete" },
+      expect: { kind: "visible", target: { role: "button" } },
+    };
+    const clickB: Step = {
+      kind: "click",
+      target: { role: "button", name: "Save" },
+      expect: { kind: "visible", target: { role: "button" } },
+    };
+
+    expect(strictSignature(clickA, "/home")).not.toBe(strictSignature(clickB, "/home"));
+  });
+
+  it("distinguishes two same-role clicks by text, unlike stepSignature", () => {
+    const clickA: Step = {
+      kind: "click",
+      target: { role: "button", text: "Submit now" },
+      expect: { kind: "visible", target: { role: "button" } },
+    };
+    const clickB: Step = {
+      kind: "click",
+      target: { role: "button", text: "Go" },
+      expect: { kind: "visible", target: { role: "button" } },
+    };
+
+    expect(strictSignature(clickA, "/home")).not.toBe(strictSignature(clickB, "/home"));
+  });
+
+  it("distinguishes two clicks with the same role+name but different ordinal", () => {
+    const clickA: Step = {
+      kind: "click",
+      target: { role: "listitem", name: "Item", ordinal: 0 },
+      expect: { kind: "visible", target: { role: "listitem", name: "Item" } },
+    };
+    const clickB: Step = {
+      kind: "click",
+      target: { role: "listitem", name: "Item", ordinal: 1 },
+      expect: { kind: "visible", target: { role: "listitem", name: "Item" } },
+    };
+
+    expect(strictSignature(clickA, "/list")).not.toBe(strictSignature(clickB, "/list"));
+  });
+
+  it("gives two fill steps on the same field the same strict signature regardless of value", () => {
+    const stepA: Step = {
+      kind: "fill",
+      target: { role: "textbox", label: "Name", name: "Name" },
+      value: { redacted: false, value: "jane" },
+      expect: { kind: "visible", target: { role: "textbox", label: "Name" } },
+    };
+    const stepB: Step = {
+      kind: "fill",
+      target: { role: "textbox", label: "Name", name: "Name" },
+      value: { redacted: false, value: "bob" },
+      expect: { kind: "visible", target: { role: "textbox", label: "Name" } },
+    };
+
+    expect(strictSignature(stepA, "/signup")).toBe(strictSignature(stepB, "/signup"));
+  });
+
+  it("gives identical steps the same strict signature", () => {
+    const step: Step = {
+      kind: "click",
+      target: { testId: "reply-button", name: "Reply" },
+      expect: { kind: "visible", target: { testId: "reply-form" } },
+    };
+
+    expect(strictSignature(step, "/thread/1")).toBe(strictSignature(step, "/thread/1"));
   });
 });

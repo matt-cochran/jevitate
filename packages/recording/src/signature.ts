@@ -108,6 +108,80 @@ export function stepSignature(step: Step, pageUrl: string): string {
   return `${step.kind}|${page}|${descriptor}`;
 }
 
+/**
+ * Deterministic key that ALSO folds in the fields `stepSignature` deliberately
+ * excludes: `TargetDescriptor.name`/`.text` (the accessible name/text of the
+ * acted element) and `.ordinal` (which same-named sibling was acted on).
+ *
+ * Used for **divergence detection** (`diffRecordings`), never for alignment:
+ * alignment must stay value/name-independent (that's `stepSignature`'s job,
+ * unchanged), or a run that clicked the WRONG same-role control would never
+ * even align against the reference step it should be compared to. Once two
+ * steps are aligned by `stepSignature`, comparing their `strictSignature`
+ * tells you whether they're truly the same control or a structurally-
+ * identical-but-different one (e.g. two same-role buttons with different
+ * accessible names, or the 2nd vs. 3rd same-role/same-name sibling).
+ *
+ * Built as `stepSignature | strictKey`, so anything `stepSignature` already
+ * distinguishes stays distinguished here too — this is strictly more
+ * specific than `stepSignature`, never less.
+ *
+ * Pure: no I/O, no randomness, deterministic for identical inputs.
+ */
+export function strictSignature(step: Step, pageUrl: string): string {
+  return `${stepSignature(step, pageUrl)}|${strictKey(step)}`;
+}
+
+/**
+ * The name/text/ordinal suffix folded on top of `structuralKey` to produce
+ * `strictSignature`. Only ever adds identifying detail for the step kinds
+ * that carry a `TargetDescriptor` (directly, or via `items`/an `Assertion`'s
+ * `target`) — `navigate` and `press` have none, so they contribute nothing
+ * beyond what `stepSignature` already captures.
+ */
+function strictKey(step: Step): string {
+  switch (step.kind) {
+    case "navigate":
+    case "press":
+      return "";
+    case "click":
+    case "fill":
+    case "select":
+    case "waitFor":
+    case "extract":
+      return targetDescriptorStrictKey(step.target);
+    case "forEach":
+      return targetDescriptorStrictKey(step.items);
+    case "assert":
+      return assertionStrictKey(step.check);
+    case "handback":
+      return assertionStrictKey(step.resume);
+  }
+}
+
+/**
+ * The `name`/`text`/`ordinal` portion of a `TargetDescriptor`, deliberately
+ * left OUT of `targetDescriptorKey` (structural) and folded in here instead.
+ * `?? ""` distinguishes "field omitted" from "field present but empty" so
+ * they never collide with each other.
+ */
+function targetDescriptorStrictKey(target: TargetDescriptor | undefined): string {
+  if (!target) return "";
+  return `name:${target.name ?? ""}|text:${target.text ?? ""}|ordinal:${target.ordinal ?? ""}`;
+}
+
+/** Strict counterpart to `assertionKey`, reusing `targetDescriptorStrictKey` on its `target` where present. */
+function assertionStrictKey(assertion: Assertion): string {
+  switch (assertion.kind) {
+    case "urlIncludes":
+      return "";
+    case "visible":
+    case "textIncludes":
+    case "count":
+      return targetDescriptorStrictKey(assertion.target);
+  }
+}
+
 function structuralKey(step: Step): string {
   switch (step.kind) {
     case "navigate":

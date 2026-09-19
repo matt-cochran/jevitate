@@ -153,4 +153,47 @@ describe("diffRecordings", () => {
     const result = diffRecordings(run, reference);
     expect(result.divergedAt).toBeNull();
   });
+
+  // === Strict two-tier signature: A.3a gap 3 ===
+  // `stepSignature` (structural) deliberately ignores `name`/`text`/`ordinal`
+  // so alignment isn't defeated by different captured content. That means a
+  // click on button "Delete" and a click on button "Save" (same role, no
+  // testId) land in the SAME aligned column — A.3a's stepSignature-only diff
+  // reported `divergedAt: null` here, silently missing that run clicked the
+  // wrong same-role control. `diffRecordings` must now also compare the
+  // aligned cells' `strictSignature` and report `kind: "changed"`.
+
+  function roleClick(role: string, name: string): Step {
+    return {
+      kind: "click",
+      target: { role, name },
+      expect: { kind: "visible", target: { role } },
+    };
+  }
+
+  it("detects a click on a structurally-identical but differently-named same-role control as kind: 'changed' (A.3a returned null here)", () => {
+    const A = click("step-a");
+    const runClick = roleClick("button", "Delete");
+    const refClick = roleClick("button", "Save");
+
+    const run = recording([page("/a", [A, runClick])]);
+    const reference = recording([page("/a", [A, refClick])]);
+
+    // Both clicks share the identical structural stepSignature (same role,
+    // no testId/label/css), so alignTraces places them in one "perfect"
+    // column at index 1. The divergence only shows up via strictSignature.
+    expect(diffRecordings(run, reference)).toEqual(
+      expect.objectContaining({ divergedAt: 1, kind: "changed" }),
+    );
+  });
+
+  it("still returns divergedAt: null for identical runs (strict signatures also match)", () => {
+    const A = click("step-a");
+    const B = roleClick("button", "Save");
+
+    const run = recording([page("/a", [A, B])]);
+    const reference = recording([page("/a", [A, B])]);
+
+    expect(diffRecordings(run, reference)).toEqual({ divergedAt: null });
+  });
 });

@@ -1,6 +1,7 @@
 import type { Recording, RecordedStep } from "./schema.js";
 import { alignTraces } from "./align.js";
 import type { AlignedColumn } from "./align.js";
+import { strictSignature } from "./signature.js";
 
 export interface ReferenceDiffResult {
   divergedAt: number | null;
@@ -17,17 +18,28 @@ export interface ReferenceDiffResult {
  * Built directly on `alignTraces`'s two-take alignment (Task 5), whose
  * invariant is load-bearing here: a column's non-null cells always share
  * the identical `stepSignature`, or the column has exactly one non-null
- * cell (a gap). Two different-signature steps NEVER land in the same
- * column — so a literal "changed" divergence never appears as ONE aligned
- * column holding two different steps. Instead a substitution (run did step
- * X where reference expected step B, B != X) always shows up as TWO
- * adjacent columns: one where run has a step and reference has a gap, and
- * the very next one where reference has a step and run has a gap (or vice
- * versa, depending on which side the aligner's tie-breaking happens to
- * place first — see `needlemanWunsch`'s traceback comment in `align.ts`).
- * This function detects that adjacent opposite-gap pair and reports it as
- * a single `"changed"` event rather than two independent
+ * cell (a gap). Two different-*structural*-signature steps NEVER land in
+ * the same column — so a "changed" divergence caused by a genuinely
+ * different step (different testId/role/etc.) never appears as ONE aligned
+ * column holding two different steps. Instead a substitution like that
+ * (run did step X where reference expected step B, B != X) always shows up
+ * as TWO adjacent columns: one where run has a step and reference has a
+ * gap, and the very next one where reference has a step and run has a gap
+ * (or vice versa, depending on which side the aligner's tie-breaking
+ * happens to place first — see `needlemanWunsch`'s traceback comment in
+ * `align.ts`). This function detects that adjacent opposite-gap pair and
+ * reports it as a single `"changed"` event rather than two independent
  * `"missing"`/`"extra"` events.
+ *
+ * A SECOND, distinct "changed" case (closing A.3a gap 3): two steps can
+ * share the identical *structural* `stepSignature` (same role, no testId —
+ * e.g. two same-role buttons with different accessible names) and so land
+ * in one "perfect" column (both cells present) that alignment considers a
+ * clean match. `diffColumns` additionally compares such a column's cells by
+ * `strictSignature` (which folds in `name`/`text`/`ordinal`) and reports
+ * `"changed"` right there, at that column, when they differ — this is what
+ * lets self-healing tell apart "clicked the right same-role control" from
+ * "clicked a structurally-identical but wrong one".
  *
  * `cols[c].cells[0]` is always `run`'s cell and `cols[c].cells[1]` is
  * always `reference`'s cell at aligned position `c`, since `alignTraces`
@@ -45,7 +57,30 @@ export interface ReferenceDiffResult {
  * the two input `Recording`s' content (via `alignTraces`).
  */
 export function diffRecordings(run: Recording, reference: Recording): ReferenceDiffResult {
-  return diffColumns(alignTraces([run, reference]));
+  const urlByStep = buildUrlByStep([run, reference]);
+  return diffColumns(alignTraces([run, reference]), urlByStep);
+}
+
+/**
+ * Maps every `RecordedStep` in the given recordings to the `url` of the
+ * `PageSegment` it came from, by object identity. `strictSignature` needs a
+ * step's page url, but by the time a step reaches an `AlignedColumn` cell
+ * (post-`alignTraces`) it's been flattened away from its originating page —
+ * see `align.ts`'s `FlatStep`. This works because `alignTraces`/`flattenTake`
+ * carry the SAME `RecordedStep` object references through into
+ * `AlignedColumn.cells` (no cloning), so looking a cell up by identity here
+ * recovers exactly the url it was recorded on.
+ */
+function buildUrlByStep(recordings: Recording[]): Map<RecordedStep, string> {
+  const urlByStep = new Map<RecordedStep, string>();
+  for (const recording of recordings) {
+    for (const page of recording.pages) {
+      for (const recordedStep of page.steps) {
+        urlByStep.set(recordedStep, page.url);
+      }
+    }
+  }
+  return urlByStep;
 }
 
 /**
@@ -66,14 +101,54 @@ export function diffRecordings(run: Recording, reference: Recording): ReferenceD
  * direct test even though it's currently unreachable end-to-end via
  * `diffRecordings` — so a future change to `align.ts`'s tie-breaking can't
  * silently leave it broken and untested.
+ *
+ * `urlByStep` (optional, defaults to empty) supplies each cell's page url
+ * for the `strictSignature` comparison on "perfect" columns — see
+ * `diffRecordings`'s `buildUrlByStep`. Direct unit tests that hand-build an
+ * `AlignedColumn[]` (with no originating `Recording`) can omit it: a
+ * missing url falls back to `""`, which is fine since it's the identical
+ * fallback on both sides of the comparison.
  */
-export function diffColumns(cols: AlignedColumn[]): ReferenceDiffResult {
-  const c = cols.findIndex((col) => !isPerfect(col));
-  if (c === -1) return { divergedAt: null };
+export function diffColumns(
+  cols: AlignedColumn[],
+  urlByStep: ReadonlyMap<RecordedStep, string> = new Map(),
+): ReferenceDiffResult {
+  for (let c = 0; c < cols.length; c++) {
+    const result = evaluateColumn(cols, c, urlByStep);
+    if (result) return result;
+  }
+  return { divergedAt: null };
+}
 
+/**
+ * Evaluates a single aligned column for divergence, returning `null` when
+ * it's a clean match (a "perfect" column — both cells present — whose
+ * cells also agree on `strictSignature`) or a diverging `ReferenceDiffResult`
+ * otherwise. Split out of `diffColumns` so the "first diverging column"
+ * search stays a simple linear scan.
+ */
+function evaluateColumn(
+  cols: AlignedColumn[],
+  c: number,
+  urlByStep: ReadonlyMap<RecordedStep, string>,
+): ReferenceDiffResult | null {
   const runCell = cols[c].cells[0];
   const refCell = cols[c].cells[1];
   const next = c + 1 < cols.length ? cols[c + 1] : undefined;
+
+  if (runCell !== null && refCell !== null) {
+    // Structurally "perfect" — same stepSignature. Still might be a
+    // structurally-identical-but-different same-role control (A.3a gap 3):
+    // compare the stricter signature, which folds in name/text/ordinal.
+    if (strictSignatureOf(runCell, urlByStep) !== strictSignatureOf(refCell, urlByStep)) {
+      return {
+        divergedAt: c,
+        kind: "changed",
+        detail: `run performed ${describeStep(runCell)} where reference expected ${describeStep(refCell)} (same structural signature, different name/text/ordinal)`,
+      };
+    }
+    return null;
+  }
 
   if (runCell === null) {
     // reference has a step run is missing (refCell is non-null: a column
@@ -126,8 +201,14 @@ export function diffColumns(cols: AlignedColumn[]): ReferenceDiffResult {
   };
 }
 
-function isPerfect(col: AlignedColumn): boolean {
-  return col.cells[0] !== null && col.cells[1] !== null;
+/**
+ * `strictSignature` for one aligned cell, looking its page url up in
+ * `urlByStep` (falling back to `""` when absent — see `diffColumns`'s doc
+ * comment on hand-built `AlignedColumn[]` inputs).
+ */
+function strictSignatureOf(recordedStep: RecordedStep, urlByStep: ReadonlyMap<RecordedStep, string>): string {
+  const pageUrl = urlByStep.get(recordedStep) ?? "";
+  return strictSignature(recordedStep.step, pageUrl);
 }
 
 /** Short, human-readable diagnostic for a step, used only in `detail`. */
