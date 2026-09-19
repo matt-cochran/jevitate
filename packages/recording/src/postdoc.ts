@@ -262,9 +262,24 @@ function assertNotVariedAcrossTakes(
   }
 
   const position = baseFillSteps.findIndex((s) => s.ref.page === ref.page && s.ref.step === ref.step);
-  // Unreachable in practice: materializeConstant already confirmed `ref`
-  // addresses a fill/select step, so it must appear in `baseFillSteps`.
-  if (position === -1) return;
+  // Defensive fail-closed invariant, not reachable through any public
+  // `applyPostdoc` call today (`materializeConstant` already confirmed `ref`
+  // addresses a fill/select step, so it must appear in `baseFillSteps`) —
+  // covered by inspection, not a test (this helper is private and not
+  // independently unit-testable without exporting it solely for that
+  // purpose). If this DID ever trigger (e.g. a future refactor breaks the
+  // invariant), the target step's cross-take variance can no longer be
+  // verified at all, so refuse to materialize rather than silently allowing
+  // a possibly-secret/varied value through — the whole point of floor #6 is
+  // that this guard must never fail open.
+  if (position === -1) {
+    throw new SecretMaterializationError(
+      `applyPostdoc: cannot materialize step ${key} as a constant — its target step could not be ` +
+        `located in the fill/select projection used to check cross-take variance, so its safety ` +
+        `cannot be verified. Refusing to materialize rather than risk silently allowing a ` +
+        `varied/secret value through.`,
+    );
+  }
 
   const column = valueBearingColumns[position];
   if (column.kind === "variable" && column.confidence >= CONFIDENT_VARIABLE_THRESHOLD) {
