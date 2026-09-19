@@ -1,19 +1,24 @@
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { Command } from "commander";
+import * as clack from "@clack/prompts";
 import type { ProfileManager } from "@doit/daemon";
 import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } from "@doit/domain";
 import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@doit/storage-sqlite";
 import {
   RecordingSchema,
   AuthoringTakeSchema,
+  PostdocDecisionsSchema,
   promoteToVariable,
   diffTakes,
+  applyPostdoc,
+  flattenBaseFillSteps,
   fitInteractionPolicy,
   type Recording,
   type AuthoringRecording,
   type ColumnClass,
+  type PostdocDecision,
 } from "@doit/recording";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 
@@ -346,5 +351,160 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
+  recording
+    .command("postdoc <take> [more...]")
+    .option("--decisions <file>", "path to a PostdocDecision[] JSON file (non-interactive mode)")
+    .option("--out <file>", "write the resulting Recording to this file instead of stdout")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, take: string, more: string[]) {
+      const { decisions: decisionsFile, out, json } = this.opts<{
+        decisions?: string;
+        out?: string;
+        json?: boolean;
+      }>();
+      try {
+        const files = [take, ...more];
+        const takes: AuthoringRecording[] = await Promise.all(
+          files.map(async (f) => {
+            const raw = await readFile(f, "utf8");
+            const parsed = AuthoringTakeSchema.parse(JSON.parse(raw));
+            return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
+          })
+        );
+        const diff = diffTakes(takes);
+
+        let decisions: PostdocDecision[];
+        if (decisionsFile !== undefined) {
+          decisions = await loadDecisions(decisionsFile);
+        } else {
+          decisions = await promptForDecisions(takes[0]);
+        }
+
+        const result = applyPostdoc(takes[0], diff, decisions);
+
+        if (out !== undefined) {
+          await writeFile(out, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+        }
+        if (json) {
+          emitJson(program, ok(result));
+        } else if (out === undefined) {
+          program.configureOutput().writeOut?.(`${JSON.stringify(result, null, 2)}\n`);
+          process.exitCode = 0;
+        } else {
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof DecisionsParseError) {
+          emitJson(program, fail("E_INVALID_DECISIONS", String(err.cause)));
+        } else {
+          emitJson(program, fail("E_INVALID_TAKE", String(err)));
+        }
+      }
+    });
+
   return program;
+}
+
+/**
+ * Distinguishes a malformed `--decisions <file>` (E_INVALID_DECISIONS) from
+ * every other failure mode of the `postdoc` action (E_INVALID_TAKE) without
+ * making `loadDecisions` itself responsible for emitting the CLI envelope —
+ * matching this file's existing pattern of one try/catch per subcommand
+ * mapping to one error code.
+ */
+class DecisionsParseError extends Error {
+  constructor(public readonly cause: unknown) {
+    super(String(cause));
+  }
+}
+
+async function loadDecisions(file: string): Promise<PostdocDecision[]> {
+  let raw: string;
+  let parsed: unknown;
+  try {
+    raw = await readFile(file, "utf8");
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new DecisionsParseError(err);
+  }
+  const result = PostdocDecisionsSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new DecisionsParseError(result.error);
+  }
+  return result.data;
+}
+
+/**
+ * Thin `@clack/prompts` adapter: walks `authoring`'s fill/select steps in
+ * order and asks the human how to classify each one. ALL logic (variance
+ * guards, secret-materialization checks, the actual step rewrite) lives in
+ * `applyPostdoc`/`diffTakes` — this function only collects a
+ * `PostdocDecision[]` to hand them.
+ */
+async function promptForDecisions(authoring: AuthoringRecording): Promise<PostdocDecision[]> {
+  clack.intro("recording postdoc — review captured fill/select steps");
+
+  const decisions: PostdocDecision[] = [];
+  const fillSteps = flattenBaseFillSteps(authoring.recording);
+
+  for (const { ref } of fillSteps) {
+    const classify = await clack.select({
+      message: `Step ${ref.page}:${ref.step} — how should this value be classified?`,
+      options: [
+        { value: "constant" as const, label: "constant", hint: "fix this value in the artifact" },
+        { value: "variable" as const, label: "variable", hint: "prompt for a value at replay time" },
+        { value: "handback" as const, label: "handback", hint: "hand control to a human at replay time" },
+      ],
+    });
+    if (clack.isCancel(classify)) {
+      clack.cancel("postdoc review cancelled");
+      process.exit(1);
+    }
+
+    const label = await promptOptionalText("Label for this step? (blank to skip)");
+    const chunk = await promptOptionalText("Chunk name for this step? (blank to skip)");
+
+    let decision: PostdocDecision;
+    if (classify === "constant") {
+      const acknowledgeVaried = await clack.confirm({
+        message: "Acknowledge this value varied across takes anyway?",
+        initialValue: false,
+      });
+      if (clack.isCancel(acknowledgeVaried)) {
+        clack.cancel("postdoc review cancelled");
+        process.exit(1);
+      }
+      decision = { step: ref, classify: "constant", ...(acknowledgeVaried ? { acknowledgeVaried: true as const } : {}) };
+    } else if (classify === "variable") {
+      const name = await clack.text({ message: "Variable name?" });
+      if (clack.isCancel(name)) {
+        clack.cancel("postdoc review cancelled");
+        process.exit(1);
+      }
+      decision = { step: ref, classify: "variable", name };
+    } else {
+      const prompt = await clack.text({ message: "Handback prompt for the human operator?" });
+      if (clack.isCancel(prompt)) {
+        clack.cancel("postdoc review cancelled");
+        process.exit(1);
+      }
+      decision = { step: ref, classify: "handback", prompt };
+    }
+
+    if (label !== undefined) decision = { ...decision, label };
+    if (chunk !== undefined) decision = { ...decision, chunk };
+    decisions.push(decision);
+  }
+
+  clack.outro("review complete");
+  return decisions;
+}
+
+async function promptOptionalText(message: string): Promise<string | undefined> {
+  const value = await clack.text({ message, defaultValue: "" });
+  if (clack.isCancel(value)) {
+    clack.cancel("postdoc review cancelled");
+    process.exit(1);
+  }
+  return value === "" ? undefined : value;
 }

@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@doit/daemon";
 import { SitePolicySchema } from "@doit/domain";
-import type { Recording, Step } from "@doit/recording";
-import { AuthoringTakeSchema } from "@doit/recording";
+import type { Recording, Step, AuthoringRecording, PostdocDecision } from "@doit/recording";
+import { AuthoringTakeSchema, diffTakes, applyPostdoc } from "@doit/recording";
 import { buildProgram } from "./program.js";
 
 // === recording command fixture helpers ===
@@ -387,6 +387,97 @@ test("recording promote on a click step returns a fail envelope and sets exit co
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false });
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+/** Loads a `--decisions <file>`-shaped take file the same way `recording
+ * diff`/`recording postdoc` do (see `program.ts`'s copied loading snippet). */
+async function loadAuthoringRecording(path: string): Promise<AuthoringRecording> {
+  const raw = await readFile(path, "utf8");
+  const parsed = AuthoringTakeSchema.parse(JSON.parse(raw));
+  return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
+}
+
+test("recording postdoc --decisions applies the decisions and prints the same Recording applyPostdoc would produce", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+  const decisionsPath = join(root, "decisions.json");
+
+  // username varies across takes; email does not; submit is a plain click.
+  const takeA = authoringTakeJson([
+    fillStep("username", "jane"),
+    fillStep("email", "jane@example.test"),
+    clickStep("submit"),
+  ]);
+  const takeB = authoringTakeJson([
+    fillStep("username", "bob"),
+    fillStep("email", "jane@example.test"),
+    clickStep("submit"),
+  ]);
+  await writeFile(takeAPath, JSON.stringify(takeA));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const decisions: PostdocDecision[] = [
+    { step: { page: 0, step: 0 }, classify: "variable", name: "username" },
+    { step: { page: 0, step: 1 }, classify: "constant", label: "email field" },
+    { step: { page: 0, step: 2 }, classify: "handback", prompt: "confirm submission" },
+  ];
+  await writeFile(decisionsPath, JSON.stringify(decisions));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(
+    ["recording", "postdoc", takeAPath, takeBPath, "--decisions", decisionsPath, "--json"],
+    { from: "user" }
+  );
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.ok).toBe(true);
+
+  const takes = await Promise.all([loadAuthoringRecording(takeAPath), loadAuthoringRecording(takeBPath)]);
+  const diff = diffTakes(takes);
+  const expected = applyPostdoc(takes[0], diff, decisions);
+
+  expect(parsed.data).toEqual(JSON.parse(JSON.stringify(expected)));
+});
+
+test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) on a malformed decisions file", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+    const profiles = new ProfileManager(root);
+    const takeAPath = join(root, "takeA.json");
+    const takeBPath = join(root, "takeB.json");
+    const decisionsPath = join(root, "decisions.json");
+
+    const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+    const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+    await writeFile(takeAPath, JSON.stringify(takeA));
+    await writeFile(takeBPath, JSON.stringify(takeB));
+    // Missing required `name` for a "variable" decision — must fail closed.
+    await writeFile(
+      decisionsPath,
+      JSON.stringify([{ step: { page: 0, step: 0 }, classify: "variable" }])
+    );
+
+    const lines: string[] = [];
+    const program = buildProgram({ profiles });
+    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.exitOverride();
+    await program.parseAsync(
+      ["recording", "postdoc", takeAPath, takeBPath, "--decisions", decisionsPath, "--json"],
+      { from: "user" }
+    );
+    const parsed = JSON.parse(lines.join(""));
+
+    expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_DECISIONS" } });
     expect(process.exitCode).toBe(1);
   } finally {
     process.exitCode = savedExitCode;

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Recording, RecordedStep, PageSegment, Step, Assertion } from "./schema.js";
 import { RecordingSchema } from "./schema.js";
 import type { AuthoringRecording } from "./diff.js";
@@ -63,6 +64,67 @@ export type PostdocDecision = { step: StepRef } & (
   | { classify: "variable"; name: string }
   | { classify: "handback"; prompt: string }
 ) & { label?: string; chunk?: string };
+
+/**
+ * zod schema for `StepRef` (not exported elsewhere in the package today —
+ * this is the only place a `StepRef` needs to be parsed from untrusted
+ * input). `.strict()` to fail closed on unknown keys, matching the rest of
+ * this package's closed-schema posture.
+ */
+const StepRefSchema = z
+  .object({
+    page: z.number().int().nonnegative(),
+    step: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * CLI-INPUT schema for `PostdocDecision`, matching its in-memory type
+ * EXACTLY: a discriminated union on `classify`, each variant `.strict()` to
+ * fail closed on unknown keys.
+ *
+ * This is a schema for parsing a `--decisions <file>` JSON array fed to the
+ * `recording postdoc` CLI (Task 7) — it is NOT part of the `Recording`
+ * artifact and never touches `RecordingSchema`'s closed-schema guardrail.
+ * `acknowledgeVaried`, in particular, is validated here purely so the CLI
+ * can fail closed on a malformed decisions file; it is still never
+ * persisted into a `Recording` (see `PostdocDecision`'s doc comment above).
+ */
+export const PostdocDecisionSchema = z.discriminatedUnion("classify", [
+  z
+    .object({
+      step: StepRefSchema,
+      classify: z.literal("constant"),
+      acknowledgeVaried: z.literal(true).optional(),
+      label: z.string().optional(),
+      chunk: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      step: StepRefSchema,
+      classify: z.literal("variable"),
+      name: z.string(),
+      label: z.string().optional(),
+      chunk: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      step: StepRefSchema,
+      classify: z.literal("handback"),
+      prompt: z.string(),
+      label: z.string().optional(),
+      chunk: z.string().optional(),
+    })
+    .strict(),
+]);
+
+/**
+ * An array of `PostdocDecisionSchema` — the shape `recording postdoc
+ * --decisions <file>` reads from disk.
+ */
+export const PostdocDecisionsSchema = z.array(PostdocDecisionSchema);
 
 /**
  * Turns one authoring take + the A.3a diff + a list of explicit human

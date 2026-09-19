@@ -7,6 +7,7 @@
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
+    "@clack/prompts": "^0.9.1",
     "@doit/daemon": "workspace:*",
     "@doit/domain": "workspace:*",
     "@doit/recording": "workspace:*",
