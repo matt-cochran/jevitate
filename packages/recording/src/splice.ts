@@ -36,6 +36,17 @@ export type SpliceMode = "insert" | "replace-from";
  * in `insert` mode) is omitted entirely when it would be empty, so splicing
  * at a page boundary never introduces a spurious empty `PageSegment`.
  *
+ * Finally, adjacent `PageSegment`s that share the same `url` and `title`
+ * are merged into one (steps concatenated, order preserved). This matters
+ * because the "before"/segment/"after" pieces above are often really the
+ * same page: a same-URL patch segment inserted mid-page, or an empty
+ * `segment.pages` (nothing to insert) would otherwise leave 2-3 adjacent
+ * `PageSegment`s with an identical `url` — fabricating navigation events
+ * that never happened and that downstream diff/align/self-healing would
+ * misread as a real page transition. Only *adjacent* equal-url/title pages
+ * are merged (never across a differing-url page in between), so a segment
+ * that genuinely navigates to a different URL still becomes its own page.
+ *
  * Pure: neither `base` nor `segment` is mutated, and the same inputs always
  * produce the same output. Fails closed: the result is validated against
  * `RecordingSchema` before being returned, so a caller can never receive a
@@ -85,7 +96,7 @@ export function spliceRecording(
 
   const result: Recording = {
     ...base,
-    pages: newPages,
+    pages: mergeAdjacentSameUrlPages(newPages),
   };
 
   const validation = RecordingSchema.safeParse(result);
@@ -93,4 +104,26 @@ export function spliceRecording(
     throw new Error(`Recording validation failed: ${validation.error.message}`);
   }
   return validation.data;
+}
+
+/**
+ * Merges consecutive `PageSegment`s that share the same `url` and `title`
+ * into one, concatenating their `steps` in order. Only ever merges pages
+ * that are directly adjacent in the input array — a different-url page
+ * sitting between two same-url pages blocks the merge on both sides, since
+ * a genuine navigation away and back is not the same page occurrence.
+ */
+function mergeAdjacentSameUrlPages(pages: PageSegment[]): PageSegment[] {
+  const merged: PageSegment[] = [];
+
+  for (const p of pages) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && last.url === p.url && last.title === p.title) {
+      merged[merged.length - 1] = { ...last, steps: [...last.steps, ...p.steps] };
+    } else {
+      merged.push(p);
+    }
+  }
+
+  return merged;
 }

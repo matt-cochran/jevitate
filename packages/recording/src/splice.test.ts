@@ -81,6 +81,62 @@ describe("spliceRecording", () => {
       ]);
       expect(RecordingSchema.safeParse(result).success).toBe(true);
     });
+
+    it("splices correctly with no empty PageSegment when the cursor is after the last step of a page", () => {
+      const A = click("step-a");
+      const B = click("step-b");
+      const base = recording([page("/a", [A, B])]);
+
+      const S1 = click("seg-1");
+      const segment = recording([page("/seg", [S1])]);
+
+      // at.step === targetPage.steps.length: nothing follows the checkpoint
+      // on this page, so no "after" half should be emitted.
+      const result = spliceRecording(base, { page: 0, step: 2 }, segment, "insert");
+
+      expect(result.pages).toEqual([
+        { url: "/a", steps: [rs(A), rs(B)] },
+        { url: "/seg", steps: [rs(S1)] },
+      ]);
+      expect(result.pages.every((p) => p.steps.length > 0)).toBe(true);
+      expect(RecordingSchema.safeParse(result).success).toBe(true);
+    });
+
+    it("rejoins the before/after halves into one page when segment.pages is empty", () => {
+      const A = click("step-a");
+      const B = click("step-b");
+      const C = click("step-c");
+      const base = recording([page("/a", [A, B, C])]);
+      const emptySegment = recording([]);
+
+      const result = spliceRecording(base, { page: 0, step: 1 }, emptySegment, "insert");
+
+      // Before ([A]) and after ([B, C]) are both "/a" with no distinguishing
+      // title, and nothing was inserted between them, so they merge back
+      // into a single page identical to the original.
+      expect(result.pages).toEqual([{ url: "/a", steps: [rs(A), rs(B), rs(C)] }]);
+      expect(RecordingSchema.safeParse(result).success).toBe(true);
+    });
+
+    it("merges a same-URL segment into a single PageSegment instead of fabricating a navigation", () => {
+      const A = click("step-a");
+      const B = click("step-b");
+      const C = click("step-c");
+      const base = recording([page("/a", [A, B, C])]);
+
+      const S1 = fill("seg-1", "x");
+      const S2 = click("seg-2");
+      const segment = recording([page("/a", [S1, S2])]); // same url as the checkpoint page
+
+      const result = spliceRecording(base, { page: 0, step: 1 }, segment, "insert");
+
+      // One PageSegment for "/a", not three: before, segment, and after all
+      // merge, steps in [before, segment, after] order.
+      expect(result.pages).toEqual([
+        { url: "/a", steps: [rs(A), rs(S1), rs(S2), rs(B), rs(C)] },
+      ]);
+      expect(RecordingSchema.safeParse(result).success).toBe(true);
+    });
   });
 
   describe("mode: replace-from", () => {
