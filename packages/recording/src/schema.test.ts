@@ -414,6 +414,51 @@ describe("RecordingSchema", () => {
     expect(() => RecordingSchema.parse(invalidRecording)).toThrow();
   });
 
+  // === Task 1: TargetDescriptor ordinal/container ===
+
+  it("accepts a TargetDescriptor with role+name and an ordinal (nth-match)", () => {
+    expect(() =>
+      RecordingSchema.parse(withClickTarget({ role: "button", name: "OK", ordinal: 1 })),
+    ).not.toThrow();
+  });
+
+  it("accepts a TargetDescriptor with a container (nearest stable ancestor)", () => {
+    expect(() =>
+      RecordingSchema.parse(
+        withClickTarget({
+          role: "button",
+          name: "OK",
+          ordinal: 0,
+          container: { testId: "row-1" },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects a negative ordinal", () => {
+    expect(() =>
+      RecordingSchema.parse(withClickTarget({ role: "button", name: "OK", ordinal: -1 })),
+    ).toThrow();
+  });
+
+  it("rejects a non-integer ordinal", () => {
+    expect(() =>
+      RecordingSchema.parse(withClickTarget({ role: "button", name: "OK", ordinal: 1.5 })),
+    ).toThrow();
+  });
+
+  it("rejects an ordinal-only TargetDescriptor — still no usable selector", () => {
+    expect(() => RecordingSchema.parse(withClickTarget({ ordinal: 0 }))).toThrow();
+  });
+
+  it("rejects a TargetDescriptor with a typo'd key on a nested container", () => {
+    expect(() =>
+      RecordingSchema.parse(
+        withClickTarget({ role: "button", name: "OK", container: { testid: "row-1" } }),
+      ),
+    ).toThrow();
+  });
+
   it("rejects a StepTiming with an unexpected extra field", () => {
     const invalid = {
       version: "1.0",

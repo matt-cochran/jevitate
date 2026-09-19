@@ -123,7 +123,7 @@ test(
 // === Scenario 5: ambiguous elements ===
 
 test(
-  "two identical buttons each get a descriptor that resolves to that specific button",
+  "two identical buttons each get a descriptor that resolves to that specific button, via role+name plus an ordinal instead of falling to css",
   async () => {
     await withPage(`<div id="row"><button>Ok</button><button>Ok</button></div>`, async (page) => {
       const first = await handleFor(page, "button", 0);
@@ -132,22 +132,32 @@ test(
       const a = await computeDescriptor(page, first);
       const b = await computeDescriptor(page, second);
 
-      // role+name and text both match BOTH buttons, so both rungs fail
-      // uniqueness and the ladder is forced down to css.
-      expect(Object.keys(a.descriptor)).toEqual(["css"]);
-      expect(Object.keys(b.descriptor)).toEqual(["css"]);
-      expect(a.stability).toBe("low");
-      expect(b.stability).toBe("low");
-      expect(a.alternates).toEqual([]);
-      expect(b.alternates).toEqual([]);
+      // role+name and text both match BOTH buttons, so neither rung is
+      // unique on its own — but each is corroborated with an `ordinal`
+      // (Task 1: TargetDescriptor ordinal/container) recording *which*
+      // match was acted on, which is a strictly better selector than
+      // falling all the way down to a generated-looking css nth-of-type
+      // path. Stability is capped one notch, since the underlying rung is
+      // no longer unique by itself.
+      expect(a.descriptor).toEqual({ role: "button", name: "Ok", ordinal: 0 });
+      expect(b.descriptor).toEqual({ role: "button", name: "Ok", ordinal: 1 });
+      expect(a.stability).toBe("medium");
+      expect(b.stability).toBe("medium");
 
-      // The two descriptors are different, and each points at its own button.
-      expect(a.descriptor.css).not.toBe(b.descriptor.css);
-      expect(await page.locator(a.descriptor.css!).count()).toBe(1);
-      expect(await page.locator(b.descriptor.css!).count()).toBe(1);
-      // Proven independently of the identity helper, by DOM position.
-      expect(await buttonIndex(page, a.descriptor.css!)).toBe(0);
-      expect(await buttonIndex(page, b.descriptor.css!)).toBe(1);
+      // The demoted text+ordinal rung and the plain (already-unique) css
+      // rung both still validate and are kept as alternates.
+      expect(a.alternates).toContainEqual({ text: "Ok", ordinal: 0 });
+      expect(b.alternates).toContainEqual({ text: "Ok", ordinal: 1 });
+      expect(a.alternates.some((alt) => typeof alt.css === "string")).toBe(true);
+      expect(b.alternates.some((alt) => typeof alt.css === "string")).toBe(true);
+
+      // Each descriptor really does resolve back, uniquely, to its own button.
+      expect(await resolvesToSameElement(page, page.getByRole("button", { name: "Ok" }).nth(0), first)).toBe(true);
+      expect(await resolvesToSameElement(page, page.getByRole("button", { name: "Ok" }).nth(1), second)).toBe(true);
+      const aCss = a.alternates.find((alt) => typeof alt.css === "string")!.css!;
+      const bCss = b.alternates.find((alt) => typeof alt.css === "string")!.css!;
+      expect(await buttonIndex(page, aCss)).toBe(0);
+      expect(await buttonIndex(page, bCss)).toBe(1);
     });
   },
   120_000,

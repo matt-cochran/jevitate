@@ -4,8 +4,8 @@ import type { Recording, TargetDescriptor } from "@doit/recording";
 import { assembleRecording, assembleWithValues, pathOrRaw } from "./assemble.js";
 import {
   buildCandidates,
-  descriptorToLocator,
-  resolvesToSameElement,
+  validateCandidates,
+  CAPPED_STABILITY,
   EID_ATTRIBUTE,
   type DescriptorCandidate,
   type ElementFacts,
@@ -444,6 +444,12 @@ export class Recorder {
    * nothing corroborated it. Only an action that arrived with no facts at all
    * — which `buildCandidates`'s near-universal css rung makes very rare — is
    * left undescribable.
+   *
+   * Validation itself is `validateCandidates` (descriptor.ts), shared with
+   * `computeDescriptor`: when a higher-priority rung (testId/role+name/
+   * label/text) matches more than one live element, it is retried with an
+   * `ordinal` recording which match `handle` was, rather than the ladder
+   * falling straight through to css (Task 1: `TargetDescriptor.ordinal`).
    */
   private async compute(
     page: Page,
@@ -506,13 +512,10 @@ export class Recorder {
     // against, and the facts remain the best answer available.
     if (handle === null) return unproven();
 
-    const passing: DescriptorCandidate[] = [];
+    let passing: DescriptorCandidate[];
     try {
       if (movedOn()) return unproven();
-      for (const candidate of candidates) {
-        const locator = descriptorToLocator(page, candidate.descriptor);
-        if (await resolvesToSameElement(page, locator, handle)) passing.push(candidate);
-      }
+      passing = await validateCandidates(page, candidates, handle);
     } finally {
       await handle.dispose().catch(() => undefined);
     }
@@ -582,18 +585,6 @@ const NEEDS_DESCRIPTOR: ReadonlySet<string> = new Set(["click", "input", "change
  * longer depends on this query, only its corroboration does.
  */
 const RESOLVE_TIMEOUT_MS = 500;
-
-/**
- * What a rung's stability becomes when nothing could corroborate it. One notch,
- * not a floor: a `high` role+name read off the real element a moment before the
- * page moved on is genuinely better evidence than a css path, and flattening
- * both to `low` would tell the reviewer the opposite.
- */
-const CAPPED_STABILITY: Readonly<Record<Stability, Stability>> = {
-  high: "medium",
-  medium: "low",
-  low: "low",
-};
 
 /**
  * Validates what the page sent. Copies `typeAttr`/`rawText` only when present,

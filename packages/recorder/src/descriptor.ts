@@ -445,6 +445,15 @@ export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
  * drifting from it.
  */
 export function descriptorToLocator(page: Page, d: TargetDescriptor): Locator {
+  const base = baseLocator(page, d);
+  // `ordinal` narrows an otherwise-ambiguous rung to the nth match (see
+  // `findOrdinalAmong`/`validateCandidates` below). `.nth()` always yields a
+  // locator whose `count()` is 0 or 1, which is exactly what
+  // `resolvesToSameElement` needs to prove identity.
+  return d.ordinal !== undefined ? base.nth(d.ordinal) : base;
+}
+
+function baseLocator(page: Page, d: TargetDescriptor): Locator {
   if (d.testId !== undefined) return page.getByTestId(d.testId);
   if (d.role !== undefined && d.name !== undefined) {
     return page.getByRole(d.role as Parameters<Page["getByRole"]>[0], { name: d.name });
@@ -498,6 +507,99 @@ export async function resolvesToSameElement(
   }
 }
 
+/**
+ * What a rung's stability becomes when it no longer stands on its own —
+ * either because live validation was abandoned (`Recorder.compute`'s
+ * `unproven()`) or because it only validated with an `ordinal` bolted on
+ * (`validateCandidates` below). One notch, not a floor: a `high` role+name
+ * that is merely one of several same-signature siblings is genuinely better
+ * evidence than a css path, and flattening both to `low` would tell a
+ * reviewer the opposite. Exported so `Recorder.compute` shares this table
+ * rather than keeping its own copy that could drift.
+ */
+export const CAPPED_STABILITY: Readonly<Record<Stability, Stability>> = {
+  high: "medium",
+  medium: "low",
+  low: "low",
+};
+
+/**
+ * When `descriptor`'s own locator (ignoring any `ordinal` it might already
+ * carry) matches more than one element, finds `handle`'s position among
+ * those matches. Returns `null` when the locator is already unique (nothing
+ * to narrow), matches nothing, or `handle` cannot be found among the matches
+ * at all (the DOM changed under us).
+ *
+ * Matches are probed one at a time with `resolvesToSameElement` rather than
+ * compared by index directly: `.nth(i)` re-queries the live DOM each time,
+ * so this stays correct even though it costs one round trip per candidate
+ * index, which is bounded by how many same-signature siblings exist.
+ */
+export async function findOrdinalAmong(
+  page: Page,
+  descriptor: TargetDescriptor,
+  handle: ElementHandle<Node>,
+): Promise<number | null> {
+  const base = descriptorToLocator(page, descriptor);
+  let count: number;
+  try {
+    count = await base.count();
+  } catch {
+    return null;
+  }
+  if (count <= 1) return null;
+
+  for (let i = 0; i < count; i++) {
+    if (await resolvesToSameElement(page, base.nth(i), handle)) return i;
+  }
+  return null;
+}
+
+/**
+ * Validates every candidate the ladder produced against the live page, in
+ * ladder order — the one algorithm `computeDescriptor` and `Recorder.compute`
+ * both run, so the two paths cannot silently diverge on how ambiguity is
+ * resolved.
+ *
+ * A candidate that resolves uniquely passes as-is. One that doesn't (its
+ * rung matches more than one element) gets one more chance, *except* `css`:
+ * the in-page css-path builder already bakes `:nth-of-type(n)` into the path
+ * when siblings share a tag, so an ambiguous css candidate has nothing left
+ * to add and is dropped. For every other rung, `findOrdinalAmong` locates
+ * `handle` among the matches and, if found, a second candidate — the same
+ * descriptor plus `ordinal`, stability capped one notch — is validated and
+ * kept on success. This is what lets `{role, name, ordinal}` outrank a
+ * generated-looking css path instead of the ladder falling all the way
+ * through to it.
+ */
+export async function validateCandidates(
+  page: Page,
+  candidates: readonly DescriptorCandidate[],
+  handle: ElementHandle<Node>,
+): Promise<DescriptorCandidate[]> {
+  const passing: DescriptorCandidate[] = [];
+  for (const candidate of candidates) {
+    const locator = descriptorToLocator(page, candidate.descriptor);
+    if (await resolvesToSameElement(page, locator, handle)) {
+      passing.push(candidate);
+      continue;
+    }
+    if (candidate.rung === "css") continue;
+
+    const ordinal = await findOrdinalAmong(page, candidate.descriptor, handle);
+    if (ordinal === null) continue;
+    const refined: TargetDescriptor = { ...candidate.descriptor, ordinal };
+    if (await resolvesToSameElement(page, descriptorToLocator(page, refined), handle)) {
+      passing.push({
+        rung: candidate.rung,
+        descriptor: refined,
+        stability: CAPPED_STABILITY[candidate.stability],
+      });
+    }
+  }
+  return passing;
+}
+
 // === Entry point ===
 
 /**
@@ -522,11 +624,7 @@ export async function computeDescriptor(
       generatedPatterns: [...GENERATED_PATTERNS],
       valueNamedInputTypes: [...VALUE_NAMED_INPUT_TYPES],
     });
-    const passing: DescriptorCandidate[] = [];
-    for (const candidate of buildCandidates(facts)) {
-      const locator = descriptorToLocator(page, candidate.descriptor);
-      if (await resolvesToSameElement(page, locator, handle)) passing.push(candidate);
-    }
+    const passing = await validateCandidates(page, buildCandidates(facts), handle);
 
     const primary = passing[0];
     if (primary === undefined) {

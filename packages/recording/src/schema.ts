@@ -10,6 +10,22 @@ export interface TargetDescriptor {
   text?: string;
   css?: string;
   frameUrl?: string;
+  /**
+   * 0-based index of the acted element among the siblings that share the
+   * same higher-priority selector (the testId/role+name/label/text rung that
+   * didn't uniquely resolve). Only meaningful alongside another rung — never
+   * set on its own — and only ever populated when uniqueness genuinely
+   * failed, so a descriptor's absence of `ordinal` still means "this
+   * selector alone was unique."
+   */
+  ordinal?: number;
+  /**
+   * A descriptor for the nearest stable ancestor of the target, used by
+   * self-healing to re-anchor a broken selector within the right region of
+   * the page rather than the whole document. Recursive: a container may
+   * itself carry `ordinal`/`container`.
+   */
+  container?: TargetDescriptor;
 }
 
 export type RedactedValue =
@@ -80,8 +96,19 @@ export interface Recording {
  * `role` alone) — it just won't hit the role+name ladder rung at resolution
  * time and falls through to lower rungs. That pairing rule lives in the
  * interpreter's selector-ladder fallthrough logic, not the schema.
+ *
+ * `ordinal` and `container` are both optional and additive: neither counts
+ * toward the refine's "has a usable selector" check, so `{ordinal: 0}` alone
+ * still fails (an ordinal with nothing to index into is meaningless) and a
+ * closed-schema recording from before these fields existed still parses
+ * unchanged. `container` is declared with `z.lazy(...)` because it is itself
+ * a `TargetDescriptor` — the same recursive-schema pattern `StepSchema` uses
+ * for `forEach.steps` below — which is also why this const now carries an
+ * explicit `z.ZodType<TargetDescriptor>` annotation: a lazy reference to
+ * `TargetDescriptorSchema` from inside its own definition needs the binding
+ * to already have a declared type to close over.
  */
-const TargetDescriptorSchema = z
+const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
   .object({
     testId: z.string().optional(),
     role: z.string().optional(),
@@ -90,6 +117,8 @@ const TargetDescriptorSchema = z
     text: z.string().optional(),
     css: z.string().optional(),
     frameUrl: z.string().optional(),
+    ordinal: z.number().int().nonnegative().optional(),
+    container: z.lazy(() => TargetDescriptorSchema).optional(),
   })
   .strict()
   .refine(

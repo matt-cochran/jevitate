@@ -709,3 +709,43 @@ test(
   },
   120_000,
 );
+
+// === Task 1: TargetDescriptor ordinal ===
+
+test(
+  "clicking one of two identical <button>OK</button>s records which match it was, via role+name plus ordinal, instead of falling to a fragile css path",
+  async () => {
+    const html = `<div id="row"><button>OK</button><button>OK</button></div>`;
+
+    await withRecorder(html, async ({ recorder, page }) => {
+      await recorder.start();
+      await page.locator("button").nth(0).click();
+      await page.locator("button").nth(1).click();
+      await describedSoFar(recorder, page);
+
+      const clicks = actions(recorder).filter((a) => a.payload.kind === "click");
+      expect(clicks.length).toBe(2);
+      const [firstClick, secondClick] = clicks;
+
+      const first = firstClick!.resolution;
+      const second = secondClick!.resolution;
+      if (first?.ok !== true || second?.ok !== true) {
+        throw new Error("expected both identical-button clicks to be described");
+      }
+
+      // Neither role+name nor text is unique on its own — both buttons say
+      // "OK" — so each click's descriptor is corroborated with `ordinal`
+      // recording *which* match was acted on, rather than falling all the
+      // way down to a generated css nth-of-type selector.
+      expect(first.descriptor).toEqual({ role: "button", name: "OK", ordinal: 0 });
+      expect(second.descriptor).toEqual({ role: "button", name: "OK", ordinal: 1 });
+
+      const recording = await recorder.stop();
+      expect(() => RecordingSchema.parse(recording)).not.toThrow();
+      const steps = stepsOf(recording.pages[0]!.steps);
+      expect(steps[0]).toMatchObject({ kind: "click", target: { role: "button", name: "OK", ordinal: 0 } });
+      expect(steps[1]).toMatchObject({ kind: "click", target: { role: "button", name: "OK", ordinal: 1 } });
+    });
+  },
+  120_000,
+);
