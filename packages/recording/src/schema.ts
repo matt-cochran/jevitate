@@ -64,6 +64,17 @@ export interface RecordedStep {
   marker?: "narration" | "checkpoint";
   variableName?: string;
   enumerationId?: string;
+  /**
+   * Postdoc (RxD Phase A.3b Task 5) chunk-grouping tag: a human-assigned
+   * name for the higher-level Screenplay Task/Action this step belongs to
+   * (design spec §6a "combine/merge consecutive low-level steps into a
+   * named higher-level chunk"). Purely a metadata annotation at this stage
+   * — it does not restructure/merge the `pages`/`steps` arrays; consumers
+   * (the postdoc TUI, later chunk-aware tooling) group steps that share a
+   * `chunk` value. Same RecordedStep-level-tag pattern as `variableName`/
+   * `enumerationId` above.
+   */
+  chunk?: string;
 }
 
 export interface PageSegment {
@@ -291,6 +302,7 @@ const RecordedStepSchema = z
     marker: z.enum(["narration", "checkpoint"]).optional(),
     variableName: z.string().optional(),
     enumerationId: z.string().optional(),
+    chunk: z.string().optional(),
   })
   .strict();
 

@@ -9,3 +9,4 @@ export * from "./diff.js";
 export * from "./reference-diff.js";
 export * from "./fit.js";
 export * from "./splice.js";
+export * from "./postdoc.js";
