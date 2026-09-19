@@ -102,8 +102,8 @@ Derived from the FMECA. These are permanent, named contracts; the Slice plans MU
 
 | Slice | Capability |
 |---|---|
-| **1** | Deterministic backbone + productization (no API keys): finish A.3b → `Journey` artifact+registry → segmented `RunPolicy` (fail-closed + deterministic only) → **secret via `visible-handback`** → 2-level MCP (deterministic search) → CLI/API → fail-closed self-heal wiring. Invariants 1–3, 5–7 land here. **Acceptance: a real login journey runs end-to-end via `visible-handback`.** |
-| **1b** | Thin **external-manager** secret delegation → `secretMode: vault-autofill` (fetch-on-demand, origin-bound, nothing stored). Invariant 4. |
+| **1** | Deterministic backbone + productization (no API keys): finish A.3b → `Journey` artifact+registry → segmented `RunPolicy` (fail-closed + deterministic only) → **secret via `visible-handback`** → 2-level MCP (deterministic search) → CLI/API → fail-closed self-heal wiring. Invariants 1, 5–7 land here (in `visible-handback` our process never holds a secret **value**). **Acceptance: a real login journey runs end-to-end via `visible-handback`.** |
+| **1b** | Thin **external-manager** secret delegation → `secretMode: vault-autofill` (fetch-on-demand, origin-bound, nothing stored). Invariants 2–4 (the secret-**value** contracts) land here, where a value is first handled. |
 | **2** | **Throughput / Load harness** (floated earlier — no models, no A.3b): seeded actor pool + measured capacity report. Invariants 9–10. |
 | **3** | Model gateways: `@doit/ai-core` + generation (M3a) + Jev judgment. |
 | **4** | LM-driving: Jev-directed / goal-based exploration; Jev-ranked `find_capabilities`. |
@@ -120,7 +120,7 @@ Derived from the FMECA. These are permanent, named contracts; the Slice plans MU
 5. **2-level MCP facade** — `find_capabilities(query)` (deterministic metadata search; Jev-ranking in Slice 4) → capabilities + param-schemas; `run_journey(id, params)` published-id-only + schema-validated + auto-registered named tools for promoted Journeys, behind the allowlist.
 6. **CLI + programmatic API** — `brauto journey list/find/run --param k=v`; runtime API. One core under all three surfaces.
 7. **Fail-closed self-heal wiring** — divergence (A.3b strict signature) → stop + quarantine + alert.
-8. **Fail-fast invariant tests** — §9a invariants 1–3, 5–7 each land with an "asserts-it-refuses" test; exit gate greps for permissive fallbacks. (Invariant 4 → 1b; 8 → Slice 6; 9–10 → Slice 2.)
+8. **Fail-fast invariant tests** — §9a invariants 1, 5–7 each land with an "asserts-it-refuses" test; exit gate greps for permissive fallbacks. (Invariants 2–4 → 1b, where a secret **value** is first handled; 8 → Slice 6; 9–10 → Slice 2.)
 
 **Out of Slice 1:** external-manager autofill (1b), throughput harness (2), model gateways (3), LM-driving/missions (4–5), hybrid/full self-heal (6), Jev-ranked `find_capabilities`.
 
