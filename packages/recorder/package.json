@@ -5,11 +5,15 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "dependencies": { "@doit/playwright": "workspace:*", "@doit/recording": "workspace:*", "playwright": "^1.49.0" },
-  "devDependencies": {
-    "@doit/example-site": "workspace:*",
+  "dependencies": {
     "@doit/interpreter": "workspace:*",
-    "@doit/screenplay": "workspace:*"
+    "@doit/playwright": "workspace:*",
+    "@doit/recording": "workspace:*",
+    "@doit/screenplay": "workspace:*",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@doit/example-site": "workspace:*"
   },
   "scripts": { "build": "tsc --build" }
 }

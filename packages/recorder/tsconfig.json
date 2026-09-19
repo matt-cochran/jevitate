@@ -1,7 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "references": [{ "path": "../playwright" }, { "path": "../recording" }],
+  "references": [
+    { "path": "../interpreter" },
+    { "path": "../playwright" },
+    { "path": "../recording" },
+    { "path": "../screenplay" }
+  ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
 }

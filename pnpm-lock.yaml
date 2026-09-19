@@ -128,12 +128,18 @@ importers:
 
   packages/recorder:
     dependencies:
+      '@doit/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright
       '@doit/recording':
         specifier: workspace:*
         version: link:../recording
+      '@doit/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
       playwright:
         specifier: ^1.49.0
         version: 1.63.0
@@ -141,12 +147,6 @@ importers:
       '@doit/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
-      '@doit/interpreter':
-        specifier: workspace:*
-        version: link:../interpreter
-      '@doit/screenplay':
-        specifier: workspace:*
-        version: link:../screenplay
 
   packages/recording:
     dependencies:
