@@ -1,5 +1,11 @@
 export type SelfHealMode = "fail-closed" | "hybrid" | "full";
 export type Direction = "deterministic" | "jev-directed" | "goal-based";
+// Slice 1b (thin external-manager secret delegation) implements the
+// "vault-autofill" branch of secretMode's behavior in @doit/runtime's
+// JourneyRunner. It is already a member of this union as of Slice 1 and
+// requires NO new field here — a vault-autofill run's manager/key/origin
+// come from the Journey's own `metadata.secretRefs` (see
+// packages/journey/src/journey.ts's `SecretRef`), never from RunPolicy.
 export type SecretMode = "vault-autofill" | "visible-handback" | "fail-closed";
 
 export interface RunPolicy {
