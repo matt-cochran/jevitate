@@ -9,6 +9,12 @@ export interface Capability {
   params: string[];
 }
 
+export interface NamedJourneyTool {
+  name: string;
+  description?: string;
+  inputSchema: { type: "object"; properties: Record<string, { type: "string" }>; required: string[] };
+}
+
 /**
  * Invariant #6: lists ONLY promoted Journeys. `JourneyRegistry.find` already
  * filters to `metadata.promoted === true` — this is a thin, promoted-only
@@ -43,4 +49,23 @@ export async function runJourney(
     throw new Error(`unknown or unpublished journey '${id}'`);
   }
   return runner.run({ journey, params, policy });
+}
+
+/**
+ * Invariant #6: one MCP tool per PROMOTED journey only (unpromoted journeys
+ * produce no tool). `name` = the journey's id; `inputSchema` is a JSON-schema
+ * object whose properties come from `metadata.params` (each a string), all
+ * required.
+ */
+export async function listNamedJourneyTools(reg: JourneyRegistry): Promise<NamedJourneyTool[]> {
+  const metas = await reg.find("");   // promoted-only (JourneyRegistry.find already filters)
+  return metas.map((m) => ({
+    name: m.id,
+    description: m.description,
+    inputSchema: {
+      type: "object",
+      properties: Object.fromEntries(m.params.map((p) => [p, { type: "string" }])),
+      required: [...m.params],
+    },
+  }));
 }
