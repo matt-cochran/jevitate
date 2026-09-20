@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { SharedJourneyFileSchema } from "./manifest.js";
 
 /**
  * Deterministic serialization for content-hashing (§14.2): object keys
@@ -29,11 +30,13 @@ export function canonicalJson(value: unknown): string {
 /**
  * Content hash over the ENTIRE closed-schema Journey file (metadata +
  * recording + declaredOrigins) — every behavior-affecting byte, so "what you
- * reviewed is what runs" (§7). Task 4 tightens this to parse through
- * `SharedJourneyFileSchema` first so hashing is defined only over
- * schema-known content (unknown keys stripped before hashing).
+ * reviewed is what runs" (§7). Parses through `SharedJourneyFileSchema`
+ * first (which strips unknown keys via `.strict()`/intersection parsing) so
+ * hashing is defined only over schema-known content — never bare
+ * `JSON.stringify` of untrusted input.
  */
 export function canonicalJourneyHash(file: unknown): string {
-  const hex = createHash("sha256").update(canonicalJson(file), "utf8").digest("hex");
+  const validated = SharedJourneyFileSchema.parse(file);
+  const hex = createHash("sha256").update(canonicalJson(validated), "utf8").digest("hex");
   return `sha256:${hex}`;
 }
