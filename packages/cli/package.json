@@ -20,5 +20,8 @@
     "@doit/storage-sqlite": "workspace:*",
     "commander": "^12.0.0"
   },
+  "devDependencies": {
+    "@doit/example-site": "workspace:*"
+  },
   "scripts": { "build": "tsc --build" }
 }
