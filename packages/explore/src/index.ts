@@ -11,3 +11,8 @@ export * from "./act.js";
 export * from "./record.js";
 export * from "./explore.js";
 export * from "./missions/goal-based.js";
+
+// Ticket #2 — feature-testing mission (capability-scoped path discovery).
+export * from "./feature/capability-scope.js";
+export * from "./feature/boundary-values.js";
+export * from "./missions/feature.js";

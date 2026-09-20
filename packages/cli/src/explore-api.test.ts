@@ -3,7 +3,7 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { buildProgram } from "./program.js";
-import { parseAssertionSpec, resolveExploreAllowlist, runExploration } from "./explore-api.js";
+import { parseAssertionSpec, resolveExploreAllowlist, runExploration, runFeatureCliMission } from "./explore-api.js";
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
   it("parses urlIncludes / visible / textIncludes / count specs", () => {
@@ -54,6 +54,18 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
       }),
     ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
     expect(browserPortFactory).not.toHaveBeenCalled();
+  });
+
+  it("runFeatureCliMission refuses an undeclared origin (no browser touched)", async () => {
+    await expect(
+      runFeatureCliMission({
+        seedUrl: "https://not-authorized.test",
+        allowlist: ["https://authorized.test"],
+        capability: "checkout",
+        routeGlobs: ["/checkout/**"],
+        profileDir: "/tmp/unused",
+      }),
+    ).rejects.toThrow(UnauthorizedExploreTargetError);
   });
 });
 
