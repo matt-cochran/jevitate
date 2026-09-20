@@ -6,6 +6,7 @@ import type { Page } from "playwright";
 import { startServer } from "@jevitate/example-site";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import { RecordingInterpreter } from "@jevitate/interpreter";
 import { runFeatureMission } from "./feature.js";
 import type { CapabilityScope } from "../feature/capability-scope.js";
 
@@ -20,6 +21,12 @@ beforeAll(async () => {
   const browserPort = new PlaywrightBrowserPort();
   session = await browserPort.open({ profileDir, headless: true, allowedOrigins: [site.url], baseUrl: site.url });
   actor = CastActor.named("feature-explorer").whoCan(new BrowseTheWeb(session, [site.url]));
+  // Authenticate once so /inbox and /thread/:id are reachable (the persistent
+  // profile keeps the session cookie across mission navigations).
+  await session.page.goto(`${site.url}/login`);
+  await session.page.fill('input[name="username"]', "jane");
+  await session.page.click('button[type="submit"]');
+  await session.page.waitForURL(/\/inbox/);
 }, 120_000);
 
 afterAll(async () => {
@@ -43,6 +50,47 @@ describe("runFeatureMission — single path", () => {
       expect(result.outcome).toBe("exhausted");
       expect(result.coverage.statesExercised).toBe(1);
       expect(result.coverage.pathsDiscovered).toBeGreaterThanOrEqual(1);
+    },
+    120_000,
+  );
+});
+
+describe("runFeatureMission — multi-path discovery", () => {
+  const scope = (): CapabilityScope => ({ name: "read messages", originAllowlist: [site.url], routeGlobs: ["/inbox", "/thread/**"] });
+
+  test(
+    "discovers both thread routes as distinct valid paths through the 'read messages' capability",
+    async () => {
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/inbox`,
+        allowlist: [site.url],
+        scope: scope(),
+      });
+      expect(result.outcome).toBe("exhausted");
+      expect(result.coverage.statesExercised).toBe(3); // inbox + thread-t-1 + thread-t-2
+      expect(result.coverage.pathsDiscovered).toBeGreaterThanOrEqual(3);
+      expect(result.recordings.length).toBeGreaterThanOrEqual(2);
+    },
+    120_000,
+  );
+
+  test(
+    "every discovered path's Recording replays deterministically via the interpreter",
+    async () => {
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/inbox`,
+        allowlist: [site.url],
+        scope: scope(),
+      });
+      const interpreter = new RecordingInterpreter();
+      for (const recording of result.recordings) {
+        const outcome = await interpreter.run(actor, recording);
+        expect(outcome.outcome).toBe("completed");
+      }
     },
     120_000,
   );
