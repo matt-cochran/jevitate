@@ -3,3 +3,4 @@ export const EXPLORE = "explore" as const;
 
 export * from "./bounds.js";
 export * from "./authorized-targets.js";
+export * from "./redact.js";
