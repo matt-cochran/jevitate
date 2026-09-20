@@ -26,5 +26,12 @@ export default defineConfig({
       "@doit/site-example-network": fileURLToPath(new URL("./site-integrations/example-network/src/index.ts", import.meta.url)),
     },
   },
-  test: { include: ["packages/**/*.test.ts", "site-integrations/**/*.test.ts", "apps/**/*.test.ts"] },
+  test: {
+    include: [
+      "packages/**/*.test.ts",
+      "site-integrations/**/*.test.ts",
+      "apps/**/*.test.ts",
+      "scripts/**/*.test.mjs",
+    ],
+  },
 });

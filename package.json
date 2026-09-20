@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:no-fallback": "node scripts/check-no-permissive-fallback.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",
