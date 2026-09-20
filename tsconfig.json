@@ -7,6 +7,7 @@
     { "path": "packages/recording" },
     { "path": "packages/journey" },
     { "path": "packages/load" },
+    { "path": "packages/ai-core" },
     { "path": "packages/interpreter" },
     { "path": "packages/recorder" },
     { "path": "packages/storage-sqlite" },

@@ -6,6 +6,7 @@
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
+    "@doit/ai-core": "workspace:*",
     "@doit/application": "workspace:*",
     "@doit/domain": "workspace:*",
     "@doit/journey": "workspace:*",
