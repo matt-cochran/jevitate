@@ -125,7 +125,7 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
 
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("brauto").description("Local browser automation platform").version("0.0.0");
+  program.name("jevitate").description("Local browser automation platform").version("0.0.0");
 
   program
     .command("init")
@@ -137,7 +137,7 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.("brauto initialized\n");
+          program.configureOutput().writeOut?.("jevitate initialized\n");
           process.exitCode = 0;
         }
       } catch (err) {
