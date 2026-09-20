@@ -11,12 +11,16 @@ import type { StepRef } from "./promote.js";
  * Thrown by `applyPostdoc` whenever a `"constant"` decision would materialize
  * a value that must never become a literal in the persisted artifact:
  *
- * - No local authoring value is available for the target step at all — the
- *   fail-closed signal for a secret/PII field (the recorder never captures
- *   an authoring value for those; see `materializeConstant` below for why
- *   this is currently the ONLY schema-level secrecy signal — there is no
- *   separate `sensitive`/`redacted` flag on `RedactedValue` beyond the
- *   presence/absence of a captured `value`).
+ * - No local authoring value is available for the target step at all — a
+ *   defense-in-depth fail-closed signal. In practice the recorder emits a
+ *   secret/PII field as a `handback` step, NOT a fill/select, so a genuine
+ *   secret never reaches this constant-materialization path as a fill in the
+ *   first place; this guard catches any fill/select step that nonetheless
+ *   arrives without a captured authoring value. There is no separate
+ *   schema-level `sensitive`/`redacted` flag on `RedactedValue` beyond the
+ *   presence/absence of a captured `value`, so this absence check is the
+ *   whole schema-level secrecy signal on the postdoc side (see
+ *   `materializeConstant` below).
  * - The target step's value VARIED across the takes that produced `diff`
  *   (a confident `"variable"` column) and the decision did not explicitly
  *   set `acknowledgeVaried: true` to override that guard.
@@ -242,13 +246,15 @@ function setStepAt(rec: Recording, ref: StepRef, newRecordedStep: RecordedStep):
  *
  * Two independent fail-closed guards, both raising `SecretMaterializationError`:
  *
- * 1. No local authoring value is available for this step: that is exactly
- *    the case for a secret/PII field (the recorder never captures an
- *    authoring value for those). Note: there is currently no separate
- *    schema-level "sensitive"/"redacted" flag distinct from this
- *    presence/absence signal (`RedactedValue` in schema.ts is just
- *    `{redacted:true,length}` or `{redacted:false,value}`) — so this
- *    absent-value check IS the whole secrecy guard, not one branch of it.
+ * 1. No local authoring value is available for this step: a defense-in-depth
+ *    fail-closed guard. The recorder emits a secret/PII field as a `handback`
+ *    step (not a fill/select), so a genuine secret never reaches this path as
+ *    a fill at all; this catches any fill/select step that nonetheless lacks
+ *    a captured authoring value. There is no separate schema-level
+ *    "sensitive"/"redacted" flag distinct from this presence/absence signal
+ *    (`RedactedValue` in schema.ts is just `{redacted:true,length}` or
+ *    `{redacted:false,value}`) — so this absent-value check IS the whole
+ *    schema-level secrecy guard on the postdoc side, not one branch of it.
  * 2. The target step's authoring value CONFIDENTLY VARIED across the takes
  *    behind `diff` (a `"variable"`-classified column at
  *    `>= CONFIDENT_VARIABLE_THRESHOLD` confidence — the same threshold
