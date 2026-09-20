@@ -16,3 +16,20 @@ export class SecretUnresolvableError extends Error {
     this.name = "SecretUnresolvableError";
   }
 }
+
+/**
+ * More than one declared `SecretRef` matched the current page's origin.
+ * Distinct from `SecretOriginMismatchError`: the origin(s) DID match — the
+ * problem is that more than one candidate did, so there is no unambiguous
+ * choice of which one to fill. Slice 1b scope deliberately does not
+ * disambiguate multiple same-origin secrets by `field` (see
+ * `@doit/runtime`'s `JourneyRunner.fillViaVaultAutofill` doc comment) — this
+ * still fails closed, it just names the actual failure mode instead of
+ * misreporting it as an origin mismatch.
+ */
+export class SecretAmbiguousBindingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SecretAmbiguousBindingError";
+  }
+}

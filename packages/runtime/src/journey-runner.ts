@@ -3,7 +3,12 @@ import { BrowseTheWebToken, EnterSecret } from "@doit/screenplay";
 import type { RunPolicy } from "@doit/domain";
 import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@doit/journey";
 import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@doit/interpreter";
-import { SecretOriginMismatchError, assertOriginBound, type SecretManagerPort } from "@doit/secrets";
+import {
+  SecretOriginMismatchError,
+  SecretAmbiguousBindingError,
+  assertOriginBound,
+  type SecretManagerPort,
+} from "@doit/secrets";
 import { PolicyEnforcementError } from "./runner.js";
 
 /**
@@ -146,11 +151,24 @@ export class JourneyRunner {
    * it fails closed rather than guessing.
    *
    * RULING (Slice 1b scope): exactly one declared `SecretRef` must match
-   * the current page's origin. Zero matches (origin mismatch) or more than
-   * one match (ambiguous — e.g. separate username/password refs on the
-   * same origin) both fail closed via `SecretOriginMismatchError`;
-   * disambiguating multiple same-origin secrets by field is out of scope
-   * for this thin slice.
+   * the current page's origin. Zero matches is an origin mismatch
+   * (`SecretOriginMismatchError`); more than one match is a DIFFERENT
+   * failure — the origins did match, but which one to fill is ambiguous
+   * (`SecretAmbiguousBindingError`, review-round-1 fix: these were
+   * previously conflated under one error). Both fail closed.
+   *
+   * RULING (Slice 1b scope, review-round-1 Finding 2): the resolved
+   * `SecretRef.field` is NOT compared against the fill target in this
+   * slice — it is not enforced, only carried for a future slice's use.
+   * There is no established mapping between a password manager's free-form
+   * field name (e.g. "password") and a `TargetDescriptor`'s selector rungs
+   * (testId/role+name/label/text/css — see `descriptorToTarget`), and
+   * inventing one now would be an unreviewed contract change. The ONLY
+   * binding this slice enforces is origin (via `assertOriginBound`, plus
+   * "exactly one same-origin ref" above) — disambiguating multiple
+   * same-origin secrets by field is explicitly out of scope here. Do not
+   * describe this method elsewhere as verifying "origin+field binding";
+   * it verifies origin binding only.
    */
   private async fillViaVaultAutofill(
     req: JourneyRunRequest,
@@ -175,9 +193,14 @@ export class JourneyRunner {
         return false;
       }
     });
-    if (matching.length !== 1) {
+    if (matching.length === 0) {
       throw new SecretOriginMismatchError(
-        `vault-autofill: expected exactly one declared secretRef bound to the current origin (${currentUrl}), found ${matching.length}`,
+        `vault-autofill: no declared secretRef is bound to the current origin (${currentUrl})`,
+      );
+    }
+    if (matching.length > 1) {
+      throw new SecretAmbiguousBindingError(
+        `vault-autofill: ${matching.length} declared secretRefs are bound to the current origin (${currentUrl}) — ambiguous, refusing to guess which one to fill (disambiguating multiple same-origin secrets by field is out of scope for this slice)`,
       );
     }
     const ref = matching[0];

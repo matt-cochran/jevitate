@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { CastActor, BrowseTheWeb } from "@doit/screenplay";
 import { safeRunPolicy } from "@doit/domain";
-import { StubSecretManager, SecretUnresolvableError, SecretOriginMismatchError } from "@doit/secrets";
+import {
+  StubSecretManager,
+  SecretUnresolvableError,
+  SecretOriginMismatchError,
+  SecretAmbiguousBindingError,
+} from "@doit/secrets";
 import { JourneyRunner, PolicyEnforcementError } from "./index.js";
 
 function fakeLocator() {
@@ -129,6 +134,21 @@ describe("JourneyRunner — vault-autofill fill", () => {
     await expect(
       runner.run({ journey: journeyWithSecret([ref]), params: {}, policy: vaultPolicy }),
     ).rejects.toBeInstanceOf(SecretOriginMismatchError);
+    expect(locator.fill).not.toHaveBeenCalled();
+  });
+
+  it("review-round-1 adjacent minor: two secretRefs bound to the SAME origin is ambiguity, not an origin mismatch — throws SecretAmbiguousBindingError (still fail-closed)", async () => {
+    const locator = fakeLocator();
+    const page = fakePage(locator, "https://mail.example.test/login");
+    const actor = actorWithPage(page);
+    const interp = fakeInterpreter(handback);
+    const secondRef = { ...ref, key: "login-username", field: "username" };
+    const manager = new StubSecretManager({ "login-password": "hunter2", "login-username": "matthew" });
+    const runner = new JourneyRunner(actor, interp, undefined, manager);
+
+    await expect(
+      runner.run({ journey: journeyWithSecret([ref, secondRef]), params: {}, policy: vaultPolicy }),
+    ).rejects.toBeInstanceOf(SecretAmbiguousBindingError);
     expect(locator.fill).not.toHaveBeenCalled();
   });
 
