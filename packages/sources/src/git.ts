@@ -31,7 +31,7 @@ function assertSafeName(name: string): void {
 /**
  * Clones/pins/pulls/updates/removes managed git-backed Journey sources under
  * a single `sourcesDir` (one subdirectory per source `name`, §14.1
- * `~/.doit/sources/<name>/` by convention — the caller supplies the dir).
+ * `~/.jevitate/sources/<name>/` by convention — the caller supplies the dir).
  */
 export class GitSourceManager {
   constructor(
