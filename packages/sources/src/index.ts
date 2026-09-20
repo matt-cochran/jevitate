@@ -5,5 +5,6 @@ export * from "./risk.js";
 export * from "./git.js";
 export * from "./source.js";
 export * from "./local-source.js";
+export * from "./remote-source.js";
 export * from "./hash.js";
 export * from "./lockfile.js";
