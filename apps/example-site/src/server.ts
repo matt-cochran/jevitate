@@ -41,6 +41,13 @@ export function buildServer(): FastifyInstance {
     reply.type("text/html").send(`<!doctype html><html><body><h1>Inbox</h1><ul>${items}</ul></body></html>`);
   });
 
+  // Additive fixture for @jevitate/explore's adversarial mission (ticket #4):
+  // a deterministic 5xx so the hard-signal defect oracle has a real HTTP 500 to
+  // observe. Namespaced under /adversarial to stay clear of other fixtures.
+  app.get("/adversarial/boom", async (_req, reply) => {
+    reply.code(500).send("internal error");
+  });
+
   app.get<{ Params: { id: string } }>("/thread/:id", async (req, reply) => {
     if (!authed(req)) { reply.redirect("/login"); return; }
     const t = SEED_THREADS.find((x) => x.id === req.params.id);
