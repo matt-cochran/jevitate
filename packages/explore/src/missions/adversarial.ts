@@ -83,24 +83,29 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     }
 
     const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random });
-    if (!decision) continue;
-
-    const control: Control | null =
-      decision.targetIndex !== undefined
-        ? snap.controls.find((c) => c.index === decision.targetIndex) ?? null
-        : null;
-    const at = now();
-    const result = await act(params.actor, { op: decision.op, control, value: decision.fillText ?? null });
-    actions += 1;
-    if (result.ok && control !== null) {
-      if (decision.op === "click") recorder.click(control.descriptor, at);
-      else if (decision.op === "type") recorder.fill(control.descriptor, decision.fillText ?? "", at);
-      else if (decision.op === "select") recorder.select(control.descriptor, decision.fillText ?? "", at);
+    let acted = false;
+    if (decision) {
+      const control: Control | null =
+        decision.targetIndex !== undefined
+          ? snap.controls.find((c) => c.index === decision.targetIndex) ?? null
+          : null;
+      const at = now();
+      const result = await act(params.actor, { op: decision.op, control, value: decision.fillText ?? null });
+      actions += 1;
+      acted = true;
+      if (result.ok && control !== null) {
+        if (decision.op === "click") recorder.click(control.descriptor, at);
+        else if (decision.op === "type") recorder.fill(control.descriptor, decision.fillText ?? "", at);
+        else if (decision.op === "select") recorder.select(control.descriptor, decision.fillText ?? "", at);
+      }
+      lastDecision = decision;
     }
-    lastDecision = decision;
 
-    // Independent oracle. A user invariant may synthesize/observe a hard signal;
-    // give a same-tick console/response event one loop tick to land before draining.
+    // Independent oracle — runs EVERY iteration, even when a strategy chose no
+    // action: the user invariant is an independent probe of live page state,
+    // and hard signals may have accrued. A user invariant may synthesize or
+    // observe a hard signal; give a same-tick console/response event one loop
+    // tick to land before draining.
     const invariantResult = params.userInvariant ? await params.userInvariant(params.page) : { ok: true };
     await params.page.waitForTimeout(10);
     const hardSignals = collector.drain();
@@ -141,8 +146,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       questions: { looksBroken: { kind: "noul" } },
     });
 
-    snap = await snapshot(params.page, { maxCandidates: bounds.maxCandidates });
-    recorder.observed(snap.url, now());
+    if (acted) {
+      snap = await snapshot(params.page, { maxCandidates: bounds.maxCandidates });
+      recorder.observed(snap.url, now());
+    }
   }
 
   return { outcome: "clean", recording: recorder.finish({ intent: "adversarial" }) };

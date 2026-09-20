@@ -46,3 +46,40 @@ describe("runAdversarialMission — clean run", () => {
     120_000,
   );
 });
+
+describe("runAdversarialMission — hard defect", () => {
+  test(
+    "a console error stops the mission, keeps the Recording, and produces a triage narrative",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+      const generation = new FakeGenerationGateway({
+        "triage.narrative": { summary: "console error observed", likelyCause: "client-side script error" },
+      });
+
+      // The HARD signal comes from the console listener, not the invariant's
+      // return value: the invariant hook fires a real console.error and still
+      // reports ok:true, proving the stop is driven by the independent oracle.
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["ordering-violation"],
+        userInvariant: async (page) => {
+          await page.evaluate(() => console.error("adversarial-synthetic-error"));
+          return { ok: true };
+        },
+      });
+
+      expect(result.outcome).toBe("defect");
+      if (result.outcome === "defect") {
+        expect(result.defect.signals.some((s) => s.kind === "console-error")).toBe(true);
+        expect(result.defect.triage.summary).toContain("console error");
+        expect(result.defect.recording).toBeDefined();
+      }
+    },
+    120_000,
+  );
+});
