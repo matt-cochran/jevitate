@@ -3,18 +3,13 @@
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "references": [
     { "path": "../ai-core" },
-    { "path": "../daemon" },
     { "path": "../domain" },
-    { "path": "../explore" },
     { "path": "../interpreter" },
-    { "path": "../journey" },
-    { "path": "../load" },
     { "path": "../playwright" },
+    { "path": "../recorder" },
     { "path": "../recording" },
-    { "path": "../runtime" },
-    { "path": "../screenplay" },
-    { "path": "../storage-sqlite" }
+    { "path": "../screenplay" }
   ],
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/testkit.ts"]
 }

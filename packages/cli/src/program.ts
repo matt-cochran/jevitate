@@ -20,10 +20,34 @@ import {
   type PostdocDecision,
 } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
+import {
+  envCredentialStore,
+  requireKeys,
+  MissingCredentialError,
+  FakeGenerationGateway,
+  OpenRouterGenerationGateway,
+  JevJudgmentGateway,
+  type JudgmentPort,
+  type GenerationPort,
+  type Answer,
+  type JudgmentState,
+  type Question,
+  type CatalogModel,
+  type ModelConstraints,
+  type OpenRouterCall,
+  type JevClientCall,
+} from "@jevitate/ai-core";
+import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
+import {
+  runExploration,
+  parseAssertionSpec,
+  resolveExploreAllowlist,
+  type ExploreCliDeps,
+} from "./explore-api.js";
 import { resolveDataDir } from "./data-dir.js";
 
 export interface CliDeps {
@@ -33,6 +57,8 @@ export interface CliDeps {
   /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
    *  production means real env + the deterministic fake generation gateway. */
   ai?: AiCliDeps;
+  /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
+  explore?: ExploreCliDeps;
 }
 
 // `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
@@ -607,9 +633,187 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
+  program
+    .command("explore")
+    .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)")
+    .option("--url <url>", "target URL (must be an authorized origin)")
+    .option("--goal <text>", "natural-language goal")
+    .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
+    .option(
+      "--allow <origin>",
+      "authorized origin (repeatable); defaults to the URL's own origin",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--secret <value>",
+      "a secret/PII value to keep out of every model call (repeatable)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--max-actions <n>", "hard cap on executed actions")
+    .option("--max-decisions <n>", "hard cap on model decisions")
+    .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
+    .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--out <dir>", "directory to write the emitted Recording")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<{
+        url?: string;
+        goal?: string;
+        success?: string;
+        allow: string[];
+        secret: string[];
+        maxActions?: string;
+        maxDecisions?: string;
+        real?: boolean;
+        fakeAi?: boolean;
+        out?: string;
+        json?: boolean;
+      }>();
+
+      if (!o.url || !o.goal || !o.success) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--url, --goal and --success are all required"));
+        return;
+      }
+      let successAssertion;
+      try {
+        successAssertion = parseAssertionSpec(o.success);
+      } catch (err) {
+        emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
+        return;
+      }
+      const allowlist = resolveExploreAllowlist(o.url, o.allow);
+      const bounds: Record<string, number> = {};
+      if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
+      if (o.maxDecisions !== undefined) bounds.maxDecisions = Number(o.maxDecisions);
+
+      let judge: JudgmentPort;
+      let gen: GenerationPort;
+      try {
+        ({ judge, gen } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+      } catch (err) {
+        if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+        } else {
+          emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+        }
+        return;
+      }
+
+      try {
+        const result = await runExploration({
+          url: o.url,
+          goal: o.goal,
+          successAssertion,
+          allowlist,
+          judge,
+          gen,
+          bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
+          secrets: o.secret.length > 0 ? o.secret : undefined,
+          outDir: o.out,
+          browserPortFactory: deps.explore?.browserPortFactory,
+        });
+        const envelope = ok(result);
+        if (o.json) {
+          emitJson(program, envelope);
+          if (result.outcome !== "succeeded") process.exitCode = 1;
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          process.exitCode = result.outcome === "succeeded" ? 0 : 1;
+        }
+      } catch (err) {
+        if (err instanceof UnauthorizedExploreTargetError) {
+          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
   registerAiCommands(program, deps);
 
   return program;
+}
+
+/** Distinct from MissingCredentialError: "no --real/--fake-ai selected" vs "keys missing." */
+class GatewaySelectionError extends Error {}
+
+const DEFAULT_EXPLORE_CATALOG: CatalogModel[] = [
+  { id: "openai/gpt-4o-mini", promptUsdPer1k: 0.15, completionUsdPer1k: 0.6, regions: [], latencyClass: "fast", capabilities: [] },
+];
+const DEFAULT_EXPLORE_CONSTRAINTS: ModelConstraints = { requiredCapabilities: [] };
+
+/**
+ * Selects the exploration gateways. Injected gateways (tests) win; otherwise
+ * `--real` builds the live Jev + OpenRouter adapters behind a fail-closed
+ * credential preflight, and `--fake-ai` uses deterministic fakes (a pipeline
+ * smoke — the fake judge always proposes `done`, so it will not drive to a
+ * goal). No selection is a fail-closed refusal, never a silent fake.
+ */
+async function buildExploreGateways(
+  deps: CliDeps,
+  opts: { real: boolean; fakeAi: boolean },
+): Promise<{ judge: JudgmentPort; gen: GenerationPort }> {
+  if (deps.explore?.judge && deps.explore?.gen) {
+    return { judge: deps.explore.judge, gen: deps.explore.gen };
+  }
+  const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? {});
+  if (opts.real) {
+    requireKeys("generation", store); // fail-closed
+    requireKeys("judgment", store); // fail-closed
+    const gen = new OpenRouterGenerationGateway({
+      store,
+      catalog: DEFAULT_EXPLORE_CATALOG,
+      constraints: DEFAULT_EXPLORE_CONSTRAINTS,
+      call: await realOpenRouterCall(),
+    });
+    const judge = new JevJudgmentGateway(store, await realJevClientCall());
+    return { judge, gen };
+  }
+  if (opts.fakeAi) {
+    return { judge: fakeDoneJudge(), gen: new FakeGenerationGateway() };
+  }
+  throw new GatewaySelectionError(
+    "no gateway selected — pass --real for live Jev+OpenRouter (after `jevitate ai setup`), or --fake-ai for a deterministic pipeline smoke",
+  );
+}
+
+/** A judge that always proposes `done` — used only by `--fake-ai` (smoke). */
+function fakeDoneJudge(): JudgmentPort {
+  return {
+    async systemOne(_args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
+      return { op: { kind: "choice", value: "done", confidence: 1 } };
+    },
+  };
+}
+
+/** Real OpenRouter seam (lazy import; not unit-tested) — mirrors ai-cli.ts. */
+async function realOpenRouterCall(): Promise<OpenRouterCall> {
+  const { generateObject } = await import("ai");
+  const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
+  return async ({ model, schema, body, authHeader }) => {
+    const openrouter = createOpenRouter({ headers: { Authorization: authHeader } });
+    const start = Date.now();
+    const { object } = await generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body) });
+    return { object, latencyMs: Date.now() - start };
+  };
+}
+
+/**
+ * Real Jev seam (documented, lazy, not unit-tested). Uses a non-literal
+ * specifier so this package builds and tests without `@typesafe-ai/sdk`
+ * installed; the host installs + wires it for live judgment.
+ */
+async function realJevClientCall(): Promise<JevClientCall> {
+  const specifier = "@typesafe-ai/sdk";
+  const sdk = (await import(specifier).catch(() => {
+    throw new Error("live judgment requires @typesafe-ai/sdk to be installed and wired (see jev.ts seam)");
+  })) as { createClient(args: { authHeader: string }): { systemOne(a: unknown): Promise<Record<string, Answer>> } };
+  return async ({ state, questions, authHeader }) => {
+    const client = sdk.createClient({ authHeader });
+    return client.systemOne({ state, questions });
+  };
 }
 
 /**

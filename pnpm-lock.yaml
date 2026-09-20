@@ -93,6 +93,9 @@ importers:
       '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
+      '@jevitate/explore':
+        specifier: workspace:*
+        version: link:../explore
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
@@ -149,6 +152,37 @@ importers:
       '@types/luxon':
         specifier: ^3.7.5
         version: 3.7.5
+
+  packages/explore:
+    dependencies:
+      '@jevitate/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@jevitate/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
+      '@jevitate/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      '@jevitate/recorder':
+        specifier: workspace:*
+        version: link:../recorder
+      '@jevitate/recording':
+        specifier: workspace:*
+        version: link:../recording
+      '@jevitate/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
+      playwright:
+        specifier: ^1.49.0
+        version: 1.63.0
+    devDependencies:
+      '@jevitate/example-site':
+        specifier: workspace:*
+        version: link:../../apps/example-site
 
   packages/interpreter:
     dependencies:

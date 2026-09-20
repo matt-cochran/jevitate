@@ -24,6 +24,7 @@ export default defineConfig({
       "@jevitate/runtime": pkg("runtime"),
       "@jevitate/load": pkg("load"),
       "@jevitate/ai-core": pkg("ai-core"),
+      "@jevitate/explore": pkg("explore"),
       "@jevitate/sources": pkg("sources"),
       "@jevitate/missions": pkg("missions"),
       // Add one line per new package here, e.g.:
