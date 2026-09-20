@@ -9,6 +9,17 @@ import type { LatencyPercentiles } from "./percentiles.js";
  */
 export type Provenance = "measured" | "modeled";
 
+/**
+ * What `CapacityReport.latency` was computed over. Always `"completedRuns"`:
+ * a run only produces a duration to sample once it finishes without
+ * throwing, so `latency` covers `okRuns + quarantinedRuns` and NEVER
+ * `errorRuns` (a thrown run has no duration to record). This is why
+ * `errorRuns`/`quarantinedRuns` must always be read alongside `latency` — a
+ * run with a high `errorRuns` count can otherwise look misleadingly fast,
+ * since its failures are simply invisible to the percentiles.
+ */
+export type LatencyPercentilesScope = "completedRuns";
+
 export interface CapacityReport {
   provenance: Provenance;
   concurrency: number;
@@ -20,6 +31,8 @@ export interface CapacityReport {
   durationMs: number;
   throughputPerSecond: number;
   latency: LatencyPercentiles;
+  /** See `LatencyPercentilesScope`'s doc comment — read together with `errorRuns`/`quarantinedRuns`. */
+  latencyPercentilesOver: LatencyPercentilesScope;
   /** Wall-clock bounds of the real run. Absent for `modeled` reports — there is no real clock to bound. */
   startedAtIso?: string;
   endedAtIso?: string;

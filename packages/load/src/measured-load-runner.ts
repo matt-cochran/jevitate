@@ -97,6 +97,7 @@ export async function runLoadTest(config: RunLoadTestConfig): Promise<CapacityRe
     durationMs,
     throughputPerSecond: durationMs > 0 ? (totalRuns * 1000) / durationMs : 0,
     latency: computeLatencyPercentiles(durations),
+    latencyPercentilesOver: "completedRuns",
     startedAtIso,
     endedAtIso,
   };
