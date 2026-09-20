@@ -1,0 +1,2 @@
+/** @doit/ai-core — model gateways (generation + judgment) and credential preflight. */
+export const AI_CORE = "ai-core" as const;
