@@ -95,3 +95,53 @@ describe("runFeatureMission — multi-path discovery", () => {
     120_000,
   );
 });
+
+describe("runFeatureMission — boundary states and scope edges", () => {
+  test(
+    "any recorded fill step carries a boundary-value candidate, never an empty value",
+    async () => {
+      // NOTE: under the real `Control` (no `value` field), a typed field does
+      // not change the state fingerprint, so a standalone fill branch always
+      // lands on an already-visited state and is not retained as a leaf — this
+      // assertion is therefore vacuous for the login fixture (fillSteps == []).
+      // The real proof that a boundary value (never empty, never a secret) is
+      // chosen lives in boundary-values.test.ts (Task 4) and the guardrail
+      // contract (Task 8); this guards the recorded artifact's shape.
+      const scope: CapabilityScope = { name: "sign in", originAllowlist: [site.url], routeGlobs: ["/login"] };
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        scope,
+      });
+      const fillSteps = result.recordings.flatMap((r) => r.pages.flatMap((p) => p.steps)).filter((s) => s.step.kind === "fill");
+      for (const s of fillSteps) {
+        if (s.step.kind === "fill" && "value" in s.step.value) {
+          expect(s.step.value.redacted ? true : s.step.value.value.length).toBeTruthy();
+        }
+      }
+    },
+    120_000,
+  );
+
+  test(
+    "a link outside the capability's route globs is recorded as a boundary edge, not expanded",
+    async () => {
+      // Scope the "inbox entry" capability to ONLY /inbox — both thread links
+      // are then genuinely out of scope.
+      const scope: CapabilityScope = { name: "inbox entry", originAllowlist: [site.url], routeGlobs: ["/inbox"] };
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/inbox`,
+        allowlist: [site.url],
+        scope,
+      });
+      expect(result.coverage.statesExercised).toBe(1); // only /inbox is ever in scope
+      expect(result.coverage.boundaryEdges.length).toBeGreaterThanOrEqual(2); // both thread links hit
+      expect(result.coverage.boundaryEdges.every((u) => u.includes("/thread/"))).toBe(true);
+    },
+    120_000,
+  );
+});
