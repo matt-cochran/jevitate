@@ -7,12 +7,15 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import {
   runGoalBasedMission,
+  authorJourney,
   assertAuthorizedExploreTarget,
   normalizeAllowlist,
   type Bounds,
   type GoalBasedOutcome,
   type StopReason,
+  type AuthorJourneyResult,
 } from "@jevitate/explore";
+import { FsJourneyStore } from "@jevitate/journey";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
@@ -97,6 +100,125 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       actions: mission.run.actions,
       recordingPath,
     };
+  } finally {
+    await session.close();
+    await rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Arguments handed to the authoring step of `runAuthorJourney`. Kept separate
+ * from `RunAuthorJourneyOptions` so tests can inject `authorImpl` (a fake
+ * authoring step) without opening a real browser.
+ */
+export interface AuthorViaBrowserArgs {
+  readonly url: string;
+  readonly origin: string;
+  readonly goal: string;
+  readonly successAssertion: Assertion;
+  readonly allowlist: readonly string[];
+  readonly judge?: JudgmentPort;
+  readonly gen?: GenerationPort;
+  readonly bounds?: Partial<Bounds>;
+  readonly takes: number;
+  readonly journeyId: string;
+  readonly journeyName: string;
+  readonly browserPortFactory?: () => BrowserPort;
+}
+
+export interface RunAuthorJourneyOptions {
+  readonly url: string;
+  readonly goal: string;
+  readonly successAssertion: Assertion;
+  readonly allowlist: readonly string[];
+  /** Where the authored Journey is persisted (via `FsJourneyStore`). */
+  readonly journeysDir: string;
+  readonly journeyId: string;
+  readonly journeyName: string;
+  /** Total takes incl. discovery. Default 1 (single-take MVP). */
+  readonly takes?: number;
+  readonly judge?: JudgmentPort;
+  readonly gen?: GenerationPort;
+  readonly bounds?: Partial<Bounds>;
+  readonly browserPortFactory?: () => BrowserPort;
+  /**
+   * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
+   * which drives a real Playwright-backed actor through `authorJourney`.
+   */
+  readonly authorImpl?: (args: AuthorViaBrowserArgs) => Promise<AuthorJourneyResult>;
+}
+
+/**
+ * The programmatic surface behind `jevitate explore author-journey` — drives
+ * the goal-based exploration mission and feeds its take(s) through RxD's
+ * diff/postdoc pipeline (`@jevitate/explore`'s `authorJourney`) to author a
+ * parameterized, replayable, UNPROMOTED Journey, then persists it under the
+ * journeys store. Additive: the record-by-demonstration authoring path is
+ * untouched.
+ *
+ * The authorized-target guard runs FIRST (fail-closed), before any browser is
+ * opened. The authoring step is injectable (`authorImpl`) so it is unit-testable
+ * without a browser.
+ */
+export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<AuthorJourneyResult> {
+  // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
+  const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+
+  const impl = opts.authorImpl ?? authorViaBrowser;
+  const result = await impl({
+    url: opts.url,
+    origin,
+    goal: opts.goal,
+    successAssertion: opts.successAssertion,
+    allowlist: opts.allowlist,
+    judge: opts.judge,
+    gen: opts.gen,
+    bounds: opts.bounds,
+    takes: opts.takes ?? 1,
+    journeyId: opts.journeyId,
+    journeyName: opts.journeyName,
+    browserPortFactory: opts.browserPortFactory,
+  });
+
+  if (result.outcome === "authored") {
+    await new FsJourneyStore(opts.journeysDir).put(result.journey);
+  }
+  return result;
+}
+
+/** Default authoring step: opens a real browser, builds an actor, authors. */
+async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourneyResult> {
+  if (!args.judge || !args.gen) {
+    throw new Error("runAuthorJourney: judge and gen gateways are required to drive the authoring mission");
+  }
+  const judge = args.judge;
+  const gen = args.gen;
+
+  const portFactory = args.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  const port = portFactory();
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-author-"));
+  const session = await port.open({
+    profileDir,
+    headless: true,
+    allowedOrigins: [...args.allowlist],
+    baseUrl: args.origin,
+  });
+
+  try {
+    const actor = CastActor.named("author").whoCan(new BrowseTheWeb(session, [...args.allowlist]));
+    return await authorJourney({
+      goal: args.goal,
+      successAssertion: args.successAssertion,
+      allowlist: args.allowlist,
+      startUrl: args.url,
+      bounds: args.bounds,
+      actor,
+      judgment: judge,
+      generation: gen,
+      takes: args.takes,
+      journeyId: args.journeyId,
+      journeyName: args.journeyName,
+    });
   } finally {
     await session.close();
     await rm(profileDir, { recursive: true, force: true });
