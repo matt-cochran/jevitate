@@ -11,3 +11,12 @@ test("facade exposes none of the forbidden browser surfaces", () => {
     expect(names.has(forbidden)).toBe(false);
   }
 });
+
+test("facade exposes the two-level journey tools alongside the existing allowlist", () => {
+  const names = new Set(listToolNames());
+  expect(names.has("find_capabilities")).toBe(true);
+  expect(names.has("run_journey")).toBe(true);
+  for (const forbidden of FORBIDDEN_TOOLS) {
+    expect(names.has(forbidden)).toBe(false);
+  }
+});

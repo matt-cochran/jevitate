@@ -1,7 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
-  "references": [{ "path": "../application" }],
+  "references": [
+    { "path": "../application" },
+    { "path": "../domain" },
+    { "path": "../journey" },
+    { "path": "../runtime" }
+  ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
 }

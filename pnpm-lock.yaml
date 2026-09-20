@@ -128,6 +128,15 @@ importers:
       '@doit/application':
         specifier: workspace:*
         version: link:../application
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@doit/journey':
+        specifier: workspace:*
+        version: link:../journey
+      '@doit/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.30.0(zod@4.6.5)
