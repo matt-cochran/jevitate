@@ -9,3 +9,4 @@ export * from "./decide.js";
 export * from "./fill.js";
 export * from "./act.js";
 export * from "./record.js";
+export * from "./explore.js";
