@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { modeledCapacityReport } from "./modeled-capacity.js";
 import { UnauthorizedLoadTargetError } from "./authorized-targets.js";
+import { LoadHarnessSetupError } from "./types.js";
 import type { InteractionPolicy, PlannedStep } from "@doit/domain";
 
 const policy: InteractionPolicy = {
@@ -60,5 +61,30 @@ describe("modeledCapacityReport", () => {
         script,
       }),
     ).toThrow(UnauthorizedLoadTargetError);
+  });
+
+  it("rejects a non-positive concurrency or iterationsPerActor with the same LoadHarnessSetupError runLoadTest uses (consistent error type across both producers)", () => {
+    // NOTE: deliberately NOT `expect(() => ...).toThrow(LoadHarnessSetupError)`
+    // — vitest/esbuild does not statically verify a named import actually
+    // exists, so if `LoadHarnessSetupError` were ever undefined (e.g. a
+    // broken re-export), `.toThrow(undefined)` degrades to "throws
+    // something, whatever it is" and passes vacuously. `toBeInstanceOf`
+    // throws a real TypeError against `instanceof undefined`, so this
+    // fails loudly instead of silently if the import is ever broken.
+    let caught: unknown;
+    try {
+      modeledCapacityReport({
+        targetOrigin: "https://example.com",
+        authorizedOrigins: ["https://example.com"],
+        concurrency: 0,
+        iterationsPerActor: 1,
+        seed: 1,
+        policy,
+        script,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(LoadHarnessSetupError);
   });
 });

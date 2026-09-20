@@ -1,7 +1,14 @@
 import { assertAuthorizedTarget } from "./authorized-targets.js";
 import { deriveActorSeeds } from "./seeded-pool.js";
 import { computeLatencyPercentiles } from "./percentiles.js";
+import { LoadHarnessSetupError } from "./types.js";
 import type { CapacityReport, LoadActorRunnerFactory } from "./types.js";
+
+// Re-exported so existing `import { LoadHarnessSetupError } from
+// "./measured-load-runner.js"` call sites keep working — the class itself
+// is now defined once in `types.ts` and shared with `modeled-capacity.ts`
+// (see that file's doc comment for why).
+export { LoadHarnessSetupError };
 
 export interface RunLoadTestConfig {
   targetOrigin: string;
@@ -11,9 +18,6 @@ export interface RunLoadTestConfig {
   seed: number;
   runnerFactory: LoadActorRunnerFactory;
 }
-
-/** Thrown when the harness itself cannot even start a pool member (e.g. no real browser/target available). Distinct from a per-iteration failure (counted as `errorRuns`) — a setup failure aborts the WHOLE run rather than under-reporting it. This is the invariant #9 refusal: never silently substitute a modeled number for a run that could not actually happen. */
-export class LoadHarnessSetupError extends Error {}
 
 export async function runLoadTest(config: RunLoadTestConfig): Promise<CapacityReport> {
   assertAuthorizedTarget(config.targetOrigin, config.authorizedOrigins); // #10 — before ANYTHING else

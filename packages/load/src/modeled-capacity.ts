@@ -2,7 +2,7 @@ import { simulateTiming, type InteractionPolicy, type PlannedStep } from "@doit/
 import { assertAuthorizedTarget } from "./authorized-targets.js";
 import { deriveActorSeeds } from "./seeded-pool.js";
 import { computeLatencyPercentiles } from "./percentiles.js";
-import type { CapacityReport } from "./types.js";
+import { LoadHarnessSetupError, type CapacityReport } from "./types.js";
 
 export interface RunModeledCapacityConfig {
   targetOrigin: string;
@@ -25,7 +25,7 @@ export function modeledCapacityReport(config: RunModeledCapacityConfig): Capacit
   assertAuthorizedTarget(config.targetOrigin, config.authorizedOrigins); // #10 applies offline too
 
   if (config.concurrency < 1 || config.iterationsPerActor < 1) {
-    throw new RangeError("concurrency and iterationsPerActor must each be >= 1");
+    throw new LoadHarnessSetupError("concurrency and iterationsPerActor must each be >= 1");
   }
 
   const seeds = deriveActorSeeds(config.seed, config.concurrency);
