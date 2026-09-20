@@ -1,8 +1,9 @@
 import type { Actor } from "@doit/screenplay";
+import { BrowseTheWebToken, Enter } from "@doit/screenplay";
 import type { RunPolicy } from "@doit/domain";
 import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@doit/journey";
-import { RecordingInterpreter, checkAssertion, type InterpretResult } from "@doit/interpreter";
-import type { SecretManagerPort } from "@doit/secrets";
+import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@doit/interpreter";
+import { SecretOriginMismatchError, assertOriginBound, type SecretManagerPort } from "@doit/secrets";
 import { PolicyEnforcementError } from "./runner.js";
 
 /**
@@ -71,6 +72,13 @@ export class JourneyRunner {
     let result = await this.interpreter.run(this.actor, req.journey.recording, req.params);
 
     while (result.outcome === "awaiting_human") {
+      if (req.policy.secret.secretMode === "vault-autofill") {
+        const refusal = await this.fillViaVaultAutofill(req, result);
+        if (refusal) return refusal; // quarantined — bail out, never assume success
+        result = await this.interpreter.resumeFrom(this.actor, req.journey.recording, result.at + 1, req.params);
+        continue;
+      }
+
       // #7: a handback (secret) step. Only proceed if policy explicitly
       // opts into a visible handback AND a handler is wired up; otherwise
       // fail closed — never assume a human will show up.
@@ -116,5 +124,76 @@ export class JourneyRunner {
     for (const ref of refs) {
       await this.secretManager.assertResolvable(ref); // throws SecretUnresolvableError, never a silent skip
     }
+  }
+
+  /**
+   * §9a invariants #2/#3: fetches the secret ONLY at the moment of fill,
+   * types it directly into the recorded field via the actor, and holds the
+   * plaintext in nothing but this method's own local bindings — never in
+   * `JourneyRunResult`, never logged, never passed to `resumeFrom`'s
+   * `params`. Returns a `{outcome:"quarantined",...}` result when it
+   * refuses to fill for a reason that is not itself a hard invariant
+   * breach (only `SecretOriginMismatchError` — thrown, not returned — is
+   * that); returns `undefined` on a successful fill so the caller's loop
+   * proceeds to `resumeFrom`.
+   *
+   * RULING (Slice 1b scope): vault-autofill can only locate the field to
+   * type into when the handback step's `resume` assertion is
+   * `{kind:"visible", target}` — exactly what the recorder emits for a
+   * real secret field (see `packages/recorder/src/assemble.ts`'s
+   * `buildStep`: `resume: visible(resolution.descriptor)`). Any other
+   * `resume` shape reaching here has no field to fill programmatically, so
+   * it fails closed rather than guessing.
+   *
+   * RULING (Slice 1b scope): exactly one declared `SecretRef` must match
+   * the current page's origin. Zero matches (origin mismatch) or more than
+   * one match (ambiguous — e.g. separate username/password refs on the
+   * same origin) both fail closed via `SecretOriginMismatchError`;
+   * disambiguating multiple same-origin secrets by field is out of scope
+   * for this thin slice.
+   */
+  private async fillViaVaultAutofill(
+    req: JourneyRunRequest,
+    result: Extract<InterpretResult, { outcome: "awaiting_human" }>,
+  ): Promise<JourneyRunResult | undefined> {
+    if (result.resume.kind !== "visible") {
+      return {
+        outcome: "quarantined",
+        reason: `vault-autofill: handback resume is not a "visible" target assertion at step ${result.at} — cannot locate a field to fill`,
+        at: result.at,
+      };
+    }
+
+    const page = this.actor.ability(BrowseTheWebToken).session.page;
+    const currentUrl = page.url();
+    const refs = req.journey.metadata.secretRefs ?? [];
+    const matching = refs.filter((ref) => {
+      try {
+        assertOriginBound(ref, currentUrl);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (matching.length !== 1) {
+      throw new SecretOriginMismatchError(
+        `vault-autofill: expected exactly one declared secretRef bound to the current origin (${currentUrl}), found ${matching.length}`,
+      );
+    }
+    const ref = matching[0];
+
+    const fieldVisible = await checkAssertion(this.actor, result.resume);
+    if (!fieldVisible) {
+      return {
+        outcome: "quarantined",
+        reason: `vault-autofill: expected credential field not visible before fill at step ${result.at}`,
+        at: result.at,
+      };
+    }
+
+    const secret = await this.secretManager!.fetch(ref); // preflight already proved this resolves
+    const target = descriptorToTarget(result.resume.target);
+    await Enter.theText(secret.reveal()).into(target).performAs(this.actor);
+    return undefined;
   }
 }
