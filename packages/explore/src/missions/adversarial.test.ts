@@ -83,3 +83,50 @@ describe("runAdversarialMission — hard defect", () => {
     120_000,
   );
 });
+
+describe("runAdversarialMission — model verdict is advisory only (guardrail #4)", () => {
+  test(
+    "Jev screaming 'looks broken' with no hard signal does NOT stop the mission or report a defect",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: true, probability: 0.99 } });
+      const generation = new FakeGenerationGateway();
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["ordering-violation", "repeat-rapid"],
+      });
+      // No console error, no 5xx, no failed request, no broken invariant was
+      // ever produced in this run — a maximally-confident "looks broken" from
+      // the model alone must never surface as outcome:"defect".
+      expect(result.outcome).not.toBe("defect");
+    },
+    120_000,
+  );
+
+  test(
+    "even when an action IS taken and Jev is consulted, its 'looks broken' verdict is discarded (no hard signal → not a defect)",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: true, probability: 0.99 } });
+      const generation = new FakeGenerationGateway();
+      // boundary-input types an invalid value into the username field: a real
+      // action runs, so the SOFT Noul augment is genuinely consulted — and its
+      // maximally-confident "broken" verdict is discarded, never adjudicating.
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["boundary-input"],
+      });
+      expect(result.outcome).not.toBe("defect");
+      expect(result.outcome === "clean" || result.outcome === "cap").toBe(true);
+    },
+    120_000,
+  );
+});
