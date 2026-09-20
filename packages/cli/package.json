@@ -8,6 +8,9 @@
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
+    "@doit/ai-core": "workspace:*",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.107",
     "@doit/daemon": "workspace:*",
     "@doit/domain": "workspace:*",
     "@doit/interpreter": "workspace:*",

@@ -23,11 +23,15 @@ import {
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@doit/journey";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
+import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
 
 export interface CliDeps {
   profiles: ProfileManager;
   dbPath?: string;
   journeysDir?: string;
+  /** Optional, additive: `@doit/ai-core` wiring (see ai-cli.ts). Omitted in
+   *  production means real env + the deterministic fake generation gateway. */
+  ai?: AiCliDeps;
 }
 
 const DEFAULT_DB_PATH = join(homedir(), ".doit", "db.sqlite");
@@ -536,6 +540,8 @@ export function buildProgram(deps: CliDeps): Command {
         }
       }
     });
+
+  registerAiCommands(program, deps);
 
   return program;
 }

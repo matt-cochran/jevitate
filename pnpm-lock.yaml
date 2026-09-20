@@ -68,6 +68,9 @@ importers:
       '@clack/prompts':
         specifier: ^0.9.1
         version: 0.9.1
+      '@doit/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
       '@doit/daemon':
         specifier: workspace:*
         version: link:../daemon
@@ -95,6 +98,12 @@ importers:
       '@doit/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
+      '@openrouter/ai-sdk-provider':
+        specifier: ^3.1.0
+        version: 3.1.0(ai@7.0.107(zod@4.6.5))(zod@4.6.5)
+      ai:
+        specifier: ^7.0.107
+        version: 7.0.107(zod@4.6.5)
       commander:
         specifier: ^12.0.0
         version: 12.1.0
@@ -158,6 +167,9 @@ importers:
 
   packages/mcp-facade:
     dependencies:
+      '@doit/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
       '@doit/application':
         specifier: workspace:*
         version: link:../application
