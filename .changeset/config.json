@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": [
+    "@jevitate/ai-core",
+    "@jevitate/application",
+    "@jevitate/daemon",
+    "@jevitate/domain",
+    "@jevitate/example-site",
+    "@jevitate/interpreter",
+    "@jevitate/journey",
+    "@jevitate/load",
+    "@jevitate/mcp-facade",
+    "@jevitate/playwright",
+    "@jevitate/recorder",
+    "@jevitate/recording",
+    "@jevitate/runtime",
+    "@jevitate/screenplay",
+    "@jevitate/secrets",
+    "@jevitate/site-example-network",
+    "@jevitate/site-sdk",
+    "@jevitate/sources",
+    "@jevitate/storage-sqlite"
+  ]
+}
