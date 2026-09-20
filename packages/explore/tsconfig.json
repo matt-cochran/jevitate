@@ -10,5 +10,5 @@
     { "path": "../screenplay" }
   ],
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/testkit.ts"]
 }
