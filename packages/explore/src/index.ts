@@ -6,3 +6,4 @@ export * from "./authorized-targets.js";
 export * from "./redact.js";
 export * from "./snapshot.js";
 export * from "./decide.js";
+export * from "./fill.js";
