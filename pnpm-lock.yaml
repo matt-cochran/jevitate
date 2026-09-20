@@ -253,6 +253,18 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/sources:
+    dependencies:
+      '@doit/journey':
+        specifier: workspace:*
+        version: link:../journey
+      '@doit/recording':
+        specifier: workspace:*
+        version: link:../recording
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
   packages/storage-sqlite:
     dependencies:
       '@doit/application':
