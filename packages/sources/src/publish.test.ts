@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Journey } from "@doit/journey";
@@ -45,6 +45,25 @@ describe("validateForPublish", () => {
 
     const req2 = { journey: journeyWithFill({ redacted: true, length: 8 }), declaredOrigins: [ORIGIN], toSource: "gmail" };
     expect(validateForPublish(req2).metadata.id).toBe("login");
+  });
+
+  it("throws on a path-traversal asId (fix round 1 — publish path traversal)", () => {
+    const req = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "../../evil" };
+    expect(() => validateForPublish(req)).toThrow(/path traversal/i);
+  });
+
+  it("throws on a ..-containing metadata.id when no asId override is given", () => {
+    const journey = journeyWithFill({ var: "pw" });
+    journey.metadata = { ...journey.metadata, id: "../../evil" };
+    const req = { journey, declaredOrigins: [ORIGIN], toSource: "gmail" };
+    expect(() => validateForPublish(req)).toThrow(/path traversal/i);
+  });
+
+  it("throws on an asId containing a forward or back slash", () => {
+    const reqSlash = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "sub/evil" };
+    expect(() => validateForPublish(reqSlash)).toThrow(/path traversal/i);
+    const reqBackslash = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "sub\\evil" };
+    expect(() => validateForPublish(reqBackslash)).toThrow(/path traversal/i);
   });
 });
 
@@ -106,5 +125,22 @@ describe("publishJourney (fake GitExec + fake GhPort)", () => {
     const req = { journey: journeyWithFill({ redacted: false, value: "hunter2" }), declaredOrigins: [ORIGIN], toSource: "gmail" };
     await expect(publishJourney(mgr, gh, req)).rejects.toBeInstanceOf(EmbeddedSecretError);
     expect(calls).toHaveLength(0);
+  });
+
+  it("a path-traversal asId ('../../evil') is refused BEFORE any git call or file write, and writes nothing outside journeys/ (fix round 1)", async () => {
+    const { mgr, calls, cloneDir } = setup();
+    const gh: GhPort = { available: async () => false, createPr: async () => "" };
+    const req = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail", asId: "../../evil" };
+
+    await expect(publishJourney(mgr, gh, req)).rejects.toThrow(/path traversal/i);
+
+    // No git operation (checkout/add/commit/push) was ever attempted.
+    expect(calls).toHaveLength(0);
+    // Nothing was written inside the clone's journeys/ dir...
+    expect(existsSync(join(cloneDir, "journeys"))).toBe(false);
+    // ...and nothing escaped to the sourcesDir parent the traversal targeted.
+    const sourcesDir = join(cloneDir, "..");
+    expect(existsSync(join(sourcesDir, "..", "evil.journey.json"))).toBe(false);
+    expect(existsSync(join(sourcesDir, "evil.journey.json"))).toBe(false);
   });
 });

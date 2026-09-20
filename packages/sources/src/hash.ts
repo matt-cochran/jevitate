@@ -31,9 +31,10 @@ export function canonicalJson(value: unknown): string {
  * Content hash over the ENTIRE closed-schema Journey file (metadata +
  * recording + declaredOrigins) — every behavior-affecting byte, so "what you
  * reviewed is what runs" (§7). Parses through `SharedJourneyFileSchema`
- * first (which strips unknown keys via `.strict()`/intersection parsing) so
- * hashing is defined only over schema-known content — never bare
- * `JSON.stringify` of untrusted input.
+ * first (which REJECTS — throws — on any unknown key via its `.strict()`
+ * inner schemas, fail-closed rather than silently dropping them) so hashing
+ * is defined only over schema-known content — never bare `JSON.stringify`
+ * of untrusted input.
  */
 export function canonicalJourneyHash(file: unknown): string {
   const validated = SharedJourneyFileSchema.parse(file);
