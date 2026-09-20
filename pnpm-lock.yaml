@@ -241,6 +241,8 @@ importers:
         specifier: ^1.49.0
         version: 1.63.0
 
+  packages/secrets: {}
+
   packages/site-sdk:
     dependencies:
       '@doit/domain':
