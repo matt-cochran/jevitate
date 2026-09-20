@@ -11,3 +11,4 @@ export * from "./act.js";
 export * from "./record.js";
 export * from "./explore.js";
 export * from "./missions/goal-based.js";
+export * from "./missions/induction.js";

@@ -7,9 +7,11 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import {
   runGoalBasedMission,
+  runInductionMission,
   assertAuthorizedExploreTarget,
   normalizeAllowlist,
   type Bounds,
+  type CoverageReport,
   type GoalBasedOutcome,
   type StopReason,
 } from "@jevitate/explore";
@@ -97,6 +99,77 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       actions: mission.run.actions,
       recordingPath,
     };
+  } finally {
+    await session.close();
+    await rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The programmatic surface behind `jevitate explore --strategy coverage`
+ * (additive, alongside `runExploration`). Wires a real Playwright `Page` +
+ * gateways to `@jevitate/explore`'s proof-by-induction (state-coverage) mission
+ * and persists each emitted repro `Recording` under `~/.jevitate/recordings`.
+ *
+ * Same fail-closed discipline as `runExploration`: the authorized-target guard
+ * runs FIRST, before any browser is opened.
+ */
+export interface RunCoverageMissionOptions {
+  readonly url: string;
+  readonly allowlist: readonly string[];
+  readonly judge: JudgmentPort;
+  readonly gen: GenerationPort;
+  readonly bounds?: Partial<Bounds>;
+  /** Where the repro Recordings are written. Default `~/.jevitate/recordings`. */
+  readonly outDir?: string;
+  readonly browserPortFactory?: () => BrowserPort;
+  readonly nowIso?: () => string;
+}
+
+export interface RunCoverageMissionResult {
+  readonly coverage: CoverageReport;
+  readonly outcome: "exhausted" | "cap";
+  readonly recordingPaths: string[];
+}
+
+export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
+  // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
+  const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+
+  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  const port = portFactory();
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-coverage-"));
+  const session = await port.open({
+    profileDir,
+    headless: true,
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+  });
+
+  try {
+    const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
+    const result = await runInductionMission({
+      page: session.page,
+      actor,
+      judgment: opts.judge,
+      generation: opts.gen,
+      seedUrl: opts.url,
+      allowlist: opts.allowlist,
+      bounds: opts.bounds,
+    });
+
+    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+    await mkdir(outDir, { recursive: true });
+    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const stamp = iso.replace(/[:.]/g, "-");
+    const recordingPaths: string[] = [];
+    for (let i = 0; i < result.recordings.length; i++) {
+      const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
+      await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
+      recordingPaths.push(p);
+    }
+
+    return { coverage: result.coverage, outcome: result.outcome, recordingPaths };
   } finally {
     await session.close();
     await rm(profileDir, { recursive: true, force: true });
