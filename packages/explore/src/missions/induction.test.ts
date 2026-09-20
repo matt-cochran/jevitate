@@ -84,3 +84,23 @@ describe("runInductionMission — branching", () => {
     expect(result.recordings.length).toBeGreaterThanOrEqual(2);
   }, 30_000);
 });
+
+describe("runInductionMission — cycles", () => {
+  // The cycle-a <-> cycle-b fixture forms a real inter-page loop. The mission
+  // must exercise the return edge but detect the already-visited state, so it
+  // terminates with exactly 2 distinct states and never spins forever.
+  test("a link back to an already-visited state is exercised but not re-expanded", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/exploratory-testing/cycle-a`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    expect(result.coverage.statesVisited).toBe(2);
+    // Both edges (A->B and the B->A return edge) were exercised.
+    expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
+  }, 15_000);
+});
