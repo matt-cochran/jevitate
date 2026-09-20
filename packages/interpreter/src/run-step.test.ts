@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import type { Assertion, RecordedStep } from "@doit/recording";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
+import type { Assertion, RecordedStep } from "@jevitate/recording";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { checkAssertion, PostconditionFailed } from "./assertion.js";
 import { runStep } from "./run-step.js";
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { contentHash } from "@doit/domain";
+import { contentHash } from "@jevitate/domain";
 
 /** Text-only generation tasks (form values / triage). Closed set. */
 export const FormValueInput = z.object({

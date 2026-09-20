@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProfileManager } from "@doit/daemon";
-import type { Journey } from "@doit/journey";
+import { ProfileManager } from "@jevitate/daemon";
+import type { Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
 
 /**

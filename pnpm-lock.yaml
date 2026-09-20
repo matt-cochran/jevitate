@@ -41,7 +41,7 @@ importers:
 
   packages/ai-core:
     dependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
       zod:
@@ -50,7 +50,7 @@ importers:
 
   packages/application:
     dependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
 
@@ -59,37 +59,37 @@ importers:
       '@clack/prompts':
         specifier: ^0.9.1
         version: 0.9.1
-      '@doit/ai-core':
+      '@jevitate/ai-core':
         specifier: workspace:*
         version: link:../ai-core
-      '@doit/daemon':
+      '@jevitate/daemon':
         specifier: workspace:*
         version: link:../daemon
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/interpreter':
+      '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
-      '@doit/journey':
+      '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey
-      '@doit/load':
+      '@jevitate/load':
         specifier: workspace:*
         version: link:../load
-      '@doit/playwright':
+      '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
-      '@doit/recording':
+      '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
-      '@doit/runtime':
+      '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@doit/screenplay':
+      '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../screenplay
-      '@doit/storage-sqlite':
+      '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
       '@openrouter/ai-sdk-provider':
@@ -102,20 +102,20 @@ importers:
         specifier: ^12.0.0
         version: 12.1.0
     devDependencies:
-      '@doit/example-site':
+      '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
 
   packages/daemon:
     dependencies:
-      '@doit/application':
+      '@jevitate/application':
         specifier: workspace:*
         version: link:../application
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
     devDependencies:
-      '@doit/storage-sqlite':
+      '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
 
@@ -137,17 +137,17 @@ importers:
 
   packages/interpreter:
     dependencies:
-      '@doit/recording':
+      '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
-      '@doit/screenplay':
+      '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../screenplay
     devDependencies:
-      '@doit/example-site':
+      '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
-      '@doit/playwright':
+      '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
       playwright:
@@ -156,7 +156,7 @@ importers:
 
   packages/journey:
     dependencies:
-      '@doit/recording':
+      '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
       zod:
@@ -165,31 +165,31 @@ importers:
 
   packages/load:
     dependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/runtime':
+      '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
 
   packages/mcp-facade:
     dependencies:
-      '@doit/ai-core':
+      '@jevitate/ai-core':
         specifier: workspace:*
         version: link:../ai-core
-      '@doit/application':
+      '@jevitate/application':
         specifier: workspace:*
         version: link:../application
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/journey':
+      '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey
-      '@doit/runtime':
+      '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@doit/sources':
+      '@jevitate/sources':
         specifier: workspace:*
         version: link:../sources
       '@modelcontextprotocol/sdk':
@@ -204,23 +204,23 @@ importers:
 
   packages/recorder:
     dependencies:
-      '@doit/interpreter':
+      '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
-      '@doit/playwright':
+      '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
-      '@doit/recording':
+      '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
-      '@doit/screenplay':
+      '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../screenplay
       playwright:
         specifier: ^1.49.0
         version: 1.63.0
     devDependencies:
-      '@doit/example-site':
+      '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
 
@@ -230,41 +230,41 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
 
   packages/runtime:
     dependencies:
-      '@doit/application':
+      '@jevitate/application':
         specifier: workspace:*
         version: link:../application
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/interpreter':
+      '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
-      '@doit/journey':
+      '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey
-      '@doit/playwright':
+      '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
-      '@doit/screenplay':
+      '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../screenplay
-      '@doit/secrets':
+      '@jevitate/secrets':
         specifier: workspace:*
         version: link:../secrets
-      '@doit/site-sdk':
+      '@jevitate/site-sdk':
         specifier: workspace:*
         version: link:../site-sdk
     devDependencies:
-      '@doit/example-site':
+      '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
-      '@doit/storage-sqlite':
+      '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
       zod:
@@ -273,10 +273,10 @@ importers:
 
   packages/screenplay:
     dependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/playwright':
+      '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
     devDependencies:
@@ -288,10 +288,10 @@ importers:
 
   packages/site-sdk:
     dependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
-      '@doit/screenplay':
+      '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../screenplay
       zod:
@@ -300,10 +300,10 @@ importers:
 
   packages/sources:
     dependencies:
-      '@doit/journey':
+      '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey
-      '@doit/recording':
+      '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
       zod:
@@ -312,10 +312,10 @@ importers:
 
   packages/storage-sqlite:
     dependencies:
-      '@doit/application':
+      '@jevitate/application':
         specifier: workspace:*
         version: link:../application
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
       better-sqlite3:
@@ -334,32 +334,32 @@ importers:
 
   site-integrations/example-network:
     dependencies:
-      '@doit/domain':
+      '@jevitate/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@doit/screenplay':
+      '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../../packages/screenplay
-      '@doit/site-sdk':
+      '@jevitate/site-sdk':
         specifier: workspace:*
         version: link:../../packages/site-sdk
       zod:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
-      '@doit/application':
+      '@jevitate/application':
         specifier: workspace:*
         version: link:../../packages/application
-      '@doit/example-site':
+      '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
-      '@doit/playwright':
+      '@jevitate/playwright':
         specifier: workspace:*
         version: link:../../packages/playwright
-      '@doit/runtime':
+      '@jevitate/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@doit/storage-sqlite':
+      '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
 

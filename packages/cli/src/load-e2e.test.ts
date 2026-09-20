@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "@doit/example-site";
-import { FsJourneyStore, JourneyRegistry } from "@doit/journey";
+import { startServer } from "@jevitate/example-site";
+import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { runJourneyLoadTest } from "./load-api.js";
 
 /**

@@ -1,7 +1,7 @@
 import type { Kysely } from "kysely";
-import type { Clock, CommandRepository, CommandRecord, NewCommand } from "@doit/application";
-import type { CommandState } from "@doit/domain";
-import { newCommandId, canTransition, IllegalTransitionError } from "@doit/domain";
+import type { Clock, CommandRepository, CommandRecord, NewCommand } from "@jevitate/application";
+import type { CommandState } from "@jevitate/domain";
+import { newCommandId, canTransition, IllegalTransitionError } from "@jevitate/domain";
 import type { CommandTable, Database } from "./schema.js";
 
 function toRecord(row: CommandTable): CommandRecord {

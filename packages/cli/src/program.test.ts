@@ -2,10 +2,10 @@ import { expect, test } from "vitest";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProfileManager } from "@doit/daemon";
-import { SitePolicySchema } from "@doit/domain";
-import type { Recording, Step, AuthoringRecording, PostdocDecision } from "@doit/recording";
-import { AuthoringTakeSchema, diffTakes, applyPostdoc } from "@doit/recording";
+import { ProfileManager } from "@jevitate/daemon";
+import { SitePolicySchema } from "@jevitate/domain";
+import type { Recording, Step, AuthoringRecording, PostdocDecision } from "@jevitate/recording";
+import { AuthoringTakeSchema, diffTakes, applyPostdoc } from "@jevitate/recording";
 import { buildProgram } from "./program.js";
 
 // === recording command fixture helpers ===
@@ -35,7 +35,7 @@ function clickStep(testId: string): Step {
  * (non-redacted) `value`, keyed `"page:stepInPage"` per Task 1's convention.
  *
  * Validated against `AuthoringTakeSchema` — the ONE canonical take-file
- * shape (`@doit/recording`'s `diff.ts`) — before being returned, so this
+ * shape (`@jevitate/recording`'s `diff.ts`) — before being returned, so this
  * fixture builder can never silently drift from what `recording diff`
  * actually accepts.
  */

@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import { safeRunPolicy } from "@doit/domain";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import { safeRunPolicy } from "@jevitate/domain";
 import {
   StubSecretManager,
   SecretUnresolvableError,
   SecretOriginMismatchError,
   SecretAmbiguousBindingError,
-} from "@doit/secrets";
+} from "@jevitate/secrets";
 import { JourneyRunner, PolicyEnforcementError } from "./index.js";
 
 function fakeLocator() {

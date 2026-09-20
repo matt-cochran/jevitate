@@ -5,8 +5,8 @@ import { PaceInteractions } from "./pace-interactions.js";
 import { Target } from "./target.js";
 import { Click, Enter, EnterSecret, Navigate } from "./interactions.js";
 import { TextOf } from "./questions.js";
-import { Pacer } from "@doit/domain";
-import type { InteractionPolicy } from "@doit/domain";
+import { Pacer } from "@jevitate/domain";
+import type { InteractionPolicy } from "@jevitate/domain";
 
 function fakeSessionWithPage(page: any) {
   return { page, startTracing: async () => {}, stopTracingToFile: async () => {}, close: async () => {} };

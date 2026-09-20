@@ -1,5 +1,5 @@
 import { z, type ZodType } from "zod";
-import { RecordingSchema, type Recording } from "@doit/recording";
+import { RecordingSchema, type Recording } from "@jevitate/recording";
 
 export interface SecretRef { manager: string; key: string; origin: string; field: string }
 export interface JourneyMetadata {

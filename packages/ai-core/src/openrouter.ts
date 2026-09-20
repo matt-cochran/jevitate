@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { contentHash } from "@doit/domain";
+import { contentHash } from "@jevitate/domain";
 import { GEN_TASKS, type GenTaskKind, type GenInput, type GenOutput, type GenerationPort, type GenerationResult } from "./generation.js";
 import { type CredentialStore, requireKeys } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";

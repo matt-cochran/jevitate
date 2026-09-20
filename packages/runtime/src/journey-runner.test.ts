@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { JourneyRunner, PolicyEnforcementError } from "./index.js";
-import { safeRunPolicy } from "@doit/domain";
+import { safeRunPolicy } from "@jevitate/domain";
 
 const journeyNoVars = {
   metadata: { id: "j", name: "j", promoted: true, params: [], createdAtIso: "x" },

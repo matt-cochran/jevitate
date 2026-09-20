@@ -1,6 +1,6 @@
-import type { Recording, RecordedStep, Step, StepTiming } from "@doit/recording";
-import { RecordingSchema } from "@doit/recording";
-import type { Actor } from "@doit/screenplay";
+import type { Recording, RecordedStep, Step, StepTiming } from "@jevitate/recording";
+import { RecordingSchema } from "@jevitate/recording";
+import type { Actor } from "@jevitate/screenplay";
 import type { InterpretResult } from "./interpret-result.js";
 import { runStep } from "./run-step.js";
 import type { RecordingSink } from "./sink.js";

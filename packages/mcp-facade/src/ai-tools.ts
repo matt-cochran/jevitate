@@ -3,7 +3,7 @@ import {
   type CredentialStore,
   type GenerationPort,
   type SetupRequiredResult,
-} from "@doit/ai-core";
+} from "@jevitate/ai-core";
 
 export interface AiGenerateTextArgs {
   fieldLabel: string;

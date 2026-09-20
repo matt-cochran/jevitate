@@ -1,4 +1,4 @@
-import { boundVariables, type Recording } from "@doit/recording";
+import { boundVariables, type Recording } from "@jevitate/recording";
 
 export interface ParamSchema { required: string[] }
 export class ParamValidationError extends Error {}

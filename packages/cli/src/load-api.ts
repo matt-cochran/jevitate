@@ -1,15 +1,15 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@doit/journey";
-import { safeRunPolicy, type RunPolicy } from "@doit/domain";
-import { PlaywrightBrowserPort, type BrowserPort } from "@doit/playwright";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import { RecordingInterpreter } from "@doit/interpreter";
-import { JourneyRunner } from "@doit/runtime";
-import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@doit/load";
+import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
+import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
+import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import { RecordingInterpreter } from "@jevitate/interpreter";
+import { JourneyRunner } from "@jevitate/runtime";
+import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitate/load";
 
-/** Distinct from `@doit/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
+/** Distinct from `@jevitate/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
 export class UnknownLoadJourneyError extends Error {}
 
 export interface RunJourneyLoadTestOptions {
@@ -20,7 +20,7 @@ export interface RunJourneyLoadTestOptions {
   iterationsPerActor: number;
   /**
    * Governs deterministic actor fan-out/scheduling only (see
-   * `@doit/load`'s `RunLoadTestConfig.seed` doc comment) — the real
+   * `@jevitate/load`'s `RunLoadTestConfig.seed` doc comment) — the real
    * `JourneyRunner` this function drives per pool member has no pacing
    * hook, so this `seed` does NOT (yet) produce human-speed pacing of the
    * real run the way `modeledCapacityReport`'s `seed` drives
@@ -42,7 +42,7 @@ export interface RunJourneyLoadTestOptions {
 /**
  * The programmatic surface behind `brauto load run` — resolves a published
  * Journey (unknown id -> `UnknownLoadJourneyError`), validates params UP
- * FRONT, then hands `@doit/load`'s `runLoadTest` a factory that opens ONE
+ * FRONT, then hands `@jevitate/load`'s `runLoadTest` a factory that opens ONE
  * real headless Playwright session + `JourneyRunner` per pool member. The
  * authorized-target check happens inside `runLoadTest` itself — this
  * function does not duplicate or bypass it.
@@ -52,7 +52,7 @@ export interface RunJourneyLoadTestOptions {
  * `deriveActorSeeds` inside `runLoadTest`) — it does not yet make the real
  * run human-paced, because `JourneyRunner` (constructed below) has no
  * pacing hook to seed. Only the offline `modeledCapacityReport` path is
- * genuinely human-paced today, via `@doit/domain`'s `simulateTiming()`.
+ * genuinely human-paced today, via `@jevitate/domain`'s `simulateTiming()`.
  */
 export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promise<CapacityReport> {
   const store = new FsJourneyStore(opts.dir);

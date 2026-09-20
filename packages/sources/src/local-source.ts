@@ -1,5 +1,5 @@
-import type { Journey } from "@doit/journey";
-import { JourneyRegistry } from "@doit/journey";
+import type { Journey } from "@jevitate/journey";
+import { JourneyRegistry } from "@jevitate/journey";
 import type { JourneySource, SourcedJourney, SourcedJourneyMetadata } from "./source.js";
 import { classifyRisk, collectNavigateOrigins } from "./risk.js";
 import { canonicalJourneyHash } from "./hash.js";

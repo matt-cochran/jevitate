@@ -1,6 +1,6 @@
 import type { z } from "zod";
-import type { Actor } from "@doit/screenplay";
-import type { RiskClass } from "@doit/domain";
+import type { Actor } from "@jevitate/screenplay";
+import type { RiskClass } from "@jevitate/domain";
 
 export interface ActionDefinition<I extends z.ZodType, O extends z.ZodType> {
   readonly id: string;

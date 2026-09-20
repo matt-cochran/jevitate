@@ -4,7 +4,7 @@ import { z } from "zod";
 
 /**
  * Rejects a `name` containing a path separator or `..` segment — mirrors
- * `@doit/journey`'s `assertSafeId` — since a source `name` is used to build
+ * `@jevitate/journey`'s `assertSafeId` — since a source `name` is used to build
  * filesystem paths under the managed sources dir (`~/.doit/sources/<name>/`)
  * and trust-store keys.
  */

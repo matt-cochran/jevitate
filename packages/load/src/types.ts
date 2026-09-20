@@ -1,4 +1,4 @@
-import type { JourneyRunResult } from "@doit/runtime";
+import type { JourneyRunResult } from "@jevitate/runtime";
 import type { LatencyPercentiles } from "./percentiles.js";
 
 /**

@@ -1,4 +1,4 @@
-import { simulateTiming, type InteractionPolicy, type PlannedStep } from "@doit/domain";
+import { simulateTiming, type InteractionPolicy, type PlannedStep } from "@jevitate/domain";
 import { assertAuthorizedTarget } from "./authorized-targets.js";
 import { deriveActorSeeds } from "./seeded-pool.js";
 import { computeLatencyPercentiles } from "./percentiles.js";
@@ -15,13 +15,13 @@ export interface RunModeledCapacityConfig {
 }
 
 /**
- * Offline estimate, reusing `@doit/domain`'s `simulateTiming()` — used when
+ * Offline estimate, reusing `@jevitate/domain`'s `simulateTiming()` — used when
  * a real browser/target is not available. ALWAYS returns
  * `provenance: "modeled"`; there is no code path here that returns
  * `"measured"`. See `runLoadTest` (measured-load-runner.ts) for the real
  * path — the two never call into each other.
  *
- * This is currently the ONLY genuinely human-paced path in `@doit/load`:
+ * This is currently the ONLY genuinely human-paced path in `@jevitate/load`:
  * `config.seed` drives both per-actor fan-out (`deriveActorSeeds`) AND
  * per-iteration `simulateTiming()` pacing. Contrast with `runLoadTest`,
  * whose `seed` governs fan-out/scheduling only — see that function's doc

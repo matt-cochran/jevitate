@@ -1,5 +1,5 @@
 {
-  "name": "@doit/playwright",
+  "name": "@jevitate/playwright",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",

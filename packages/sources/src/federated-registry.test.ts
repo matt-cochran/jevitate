@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FsJourneyStore, JourneyRegistry } from "@doit/journey";
+import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { LocalSource } from "./local-source.js";
 import { RemoteSource } from "./remote-source.js";
 import { FsTrustStore } from "./trust.js";

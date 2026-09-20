@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import { startServer } from "@doit/example-site";
-import { RecordingSchema, type Recording } from "@doit/recording";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import { startServer } from "@jevitate/example-site";
+import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "./interpreter.js";
 
 let site: { url: string; close(): Promise<void> };

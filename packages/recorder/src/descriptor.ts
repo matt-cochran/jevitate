@@ -1,5 +1,5 @@
 import type { ElementHandle, Locator, Page } from "playwright";
-import type { TargetDescriptor } from "@doit/recording";
+import type { TargetDescriptor } from "@jevitate/recording";
 
 /**
  * Node-side descriptor computation (RxD design §5c, "Descriptor computed
@@ -427,14 +427,14 @@ export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
 // === Validation ===
 
 /**
- * Resolves a descriptor to a `Locator` exactly the way `@doit/interpreter`'s
+ * Resolves a descriptor to a `Locator` exactly the way `@jevitate/interpreter`'s
  * `descriptorToTarget` will at replay time (same rung order, same Playwright
  * APIs), so a descriptor proven here is a descriptor that replays.
  *
  * This duplicates ~15 lines of the interpreter rather than importing it:
- * `@doit/recorder`'s intended dependencies are `@doit/recording`,
- * `@doit/playwright`, `@doit/screenplay` and `playwright`, and reaching into
- * `@doit/interpreter` would add an edge outside that graph — recorder and
+ * `@jevitate/recorder`'s intended dependencies are `@jevitate/recording`,
+ * `@jevitate/playwright`, `@jevitate/screenplay` and `playwright`, and reaching into
+ * `@jevitate/interpreter` would add an edge outside that graph — recorder and
  * interpreter are meant to meet only through the recording schema. The two
  * must be changed together; the ladder order is fixed by the design spec
  * (§4/§8), which is what actually keeps them in step.

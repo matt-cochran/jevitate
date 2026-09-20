@@ -1,9 +1,9 @@
 import { join } from "node:path";
-import type { BrowserPort } from "@doit/playwright";
-import type { ActionRegistry } from "@doit/site-sdk";
-import { CastActor, BrowseTheWeb, PaceInteractions, type Ability } from "@doit/screenplay";
-import { evaluateGate, resolveThrottle, seedFrom, makeRng, Pacer } from "@doit/domain";
-import type { SitePolicyRepository, BudgetRepository, ActivityRepository } from "@doit/application";
+import type { BrowserPort } from "@jevitate/playwright";
+import type { ActionRegistry } from "@jevitate/site-sdk";
+import { CastActor, BrowseTheWeb, PaceInteractions, type Ability } from "@jevitate/screenplay";
+import { evaluateGate, resolveThrottle, seedFrom, makeRng, Pacer } from "@jevitate/domain";
+import type { SitePolicyRepository, BudgetRepository, ActivityRepository } from "@jevitate/application";
 
 export interface RunRequest {
   site: string;

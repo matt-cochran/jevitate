@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Journey } from "@doit/journey";
+import type { Journey } from "@jevitate/journey";
 import type { GitSourceManager } from "./git.js";
 import { SharedJourneyFileSchema, type SharedJourneyFile } from "./manifest.js";
 import { collectNavigateOrigins } from "./risk.js";
@@ -30,7 +30,7 @@ export type GhPort = {
 };
 
 /** Rejects an `id` containing a path separator or `..` segment before it is
- * ever used to build a filesystem path — mirrors `@doit/journey`'s
+ * ever used to build a filesystem path — mirrors `@jevitate/journey`'s
  * `assertSafeId` and this package's own `FsTrustStore`/`GitSourceManager`/
  * `FsAckStore` guards. Applied to the RESOLVED id (covers both an explicit
  * `asId` and the `metadata.id` fallback), so a hostile

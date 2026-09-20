@@ -1,5 +1,5 @@
 import type { Kysely } from "kysely";
-import type { ActivityRepository } from "@doit/application";
+import type { ActivityRepository } from "@jevitate/application";
 import type { Database } from "./schema.js";
 
 export class SqliteActivityRepository implements ActivityRepository {

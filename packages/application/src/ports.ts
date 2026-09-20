@@ -1,4 +1,4 @@
-import type { CommandState, RiskClass, DomainEvent, DomainEventInput, NormalizedMessage, SitePolicy } from "@doit/domain";
+import type { CommandState, RiskClass, DomainEvent, DomainEventInput, NormalizedMessage, SitePolicy } from "@jevitate/domain";
 
 export interface Clock {
   nowIso(): string;

@@ -1,5 +1,5 @@
 import { sql, type Kysely, type Transaction } from "kysely";
-import type { BudgetLimits, BudgetRepository } from "@doit/application";
+import type { BudgetLimits, BudgetRepository } from "@jevitate/application";
 import type { Database } from "./schema.js";
 
 /** Sentinel error thrown inside the reserve transaction to trigger a full rollback

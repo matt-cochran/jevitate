@@ -2,11 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { BrowseTheWeb, CastActor } from "@doit/screenplay";
-import { startServer, SEED_THREADS } from "@doit/example-site";
-import { RecordingSchema, type RecordedStep, type Recording } from "@doit/recording";
-import { RecordingInterpreter } from "@doit/interpreter";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
+import { startServer, SEED_THREADS } from "@jevitate/example-site";
+import { RecordingSchema, type RecordedStep, type Recording } from "@jevitate/recording";
+import { RecordingInterpreter } from "@jevitate/interpreter";
 import { Recorder } from "./recorder.js";
 
 /**
@@ -16,7 +16,7 @@ import { Recorder } from "./recorder.js";
  * Nothing here is simulated. The fixture is the real `apps/example-site`
  * Fastify server; the journey is driven with ordinary Playwright locator calls,
  * so every step the recorder sees came from a genuine DOM event; and the replay
- * runs through `@doit/interpreter` exactly as production would.
+ * runs through `@jevitate/interpreter` exactly as production would.
  *
  * The fixture's login is username-only on purpose. A real password field would
  * be captured as a `handback` (its value is never read out of the page — see

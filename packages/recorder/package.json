@@ -1,19 +1,19 @@
 {
-  "name": "@doit/recorder",
+  "name": "@jevitate/recorder",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
-    "@doit/interpreter": "workspace:*",
-    "@doit/playwright": "workspace:*",
-    "@doit/recording": "workspace:*",
-    "@doit/screenplay": "workspace:*",
+    "@jevitate/interpreter": "workspace:*",
+    "@jevitate/playwright": "workspace:*",
+    "@jevitate/recording": "workspace:*",
+    "@jevitate/screenplay": "workspace:*",
     "playwright": "^1.49.0"
   },
   "devDependencies": {
-    "@doit/example-site": "workspace:*"
+    "@jevitate/example-site": "workspace:*"
   },
   "scripts": { "build": "tsc --build" }
 }

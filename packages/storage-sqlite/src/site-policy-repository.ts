@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
-import type { Clock, SitePolicyRepository } from "@doit/application";
-import { SitePolicySchema, type SitePolicy } from "@doit/domain";
+import type { Clock, SitePolicyRepository } from "@jevitate/application";
+import { SitePolicySchema, type SitePolicy } from "@jevitate/domain";
 import type { Database } from "./schema.js";
 
 const POLICY_KEY = "policy";

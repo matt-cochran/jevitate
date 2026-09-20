@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
-import type { TargetDescriptor } from "@doit/recording";
-import { Target } from "@doit/screenplay";
+import type { TargetDescriptor } from "@jevitate/recording";
+import { Target } from "@jevitate/screenplay";
 
 /**
  * Builds a Screenplay Target from a closed-schema TargetDescriptor, following

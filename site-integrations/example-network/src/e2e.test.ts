@@ -3,11 +3,11 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { ActionRunner } from "@doit/runtime";
-import { ActionRegistry, defineAction } from "@doit/site-sdk";
-import { openDatabase, migrateToLatest, SqliteIncomingMessageRepository } from "@doit/storage-sqlite";
-import { startServer } from "@doit/example-site";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { ActionRunner } from "@jevitate/runtime";
+import { ActionRegistry, defineAction } from "@jevitate/site-sdk";
+import { openDatabase, migrateToLatest, SqliteIncomingMessageRepository } from "@jevitate/storage-sqlite";
+import { startServer } from "@jevitate/example-site";
 import { EXAMPLE_NETWORK_ACTIONS } from "./actions.js";
 
 let site: { url: string; close(): Promise<void> };

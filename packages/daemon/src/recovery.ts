@@ -1,4 +1,4 @@
-import type { CommandRepository, EventLog } from "@doit/application";
+import type { CommandRepository, EventLog } from "@jevitate/application";
 
 export async function recoverOnStartup(
   repo: CommandRepository,

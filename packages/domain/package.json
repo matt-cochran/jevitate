@@ -1,5 +1,5 @@
 {
-  "name": "@doit/domain",
+  "name": "@jevitate/domain",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",

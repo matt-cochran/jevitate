@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { defineAction, ActionRegistry } from "@doit/site-sdk";
-import { BrowseTheWebToken, PaceInteractionsToken, tryAbility } from "@doit/screenplay";
-import type { SitePolicy } from "@doit/domain";
-import type { ActivityRepository, BudgetLimits, BudgetRepository, SitePolicyRepository } from "@doit/application";
-import { openDatabase, migrateToLatest, SqliteActivityRepository, SqliteBudgetRepository, SqliteSitePolicyRepository } from "@doit/storage-sqlite";
+import { defineAction, ActionRegistry } from "@jevitate/site-sdk";
+import { BrowseTheWebToken, PaceInteractionsToken, tryAbility } from "@jevitate/screenplay";
+import type { SitePolicy } from "@jevitate/domain";
+import type { ActivityRepository, BudgetLimits, BudgetRepository, SitePolicyRepository } from "@jevitate/application";
+import { openDatabase, migrateToLatest, SqliteActivityRepository, SqliteBudgetRepository, SqliteSitePolicyRepository } from "@jevitate/storage-sqlite";
 import { ActionRunner, PolicyEnforcementError } from "./runner.js";
 
 const NOW = "2026-09-17T12:00:00.000Z";

@@ -1,6 +1,6 @@
-import type { Assertion } from "@doit/recording";
-import type { Actor } from "@doit/screenplay";
-import { BrowseTheWebToken, CountOf, IsVisible, TextOf } from "@doit/screenplay";
+import type { Assertion } from "@jevitate/recording";
+import type { Actor } from "@jevitate/screenplay";
+import { BrowseTheWebToken, CountOf, IsVisible, TextOf } from "@jevitate/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
 
 /** Default bound for the bounded polling loop, in milliseconds. */

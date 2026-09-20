@@ -1,4 +1,4 @@
-import type { Recording, Step } from "@doit/recording";
+import type { Recording, Step } from "@jevitate/recording";
 import type { SharedJourneyFile } from "./manifest.js";
 
 export type RiskClass = "read-only" | "risky";

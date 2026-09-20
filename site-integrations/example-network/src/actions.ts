@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { defineAction } from "@doit/site-sdk";
-import { Navigate, Enter, Click } from "@doit/screenplay";
-import { NormalizedThreadSchema } from "@doit/domain";
+import { defineAction } from "@jevitate/site-sdk";
+import { Navigate, Enter, Click } from "@jevitate/screenplay";
+import { NormalizedThreadSchema } from "@jevitate/domain";
 import { AuthenticatedUser, InboxThreads, ThreadDetail } from "./questions.js";
 import { UsernameField, SignInButton } from "./targets.js";
 

@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
-import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@doit/recording";
-import type { Actor } from "@doit/screenplay";
-import { BrowseTheWebToken, Click, Enter, Navigate } from "@doit/screenplay";
+import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
+import type { Actor } from "@jevitate/screenplay";
+import { BrowseTheWebToken, Click, Enter, Navigate } from "@jevitate/screenplay";
 import { checkAssertion, pollUntil, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";

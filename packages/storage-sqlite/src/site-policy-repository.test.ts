@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { openDatabase } from "./db.js";
 import { migrateToLatest } from "./migrator.js";
 import { SqliteSitePolicyRepository } from "./site-policy-repository.js";
-import type { SitePolicy } from "@doit/domain";
+import type { SitePolicy } from "@jevitate/domain";
 
 const clock = { nowIso: () => "2026-09-17T12:00:00.000Z", monotonicMs: () => 0 };
 

@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import type { Assertion } from "@doit/recording";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
+import type { Assertion } from "@jevitate/recording";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { checkAssertion } from "./assertion.js";
 
 function fakeLocator(overrides: Partial<Record<string, any>> = {}) {

@@ -1,4 +1,4 @@
-import type { Assertion } from "@doit/recording";
+import type { Assertion } from "@jevitate/recording";
 
 /**
  * The result of running one step via `runStep`.

@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { FsJourneyStore, JourneyRegistry, type Journey } from "@doit/journey";
-import { LocalSource, FederatedJourneyRegistry, FsTrustStore } from "@doit/sources";
+import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
+import { LocalSource, FederatedJourneyRegistry, FsTrustStore } from "@jevitate/sources";
 import { findFederatedCapabilities } from "./index.js";
 
 function makeJourney(id: string, promoted: boolean): Journey {

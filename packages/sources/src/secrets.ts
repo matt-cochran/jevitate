@@ -1,4 +1,4 @@
-import type { Recording } from "@doit/recording";
+import type { Recording } from "@jevitate/recording";
 import { flattenSteps } from "./risk.js";
 
 /**

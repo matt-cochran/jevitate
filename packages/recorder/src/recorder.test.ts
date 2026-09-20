@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { RecordingSchema, type RecordedStep, type Step } from "@doit/recording";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { RecordingSchema, type RecordedStep, type Step } from "@jevitate/recording";
 import { Recorder, type ActionCaptureEvent, type CaptureEvent } from "./recorder.js";
 
 const port = new PlaywrightBrowserPort();

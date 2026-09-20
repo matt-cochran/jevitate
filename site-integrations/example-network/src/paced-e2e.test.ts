@@ -2,18 +2,18 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { ActionRunner } from "@doit/runtime";
-import { ActionRegistry } from "@doit/site-sdk";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { ActionRunner } from "@jevitate/runtime";
+import { ActionRegistry } from "@jevitate/site-sdk";
 import {
   openDatabase,
   migrateToLatest,
   SqliteSitePolicyRepository,
   SqliteBudgetRepository,
   SqliteActivityRepository,
-} from "@doit/storage-sqlite";
-import { startServer } from "@doit/example-site";
-import { makeRng, seedFrom, Pacer, type SitePolicy, type TypingModel } from "@doit/domain";
+} from "@jevitate/storage-sqlite";
+import { startServer } from "@jevitate/example-site";
+import { makeRng, seedFrom, Pacer, type SitePolicy, type TypingModel } from "@jevitate/domain";
 import { EXAMPLE_NETWORK_ACTIONS } from "./actions.js";
 
 let site: { url: string; close(): Promise<void> };

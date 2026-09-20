@@ -1,6 +1,6 @@
 import { Writable } from "node:stream";
 import { expect, test } from "vitest";
-import { ProfileManager } from "@doit/daemon";
+import { ProfileManager } from "@jevitate/daemon";
 import type { CliDeps } from "./program.js";
 import { buildProgram } from "./program.js";
 import { createMutableEcho } from "./ai-cli.js";

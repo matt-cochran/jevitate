@@ -6,8 +6,8 @@ import { JourneySchema } from "./journey.js";
 /**
  * Structural shape `JourneyRegistry` needs from its backing store.
  * `FsJourneyStore` already satisfies this; exported so other packages
- * (e.g. `@doit/sources`, federating external Journey sources) can hand a
- * `JourneyRegistry` a different backing store without `@doit/journey`
+ * (e.g. `@jevitate/sources`, federating external Journey sources) can hand a
+ * `JourneyRegistry` a different backing store without `@jevitate/journey`
  * importing anything from them (dependency direction stays inward).
  */
 export interface JourneyStore {
@@ -37,8 +37,8 @@ function isNodeError(err: unknown, code: string): boolean {
 }
 
 /**
- * Filesystem-backed Journey store. Keeps `@doit/journey` a leaf package
- * (Node's built-in `fs`/`path` plus `@doit/recording` only, no new
+ * Filesystem-backed Journey store. Keeps `@jevitate/journey` a leaf package
+ * (Node's built-in `fs`/`path` plus `@jevitate/recording` only, no new
  * dependency). JSON files are keyed by `metadata.id`.
  */
 export class FsJourneyStore {

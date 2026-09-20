@@ -173,11 +173,11 @@ describe("applyDiff", () => {
   });
 
   // The replay-level proof (interpreting `applyDiff`'s output with a fake
-  // Actor via `@doit/interpreter`) now lives in
+  // Actor via `@jevitate/interpreter`) now lives in
   // `packages/interpreter/src/applyDiff-replay.test.ts` — it was moved out
-  // of this package to avoid a `@doit/recording` (dev) -> `@doit/interpreter`
-  // -> `@doit/recording` workspace dependency cycle (`@doit/recording` is
-  // meant to be a runtime leaf package; `@doit/interpreter` already depends
-  // on `@doit/recording` at runtime, so the test fits naturally there
+  // of this package to avoid a `@jevitate/recording` (dev) -> `@jevitate/interpreter`
+  // -> `@jevitate/recording` workspace dependency cycle (`@jevitate/recording` is
+  // meant to be a runtime leaf package; `@jevitate/interpreter` already depends
+  // on `@jevitate/recording` at runtime, so the test fits naturally there
   // instead).
 });

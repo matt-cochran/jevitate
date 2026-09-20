@@ -1,17 +1,17 @@
 {
-  "name": "@doit/mcp-facade",
+  "name": "@jevitate/mcp-facade",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
-    "@doit/ai-core": "workspace:*",
-    "@doit/application": "workspace:*",
-    "@doit/domain": "workspace:*",
-    "@doit/journey": "workspace:*",
-    "@doit/runtime": "workspace:*",
-    "@doit/sources": "workspace:*",
+    "@jevitate/ai-core": "workspace:*",
+    "@jevitate/application": "workspace:*",
+    "@jevitate/domain": "workspace:*",
+    "@jevitate/journey": "workspace:*",
+    "@jevitate/runtime": "workspace:*",
+    "@jevitate/sources": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "scripts": { "build": "tsc --build" }

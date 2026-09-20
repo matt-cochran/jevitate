@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import type { TargetDescriptor } from "@doit/recording";
+import type { TargetDescriptor } from "@jevitate/recording";
 import { descriptorToTarget } from "./descriptor.js";
 
 function fakePage() {

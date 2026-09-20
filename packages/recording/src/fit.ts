@@ -1,4 +1,4 @@
-import type { InteractionPolicy } from "@doit/domain";
+import type { InteractionPolicy } from "@jevitate/domain";
 import type { Recording, RecordedStep, ValueOrVar } from "./schema.js";
 
 /**
@@ -6,11 +6,11 @@ import type { Recording, RecordedStep, ValueOrVar } from "./schema.js";
  * `Recording`'s captured `StepTiming`s, so a later replay can pace itself
  * like the human demonstrator did.
  *
- * `@doit/domain` is imported `import type` ONLY, never at runtime — see
+ * `@jevitate/domain` is imported `import type` ONLY, never at runtime — see
  * `packages/recording/package.json` (a `devDependency`, not a runtime
  * `dependency`) and `packages/recording/tsconfig.json` (a project
  * `references` entry so `tsc --build` can resolve the type). This keeps
- * `@doit/recording` a runtime leaf package (no playwright/domain at
+ * `@jevitate/recording` a runtime leaf package (no playwright/domain at
  * runtime); the type import is fully erased at build.
  *
  * Pure and deterministic: no clock, no randomness, no I/O. Every number in

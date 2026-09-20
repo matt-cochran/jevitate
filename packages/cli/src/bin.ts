@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { ProfileManager } from "@doit/daemon";
+import { ProfileManager } from "@jevitate/daemon";
 import { buildProgram } from "./program.js";
 
 const profiles = new ProfileManager(join(homedir(), ".doit", "profiles"));

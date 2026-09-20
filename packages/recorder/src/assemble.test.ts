@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { RecordingSchema } from "@doit/recording";
+import { RecordingSchema } from "@jevitate/recording";
 import { assembleRecording, pathOf } from "./assemble.js";
 import type { CaptureEvent, DescriptorResolution, DomEventKind } from "./recorder.js";
 

@@ -1,5 +1,5 @@
-import type { InteractionPolicy } from "@doit/domain";
-import { Pacer } from "@doit/domain";
+import type { InteractionPolicy } from "@jevitate/domain";
+import { Pacer } from "@jevitate/domain";
 import type { Ability, AbilityToken } from "./core.js";
 
 export class PaceInteractions implements Ability {

@@ -1,4 +1,4 @@
-import type { JourneyMetadata } from "@doit/journey";
+import type { JourneyMetadata } from "@jevitate/journey";
 import type { SharedJourneyFile } from "./manifest.js";
 import type { RiskClass } from "./risk.js";
 

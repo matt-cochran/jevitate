@@ -7,7 +7,7 @@ import {
   type Step,
   type StepTiming,
   type TargetDescriptor,
-} from "@doit/recording";
+} from "@jevitate/recording";
 import type {
   ActionCaptureEvent,
   CaptureEvent,

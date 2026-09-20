@@ -19,7 +19,7 @@ export const execGit: GitExec = async (args, opts) => {
 };
 
 /** Rejects a source `name` containing a path separator or `..` segment —
- * mirrors `@doit/journey`'s `assertSafeId` / the lockfile's name guard —
+ * mirrors `@jevitate/journey`'s `assertSafeId` / the lockfile's name guard —
  * since `name` is used to build a filesystem path under the managed
  * sources dir. */
 function assertSafeName(name: string): void {

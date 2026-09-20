@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
-import type { EventLog } from "@doit/application";
-import type { DomainEvent, DomainEventInput } from "@doit/domain";
+import type { EventLog } from "@jevitate/application";
+import type { DomainEvent, DomainEventInput } from "@jevitate/domain";
 import type { Database } from "./schema.js";
 
 export class SqliteEventLog implements EventLog {

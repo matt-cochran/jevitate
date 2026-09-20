@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import { safeRunPolicy } from "@doit/domain";
-import { StubSecretManager, SecretOriginMismatchError, SecretUnresolvableError, Secret } from "@doit/secrets";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import { safeRunPolicy } from "@jevitate/domain";
+import { StubSecretManager, SecretOriginMismatchError, SecretUnresolvableError, Secret } from "@jevitate/secrets";
 import { JourneyRunner, PolicyEnforcementError } from "./index.js";
 
 /**

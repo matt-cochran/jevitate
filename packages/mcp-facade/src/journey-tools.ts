@@ -1,7 +1,7 @@
-import type { JourneyRegistry } from "@doit/journey";
-import type { JourneyRunner, JourneyRunResult } from "@doit/runtime";
-import type { RunPolicy } from "@doit/domain";
-import type { FederatedJourneyRegistry } from "@doit/sources";
+import type { JourneyRegistry } from "@jevitate/journey";
+import type { JourneyRunner, JourneyRunResult } from "@jevitate/runtime";
+import type { RunPolicy } from "@jevitate/domain";
+import type { FederatedJourneyRegistry } from "@jevitate/sources";
 
 export interface Capability {
   id: string;

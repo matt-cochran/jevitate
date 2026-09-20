@@ -1,11 +1,11 @@
-import type { Recording, RecordedStep } from "@doit/recording";
-import { RecordingSchema } from "@doit/recording";
+import type { Recording, RecordedStep } from "@jevitate/recording";
+import { RecordingSchema } from "@jevitate/recording";
 
 /**
  * "Always-on recording" (design spec §5b): a `RecordingSink` receives one
  * `RecordedStep` per top-level step the interpreter actually executed, so an
  * automated `RecordingInterpreter.run` can emit a `Recording` describing what
- * it did, in the same shape as a human-authored/`@doit/recorder`-captured
+ * it did, in the same shape as a human-authored/`@jevitate/recorder`-captured
  * one — an apples-to-apples diagnostic artifact.
  *
  * Deliberately ONE method, no page-boundary parameter (per the controller

@@ -3,8 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JourneyRunner, PolicyEnforcementError } from "./index.js";
-import { ParamValidationError, JourneyRegistry, FsJourneyStore } from "@doit/journey";
-import { safeRunPolicy } from "@doit/domain";
+import { ParamValidationError, JourneyRegistry, FsJourneyStore } from "@jevitate/journey";
+import { safeRunPolicy } from "@jevitate/domain";
 
 /**
  * Slice 1 §9a — invariant refusal contract.
@@ -55,7 +55,7 @@ describe("Slice 1 §9a — invariant refusal contract", () => {
     // NOTE (RULING 6): #6 governs the AGENT-FACING MCP surface, not the local
     // CLI `journey run` (intentionally not promoted-only — the CLI is the
     // authoring surface). `findCapabilities`/`listNamedJourneyTools`/
-    // `runJourney` in @doit/mcp-facade all delegate to `JourneyRegistry.find`
+    // `runJourney` in @jevitate/mcp-facade all delegate to `JourneyRegistry.find`
     // (or `reg.get` + a promoted check) for this filtering — see
     // packages/mcp-facade/src/journey-tools.ts.
     const dir = mkdtempSync(join(tmpdir(), "slice1-invariants-"));

@@ -1,5 +1,5 @@
 {
-  "name": "@doit/journey",
+  "name": "@jevitate/journey",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
-    "@doit/recording": "workspace:*",
+    "@jevitate/recording": "workspace:*",
     "zod": "^4.6.5"
   }
 }

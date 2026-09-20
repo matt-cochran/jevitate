@@ -4,9 +4,9 @@
  * anything else) may hold at rest for a secret (§9a invariant #2: "a
  * Journey/Recording may hold only a manager reference, never a value").
  *
- * Structurally identical to `@doit/journey`'s `SecretRef`
+ * Structurally identical to `@jevitate/journey`'s `SecretRef`
  * (packages/journey/src/journey.ts) — deliberately duplicated, not
- * imported, so `@doit/secrets` stays a dependency-free leaf package.
+ * imported, so `@jevitate/secrets` stays a dependency-free leaf package.
  * TypeScript's structural typing makes the two interchangeable at call
  * sites with zero casting.
  */

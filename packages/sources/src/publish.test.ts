@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Journey } from "@doit/journey";
+import type { Journey } from "@jevitate/journey";
 import { GitSourceManager, type GitExec } from "./git.js";
 import { validateForPublish, publishJourney, type GhPort } from "./publish.js";
 import { EmbeddedSecretError, UndeclaredOriginError } from "./errors.js";

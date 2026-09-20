@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { modeledCapacityReport } from "./modeled-capacity.js";
 import { UnauthorizedLoadTargetError } from "./authorized-targets.js";
 import { LoadHarnessSetupError } from "./types.js";
-import type { InteractionPolicy, PlannedStep } from "@doit/domain";
+import type { InteractionPolicy, PlannedStep } from "@jevitate/domain";
 
 const policy: InteractionPolicy = {
   typing: { charsPerSecond: 5, perKeyJitter: 0.1 },

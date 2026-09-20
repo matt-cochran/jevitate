@@ -1,8 +1,8 @@
-import { makeRng } from "@doit/domain";
+import { makeRng } from "@jevitate/domain";
 
 /**
  * Derives `count` reproducible sub-seeds from one master seed, using
- * `@doit/domain`'s `makeRng` as the single deterministic RNG stream. Same
+ * `@jevitate/domain`'s `makeRng` as the single deterministic RNG stream. Same
  * `masterSeed` + `count` always yields the same seed list — this is what
  * makes a load-test run replayable end to end (the master seed is the only
  * thing a caller needs to record).

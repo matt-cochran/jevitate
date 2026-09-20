@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import type { Recording, Step, AuthoringRecording } from "@doit/recording";
-import { diffTakes, applyDiff, boundVariables, AuthoringTakeSchema } from "@doit/recording";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import type { Recording, Step, AuthoringRecording } from "@jevitate/recording";
+import { diffTakes, applyDiff, boundVariables, AuthoringTakeSchema } from "@jevitate/recording";
 import { RecordingInterpreter } from "./interpreter.js";
 
 // === Fixture helpers ===
@@ -9,7 +9,7 @@ import { RecordingInterpreter } from "./interpreter.js";
 // This file's fixtures are structurally identical to
 // `packages/recording/src/diff.test.ts`'s own `fillStep`/`authoringRecording`
 // helpers, duplicated here (rather than shared) because this test moved OUT
-// of `@doit/recording` specifically to avoid depending on it beyond its
+// of `@jevitate/recording` specifically to avoid depending on it beyond its
 // normal runtime dependency — see the doc comment this replaced in
 // `diff.test.ts`.
 
@@ -26,8 +26,8 @@ function fillStep(testId: string, value: string): Step {
  * Builds an AuthoringRecording (`{recording, values}`) from a flat list of
  * steps (single page), auto-populating `values` for fill/select steps from
  * their captured (non-redacted) `value`, keyed `"page:stepInPage"` per
- * `@doit/recording`'s convention (single page here, so always `"0:${i}"`).
- * Validated against `@doit/recording`'s `AuthoringTakeSchema` — the ONE
+ * `@jevitate/recording`'s convention (single page here, so always `"0:${i}"`).
+ * Validated against `@jevitate/recording`'s `AuthoringTakeSchema` — the ONE
  * canonical take-file shape — before being converted to the `Map` form
  * `diffTakes` wants.
  */

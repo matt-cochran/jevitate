@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { CastActor } from "@doit/screenplay";
-import { BrowseTheWeb } from "@doit/screenplay";
+import { CastActor } from "@jevitate/screenplay";
+import { BrowseTheWeb } from "@jevitate/screenplay";
 import { AuthenticatedUser } from "./questions.js";
 
 function actorWithPage(page: any) {

@@ -1,10 +1,10 @@
 {
-  "name": "@doit/application",
+  "name": "@jevitate/application",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "dependencies": { "@doit/domain": "workspace:*" },
+  "dependencies": { "@jevitate/domain": "workspace:*" },
   "scripts": { "build": "tsc --build" }
 }

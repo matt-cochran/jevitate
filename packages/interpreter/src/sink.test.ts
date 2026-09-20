@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
-import type { PageSegment, Recording, RecordedStep } from "@doit/recording";
-import { RecordingSchema } from "@doit/recording";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
+import type { PageSegment, Recording, RecordedStep } from "@jevitate/recording";
+import { RecordingSchema } from "@jevitate/recording";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "./interpreter.js";
 import { BufferingSink } from "./sink.js";
 

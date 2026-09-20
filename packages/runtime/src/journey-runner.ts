@@ -1,14 +1,14 @@
-import type { Actor } from "@doit/screenplay";
-import { BrowseTheWebToken, EnterSecret } from "@doit/screenplay";
-import type { RunPolicy } from "@doit/domain";
-import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@doit/journey";
-import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@doit/interpreter";
+import type { Actor } from "@jevitate/screenplay";
+import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
+import type { RunPolicy } from "@jevitate/domain";
+import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
+import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@jevitate/interpreter";
 import {
   SecretOriginMismatchError,
   SecretAmbiguousBindingError,
   assertOriginBound,
   type SecretManagerPort,
-} from "@doit/secrets";
+} from "@jevitate/secrets";
 import { PolicyEnforcementError } from "./runner.js";
 
 /**
@@ -35,7 +35,7 @@ export interface JourneyRunRequest {
 /**
  * Invariant #1: a `JourneyRunner` must never run with an absent or partial
  * `RunPolicy`. There is no permissive default here — `safeRunPolicy()` exists
- * in `@doit/domain` for callers who want a safe default, but this guard does
+ * in `@jevitate/domain` for callers who want a safe default, but this guard does
  * not reach for it itself; it only ever accepts or rejects what the caller
  * supplied.
  */
@@ -219,7 +219,7 @@ export class JourneyRunner {
     // EnterSecret (not Enter.theText): Enter.theText's description
     // interpolates the raw value, which would leak the secret's plaintext
     // into an Activity.description; EnterSecret's description is always
-    // redacted (see @doit/screenplay's interactions.ts).
+    // redacted (see @jevitate/screenplay's interactions.ts).
     await EnterSecret.theSecret(secret).into(target).performAs(this.actor);
     return undefined;
   }

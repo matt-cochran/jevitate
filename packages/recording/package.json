@@ -1,5 +1,5 @@
 {
-  "name": "@doit/recording",
+  "name": "@jevitate/recording",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@doit/domain": "workspace:*"
+    "@jevitate/domain": "workspace:*"
   }
 }

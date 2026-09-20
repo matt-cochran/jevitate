@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FsJourneyStore, JourneyRegistry } from "@doit/journey";
+import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { LocalSource } from "./local-source.js";
 
 const rec = (steps: any[] = []) => ({

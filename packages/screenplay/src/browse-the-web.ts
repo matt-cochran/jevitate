@@ -1,4 +1,4 @@
-import type { BrowserSession } from "@doit/playwright";
+import type { BrowserSession } from "@jevitate/playwright";
 import type { Ability, AbilityToken } from "./core.js";
 
 export class BrowseTheWeb implements Ability {

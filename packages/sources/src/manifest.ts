@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { JourneySchema, type Journey } from "@doit/journey";
+import { JourneySchema, type Journey } from "@jevitate/journey";
 import { SourceValidationError } from "./errors.js";
 
 export interface SiteDeclaration {

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { CastActor, MissingAbilityError, PaceInteractions, type Ability, type AbilityToken, type Activity } from "./index.js";
-import { Pacer } from "@doit/domain";
-import type { InteractionPolicy } from "@doit/domain";
+import { Pacer } from "@jevitate/domain";
+import type { InteractionPolicy } from "@jevitate/domain";
 
 class Counter implements Ability { readonly kind = "counter"; n = 0; }
 const CounterToken: AbilityToken<Counter> = { kind: "counter" };

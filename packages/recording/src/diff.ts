@@ -9,11 +9,11 @@ import { promoteToVariable } from "./promote.js";
 import type { StepRef } from "./promote.js";
 
 /**
- * Structurally identical to `@doit/recorder`'s `AuthoringRecording` —
- * declared locally (not imported) because `@doit/recorder` depends on
- * `@doit/recording`, and importing the other way would create a circular
+ * Structurally identical to `@jevitate/recorder`'s `AuthoringRecording` —
+ * declared locally (not imported) because `@jevitate/recorder` depends on
+ * `@jevitate/recording`, and importing the other way would create a circular
  * package/project-reference cycle. TypeScript's structural typing makes a
- * real `@doit/recorder` `AuthoringRecording` value assignable here with
+ * real `@jevitate/recorder` `AuthoringRecording` value assignable here with
  * zero adapter code.
  */
 export interface AuthoringRecording {
@@ -155,7 +155,7 @@ interface DiffFillColumn {
  * A column this function classifies as `"constant"` (or leaves untouched
  * for any other non-promoted reason — noise, ambiguous, low-confidence
  * variable) is left completely untouched on `base`, so its step stays
- * `{redacted:true}` in the returned `Recording`. `@doit/interpreter`'s
+ * `{redacted:true}` in the returned `Recording`. `@jevitate/interpreter`'s
  * `run-step.ts` throws `"cannot fill with a redacted constant value"` when
  * it hits such a step during replay — so this function's output is only
  * genuinely independently replayable when EVERY fill/select column in

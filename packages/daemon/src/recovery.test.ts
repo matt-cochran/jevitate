@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { openDatabase, migrateToLatest, SqliteCommandRepository, SqliteEventLog } from "@doit/storage-sqlite";
+import { openDatabase, migrateToLatest, SqliteCommandRepository, SqliteEventLog } from "@jevitate/storage-sqlite";
 import { recoverOnStartup } from "./recovery.js";
 
 const past = { nowIso: () => "2000-01-01T00:00:00Z", monotonicMs: () => 0 };

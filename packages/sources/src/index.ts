@@ -1,4 +1,4 @@
-export const PACKAGE_NAME = "@doit/sources";
+export const PACKAGE_NAME = "@jevitate/sources";
 export * from "./errors.js";
 export * from "./manifest.js";
 export * from "./risk.js";

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Journey } from "@doit/journey";
+import type { Journey } from "@jevitate/journey";
 import type { JourneySource, SourcedJourney, SourcedJourneyMetadata } from "./source.js";
 import type { JevitateManifest } from "./manifest.js";
 import { RemoteSource } from "./remote-source.js";

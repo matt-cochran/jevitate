@@ -1,4 +1,4 @@
-import { Target } from "@doit/screenplay";
+import { Target } from "@jevitate/screenplay";
 
 export const UsernameField = Target.named("username field").locatedBy((p) => p.getByLabel("Username"));
 export const SignInButton = Target.named("sign in button").locatedBy((p) => p.getByRole("button", { name: "Sign in" }));

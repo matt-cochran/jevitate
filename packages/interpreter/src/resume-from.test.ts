@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import type { PageSegment, Recording, RecordedStep } from "@doit/recording";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
+import type { PageSegment, Recording, RecordedStep } from "@jevitate/recording";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "./interpreter.js";
 
 // === fakes, mirroring interpreter.test.ts's pattern ===

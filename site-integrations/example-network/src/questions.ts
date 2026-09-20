@@ -1,6 +1,6 @@
-import type { Question } from "@doit/screenplay";
-import { BrowseTheWebToken } from "@doit/screenplay";
-import type { NormalizedMessage, NormalizedThread } from "@doit/domain";
+import type { Question } from "@jevitate/screenplay";
+import { BrowseTheWebToken } from "@jevitate/screenplay";
+import type { NormalizedMessage, NormalizedThread } from "@jevitate/domain";
 
 export const AuthenticatedUser: Question<{ authenticated: boolean; account: string | null }> = {
   description: "authenticated user",

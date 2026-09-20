@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { FsJourneyStore, JourneyRegistry, type Journey } from "@doit/journey";
+import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import { listNamedJourneyTools } from "./index.js";
 
 function makeJourney(id: string, promoted: boolean, params: string[] = ["qty"]): Journey {

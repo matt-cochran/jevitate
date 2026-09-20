@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import type { Kysely } from "kysely";
-import type { Clock, IncomingMessageRecord, IncomingMessageRepository } from "@doit/application";
-import type { NormalizedMessage } from "@doit/domain";
+import type { Clock, IncomingMessageRecord, IncomingMessageRepository } from "@jevitate/application";
+import type { NormalizedMessage } from "@jevitate/domain";
 import type { Database, IncomingMessageTable } from "./schema.js";
 
 function toRecord(row: IncomingMessageTable): IncomingMessageRecord {

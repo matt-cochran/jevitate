@@ -16,7 +16,7 @@ const FORBIDDEN: RegExp[] = [
 ];
 
 describe("Hard Floor #6 — nothing stored at rest", () => {
-  it("no @doit/secrets source file touches the filesystem or a database (thin delegation only, per-call fetch)", () => {
+  it("no @jevitate/secrets source file touches the filesystem or a database (thin delegation only, per-call fetch)", () => {
     const files = readdirSync(srcDir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
     expect(files.length).toBeGreaterThan(0); // guard against an empty/misconfigured glob silently "passing"
     for (const file of files) {

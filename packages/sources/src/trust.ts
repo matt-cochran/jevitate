@@ -22,7 +22,7 @@ export interface TrustStore {
 export const DEFAULT_TRUST_DIR = join(homedir(), ".doit", "trust");
 
 /** Rejects a `sourceId`/`journeyId` containing a path separator or `..`
- * segment — mirrors `@doit/journey`'s `assertSafeId` — since both are used
+ * segment — mirrors `@jevitate/journey`'s `assertSafeId` — since both are used
  * to build the on-disk key filename. */
 function assertSafeId(id: string, label: string): void {
   if (id.includes("/") || id.includes("\\") || id.includes("..") || id.length === 0) {

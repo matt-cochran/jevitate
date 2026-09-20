@@ -2,11 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { BrowseTheWeb, CastActor } from "@doit/screenplay";
-import { startServer, SEED_THREADS } from "@doit/example-site";
-import { RecordingSchema, type Recording } from "@doit/recording";
-import { RecordingInterpreter } from "@doit/interpreter";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
+import { startServer, SEED_THREADS } from "@jevitate/example-site";
+import { RecordingSchema, type Recording } from "@jevitate/recording";
+import { RecordingInterpreter } from "@jevitate/interpreter";
 import { recordPatch } from "./patch.js";
 
 /**

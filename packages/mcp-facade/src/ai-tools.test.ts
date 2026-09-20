@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { envCredentialStore, FakeGenerationGateway } from "@doit/ai-core";
+import { envCredentialStore, FakeGenerationGateway } from "@jevitate/ai-core";
 import { aiGenerateText } from "./index.js";
 
 const input = { fieldLabel: "email", goal: "log in", visibleContext: "form" };

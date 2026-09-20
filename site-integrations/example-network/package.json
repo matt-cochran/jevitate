@@ -1,18 +1,18 @@
 {
-  "name": "@doit/site-example-network",
+  "name": "@jevitate/site-example-network",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "dependencies": { "@doit/domain": "workspace:*", "@doit/screenplay": "workspace:*", "@doit/site-sdk": "workspace:*", "zod": "^4.6.5" },
+  "dependencies": { "@jevitate/domain": "workspace:*", "@jevitate/screenplay": "workspace:*", "@jevitate/site-sdk": "workspace:*", "zod": "^4.6.5" },
   "devDependencies": {
-    "@doit/application": "workspace:*",
-    "@doit/example-site": "workspace:*",
-    "@doit/playwright": "workspace:*",
-    "@doit/runtime": "workspace:*",
-    "@doit/storage-sqlite": "workspace:*"
+    "@jevitate/application": "workspace:*",
+    "@jevitate/example-site": "workspace:*",
+    "@jevitate/playwright": "workspace:*",
+    "@jevitate/runtime": "workspace:*",
+    "@jevitate/storage-sqlite": "workspace:*"
   },
   "scripts": { "build": "tsc --build" }
 }

@@ -3,9 +3,9 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
-import type { ProfileManager } from "@doit/daemon";
-import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } from "@doit/domain";
-import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@doit/storage-sqlite";
+import type { ProfileManager } from "@jevitate/daemon";
+import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } from "@jevitate/domain";
+import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@jevitate/storage-sqlite";
 import {
   RecordingSchema,
   AuthoringTakeSchema,
@@ -19,8 +19,8 @@ import {
   type AuthoringRecording,
   type ColumnClass,
   type PostdocDecision,
-} from "@doit/recording";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@doit/journey";
+} from "@jevitate/recording";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
@@ -30,7 +30,7 @@ export interface CliDeps {
   profiles: ProfileManager;
   dbPath?: string;
   journeysDir?: string;
-  /** Optional, additive: `@doit/ai-core` wiring (see ai-cli.ts). Omitted in
+  /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
    *  production means real env + the deterministic fake generation gateway. */
   ai?: AiCliDeps;
 }
@@ -466,9 +466,9 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  // RULING 5: uses `JourneyRegistry.find` (from `@doit/journey`) directly —
-  // NEVER `@doit/mcp-facade`'s `findCapabilities` — Slice 1 forbids the CLI
-  // depending on `@doit/mcp-facade`. `JourneyRegistry.find` is already
+  // RULING 5: uses `JourneyRegistry.find` (from `@jevitate/journey`) directly —
+  // NEVER `@jevitate/mcp-facade`'s `findCapabilities` — Slice 1 forbids the CLI
+  // depending on `@jevitate/mcp-facade`. `JourneyRegistry.find` is already
   // promoted-only, so this is the same promoted-only view without the
   // forbidden dependency.
   journey

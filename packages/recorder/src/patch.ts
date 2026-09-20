@@ -1,7 +1,7 @@
-import type { BrowserSession } from "@doit/playwright";
-import { spliceRecording, type Recording, type SpliceAt } from "@doit/recording";
-import { RecordingInterpreter } from "@doit/interpreter";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
+import type { BrowserSession } from "@jevitate/playwright";
+import { spliceRecording, type Recording, type SpliceAt } from "@jevitate/recording";
+import { RecordingInterpreter } from "@jevitate/interpreter";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { Recorder } from "./recorder.js";
 
 /**
@@ -11,7 +11,7 @@ import { Recorder } from "./recorder.js";
  *
  *  1. `RecordingInterpreter.runToCheckpoint` drives `browser` through `base`
  *     up to (and including) `checkpoint` — a flat, 0-based step index, in the
- *     same order `@doit/interpreter`'s internal `flatten()` concatenates
+ *     same order `@jevitate/interpreter`'s internal `flatten()` concatenates
  *     `base.pages[*].steps` in.
  *  2. The `Recorder` is *armed* (`install()`) before that drive begins, so
  *     its `page.addInitScript` listener is already present in whatever
@@ -104,7 +104,7 @@ export async function recordPatch(opts: RecordPatchOptions): Promise<Recording> 
  * segment lands following it rather than before it (the checkpoint step has
  * already run by the time the segment is captured).
  *
- * Walks `base.pages` in exactly the order `@doit/interpreter`'s internal
+ * Walks `base.pages` in exactly the order `@jevitate/interpreter`'s internal
  * `flatten(rec)` (`rec.pages.flatMap(p => p.steps)`) concatenates them —
  * this must never diverge from that function, or the splice lands at the
  * wrong step.

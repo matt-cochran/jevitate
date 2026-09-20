@@ -1,15 +1,15 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@doit/journey";
-import { safeRunPolicy, type RunPolicy } from "@doit/domain";
-import { PlaywrightBrowserPort } from "@doit/playwright";
-import { CastActor, BrowseTheWeb } from "@doit/screenplay";
-import { RecordingInterpreter } from "@doit/interpreter";
-import { JourneyRunner, type JourneyRunResult } from "@doit/runtime";
+import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
+import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import { RecordingInterpreter } from "@jevitate/interpreter";
+import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
 
 /**
- * Distinct from `@doit/journey`'s `ParamValidationError` so CLI/API callers
+ * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
  * can tell "no such journey" apart from "params didn't match the journey's
  * schema" without string-matching error messages.
  */
@@ -30,7 +30,7 @@ export interface RunJourneyProgrammaticallyOptions {
  * the real `FsJourneyStore` + `JourneyRegistry`, resolves the journey
  * (unknown id -> `UnknownJourneyError`), validates params UP FRONT with
  * `deriveParamSchema`/`validateParams` (unknown/missing param ->
- * `ParamValidationError`, from `@doit/journey`) BEFORE any browser is
+ * `ParamValidationError`, from `@jevitate/journey`) BEFORE any browser is
  * launched, then builds the real Actor + `JourneyRunner` and runs.
  */
 export async function runJourneyProgrammatically(

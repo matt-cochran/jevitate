@@ -2,10 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FsJourneyStore, JourneyRegistry } from "@doit/journey";
-import { UnauthorizedLoadTargetError } from "@doit/load";
-import type { BrowserPort, BrowserSession } from "@doit/playwright";
-import type { RunPolicy } from "@doit/domain";
+import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
+import { UnauthorizedLoadTargetError } from "@jevitate/load";
+import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+import type { RunPolicy } from "@jevitate/domain";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 
 async function seedJourney(dir: string, site = "https://example.com") {

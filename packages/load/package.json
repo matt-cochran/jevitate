@@ -1,5 +1,5 @@
 {
-  "name": "@doit/load",
+  "name": "@jevitate/load",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -8,8 +8,8 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@doit/domain": "workspace:*",
-    "@doit/runtime": "workspace:*"
+    "@jevitate/domain": "workspace:*",
+    "@jevitate/runtime": "workspace:*"
   },
   "scripts": { "build": "tsc --build" }
 }

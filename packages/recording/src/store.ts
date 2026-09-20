@@ -51,11 +51,11 @@ function isNodeError(err: unknown, code: string): boolean {
 }
 
 /**
- * Filesystem-backed `RecordingStore`. Keeps `@doit/recording` a leaf package
+ * Filesystem-backed `RecordingStore`. Keeps `@jevitate/recording` a leaf package
  * (Node's built-in `fs`/`path` only, no sqlite or other new dependency).
  *
  * This store does NOT perform redaction — it trusts the caller to hand it an
- * already-redacted `Recording` (per `@doit/recorder`'s guarantees). Its own
+ * already-redacted `Recording` (per `@jevitate/recorder`'s guarantees). Its own
  * job is: schema-validate (fail-closed), enforce the size cap, and write
  * with restrictive (user-only) permissions.
  */

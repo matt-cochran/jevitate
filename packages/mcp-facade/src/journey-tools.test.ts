@@ -2,10 +2,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { FsJourneyStore, JourneyRegistry, type Journey } from "@doit/journey";
-import { JourneyRunner } from "@doit/runtime";
-import { RecordingInterpreter } from "@doit/interpreter";
-import { safeRunPolicy } from "@doit/domain";
+import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
+import { JourneyRunner } from "@jevitate/runtime";
+import { RecordingInterpreter } from "@jevitate/interpreter";
+import { safeRunPolicy } from "@jevitate/domain";
 import { findCapabilities, runJourney } from "./index.js";
 
 function makeJourney(id: string, promoted: boolean): Journey {

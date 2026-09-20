@@ -16,12 +16,12 @@ import {
   type CatalogModel,
   type ModelConstraints,
   type OpenRouterCall,
-} from "@doit/ai-core";
+} from "@jevitate/ai-core";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
 
 /**
- * Additive, optional wiring for `@doit/ai-core` threaded through `CliDeps`.
+ * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
  * Every field is injectable so `ai-cli.test.ts` never touches real env,
  * stdin, or disk — production `buildProgram` calls omit `ai` entirely and
  * get the real-env store + fake generation gateway (never a key by default).

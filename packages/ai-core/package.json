@@ -1,5 +1,5 @@
 {
-  "name": "@doit/ai-core",
+  "name": "@jevitate/ai-core",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -7,7 +7,7 @@
   "exports": { ".": "./dist/index.js" },
   "scripts": { "build": "tsc --build" },
   "dependencies": {
-    "@doit/domain": "workspace:*",
+    "@jevitate/domain": "workspace:*",
     "zod": "^4.6.5"
   }
 }

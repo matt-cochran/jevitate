@@ -1,6 +1,6 @@
 import type { ElementHandle, Frame, Page } from "playwright";
-import type { BrowserSession } from "@doit/playwright";
-import type { Recording, TargetDescriptor } from "@doit/recording";
+import type { BrowserSession } from "@jevitate/playwright";
+import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import { assembleRecording, assembleWithValues, pathOrRaw } from "./assemble.js";
 import {
   buildCandidates,

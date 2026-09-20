@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { openDatabase } from "./db.js";
 import { migrateToLatest } from "./migrator.js";
 import { SqliteCommandRepository } from "./command-repository.js";
-import type { NewCommand } from "@doit/application";
+import type { NewCommand } from "@jevitate/application";
 
 const clock = { nowIso: () => new Date().toISOString(), monotonicMs: () => Date.now() };
 const cmd: NewCommand = { site: "s", account: "a", actionId: "inbox.list", actionVersion: "1.0.0",

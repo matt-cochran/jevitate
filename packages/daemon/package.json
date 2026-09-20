@@ -1,14 +1,14 @@
 {
-  "name": "@doit/daemon",
+  "name": "@jevitate/daemon",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
-    "@doit/application": "workspace:*",
-    "@doit/domain": "workspace:*"
+    "@jevitate/application": "workspace:*",
+    "@jevitate/domain": "workspace:*"
   },
-  "devDependencies": { "@doit/storage-sqlite": "workspace:*" },
+  "devDependencies": { "@jevitate/storage-sqlite": "workspace:*" },
   "scripts": { "build": "tsc --build" }
 }

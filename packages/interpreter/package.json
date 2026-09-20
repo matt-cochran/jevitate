@@ -1,11 +1,11 @@
 {
-  "name": "@doit/interpreter",
+  "name": "@jevitate/interpreter",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "dependencies": { "@doit/recording": "workspace:*", "@doit/screenplay": "workspace:*" },
-  "devDependencies": { "@doit/playwright": "workspace:*", "playwright": "^1.49.0", "@doit/example-site": "workspace:*" },
+  "dependencies": { "@jevitate/recording": "workspace:*", "@jevitate/screenplay": "workspace:*" },
+  "devDependencies": { "@jevitate/playwright": "workspace:*", "playwright": "^1.49.0", "@jevitate/example-site": "workspace:*" },
   "scripts": { "build": "tsc --build" }
 }

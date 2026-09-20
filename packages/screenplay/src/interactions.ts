@@ -74,9 +74,9 @@ export const Enter = {
  * A REDACTED sibling of `Enter.theText` for secret values (Hard Floor #6 /
  * §9a invariant #2: a secret's plaintext must never reach an Activity
  * description, since a future logger could print `activity.description`).
- * Takes anything shaped like `@doit/secrets`' `Secret` (duck-typed —
- * `@doit/screenplay` stays dependency-free of `@doit/secrets`, exactly as
- * `@doit/secrets` itself duplicates rather than imports `SecretRef`) and
+ * Takes anything shaped like `@jevitate/secrets`' `Secret` (duck-typed —
+ * `@jevitate/screenplay` stays dependency-free of `@jevitate/secrets`, exactly as
+ * `@jevitate/secrets` itself duplicates rather than imports `SecretRef`) and
  * calls `.reveal()` exactly once, inline, at the moment of fill — the
  * revealed value is never interpolated into `description` or assigned to
  * anything outside `typeInto`'s own call stack.

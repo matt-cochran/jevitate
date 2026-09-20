@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import type { ElementHandle, Page } from "playwright";
-import { PlaywrightBrowserPort } from "@doit/playwright";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import {
   computeDescriptor,
   looksGenerated,

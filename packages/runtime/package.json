@@ -1,23 +1,23 @@
 {
-  "name": "@doit/runtime",
+  "name": "@jevitate/runtime",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": {
-    "@doit/application": "workspace:*",
-    "@doit/domain": "workspace:*",
-    "@doit/interpreter": "workspace:*",
-    "@doit/journey": "workspace:*",
-    "@doit/playwright": "workspace:*",
-    "@doit/screenplay": "workspace:*",
-    "@doit/secrets": "workspace:*",
-    "@doit/site-sdk": "workspace:*"
+    "@jevitate/application": "workspace:*",
+    "@jevitate/domain": "workspace:*",
+    "@jevitate/interpreter": "workspace:*",
+    "@jevitate/journey": "workspace:*",
+    "@jevitate/playwright": "workspace:*",
+    "@jevitate/screenplay": "workspace:*",
+    "@jevitate/secrets": "workspace:*",
+    "@jevitate/site-sdk": "workspace:*"
   },
   "devDependencies": {
-    "@doit/example-site": "workspace:*",
-    "@doit/storage-sqlite": "workspace:*",
+    "@jevitate/example-site": "workspace:*",
+    "@jevitate/storage-sqlite": "workspace:*",
     "zod": "^4.6.5"
   },
   "scripts": { "build": "tsc --build" }
