@@ -7,5 +7,6 @@ export * from "./source.js";
 export * from "./local-source.js";
 export * from "./remote-source.js";
 export * from "./trust.js";
+export * from "./tou.js";
 export * from "./hash.js";
 export * from "./lockfile.js";
