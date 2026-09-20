@@ -48,7 +48,16 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { runRegressionCapture } from "./regression-api.js";
-import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
+import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
+import { collectAllMissingKeys } from "./init-keys.js";
+import {
+  detectRuntimes,
+  resolveInstallTargetPaths,
+  installSkills,
+  type RuntimeId,
+  type DetectionDeps,
+} from "./init-skills.js";
+import { loadManifest } from "@jevitate/skills";
 import {
   runExploration,
   runAuthorJourney,
@@ -70,6 +79,10 @@ export interface CliDeps {
   ai?: AiCliDeps;
   /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
   explore?: ExploreCliDeps;
+  /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
+   *  in production means the real `existsSync`/`homedir`/`cwd` and the real
+   *  `~/.jevitate/skills-install-state.json` state path. */
+  init?: { detection?: DetectionDeps; statePath?: string };
 }
 
 // `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
@@ -192,18 +205,54 @@ export function buildProgram(deps: CliDeps): Command {
   program
     .command("init")
     .option("--json", "emit a JSON envelope")
-    .action(function (this: Command) {
-      const { json } = this.opts<{ json?: boolean }>();
+    .option("--skip-keys", "skip credential collection")
+    .option("--skip-skills", "skip skill installation")
+    .option("--targets <ids>", "comma-separated runtime ids to force-install to, overriding detection")
+    .option("--force", "overwrite a user-modified installed skill file/block")
+    .option("--dry-run", "report planned skill-install actions without writing")
+    .action(async function (this: Command) {
+      const { json, skipKeys, skipSkills, targets, force, dryRun } = this.opts<{
+        json?: boolean;
+        skipKeys?: boolean;
+        skipSkills?: boolean;
+        targets?: string;
+        force?: boolean;
+        dryRun?: boolean;
+      }>();
       try {
-        const envelope = ok({ initialized: true });
+        const data: Record<string, unknown> = { initialized: true };
+        if (!skipKeys) {
+          // SECURITY: reuses the existing, already-guardrailed credential
+          // collection. The report holds only key NAMES (required/collected),
+          // never a value — nothing here reads, echoes, logs, or returns a key.
+          const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? {});
+          const io = deps.ai?.secureIO ?? realSecureIO();
+          data.keys = await collectAllMissingKeys(store, io);
+        }
+        if (!skipSkills) {
+          // Explicit `--targets` overrides detection entirely (the user takes
+          // full control); otherwise `detectRuntimes` decides, always including
+          // the always-on generic fallback.
+          const runtimes = targets
+            ? (targets.split(",").map((t) => t.trim()).filter((t) => t.length > 0) as RuntimeId[])
+            : detectRuntimes(deps.init?.detection);
+          const paths = resolveInstallTargetPaths(deps.init?.detection);
+          const statePath = deps.init?.statePath ?? resolveDataDir(["skills-install-state.json"]);
+          const skills = loadManifest();
+          data.skills = await installSkills(runtimes, skills, paths, statePath, { force, dryRun });
+        }
+        const envelope = ok(data);
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.("jevitate initialized\n");
+          const out = program.configureOutput().writeOut;
+          out?.("jevitate initialized\n");
+          if (data.keys) out?.(`keys: ${JSON.stringify(data.keys)}\n`);
+          if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
           process.exitCode = 0;
         }
       } catch (err) {
-        emitJson(program, fail("E_INIT", String(err)));
+        emitJson(program, fail("E_INIT", String(err instanceof Error ? err.message : err)));
       }
     });
 
