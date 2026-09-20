@@ -1,5 +1,5 @@
 import type { Actor } from "@doit/screenplay";
-import { BrowseTheWebToken, Enter } from "@doit/screenplay";
+import { BrowseTheWebToken, EnterSecret } from "@doit/screenplay";
 import type { RunPolicy } from "@doit/domain";
 import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@doit/journey";
 import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@doit/interpreter";
@@ -193,7 +193,11 @@ export class JourneyRunner {
 
     const secret = await this.secretManager!.fetch(ref); // preflight already proved this resolves
     const target = descriptorToTarget(result.resume.target);
-    await Enter.theText(secret.reveal()).into(target).performAs(this.actor);
+    // EnterSecret (not Enter.theText): Enter.theText's description
+    // interpolates the raw value, which would leak the secret's plaintext
+    // into an Activity.description; EnterSecret's description is always
+    // redacted (see @doit/screenplay's interactions.ts).
+    await EnterSecret.theSecret(secret).into(target).performAs(this.actor);
     return undefined;
   }
 }

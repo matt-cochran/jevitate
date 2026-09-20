@@ -3,7 +3,7 @@ import { CastActor } from "./cast-actor.js";
 import { BrowseTheWeb } from "./browse-the-web.js";
 import { PaceInteractions } from "./pace-interactions.js";
 import { Target } from "./target.js";
-import { Click, Enter, Navigate } from "./interactions.js";
+import { Click, Enter, EnterSecret, Navigate } from "./interactions.js";
 import { TextOf } from "./questions.js";
 import { Pacer } from "@doit/domain";
 import type { InteractionPolicy } from "@doit/domain";
@@ -118,4 +118,52 @@ test("Enter.theText uses fill() with zero sleeps when actor is unpaced (no PaceI
   const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
   await actor.attemptsTo(Enter.theText("hi").into(Box));
   expect(calls).toEqual(["fill:hi"]);
+});
+
+// Floor #6 fix (Slice 1b review round 1, Finding 1): Enter.theText's
+// description interpolates the raw value, which would leak a secret's
+// plaintext into any Activity.description if used for a credential fill
+// (e.g. a future console.debug(activity.description) in attemptsTo).
+// EnterSecret is a REDACTED sibling — its description NEVER contains the
+// wrapped value, no matter what performAs types into the page.
+test("EnterSecret.theSecret's description never contains the revealed secret value", () => {
+  const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
+  const secret = { reveal: () => "hunter2" };
+  const activity = EnterSecret.theSecret(secret).into(Box);
+  expect(activity.description).not.toContain("hunter2");
+  expect(activity.description).toContain("box");
+});
+
+test("EnterSecret.theSecret fills the target with the secret's revealed value (unpaced)", async () => {
+  const calls: string[] = [];
+  const locator = {
+    fill: async (v: string) => { calls.push(`fill:${v}`); },
+    pressSequentially: async () => { calls.push("type"); },
+  };
+  const page: any = { getByRole: () => locator };
+  const actor = CastActor.named("T").whoCan(new BrowseTheWeb(fakeSessionWithPage(page), []));
+  const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
+  const secret = { reveal: () => "hunter2" };
+  await actor.attemptsTo(EnterSecret.theSecret(secret).into(Box));
+  expect(calls).toEqual(["fill:hunter2"]);
+});
+
+test("EnterSecret.theSecret types char-by-char with pacing sleeps when actor is paced with a typing model", async () => {
+  const calls: string[] = [];
+  const sleeps: number[] = [];
+  const locator = {
+    fill: async (v: string) => { calls.push(`fill:${v}`); },
+    pressSequentially: async (c: string, opts: { delay: number }) => { calls.push(`type:${c}:${opts.delay}`); },
+  };
+  const page: any = { getByRole: () => locator };
+  const actor = CastActor.named("T")
+    .whoCan(
+      new BrowseTheWeb(fakeSessionWithPage(page), []),
+      new PaceInteractions(TYPING_POLICY, new Pacer(() => 0.5), async (ms: number) => { sleeps.push(ms); }),
+    );
+  const Box = Target.named("box").locatedBy((p: any) => p.getByRole("textbox"));
+  const secret = { reveal: () => "hi" };
+  await actor.attemptsTo(EnterSecret.theSecret(secret).into(Box));
+  expect(calls).toEqual(["fill:", "type:h:0", "type:i:0"]);
+  expect(sleeps).toEqual([100, 100]);
 });
