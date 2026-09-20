@@ -47,6 +47,18 @@ function assertCompletePolicy(p: RunPolicy | undefined): asserts p is RunPolicy 
   }
 }
 
+/**
+ * Secret-bearing runs must never enable Playwright tracing. `JourneyRunner`
+ * itself never calls `session.startTracing()`/`stopTracingToFile()` (that
+ * wiring exists only in the separate `Runner`/`ActionRunner` in
+ * `runner.ts`, gated on `req.traceDir`) — tracing screenshots/snapshots
+ * would capture the vault-autofill fill value, so a `JourneyRunner` caller
+ * must not layer tracing onto a session used for a `vault-autofill` or
+ * `visible-handback` run. Enforced today by omission + a test asserting
+ * `fillViaVaultAutofill` never calls `startTracing` on the actor's session
+ * (see vault-autofill.test.ts); if `JourneyRunner` ever grows its own
+ * tracing wiring, that wiring must exclude secret-bearing runs.
+ */
 export class JourneyRunner {
   constructor(
     private readonly actor: Actor,

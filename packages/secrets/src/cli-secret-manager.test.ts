@@ -36,4 +36,33 @@ describe("CliSecretManager", () => {
     const mgr = new CliSecretManager((r) => ({ cmd: "op", args: ["read", r.key] }), exec);
     await expect(mgr.assertResolvable(ref)).rejects.toBeInstanceOf(SecretUnresolvableError);
   });
+
+  it("does not echo the raw exec error/stderr text into the thrown error message (a misconfigured manager CLI could echo the secret to stderr)", async () => {
+    const leaked = "hunter2-leaked-to-stderr";
+    const exec = vi.fn(async () => {
+      // Mirrors node's exec/execFile behavior: a failed process's error
+      // folds stderr into `.message` and also attaches it as `.stderr`.
+      const err = new Error(`Command failed: op read gmail-password\n${leaked}`) as Error & {
+        code?: number;
+        stderr?: string;
+      };
+      err.code = 1;
+      err.stderr = leaked;
+      throw err;
+    });
+    const mgr = new CliSecretManager((r) => ({ cmd: "op", args: ["read", r.key] }), exec);
+
+    let caught: unknown;
+    try {
+      await mgr.fetch(ref);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(SecretUnresolvableError);
+    const message = (caught as Error).message;
+    expect(message).not.toContain(leaked);
+    expect(message).toContain(ref.manager);
+    expect(message).toContain(ref.key);
+  });
 });
