@@ -42,19 +42,58 @@ const DEFAULT_CONSTRAINTS: ModelConstraints = { requiredCapabilities: [] };
 
 const FEATURES: Feature[] = ["generation", "judgment"];
 
+/**
+ * A tiny write gate: forwards to `output` while unmuted, drops everything
+ * while muted. Exported so the actual "does the key get echoed" decision is
+ * directly unit-testable, independent of readline/TTY simulation (per-
+ * keystroke echo can't be faithfully exercised outside a real terminal in a
+ * non-interactive test runner).
+ */
+export function createMutableEcho(output: NodeJS.WritableStream): {
+  write: (chunk: string) => void;
+  mute: () => void;
+  unmute: () => void;
+} {
+  let muted = false;
+  return {
+    write: (chunk: string) => {
+      if (!muted) output.write(chunk);
+    },
+    mute: () => {
+      muted = true;
+    },
+    unmute: () => {
+      muted = false;
+    },
+  };
+}
+
 function realSecureIO(): SecureKeyIO {
   return {
     async promptSecret(message: string): Promise<string> {
-      const { createInterface } = await import("node:readline/promises");
-      const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-      // Node's core readline has no built-in masked-input mode; production
-      // wiring may swap this for a masked-stdin implementation. This path is
-      // out-of-band (host-only) and the model never sees the typed value.
-      try {
-        return await rl.question(`${message} `);
-      } finally {
-        rl.close();
-      }
+      const readline = await import("node:readline");
+      return new Promise<string>((resolve) => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+        const echo = createMutableEcho(process.stdout);
+        // Node's core readline has no public masked-input option. Routing
+        // every write readline would otherwise make through this output
+        // stream's internal hook through our own mute-able gate is the
+        // documented workaround for suppressing per-keystroke terminal echo
+        // (Node readline FAQ) — genuinely hides the typed key, matching
+        // `collectMissingKeys`'s "input hidden" prompt copy. Muted only for
+        // the duration of this single prompt; the model never sees the
+        // typed value either way (out-of-band, host-only).
+        (rl as unknown as { _writeToOutput: (chunk: string) => void })._writeToOutput = (chunk: string) =>
+          echo.write(chunk);
+        echo.write(`${message} `);
+        echo.mute();
+        rl.question("", (answer) => {
+          echo.unmute();
+          rl.close();
+          process.stdout.write("\n");
+          resolve(answer);
+        });
+      });
     },
     async persist(key: CredentialKey, value: string): Promise<void> {
       const { mkdir, writeFile, readFile } = await import("node:fs/promises");
