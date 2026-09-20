@@ -111,6 +111,9 @@ importers:
       '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
+      '@jevitate/regression':
+        specifier: workspace:*
+        version: link:../regression
       '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -300,6 +303,25 @@ importers:
       '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/regression:
+    dependencies:
+      '@jevitate/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
+      '@jevitate/recording':
+        specifier: workspace:*
+        version: link:../recording
+      '@jevitate/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
+    devDependencies:
+      '@jevitate/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
 
   packages/runtime:
     dependencies:

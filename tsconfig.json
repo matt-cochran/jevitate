@@ -21,6 +21,7 @@
     { "path": "packages/site-sdk" },
     { "path": "packages/runtime" },
     { "path": "packages/sources" },
+    { "path": "packages/regression" },
     { "path": "apps/example-site" },
     { "path": "site-integrations/example-network" }
   ]

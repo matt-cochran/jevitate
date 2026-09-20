@@ -1,5 +1,7 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp } from "node:fs/promises";
 import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
 import type { ProfileManager } from "@jevitate/daemon";
@@ -38,9 +40,12 @@ import {
   type JevClientCall,
 } from "@jevitate/ai-core";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
+import { runRegressionCapture } from "./regression-api.js";
 import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
 import {
   runExploration,
@@ -65,6 +70,7 @@ export interface CliDeps {
 // See data-dir.ts.
 const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
 const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
+const DEFAULT_REGRESSIONS_DIR = resolveDataDir(["regressions"]);
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
@@ -77,6 +83,28 @@ function resolveDbPath(deps: CliDeps, flag?: string): string {
  */
 function resolveJourneysDir(deps: CliDeps, flag?: string): string {
   return flag ?? deps.journeysDir ?? DEFAULT_JOURNEYS_DIR;
+}
+
+/** Same flag > home-dir-default convention as `resolveJourneysDir`, for the
+ *  committed-regressions directory `regression capture` writes into. */
+function resolveRegressionsDir(flag?: string): string {
+  return flag ?? DEFAULT_REGRESSIONS_DIR;
+}
+
+/**
+ * Builds a fresh, real Playwright-backed `Actor` (its own temp profile dir +
+ * browser context, per `journey-api.ts`'s `runJourneyProgrammatically`
+ * pattern) and returns it alongside a `close()` to tear the session down.
+ * `@jevitate/regression`'s `makeActor: () => Promise<Actor>` contract calls
+ * this once per reproduce/minimize attempt — a Playwright session cannot be
+ * reused after a run — so callers must close each one it hands back.
+ */
+async function makeRealBrowserActor(site: string): Promise<{ actor: Actor; close: () => Promise<void> }> {
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-regression-"));
+  const port = new PlaywrightBrowserPort();
+  const session = await port.open({ profileDir, headless: true, allowedOrigins: [site], baseUrl: site });
+  const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
+  return { actor, close: () => session.close() };
 }
 
 /**
@@ -728,6 +756,62 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // Additive: `@jevitate/regression` — reproduce -> minimize -> commit a
+  // failing Recording into a committed regression artifact (Ticket #5).
+  // Independent of the `journey`/`load` commands above; wires a real
+  // Playwright-backed `makeActor` (one fresh browser session per
+  // reproduce/minimize attempt, closed after each use) into
+  // `runRegressionCapture`.
+  const regression = program.command("regression");
+
+  regression
+    .command("capture")
+    .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
+    .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
+    .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
+    .option("--attempts <n>", "reproduction attempts before labeling flaky", "3")
+    .option("--summary <text>", "optional human-readable bug summary recorded in the meta sidecar")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { from, id, dir, attempts, summary, json } = this.opts<{
+        from: string;
+        id: string;
+        dir?: string;
+        attempts: string;
+        summary?: string;
+        json?: boolean;
+      }>();
+      const opened: Array<() => Promise<void>> = [];
+      try {
+        const raw = JSON.parse(await readFile(from, "utf8"));
+        const recording = RecordingSchema.parse(raw);
+
+        const result = await runRegressionCapture({
+          failingRecordingPath: from,
+          id,
+          regressionsDir: resolveRegressionsDir(dir),
+          attempts: Number(attempts),
+          bugSummary: summary,
+          makeActor: async () => {
+            const { actor, close } = await makeRealBrowserActor(recording.site);
+            opened.push(close);
+            return actor;
+          },
+        });
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
+      } finally {
+        for (const close of opened) await close();
       }
     });
 

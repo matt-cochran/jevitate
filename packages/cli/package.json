@@ -40,6 +40,7 @@
     "@jevitate/load": "workspace:*",
     "@jevitate/playwright": "workspace:*",
     "@jevitate/recording": "workspace:*",
+    "@jevitate/regression": "workspace:*",
     "@jevitate/runtime": "workspace:*",
     "@jevitate/screenplay": "workspace:*",
     "@jevitate/storage-sqlite": "workspace:*",
