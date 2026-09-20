@@ -167,6 +167,9 @@ importers:
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
+      '@jevitate/journey':
+        specifier: workspace:*
+        version: link:../journey
       '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright

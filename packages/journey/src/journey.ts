@@ -9,6 +9,7 @@ export interface JourneyMetadata {
   promoted: boolean;
   params: string[];
   secretRefs?: SecretRef[];
+  authoredBy?: "human-demonstration" | "jev-driven";
   createdAtIso: string;
 }
 export interface Journey { metadata: JourneyMetadata; recording: Recording }
@@ -34,6 +35,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
     promoted: z.boolean(),
     params: z.array(z.string()),
     secretRefs: z.array(SecretRefSchema).optional(),
+    authoredBy: z.enum(["human-demonstration", "jev-driven"]).optional(),
     createdAtIso: z.string(),
   }).strict(),
   recording: RecordingSchema,

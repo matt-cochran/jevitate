@@ -1,9 +1,13 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
-import { parseAssertionSpec, resolveExploreAllowlist, runExploration } from "./explore-api.js";
+import { parseAssertionSpec, resolveExploreAllowlist, runExploration, runAuthorJourney } from "./explore-api.js";
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
   it("parses urlIncludes / visible / textIncludes / count specs", () => {
@@ -54,6 +58,56 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
       }),
     ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
     expect(browserPortFactory).not.toHaveBeenCalled();
+  });
+
+  it("runAuthorJourney writes the authored Journey to the journeys store", async () => {
+    const journeysDir = await mkdtemp(join(tmpdir(), "explore-author-"));
+    const authored: Journey = {
+      metadata: {
+        id: "explore-checkout",
+        name: "Explore: checkout",
+        promoted: false,
+        params: [],
+        authoredBy: "jev-driven",
+        createdAtIso: "2026-09-20T00:00:00Z",
+      },
+      recording: { version: "1.0", site: "https://fixture.test", pages: [] },
+    };
+
+    const result = await runAuthorJourney({
+      url: "https://fixture.test/checkout",
+      goal: "reach the confirmation page",
+      successAssertion: parseAssertionSpec("visible:testId=confirmed"),
+      allowlist: ["https://fixture.test"],
+      journeysDir,
+      journeyId: "explore-checkout",
+      journeyName: "Explore: checkout",
+      takes: 1,
+      // Test seam: no browser — assert persistence of an authored Journey.
+      authorImpl: async () => ({ outcome: "authored", journey: authored }),
+    });
+
+    expect(result.outcome).toBe("authored");
+    const persisted = await new FsJourneyStore(journeysDir).get("explore-checkout");
+    expect(persisted?.metadata.authoredBy).toBe("jev-driven");
+    expect(persisted?.metadata.promoted).toBe(false);
+  });
+
+  it("runAuthorJourney refuses an off-allowlist target BEFORE authoring", async () => {
+    const authorImpl = vi.fn();
+    await expect(
+      runAuthorJourney({
+        url: "https://evil.test/checkout",
+        goal: "g",
+        successAssertion: parseAssertionSpec("visible:testId=confirmed"),
+        allowlist: ["https://fixture.test"],
+        journeysDir: "/unused",
+        journeyId: "x",
+        journeyName: "x",
+        authorImpl,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
+    expect(authorImpl).not.toHaveBeenCalled();
   });
 });
 
