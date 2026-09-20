@@ -69,7 +69,7 @@ export function createMutableEcho(output: NodeJS.WritableStream): {
   };
 }
 
-function realSecureIO(): SecureKeyIO {
+export function realSecureIO(): SecureKeyIO {
   return {
     async promptSecret(message: string): Promise<string> {
       const readline = await import("node:readline");

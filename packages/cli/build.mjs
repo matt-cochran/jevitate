@@ -10,6 +10,7 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { cpSync, rmSync } from "node:fs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -33,3 +34,16 @@ await build({
   external: EXTERNAL,
   logLevel: "info",
 });
+
+// `@jevitate/skills` is `private: true` and cannot be published as an external
+// npm dependency, so its SKILL.md content is bundled WITH the CLI: its loader
+// code is inlined into dist/bin.js by esbuild above, and its markdown data is
+// copied here to `packages/cli/skills` — which is exactly where the inlined
+// `loadManifest()` resolves its default dir to at runtime (`import.meta.url`
+// of dist/bin.js → `../skills`). This dir is generated + gitignored; it ships
+// via package.json "files".
+const skillsSrc = join(here, "..", "skills", "skills");
+const skillsDest = join(here, "skills");
+rmSync(skillsDest, { recursive: true, force: true });
+cpSync(skillsSrc, skillsDest, { recursive: true });
+console.log(`copied skill set -> ${skillsDest}`);

@@ -3,7 +3,14 @@ import { expect, test } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import type { CliDeps } from "./program.js";
 import { buildProgram } from "./program.js";
-import { createMutableEcho } from "./ai-cli.js";
+import { createMutableEcho, realSecureIO } from "./ai-cli.js";
+
+test("realSecureIO is exported so jevitate init can reuse the same masked-prompt implementation", () => {
+  expect(typeof realSecureIO).toBe("function");
+  const io = realSecureIO();
+  expect(typeof io.promptSecret).toBe("function");
+  expect(typeof io.persist).toBe("function");
+});
 
 /**
  * Mirrors journey-cli.test.ts's isolation rationale: browser-free, fast,

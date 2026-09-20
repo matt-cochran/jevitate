@@ -22,6 +22,7 @@
     { "path": "packages/runtime" },
     { "path": "packages/sources" },
     { "path": "packages/regression" },
+    { "path": "packages/skills" },
     { "path": "apps/example-site" },
     { "path": "site-integrations/example-network" }
   ]

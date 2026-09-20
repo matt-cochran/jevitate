@@ -16,7 +16,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "files": ["dist"],
+  "files": ["dist", "skills"],
   "publishConfig": {
     "access": "public"
   },
@@ -43,6 +43,7 @@
     "@jevitate/regression": "workspace:*",
     "@jevitate/runtime": "workspace:*",
     "@jevitate/screenplay": "workspace:*",
+    "@jevitate/skills": "workspace:*",
     "@jevitate/storage-sqlite": "workspace:*",
     "esbuild": "^0.28.2"
   },
