@@ -2,3 +2,4 @@
 export const AI_CORE = "ai-core" as const;
 
 export * from "./credentials.js";
+export * from "./credential-guard.js";
