@@ -51,5 +51,22 @@ export function buildServer(): FastifyInstance {
     reply.type("text/html").send(`<!doctype html><html><body><h1>${esc(t.subject)}</h1><ul>${msgs}</ul></body></html>`);
   });
 
+  // Additive, namespaced fixture for the exploratory-testing (state-coverage)
+  // mission: two pages that link to each other, forming a real inter-page cycle
+  // (cycle-a <-> cycle-b). The induction mission must exercise the return edge
+  // without re-expanding the already-visited state or looping forever. Kept
+  // under /exploratory-testing/* and separate from the shared inbox/thread
+  // routes so parallel Wave-3 fixture edits never collide.
+  app.get("/exploratory-testing/cycle-a", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Cycle A</h1><a href="/exploratory-testing/cycle-b">Go to B</a></body></html>`,
+    );
+  });
+  app.get("/exploratory-testing/cycle-b", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Cycle B</h1><a href="/exploratory-testing/cycle-a">Back to A</a></body></html>`,
+    );
+  });
+
   return app;
 }

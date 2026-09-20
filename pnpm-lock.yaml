@@ -343,6 +343,9 @@ importers:
       '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
+      '@jevitate/recording':
+        specifier: workspace:*
+        version: link:../recording
       '@jevitate/screenplay':
         specifier: workspace:*
         version: link:../screenplay

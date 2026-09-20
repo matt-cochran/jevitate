@@ -3,11 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
-import { FakeGenerationGateway } from "@jevitate/ai-core";
+import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
-import { parseAssertionSpec, resolveExploreAllowlist, runExploration, runAuthorJourney } from "./explore-api.js";
+import {
+  parseAssertionSpec,
+  resolveExploreAllowlist,
+  runExploration,
+  runAuthorJourney,
+  runCoverageMission,
+} from "./explore-api.js";
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
   it("parses urlIncludes / visible / textIncludes / count specs", () => {
@@ -109,6 +115,22 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
     expect(authorImpl).not.toHaveBeenCalled();
   });
+
+  it("runCoverageMission refuses an off-allowlist target BEFORE opening a browser", async () => {
+    const browserPortFactory = vi.fn(() => {
+      throw new Error("browser must not be opened for an unauthorized target");
+    });
+    await expect(
+      runCoverageMission({
+        url: "http://127.0.0.1:3000/login",
+        allowlist: ["https://only-this.example.com"],
+        judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+        gen: new FakeGenerationGateway(),
+        browserPortFactory,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
+    expect(browserPortFactory).not.toHaveBeenCalled();
+  });
 });
 
 function newProgram() {
@@ -154,6 +176,18 @@ describe("explore command — argument + setup refusals (no browser)", () => {
       { from: "user" },
     );
     const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+
+  it("explore --strategy coverage does not require --goal/--success and reaches gateway setup", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--strategy", "coverage", "--url", "http://127.0.0.1:3000/login", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    // Got PAST the goal-args validation (no E_EXPLORE_ARGS) to gateway setup,
+    // proving the coverage strategy is a distinct, goal-free path.
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
   });
 });

@@ -52,6 +52,7 @@ import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
 import {
   runExploration,
   runAuthorJourney,
+  runCoverageMission,
   parseAssertionSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
@@ -714,7 +715,8 @@ export function buildProgram(deps: CliDeps): Command {
     .command("explore")
     .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)")
     .option("--url <url>", "target URL (must be an authorized origin)")
-    .option("--goal <text>", "natural-language goal")
+    .option("--strategy <name>", "goal | coverage | exploratory (default: goal)", "goal")
+    .option("--goal <text>", "natural-language goal (required for --strategy goal)")
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
     .option(
       "--allow <origin>",
@@ -737,6 +739,7 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const o = this.opts<{
         url?: string;
+        strategy?: string;
         goal?: string;
         success?: string;
         allow: string[];
@@ -748,6 +751,64 @@ export function buildProgram(deps: CliDeps): Command {
         out?: string;
         json?: boolean;
       }>();
+
+      const strategy = o.strategy ?? "goal";
+
+      // Additive coverage/exploratory strategy: proof-by-induction state coverage.
+      // It takes no goal/success (the frontier itself is the objective), so it is
+      // a distinct, goal-free path that leaves the goal strategy below unchanged.
+      if (strategy === "coverage" || strategy === "exploratory") {
+        if (!o.url) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required"));
+          return;
+        }
+        const covAllowlist = resolveExploreAllowlist(o.url, o.allow);
+        const covBounds: Record<string, number> = {};
+        if (o.maxActions !== undefined) covBounds.maxActions = Number(o.maxActions);
+        if (o.maxDecisions !== undefined) covBounds.maxDecisions = Number(o.maxDecisions);
+
+        let covJudge: JudgmentPort;
+        let covGen: GenerationPort;
+        try {
+          ({ judge: covJudge, gen: covGen } = await buildExploreGateways(deps, {
+            real: o.real ?? false,
+            fakeAi: o.fakeAi ?? false,
+          }));
+        } catch (err) {
+          if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
+
+        try {
+          const result = await runCoverageMission({
+            url: o.url,
+            allowlist: covAllowlist,
+            judge: covJudge,
+            gen: covGen,
+            bounds: Object.keys(covBounds).length > 0 ? covBounds : undefined,
+            outDir: o.out,
+            browserPortFactory: deps.explore?.browserPortFactory,
+          });
+          const envelope = ok(result);
+          if (o.json) {
+            emitJson(program, envelope);
+          } else {
+            program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          }
+          if (result.coverage.defects.length > 0) process.exitCode = 1;
+        } catch (err) {
+          if (err instanceof UnauthorizedExploreTargetError) {
+            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
+        }
+        return;
+      }
 
       if (!o.url || !o.goal || !o.success) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--url, --goal and --success are all required"));
