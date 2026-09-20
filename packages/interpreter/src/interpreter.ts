@@ -85,6 +85,28 @@ export class RecordingInterpreter {
     const lastIndex = Math.min(stepIndex, flat.length - 1);
     return runFlat(actor, flat, varsMap, lastIndex);
   }
+
+  /**
+   * Continues a recording from global index `fromIndex` through the end —
+   * the basis for post-handback resume: once a human has acted on a
+   * `handback` (secret) step and its postcondition has been separately
+   * verified, the `JourneyRunner` calls this to run the REMAINING steps
+   * without re-running anything before `fromIndex`.
+   *
+   * Mirrors `run`'s pre-flight (`validateRecording`) and `vars`/`sink`
+   * handling exactly; the only difference is where the shared loop starts.
+   */
+  async resumeFrom(
+    actor: Actor,
+    rec: Recording,
+    fromIndex: number,
+    vars: Record<string, string> = {},
+    sink?: RecordingSink,
+  ): Promise<InterpretResult> {
+    validateRecording(rec);
+    const flat = flatten(rec);
+    return runFlat(actor, flat, new Map(Object.entries(vars)), flat.length - 1, sink, fromIndex);
+  }
 }
 
 function flatten(rec: Recording): RecordedStep[] {
@@ -180,10 +202,11 @@ async function runFlat(
   vars: Map<string, string>,
   lastIndex: number,
   sink?: RecordingSink,
+  startIndex = 0,
 ): Promise<InterpretResult> {
   const runStartedAt = performance.now();
   let lastSunkStepEndedAt = runStartedAt;
-  for (let i = 0; i <= lastIndex; i++) {
+  for (let i = startIndex; i <= lastIndex; i++) {
     let outcome;
     const stepStartedAt = performance.now();
     try {
