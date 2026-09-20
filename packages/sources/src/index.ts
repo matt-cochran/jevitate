@@ -9,5 +9,7 @@ export * from "./remote-source.js";
 export * from "./trust.js";
 export * from "./tou.js";
 export * from "./federated-registry.js";
+export * from "./secrets.js";
+export * from "./run-gate.js";
 export * from "./hash.js";
 export * from "./lockfile.js";

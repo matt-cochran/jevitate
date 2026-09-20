@@ -11,7 +11,7 @@ const READ_ONLY_KINDS = new Set<Step["kind"]>(["navigate", "waitFor", "extract",
  * action itself, so only its nested (leaf) steps are emitted — never the
  * `forEach` step itself — otherwise every looped read-only Journey would be
  * misclassified `risky` on the container alone. */
-function flattenSteps(steps: Step[]): Step[] {
+export function flattenSteps(steps: Step[]): Step[] {
   const out: Step[] = [];
   for (const step of steps) {
     if (step.kind === "forEach") {
