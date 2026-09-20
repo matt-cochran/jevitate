@@ -63,3 +63,24 @@ describe("runInductionMission — single state", () => {
     expect(result.recordings).toHaveLength(1);
   }, 30_000);
 });
+
+describe("runInductionMission — branching", () => {
+  test("discovers both thread states from /inbox and exercises both transitions", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/inbox`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    // inbox + thread-t-1 + thread-t-2 = 3 distinct states. The thread ids ("t-1",
+    // "t-2") are NOT id-normalized by urlTemplate (they contain a letter), so the
+    // two threads template to distinct states — exactly the coverage the mission
+    // should find.
+    expect(result.coverage.statesVisited).toBe(3);
+    expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
+    expect(result.recordings.length).toBeGreaterThanOrEqual(2);
+  }, 30_000);
+});
