@@ -56,9 +56,24 @@ importers:
       '@doit/domain':
         specifier: workspace:*
         version: link:../domain
+      '@doit/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
+      '@doit/journey':
+        specifier: workspace:*
+        version: link:../journey
+      '@doit/playwright':
+        specifier: workspace:*
+        version: link:../playwright
       '@doit/recording':
         specifier: workspace:*
         version: link:../recording
+      '@doit/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@doit/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
       '@doit/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite

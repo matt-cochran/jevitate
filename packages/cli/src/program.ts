@@ -20,17 +20,42 @@ import {
   type ColumnClass,
   type PostdocDecision,
 } from "@doit/recording";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@doit/journey";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
+import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 
 export interface CliDeps {
   profiles: ProfileManager;
   dbPath?: string;
+  journeysDir?: string;
 }
 
 const DEFAULT_DB_PATH = join(homedir(), ".doit", "db.sqlite");
+const DEFAULT_JOURNEYS_DIR = join(homedir(), ".doit", "journeys");
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
+}
+
+/**
+ * Mirrors `resolveDbPath`'s flag > deps > home-dir-default convention: a
+ * per-invocation `--dir` flag wins, then a `CliDeps.journeysDir` wired in by
+ * the host, then `~/.doit/journeys`.
+ */
+function resolveJourneysDir(deps: CliDeps, flag?: string): string {
+  return flag ?? deps.journeysDir ?? DEFAULT_JOURNEYS_DIR;
+}
+
+/**
+ * Parses repeated `--param key=value` flags into a `Record<string,string>`.
+ * `previous` starts as the option's default (`{}`) and this is called once
+ * per occurrence, commander's standard "collect" pattern.
+ */
+function collectParam(value: string, previous: Record<string, string>): Record<string, string> {
+  const idx = value.indexOf("=");
+  const key = idx === -1 ? value : value.slice(0, idx);
+  const val = idx === -1 ? "" : value.slice(idx + 1);
+  return { ...previous, [key]: val };
 }
 
 function makeClock() {
@@ -398,6 +423,116 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_INVALID_DECISIONS", String(err.cause)));
         } else {
           emitJson(program, fail("E_INVALID_TAKE", String(err)));
+        }
+      }
+    });
+
+  const journey = program.command("journey");
+
+  /**
+   * `journey list` = ALL journeys' metadata via the store directly
+   * (promoted AND unpromoted) — a local/dev-facing listing of everything on
+   * disk. `journey find` (below) = promoted-only, via `JourneyRegistry.find`
+   * — the same promoted-only projection external callers (e.g. the
+   * mcp-facade) see. Keeping these distinct means `list` is useful for
+   * authoring/debugging while `find` genuinely reflects what's discoverable.
+   */
+  journey
+    .command("list")
+    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const store = new FsJourneyStore(resolveJourneysDir(deps, dir));
+        const metas = await store.list();
+        const envelope = ok(metas);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const m of metas) {
+            out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}\n`);
+          }
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_LIST", String(err)));
+      }
+    });
+
+  // RULING 5: uses `JourneyRegistry.find` (from `@doit/journey`) directly —
+  // NEVER `@doit/mcp-facade`'s `findCapabilities` — Slice 1 forbids the CLI
+  // depending on `@doit/mcp-facade`. `JourneyRegistry.find` is already
+  // promoted-only, so this is the same promoted-only view without the
+  // forbidden dependency.
+  journey
+    .command("find <query>")
+    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, query: string) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const store = new FsJourneyStore(resolveJourneysDir(deps, dir));
+        const registry = new JourneyRegistry(store);
+        const metas = await registry.find(query);
+        const capabilities = metas.map((m) => ({
+          id: m.id,
+          name: m.name,
+          description: m.description,
+          params: m.params,
+        }));
+        const envelope = ok(capabilities);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const c of capabilities) {
+            out?.(`${c.id}\t${c.name}\tparams=[${c.params.join(", ")}]\n`);
+          }
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_FIND", String(err)));
+      }
+    });
+
+  journey
+    .command("run <id>")
+    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, param, json } = this.opts<{
+        dir?: string;
+        param: Record<string, string>;
+        json?: boolean;
+      }>();
+      try {
+        // `runJourneyProgrammatically` validates params UP FRONT (before any
+        // browser launch) and defaults to `safeRunPolicy()` (Slice 1:
+        // fail-closed secret mode) — a `--secret-mode` override is a later
+        // slice's concern.
+        const result = await runJourneyProgrammatically({
+          dir: resolveJourneysDir(deps, dir),
+          id,
+          params: param,
+        });
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+          if (result.outcome !== "ok") process.exitCode = 1;
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          process.exitCode = result.outcome === "ok" ? 0 : 1;
+        }
+      } catch (err) {
+        if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof ParamValidationError) {
+          emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
+        } else {
+          emitJson(program, fail("E_JOURNEY_RUN", String(err)));
         }
       }
     });

@@ -4,7 +4,12 @@
   "references": [
     { "path": "../daemon" },
     { "path": "../domain" },
+    { "path": "../interpreter" },
+    { "path": "../journey" },
+    { "path": "../playwright" },
     { "path": "../recording" },
+    { "path": "../runtime" },
+    { "path": "../screenplay" },
     { "path": "../storage-sqlite" }
   ],
   "include": ["src/**/*"],

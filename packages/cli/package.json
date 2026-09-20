@@ -10,7 +10,12 @@
     "@clack/prompts": "^0.9.1",
     "@doit/daemon": "workspace:*",
     "@doit/domain": "workspace:*",
+    "@doit/interpreter": "workspace:*",
+    "@doit/journey": "workspace:*",
+    "@doit/playwright": "workspace:*",
     "@doit/recording": "workspace:*",
+    "@doit/runtime": "workspace:*",
+    "@doit/screenplay": "workspace:*",
     "@doit/storage-sqlite": "workspace:*",
     "commander": "^12.0.0"
   },
