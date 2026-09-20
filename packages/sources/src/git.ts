@@ -83,4 +83,14 @@ export class GitSourceManager {
     const dir = this.resolveDir(name);
     await rm(dir, { recursive: true, force: true });
   }
+
+  /** Escape hatch for the publish flow (Task 13): runs an arbitrary git
+   * subcommand against a managed source's clone dir, through the same
+   * injected `GitExec` (args-array only — no shell injection). Kept generic
+   * rather than adding a bespoke method per git operation the publish flow
+   * needs (`checkout -b`, `add`, `commit`, `push`). */
+  async run(name: string, args: string[]): Promise<{ stdout: string }> {
+    const dir = this.resolveDir(name);
+    return this.exec(args, { cwd: dir });
+  }
 }
