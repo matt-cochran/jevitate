@@ -5,7 +5,8 @@
     { "path": "../application" },
     { "path": "../domain" },
     { "path": "../journey" },
-    { "path": "../runtime" }
+    { "path": "../runtime" },
+    { "path": "../sources" }
   ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]

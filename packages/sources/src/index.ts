@@ -8,5 +8,6 @@ export * from "./local-source.js";
 export * from "./remote-source.js";
 export * from "./trust.js";
 export * from "./tou.js";
+export * from "./federated-registry.js";
 export * from "./hash.js";
 export * from "./lockfile.js";
