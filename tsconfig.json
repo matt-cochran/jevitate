@@ -18,6 +18,7 @@
     { "path": "packages/screenplay" },
     { "path": "packages/site-sdk" },
     { "path": "packages/runtime" },
+    { "path": "packages/sources" },
     { "path": "apps/example-site" },
     { "path": "site-integrations/example-network" }
   ]

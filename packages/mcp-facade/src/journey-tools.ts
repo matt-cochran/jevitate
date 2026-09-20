@@ -1,12 +1,45 @@
 import type { JourneyRegistry } from "@doit/journey";
 import type { JourneyRunner, JourneyRunResult } from "@doit/runtime";
 import type { RunPolicy } from "@doit/domain";
+import type { FederatedJourneyRegistry } from "@doit/sources";
 
 export interface Capability {
   id: string;
   name: string;
   description?: string;
   params: string[];
+}
+
+export interface SourcedCapability extends Capability {
+  source: string;
+  pin?: string;
+  riskClass: "read-only" | "risky";
+  trusted: boolean;
+}
+
+/**
+ * Federated counterpart to `findCapabilities` (new export; existing
+ * `findCapabilities`/`runJourney`/`listNamedJourneyTools` are untouched).
+ * Projects `FederatedJourneyRegistry.find` results — already promoted-only
+ * via each `JourneySource.list()` — onto the MCP-facing shape, tagged with
+ * `source`/`pin`/`riskClass`/`trusted` so a caller can apply its own
+ * run-gate policy before running one.
+ */
+export async function findFederatedCapabilities(
+  fed: FederatedJourneyRegistry,
+  query: string,
+): Promise<SourcedCapability[]> {
+  const metas = await fed.find(query);
+  return metas.map((m) => ({
+    id: `${m.source}/${m.id}`,
+    name: m.name,
+    description: m.description,
+    params: m.params,
+    source: m.source,
+    pin: m.pin,
+    riskClass: m.riskClass,
+    trusted: m.trusted,
+  }));
 }
 
 export interface NamedJourneyTool {

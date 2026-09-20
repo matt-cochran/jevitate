@@ -1,8 +1,12 @@
 import type { Journey, JourneyMetadata } from "./journey.js";
-import type { FsJourneyStore } from "./store.js";
+import type { JourneyStore } from "./store.js";
 
 export class JourneyRegistry {
-  constructor(private readonly store: FsJourneyStore) {}
+  // Widened from `FsJourneyStore` to the structural `JourneyStore` interface
+  // (additive/backward-compatible — `FsJourneyStore` already satisfies it)
+  // so a `JourneyRegistry` can wrap a different backing store (e.g. a
+  // `@doit/sources` federation adapter) without this package importing it.
+  constructor(private readonly store: JourneyStore) {}
   get(id: string) { return this.store.get(id); }
   put(j: Journey) { return this.store.put(j); }
   async promote(id: string): Promise<void> {
