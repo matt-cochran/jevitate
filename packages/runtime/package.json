@@ -14,6 +14,10 @@
     "@doit/screenplay": "workspace:*",
     "@doit/site-sdk": "workspace:*"
   },
-  "devDependencies": { "@doit/storage-sqlite": "workspace:*", "zod": "^4.6.5" },
+  "devDependencies": {
+    "@doit/example-site": "workspace:*",
+    "@doit/storage-sqlite": "workspace:*",
+    "zod": "^4.6.5"
+  },
   "scripts": { "build": "tsc --build" }
 }

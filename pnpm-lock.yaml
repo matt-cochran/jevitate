@@ -194,6 +194,9 @@ importers:
         specifier: workspace:*
         version: link:../site-sdk
     devDependencies:
+      '@doit/example-site':
+        specifier: workspace:*
+        version: link:../../apps/example-site
       '@doit/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite

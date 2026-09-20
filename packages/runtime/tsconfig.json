@@ -8,7 +8,8 @@
     { "path": "../domain" },
     { "path": "../application" },
     { "path": "../interpreter" },
-    { "path": "../journey" }
+    { "path": "../journey" },
+    { "path": "../../apps/example-site" }
   ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
