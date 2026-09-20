@@ -190,9 +190,10 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
   ai.command("generate <task>")
     .requiredOption("--input <json>", "task input as a JSON string")
     .option("--real", "use the real OpenRouter adapter (requires OPENROUTER_API_KEY)", false)
+    .option("--fake", "explicitly opt into the deterministic fake gateway (no key required)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, task: string) {
-      const { input, real, json } = this.opts<{ input: string; real?: boolean; json?: boolean }>();
+      const { input, real, fake, json } = this.opts<{ input: string; real?: boolean; fake?: boolean; json?: boolean }>();
       if (!(task in GEN_TASKS)) {
         emitJsonLine(program, fail("E_UNKNOWN_TASK", `unknown generation task '${task}'`));
         return;
@@ -204,8 +205,8 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
         emitJsonLine(program, fail("E_INVALID_INPUT", String(err instanceof Error ? err.message : err)));
         return;
       }
+      const store = buildStore(deps.ai);
       try {
-        const store = buildStore(deps.ai);
         let gateway: GenerationPort;
         if (deps.ai?.gateway) {
           gateway = deps.ai.gateway;
@@ -217,8 +218,24 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
             constraints: deps.ai?.constraints ?? DEFAULT_CONSTRAINTS,
             call: await realOpenRouterCall(),
           });
-        } else {
+        } else if (fake) {
           gateway = new FakeGenerationGateway();
+        } else {
+          // No explicit choice made. Silently falling back to the fake
+          // gateway here would be a footgun: a user who forgot `--real` (or
+          // never ran `ai setup`) would get a fake, made-up answer disclosed
+          // only via `provenance.adapter`, easy to miss. Fail closed instead.
+          const hasKey = store.detect("OPENROUTER_API_KEY");
+          emitJsonLine(
+            program,
+            fail(
+              "E_AI_SETUP_REQUIRED",
+              hasKey
+                ? "no gateway selected — pass --real to use the configured OPENROUTER_API_KEY, or --fake to explicitly use the deterministic fake gateway"
+                : "no gateway selected and no OPENROUTER_API_KEY configured — run `ai setup generation` then pass --real, or pass --fake to explicitly use the deterministic fake gateway",
+            ),
+          );
+          return;
         }
         const result = await gateway.generate(task as GenTaskKind, parsedInput as never);
         const envelope = ok(result);
@@ -232,10 +249,29 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
         if (err instanceof MissingCredentialError) {
           emitJsonLine(program, fail("E_MISSING_CREDENTIAL", err.message));
         } else {
-          emitJsonLine(program, fail("E_AI_GENERATE", String(err instanceof Error ? err.message : err)));
+          // Sanitize: an SDK/provider error can echo request internals
+          // (headers, body) verbatim in its `.message`, which could contain
+          // the key. Never surface raw provider error text in the CLI
+          // envelope — log a redacted line for host-side diagnosis instead,
+          // and emit a generic, key-free message in the envelope itself.
+          const raw = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`ai generate: provider error (redacted): ${redactCredentials(raw, store)}\n`);
+          emitJsonLine(program, fail("E_AI_GENERATE", "generation failed — see host logs for details"));
         }
       }
     });
+}
+
+/** Replaces any configured credential VALUE found in `message` with a
+ *  placeholder. Used only for the diagnostic line written to stderr; the
+ *  JSON envelope itself never carries provider error text at all. */
+function redactCredentials(message: string, store: { read(k: CredentialKey): string | undefined }): string {
+  let out = message;
+  for (const key of ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"] as const) {
+    const value = store.read(key);
+    if (value) out = out.split(value).join("***REDACTED***");
+  }
+  return out;
 }
 
 function emitJsonLine(program: Command, envelope: JsonEnvelope<unknown>): void {
