@@ -234,6 +234,25 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/regression:
+    dependencies:
+      '@jevitate/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
+      '@jevitate/recording':
+        specifier: workspace:*
+        version: link:../recording
+      '@jevitate/screenplay':
+        specifier: workspace:*
+        version: link:../screenplay
+    devDependencies:
+      '@jevitate/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
   packages/runtime:
     dependencies:
       '@jevitate/application':
