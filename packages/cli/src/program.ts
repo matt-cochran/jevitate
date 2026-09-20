@@ -49,6 +49,7 @@ import { runRegressionCapture } from "./regression-api.js";
 import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
 import {
   runExploration,
+  runAdversarialCliMission,
   parseAssertionSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
@@ -668,6 +669,11 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--goal <text>", "natural-language goal")
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
     .option(
+      "--strategy <name>",
+      "exploration strategy: 'goal' (default) or 'adversarial' (bounded misuse + trusted hard oracle)",
+      "goal",
+    )
+    .option(
       "--allow <origin>",
       "authorized origin (repeatable); defaults to the URL's own origin",
       (v, prev: string[]) => [...prev, v],
@@ -690,6 +696,7 @@ export function buildProgram(deps: CliDeps): Command {
         url?: string;
         goal?: string;
         success?: string;
+        strategy?: string;
         allow: string[];
         secret: string[];
         maxActions?: string;
@@ -699,6 +706,60 @@ export function buildProgram(deps: CliDeps): Command {
         out?: string;
         json?: boolean;
       }>();
+
+      // Additive adversarial strategy: a bounded "try to break it" run whose
+      // stop decision comes from a trusted hard-signal oracle (never Jev's
+      // Noul). Requires only --url; --goal/--success are goal-strategy inputs.
+      if (o.strategy === "adversarial") {
+        if (!o.url) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required for --strategy adversarial"));
+          return;
+        }
+        const allowlist = resolveExploreAllowlist(o.url, o.allow);
+        let advJudge: JudgmentPort;
+        let advGen: GenerationPort;
+        try {
+          ({ judge: advJudge, gen: advGen } = await buildExploreGateways(deps, {
+            real: o.real ?? false,
+            fakeAi: o.fakeAi ?? false,
+          }));
+        } catch (err) {
+          if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
+        try {
+          const profileDir = await mkdtemp(join(tmpdir(), "jevitate-adversarial-"));
+          const result = await runAdversarialCliMission({
+            seedUrl: o.url,
+            allowlist,
+            strategies: [
+              "ordering-violation",
+              "repeat-rapid",
+              "boundary-input",
+              "contradictory-actions",
+              "nav-during-pending",
+            ],
+            judgment: advJudge,
+            generation: advGen,
+            profileDir,
+            browserPortFactory: deps.explore?.browserPortFactory,
+          });
+          emitJson(program, ok(result));
+          // A discovered defect gates CI, mirroring how a failing test would.
+          if (result.outcome === "defect") process.exitCode = 1;
+        } catch (err) {
+          if (err instanceof UnauthorizedExploreTargetError) {
+            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
+        }
+        return;
+      }
 
       if (!o.url || !o.goal || !o.success) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--url, --goal and --success are all required"));

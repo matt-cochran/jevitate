@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
-import { FakeGenerationGateway } from "@jevitate/ai-core";
+import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { buildProgram } from "./program.js";
-import { parseAssertionSpec, resolveExploreAllowlist, runExploration } from "./explore-api.js";
+import {
+  parseAssertionSpec,
+  resolveExploreAllowlist,
+  runExploration,
+  runAdversarialCliMission,
+} from "./explore-api.js";
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
   it("parses urlIncludes / visible / textIncludes / count specs", () => {
@@ -101,5 +106,27 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+});
+
+describe("runAdversarialCliMission — fail-closed (no browser)", () => {
+  it("refuses an undeclared origin before any browser is opened", async () => {
+    let opened = false;
+    await expect(
+      runAdversarialCliMission({
+        seedUrl: "https://not-authorized.test",
+        allowlist: ["https://authorized.test"],
+        strategies: ["ordering-violation"],
+        judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+        generation: new FakeGenerationGateway(),
+        profileDir: "/tmp/unused",
+        // If the guard failed to fail-closed, this factory would run and flip the flag.
+        browserPortFactory: () => {
+          opened = true;
+          throw new Error("browser must not be opened for an unauthorized origin");
+        },
+      }),
+    ).rejects.toThrow(UnauthorizedExploreTargetError);
+    expect(opened).toBe(false);
   });
 });

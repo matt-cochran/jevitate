@@ -7,11 +7,14 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import {
   runGoalBasedMission,
+  runAdversarialMission,
   assertAuthorizedExploreTarget,
   normalizeAllowlist,
   type Bounds,
   type GoalBasedOutcome,
   type StopReason,
+  type AdversarialOutcome,
+  type MisuseStrategy,
 } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
 
@@ -100,6 +103,59 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   } finally {
     await session.close();
     await rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Options for the additive adversarial CLI mission. Mirrors `runExploration`'s
+ * fail-closed discipline: the authorized-target guard runs FIRST, before any
+ * browser is opened, so an unauthorized origin never launches Chromium.
+ */
+export interface RunAdversarialCliMissionOptions {
+  readonly seedUrl: string;
+  readonly allowlist: readonly string[];
+  readonly strategies: readonly MisuseStrategy[];
+  readonly judgment: JudgmentPort;
+  readonly generation: GenerationPort;
+  readonly profileDir: string;
+  readonly headless?: boolean;
+  /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
+  readonly browserPortFactory?: () => BrowserPort;
+}
+
+/**
+ * Runs `@jevitate/explore`'s adversarial "try to break it" mission behind the
+ * CLI. Guardrail #1 is enforced BEFORE opening a browser (fail-closed); the
+ * session is always torn down. The stop-on-defect decision is the mission's
+ * own trusted hard-signal oracle — never Jev's `Noul` (guardrail #4).
+ */
+export async function runAdversarialCliMission(
+  opts: RunAdversarialCliMissionOptions,
+): Promise<AdversarialOutcome> {
+  // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
+  const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
+  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  const port = portFactory();
+  const session = await port.open({
+    profileDir: opts.profileDir,
+    headless: opts.headless ?? true,
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+  });
+  try {
+    const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
+    return await runAdversarialMission({
+      page: session.page,
+      actor,
+      judgment: opts.judgment,
+      generation: opts.generation,
+      seedUrl: opts.seedUrl,
+      allowlist: opts.allowlist,
+      strategies: opts.strategies,
+      site: origin,
+    });
+  } finally {
+    await session.close();
   }
 }
 
