@@ -4,6 +4,7 @@
     { "path": "packages/domain" },
     { "path": "packages/application" },
     { "path": "packages/recording" },
+    { "path": "packages/journey" },
     { "path": "packages/interpreter" },
     { "path": "packages/recorder" },
     { "path": "packages/storage-sqlite" },

@@ -114,6 +114,15 @@ importers:
         specifier: ^1.49.0
         version: 1.63.0
 
+  packages/journey:
+    dependencies:
+      '@doit/recording':
+        specifier: workspace:*
+        version: link:../recording
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
   packages/mcp-facade:
     dependencies:
       '@doit/application':
