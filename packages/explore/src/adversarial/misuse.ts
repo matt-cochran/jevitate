@@ -1,4 +1,5 @@
 import type { Control, Op, Snapshot } from "../index.js";
+import { valueFor } from "./input-strategy.js";
 
 /**
  * Bounded MISUSE strategies (spec §3.1). Each picks the next action by
@@ -32,9 +33,14 @@ export interface MisuseDecision {
 }
 
 const TERMINAL_NAME = /submit|confirm|pay|complete|checkout|send/i;
+const OPPOSING_NAME = /cancel|back|reject|decline/i;
 
 function terminalControl(controls: readonly Control[]): Control | undefined {
   return controls.find((c) => c.role === "button" && TERMINAL_NAME.test(c.name) && c.enabled);
+}
+
+function firstTextbox(controls: readonly Control[]): Control | undefined {
+  return controls.find((c) => c.role === "textbox" && c.enabled);
 }
 
 export function pickMisuseAction(params: {
@@ -50,7 +56,27 @@ export function pickMisuseAction(params: {
     }
     case "repeat-rapid":
       return params.lastDecision ?? null;
-    default:
-      return null; // Task 4 fills in nav-during-pending / boundary-input / contradictory-actions
+    case "boundary-input": {
+      const textbox = firstTextbox(params.snapshot.controls);
+      if (!textbox) return null;
+      // Field-semantics invalid value (spec §3.1: never blind fuzz). The
+      // strategy order is walked by the mission loop across steps; a single
+      // pick uses the "invalid" value chosen by the field's role/name.
+      return { op: "type", targetIndex: textbox.index, fillText: valueFor("invalid", textbox) };
+    }
+    case "contradictory-actions": {
+      if (!params.lastDecision || params.lastDecision.targetIndex === undefined) return null;
+      const last = params.snapshot.controls.find((c) => c.index === params.lastDecision!.targetIndex);
+      if (!last) return null;
+      const opposing = TERMINAL_NAME.test(last.name)
+        ? params.snapshot.controls.find((c) => OPPOSING_NAME.test(c.name) && c.enabled)
+        : undefined;
+      return opposing ? { op: "click", targetIndex: opposing.index } : null;
+    }
+    case "nav-during-pending":
+      // The mission loop (Task 6) is what actually races this against a
+      // pending request; this pure function only chooses "do something else
+      // immediately" rather than performing the race itself.
+      return { op: "scroll_down" };
   }
 }
