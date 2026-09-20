@@ -104,3 +104,25 @@ describe("runInductionMission — cycles", () => {
     expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
   }, 15_000);
 });
+
+describe("runInductionMission — defect judgment is advisory only", () => {
+  test("a flagged state lands in coverage.defects but does not stop the mission or corrupt other branches", async () => {
+    // The fake always answers isDefect=true. Every transition is flagged — the
+    // mission must still exhaust cleanly (never throw/hang), and each flagged
+    // state is captured with its own replayable repro Recording (guardrail #4).
+    const judgment = new FakeJudgmentGateway({ isDefect: { kind: "noul", value: true, probability: 0.9 } });
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment,
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/inbox`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    expect(result.coverage.defects.length).toBeGreaterThan(0);
+    for (const d of result.coverage.defects) {
+      expect(d.recording.pages.length).toBeGreaterThan(0);
+    }
+  }, 30_000);
+});
