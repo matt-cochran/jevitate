@@ -1,4 +1,5 @@
-import type { Step, Assertion } from "@jevitate/recording";
+import type { Step, Assertion, Recording, PageSegment, RecordedStep } from "@jevitate/recording";
+import { spliceRecording } from "@jevitate/recording";
 
 /**
  * Mirrors `@jevitate/sources`'s `classifyRisk`'s per-step-kind judgment
@@ -36,4 +37,62 @@ export function postconditionOf(step: Step): Assertion | undefined {
     default:
       return undefined;
   }
+}
+
+/** Flattens a Recording's pages into a page-then-step-ordered list of its
+ * `Step`s — the same order `@jevitate/interpreter`'s `run`/`resumeFrom`
+ * index into via their `at`/`fromIndex`. */
+export function flattenRecording(rec: Recording): { step: Step }[] {
+  return rec.pages.flatMap((p) => p.steps.map((s) => ({ step: s.step })));
+}
+
+/**
+ * Extracts every step from `base` at or after `fromFlatIndex` (in flat
+ * page-then-step order), re-flowed into `PageSegment[]` — the tail that
+ * must survive a scoped repair unchanged. Mirrors `@jevitate/recorder`'s
+ * `checkpointToSpliceAt` walk.
+ */
+export function extractTail(base: Recording, fromFlatIndex: number): PageSegment[] {
+  const tail: PageSegment[] = [];
+  let seen = 0;
+  for (const page of base.pages) {
+    const keep: RecordedStep[] = [];
+    for (const step of page.steps) {
+      if (seen >= fromFlatIndex) keep.push(step);
+      seen++;
+    }
+    if (keep.length > 0) tail.push({ ...page, steps: keep });
+  }
+  return tail;
+}
+
+/** `{page, step}` position of the step AT `brokenFlatIndex` itself — the
+ * splice point for `spliceRecording`'s `"replace-from"` mode, which drops
+ * everything from that position onward. One less than
+ * `@jevitate/recorder`'s `checkpointToSpliceAt` (which points just AFTER a
+ * checkpoint step). */
+function spliceAtBroken(base: Recording, brokenFlatIndex: number): { page: number; step: number } {
+  let remaining = brokenFlatIndex;
+  for (let page = 0; page < base.pages.length; page++) {
+    const len = base.pages[page]!.steps.length;
+    if (remaining < len) return { page, step: remaining };
+    remaining -= len;
+  }
+  throw new Error(`spliceAtBroken: index ${brokenFlatIndex} out of range for a ${base.pages.reduce((n, p) => n + p.steps.length, 0)}-step recording`);
+}
+
+/**
+ * Builds the healed `Recording`: `base` with the broken step (at
+ * `brokenFlatIndex`) AND everything after it replaced by `healedSegment`'s
+ * own pages followed by the ORIGINAL tail from `brokenFlatIndex + 1`
+ * onward — so exactly one step is genuinely replaced and every step after
+ * it is preserved unchanged. Composed entirely from `spliceRecording`'s
+ * existing `"replace-from"` mode plus `extractTail`, rather than a new
+ * splice mode.
+ */
+export function healRecording(base: Recording, brokenFlatIndex: number, healedSegment: Recording): Recording {
+  const tail = extractTail(base, brokenFlatIndex + 1);
+  const replacement: Recording = { ...healedSegment, pages: [...healedSegment.pages, ...tail] };
+  const at = spliceAtBroken(base, brokenFlatIndex);
+  return spliceRecording(base, at, replacement, "replace-from");
 }

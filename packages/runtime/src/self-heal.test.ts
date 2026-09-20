@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import type { Step } from "@jevitate/recording";
-import { isWriteStep, postconditionOf } from "./self-heal.js";
+import type { Step, Recording } from "@jevitate/recording";
+import { isWriteStep, postconditionOf, extractTail, healRecording, flattenRecording } from "./self-heal.js";
 
 const visible: Step["kind"] extends never ? never : { kind: "visible"; target: { testId: string } } = { kind: "visible", target: { testId: "ok" } };
 
@@ -29,4 +29,50 @@ test("postconditionOf returns the step's own Assertion for navigate/click/fill/s
 test("postconditionOf returns undefined for waitFor/forEach (no Assertion to reach)", () => {
   expect(postconditionOf({ kind: "waitFor", target: { testId: "x" }, state: "visible" })).toBeUndefined();
   expect(postconditionOf({ kind: "forEach", items: { testId: "x" }, as: "row", steps: [] })).toBeUndefined();
+});
+
+function baseRecording(): Recording {
+  return {
+    version: "1.0",
+    site: "https://example.test",
+    pages: [
+      {
+        url: "/a",
+        steps: [
+          { step: { kind: "navigate", url: "/a", expect: { kind: "visible", target: { testId: "loaded" } } } }, // 0
+          { step: { kind: "click", target: { testId: "old-button" }, expect: { kind: "visible", target: { testId: "next" } } } }, // 1 (broken)
+        ],
+      },
+      {
+        url: "/b",
+        steps: [
+          { step: { kind: "assert", check: { kind: "urlIncludes", text: "/b" } } }, // 2
+        ],
+      },
+    ],
+  };
+}
+
+test("flattenRecording preserves page-then-step order", () => {
+  expect(flattenRecording(baseRecording()).map((e) => e.step.kind)).toEqual(["navigate", "click", "assert"]);
+});
+
+test("extractTail returns every step from the given flat index onward, re-flowed into pages", () => {
+  const tail = extractTail(baseRecording(), 2);
+  expect(tail).toEqual([{ url: "/b", steps: [{ step: { kind: "assert", check: { kind: "urlIncludes", text: "/b" } } }] }]);
+});
+
+test("healRecording replaces exactly the broken step and preserves the tail unchanged", () => {
+  const base = baseRecording();
+  const healedSegment: Recording = {
+    version: "1.0",
+    site: "https://example.test",
+    pages: [{ url: "/a", steps: [{ step: { kind: "click", target: { testId: "new-button" }, expect: { kind: "visible", target: { testId: "next" } } } }] }],
+  };
+  const healed = healRecording(base, 1, healedSegment);
+  const flat = flattenRecording(healed);
+  expect(flat).toHaveLength(3);
+  expect(flat[0].step.kind).toBe("navigate"); // unchanged before the break
+  expect(flat[1].step).toEqual(healedSegment.pages[0].steps[0].step); // the re-learned replacement
+  expect(flat[2].step.kind).toBe("assert"); // the original tail, preserved
 });
