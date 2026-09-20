@@ -126,3 +126,19 @@ describe("runInductionMission — defect judgment is advisory only", () => {
     }
   }, 30_000);
 });
+
+describe("runInductionMission — bounds", () => {
+  test("hitting maxActions terminates with outcome 'cap' and frontierExhausted=false", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/inbox`,
+      allowlist: [site.url],
+      bounds: { maxActions: 1, maxDecisions: 120, maxCandidates: 250 },
+    });
+    expect(result.outcome).toBe("cap");
+    expect(result.coverage.frontierExhausted).toBe(false);
+  }, 30_000);
+});
