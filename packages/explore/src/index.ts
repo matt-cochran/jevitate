@@ -7,3 +7,4 @@ export * from "./redact.js";
 export * from "./snapshot.js";
 export * from "./decide.js";
 export * from "./fill.js";
+export * from "./act.js";
