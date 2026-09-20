@@ -178,6 +178,12 @@ importers:
       '@doit/domain':
         specifier: workspace:*
         version: link:../domain
+      '@doit/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
+      '@doit/journey':
+        specifier: workspace:*
+        version: link:../journey
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright

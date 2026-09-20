@@ -6,7 +6,9 @@
     { "path": "../site-sdk" },
     { "path": "../playwright" },
     { "path": "../domain" },
-    { "path": "../application" }
+    { "path": "../application" },
+    { "path": "../interpreter" },
+    { "path": "../journey" }
   ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]

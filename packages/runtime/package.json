@@ -8,6 +8,8 @@
   "dependencies": {
     "@doit/application": "workspace:*",
     "@doit/domain": "workspace:*",
+    "@doit/interpreter": "workspace:*",
+    "@doit/journey": "workspace:*",
     "@doit/playwright": "workspace:*",
     "@doit/screenplay": "workspace:*",
     "@doit/site-sdk": "workspace:*"
