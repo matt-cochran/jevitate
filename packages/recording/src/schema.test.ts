@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RecordingSchema } from "./schema";
+import { RecordingSchema, AssertionSchema } from "./schema";
 
 describe("RecordingSchema", () => {
   it("parses a valid one-page recording", () => {
@@ -476,5 +476,15 @@ describe("RecordingSchema", () => {
       ],
     };
     expect(() => RecordingSchema.parse(invalid)).toThrow();
+  });
+});
+
+describe("AssertionSchema (exported for @jevitate/missions' successAssertion)", () => {
+  it("parses a well-formed urlIncludes assertion", () => {
+    expect(() => AssertionSchema.parse({ kind: "urlIncludes", text: "/checkout" })).not.toThrow();
+  });
+
+  it("rejects an unknown assertion kind", () => {
+    expect(() => AssertionSchema.parse({ kind: "bogus" })).toThrow();
   });
 });
