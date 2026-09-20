@@ -24,7 +24,10 @@ export default defineConfig({
       "@jevitate/runtime": pkg("runtime"),
       "@jevitate/load": pkg("load"),
       "@jevitate/ai-core": pkg("ai-core"),
+      "@jevitate/explore": pkg("explore"),
       "@jevitate/sources": pkg("sources"),
+      "@jevitate/missions": pkg("missions"),
+      "@jevitate/regression": pkg("regression"),
       // Add one line per new package here, e.g.:
       "@jevitate/example-site": fileURLToPath(new URL("./apps/example-site/src/index.ts", import.meta.url)),
       "@jevitate/site-example-network": fileURLToPath(new URL("./site-integrations/example-network/src/index.ts", import.meta.url)),

@@ -20,3 +20,11 @@ test("facade exposes the two-level journey tools alongside the existing allowlis
     expect(names.has(forbidden)).toBe(false);
   }
 });
+
+test("facade exposes queue_exploration alongside the existing allowlist", () => {
+  const names = new Set(listToolNames());
+  expect(names.has("queue_exploration")).toBe(true);
+  for (const forbidden of FORBIDDEN_TOOLS) {
+    expect(names.has(forbidden)).toBe(false);
+  }
+});

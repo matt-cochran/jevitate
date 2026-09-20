@@ -1,10 +1,13 @@
 {
   "name": "@jevitate/runtime",
   "version": "0.0.0",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "dependencies": {
     "@jevitate/application": "workspace:*",
     "@jevitate/domain": "workspace:*",
@@ -20,5 +23,7 @@
     "@jevitate/storage-sqlite": "workspace:*",
     "zod": "^4.6.5"
   },
-  "scripts": { "build": "tsc --build" }
+  "scripts": {
+    "build": "tsc --build"
+  }
 }

@@ -1,0 +1,23 @@
+{
+  "name": "jevitate",
+  "version": "0.1.0",
+  "description": "Bare-name alias for @jevitate/cli — installs the `jevitate` command.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matt-cochran/jevitate.git",
+    "directory": "packages/jevitate-cli-alias"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": { "jevitate": "bin/jevitate.js" },
+  "files": ["bin"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@jevitate/cli": "workspace:*"
+  }
+}

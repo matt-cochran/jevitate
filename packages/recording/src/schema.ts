@@ -150,7 +150,7 @@ const ValueOrVarSchema = z.union([
   z.object({ var: z.string() }).strict(),
 ]);
 
-const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind", [
+export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("visible"),
