@@ -12,12 +12,16 @@
     "@doit/domain": "workspace:*",
     "@doit/interpreter": "workspace:*",
     "@doit/journey": "workspace:*",
+    "@doit/load": "workspace:*",
     "@doit/playwright": "workspace:*",
     "@doit/recording": "workspace:*",
     "@doit/runtime": "workspace:*",
     "@doit/screenplay": "workspace:*",
     "@doit/storage-sqlite": "workspace:*",
     "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@doit/example-site": "workspace:*"
   },
   "scripts": { "build": "tsc --build" }
 }

@@ -62,6 +62,9 @@ importers:
       '@doit/journey':
         specifier: workspace:*
         version: link:../journey
+      '@doit/load':
+        specifier: workspace:*
+        version: link:../load
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright
@@ -80,6 +83,10 @@ importers:
       commander:
         specifier: ^12.0.0
         version: 12.1.0
+    devDependencies:
+      '@doit/example-site':
+        specifier: workspace:*
+        version: link:../../apps/example-site
 
   packages/daemon:
     dependencies:
@@ -137,6 +144,15 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
+
+  packages/load:
+    dependencies:
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@doit/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/mcp-facade:
     dependencies:
