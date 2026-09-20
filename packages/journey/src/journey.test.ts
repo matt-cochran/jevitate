@@ -13,4 +13,17 @@ describe("JourneySchema", () => {
     const bad = { ...j, metadata: { ...j.metadata, bogus: 1 } };
     expect(() => JourneySchema.parse(bad)).toThrow();
   });
+
+  it("rejects a metadata.id containing a path separator or '..', accepts a normal id", () => {
+    const base = {
+      metadata: { id: "login", name: "Log in", promoted: false, params: [], createdAtIso: "2026-09-19T00:00:00Z" },
+      recording,
+    };
+    expect(() => JourneySchema.parse(base)).not.toThrow();
+
+    for (const badId of ["a/b", "a\\b", "../etc/passwd", "..", ""]) {
+      const bad = { ...base, metadata: { ...base.metadata, id: badId } };
+      expect(() => JourneySchema.parse(bad)).toThrow();
+    }
+  });
 });
