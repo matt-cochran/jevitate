@@ -1,5 +1,6 @@
 import type { Step, Assertion, Recording, PageSegment, RecordedStep } from "@jevitate/recording";
 import { spliceRecording } from "@jevitate/recording";
+import type { Actor } from "@jevitate/screenplay";
 
 /**
  * Mirrors `@jevitate/sources`'s `classifyRisk`'s per-step-kind judgment
@@ -95,4 +96,24 @@ export function healRecording(base: Recording, brokenFlatIndex: number, healedSe
   const replacement: Recording = { ...healedSegment, pages: [...healedSegment.pages, ...tail] };
   const at = spliceAtBroken(base, brokenFlatIndex);
   return spliceRecording(base, at, replacement, "replace-from");
+}
+
+export interface SelfHealer {
+  /**
+   * Scoped re-learn of exactly one broken step: `actor` is already sitting
+   * in the LIVE state right after the last-good step (the failed step's own
+   * action never completed) — the healer drives from there to
+   * `expectedPostcondition` and returns the newly-learned segment as a
+   * `Recording` (its own pages, starting fresh from the current page — no
+   * leading `navigate`, matching the recorder's start-from-state capture
+   * convention). Returns `"not-healed"` (never throws for an ordinary
+   * failure to re-learn) when it could not reach the postcondition within
+   * its own bounds.
+   */
+  reLearnStep(args: {
+    actor: Actor;
+    brokenStep: Step;
+    expectedPostcondition: Assertion;
+    allowedOrigins?: readonly string[];
+  }): Promise<{ outcome: "healed"; segment: Recording } | { outcome: "not-healed"; reason: string }>;
 }
