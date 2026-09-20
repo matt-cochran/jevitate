@@ -13,6 +13,7 @@
     { "path": "packages/storage-sqlite" },
     { "path": "packages/daemon" },
     { "path": "packages/mcp-facade" },
+    { "path": "packages/missions" },
     { "path": "packages/cli" },
     { "path": "packages/playwright" },
     { "path": "packages/screenplay" },
