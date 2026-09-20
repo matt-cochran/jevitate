@@ -19,6 +19,7 @@ import {
 } from "@jevitate/ai-core";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
+import { resolveDataDir } from "./data-dir.js";
 
 /**
  * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
@@ -97,9 +98,11 @@ function realSecureIO(): SecureKeyIO {
     },
     async persist(key: CredentialKey, value: string): Promise<void> {
       const { mkdir, writeFile, readFile } = await import("node:fs/promises");
-      const { join, dirname } = await import("node:path");
-      const { homedir } = await import("node:os");
-      const path = join(homedir(), ".doit", "credentials.json");
+      const { dirname } = await import("node:path");
+      // D8: prefer ~/.jevitate/credentials.json; fall back to a pre-existing
+      // ~/.doit/credentials.json so a pre-rename user's saved key isn't
+      // orphaned (and isn't split across two files going forward).
+      const path = resolveDataDir(["credentials.json"]);
       await mkdir(dirname(path), { recursive: true });
       let existing: Record<string, string> = {};
       try {
