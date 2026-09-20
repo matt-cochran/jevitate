@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, mkdtemp } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +54,7 @@ import {
   runAuthorJourney,
   runCoverageMission,
   runAdversarialCliMission,
+  runFeatureCliMission,
   parseAssertionSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
@@ -723,6 +724,13 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--goal <text>", "natural-language goal (required for --strategy goal)")
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
+    .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
+    .option(
+      "--route <glob>",
+      "in-scope route glob for --feature (repeatable), e.g. /thread/**",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option(
       "--allow <origin>",
       "authorized origin (repeatable); defaults to the URL's own origin",
@@ -747,6 +755,8 @@ export function buildProgram(deps: CliDeps): Command {
         strategy?: string;
         goal?: string;
         success?: string;
+        feature?: string;
+        route: string[];
         allow: string[];
         secret: string[];
         maxActions?: string;
@@ -866,6 +876,38 @@ export function buildProgram(deps: CliDeps): Command {
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
+        }
+        return;
+      }
+
+      // Additive: `--feature <name>` runs the capability-scoped feature-testing
+      // mission (ticket #2 / site #11). It is model-free, so it needs neither
+      // --goal/--success nor a gateway selection; the goal-based path below is
+      // untouched when --feature is absent.
+      if (o.feature) {
+        if (!o.url) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required with --feature"));
+          return;
+        }
+        const featAllowlist = resolveExploreAllowlist(o.url, o.allow);
+        const profileDir = await mkdtemp(join(tmpdir(), "jevitate-feature-"));
+        try {
+          const result = await runFeatureCliMission({
+            seedUrl: o.url,
+            allowlist: featAllowlist,
+            capability: o.feature,
+            routeGlobs: o.route ?? [],
+            profileDir,
+          });
+          emitJson(program, ok(result));
+        } catch (err) {
+          if (err instanceof UnauthorizedExploreTargetError) {
+            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
+        } finally {
+          await rm(profileDir, { recursive: true, force: true });
         }
         return;
       }

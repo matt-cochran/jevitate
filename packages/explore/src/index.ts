@@ -19,3 +19,8 @@ export * from "./adversarial/input-strategy.js";
 export * from "./adversarial/defect-oracle.js";
 export * from "./adversarial/misuse.js";
 export * from "./missions/adversarial.js";
+
+// Ticket #2 — feature-testing mission (capability-scoped path discovery).
+export * from "./feature/capability-scope.js";
+export * from "./feature/boundary-values.js";
+export * from "./missions/feature.js";

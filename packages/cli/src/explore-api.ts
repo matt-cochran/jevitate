@@ -10,6 +10,7 @@ import {
   authorJourney,
   runInductionMission,
   runAdversarialMission,
+  runFeatureMission,
   assertAuthorizedExploreTarget,
   normalizeAllowlist,
   type Bounds,
@@ -19,6 +20,8 @@ import {
   type AuthorJourneyResult,
   type AdversarialOutcome,
   type MisuseStrategy,
+  type CapabilityScope,
+  type FeatureRunResult,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { resolveDataDir } from "./data-dir.js";
@@ -348,6 +351,51 @@ export async function runAdversarialCliMission(
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       site: origin,
+    });
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * The programmatic surface behind `jevitate explore --feature <name>` — the
+ * capability-scoped feature-testing mission (ticket #2, paired site ticket
+ * #11). Model-free by design, so unlike `runExploration` it needs no gateways.
+ *
+ * The authorized-target guard runs FIRST (fail-closed), BEFORE any browser is
+ * opened — an unauthorized origin never launches Chromium.
+ */
+export interface RunFeatureCliMissionOptions {
+  readonly seedUrl: string;
+  readonly allowlist: readonly string[];
+  readonly capability: string;
+  readonly routeGlobs: readonly string[];
+  readonly profileDir: string;
+  readonly headless?: boolean;
+  /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
+  readonly browserPortFactory?: () => BrowserPort;
+}
+
+export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureRunResult> {
+  // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
+  const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
+  const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
+
+  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  const session = await portFactory().open({
+    profileDir: opts.profileDir,
+    headless: opts.headless ?? true,
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+  });
+  try {
+    const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
+    return await runFeatureMission({
+      page: session.page,
+      actor,
+      seedUrl: opts.seedUrl,
+      allowlist: opts.allowlist,
+      scope,
     });
   } finally {
     await session.close();

@@ -14,6 +14,7 @@ import {
   runAuthorJourney,
   runCoverageMission,
   runAdversarialCliMission,
+  runFeatureCliMission,
 } from "./explore-api.js";
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
@@ -131,6 +132,18 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
       }),
     ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
     expect(browserPortFactory).not.toHaveBeenCalled();
+  });
+
+  it("runFeatureCliMission refuses an undeclared origin (no browser touched)", async () => {
+    await expect(
+      runFeatureCliMission({
+        seedUrl: "https://not-authorized.test",
+        allowlist: ["https://authorized.test"],
+        capability: "checkout",
+        routeGlobs: ["/checkout/**"],
+        profileDir: "/tmp/unused",
+      }),
+    ).rejects.toThrow(UnauthorizedExploreTargetError);
   });
 });
 
