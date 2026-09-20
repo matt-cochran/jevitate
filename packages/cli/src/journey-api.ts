@@ -6,7 +6,7 @@ import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
-import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
+import { JourneyRunner, type JourneyRunResult, type SelfHealer } from "@jevitate/runtime";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -22,6 +22,16 @@ export interface RunJourneyProgrammaticallyOptions {
   params: Record<string, string>;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
+  /**
+   * Optional gated self-heal port (Ticket #7). Only relevant when
+   * `policy.selfHeal.mode !== "fail-closed"`; wired as the `JourneyRunner`'s
+   * 5th constructor arg. When omitted (the default), a divergence quarantines
+   * exactly as before — identical to Slice 1's fail-closed behavior. The
+   * caller (CLI) is responsible for its credential preflight; this surface
+   * never builds AI gateways itself. Writes never auto-heal regardless of
+   * this port (enforced by `JourneyRunner`'s write floor).
+   */
+  selfHealer?: SelfHealer;
 }
 
 /**
@@ -62,7 +72,7 @@ export async function runJourneyProgrammatically(
     const actor = CastActor.named("cli-runner").whoCan(
       new BrowseTheWeb(session, [journey.recording.site]),
     );
-    const runner = new JourneyRunner(actor, new RecordingInterpreter());
+    const runner = new JourneyRunner(actor, new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
     return await runner.run({ journey, params: opts.params, policy });
   } finally {
     await session.close();
