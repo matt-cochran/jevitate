@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@doit/journey";
 import { safeRunPolicy, type RunPolicy } from "@doit/domain";
-import { PlaywrightBrowserPort } from "@doit/playwright";
+import { PlaywrightBrowserPort, type BrowserPort } from "@doit/playwright";
 import { CastActor, BrowseTheWeb } from "@doit/screenplay";
 import { RecordingInterpreter } from "@doit/interpreter";
 import { JourneyRunner } from "@doit/runtime";
@@ -22,6 +22,13 @@ export interface RunJourneyLoadTestOptions {
   authorizedOrigins: readonly string[];
   /** Defaults to `safeRunPolicy()`, same convention as `journey-api.ts`'s `runJourneyProgrammatically`. */
   policy?: RunPolicy;
+  /**
+   * Testing seam: overrides the real `PlaywrightBrowserPort` used per pool
+   * member with a fake, so the per-actor browser-session lifecycle (see
+   * `runnerFactory` below) can be unit-tested with no real browser. Defaults
+   * to `() => new PlaywrightBrowserPort()`.
+   */
+  browserPortFactory?: () => BrowserPort;
 }
 
 /**
@@ -44,6 +51,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
   validateParams(deriveParamSchema(journey.recording), opts.params);
 
   const policy = opts.policy ?? safeRunPolicy();
+  const browserPortFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
 
   return runLoadTest({
     targetOrigin: journey.recording.site,
@@ -53,7 +61,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     seed: opts.seed,
     runnerFactory: async (actorIndex): Promise<LoadActorRunner> => {
       const profileDir = await mkdtemp(join(tmpdir(), `doit-load-actor-${actorIndex}-`));
-      const port = new PlaywrightBrowserPort();
+      const port = browserPortFactory();
       const session = await port.open({
         profileDir,
         headless: true,
@@ -64,8 +72,29 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
         new BrowseTheWeb(session, [journey.recording.site]),
       );
       const runner = new JourneyRunner(actor, new RecordingInterpreter());
+
+      // `runLoadTest` calls `run()` exactly `iterationsPerActor` times for
+      // this actor — success or failure, never more, never fewer (see
+      // measured-load-runner.ts's per-actor loop). Closing the real browser
+      // session on EVERY `run()` would defeat pooling (a fresh browser
+      // launch per iteration); never closing it leaks a Chromium process +
+      // tmp profile dir per actor per invocation, worse as `--concurrency`
+      // scales — the whole point of a load harness. So: reuse one session
+      // across this actor's iterations, and close it in a `finally` once
+      // the LAST iteration finishes OR throws — mirroring `journey-api.ts`'s
+      // `try { ... } finally { await session.close(); }`.
+      let remainingIterations = opts.iterationsPerActor;
       return {
-        run: () => runner.run({ journey, params: opts.params, policy }),
+        run: async () => {
+          try {
+            return await runner.run({ journey, params: opts.params, policy });
+          } finally {
+            remainingIterations--;
+            if (remainingIterations <= 0) {
+              await session.close();
+            }
+          }
+        },
       };
     },
   });

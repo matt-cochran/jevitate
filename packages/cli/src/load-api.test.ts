@@ -1,12 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry } from "@doit/journey";
 import { UnauthorizedLoadTargetError } from "@doit/load";
+import type { BrowserPort, BrowserSession } from "@doit/playwright";
+import type { RunPolicy } from "@doit/domain";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 
-async function seedJourney(dir: string) {
+async function seedJourney(dir: string, site = "https://example.com") {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
   await registry.put({
@@ -17,8 +19,32 @@ async function seedJourney(dir: string) {
       params: [],
       createdAtIso: "2026-09-20T00:00:00Z",
     },
-    recording: { version: "1", site: "https://example.com", pages: [] },
+    recording: { version: "1", site, pages: [] },
   } as any);
+}
+
+type FakeSession = BrowserSession & { close: ReturnType<typeof vi.fn> };
+
+/**
+ * A fake `BrowserPort` that never launches a real browser — each `open()`
+ * call returns a fresh fake `BrowserSession` whose `close()` is a spy, and
+ * every session it creates is pushed to `sessions` so a test can assert on
+ * the whole pool's lifecycle (opened count, closed count) with no real
+ * Playwright/Chromium involved.
+ */
+function fakeBrowserPortFactory(sessions: FakeSession[]): () => BrowserPort {
+  return () => ({
+    async open(): Promise<BrowserSession> {
+      const session: FakeSession = {
+        page: {} as BrowserSession["page"],
+        startTracing: vi.fn(async () => {}),
+        stopTracingToFile: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      };
+      sessions.push(session);
+      return session;
+    },
+  });
 }
 
 describe("runJourneyLoadTest", () => {
@@ -53,5 +79,58 @@ describe("runJourneyLoadTest", () => {
         authorizedOrigins: ["https://example.com"],
       }),
     ).rejects.toBeInstanceOf(UnknownLoadJourneyError);
+  });
+
+  it("closes every per-actor Playwright session exactly once after its iterations complete (no leak) — no real browser", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir);
+    const sessions: FakeSession[] = [];
+
+    const report = await runJourneyLoadTest({
+      dir,
+      id: "checkout",
+      params: {},
+      concurrency: 3,
+      iterationsPerActor: 2,
+      seed: 1,
+      authorizedOrigins: ["https://example.com"],
+      browserPortFactory: fakeBrowserPortFactory(sessions),
+    });
+
+    expect(report.provenance).toBe("measured");
+    expect(sessions).toHaveLength(3); // one session opened per actor
+    for (const session of sessions) {
+      expect(session.close).toHaveBeenCalledTimes(1); // closed exactly once, after both iterations
+    }
+  });
+
+  it("still closes each per-actor session when every run() throws (cleanup must not depend on success)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir);
+    const sessions: FakeSession[] = [];
+
+    // An incomplete RunPolicy makes JourneyRunner.run() reject with
+    // PolicyEnforcementError on every call, before it ever touches the
+    // interpreter/page — proves the cleanup runs on the error path too,
+    // without needing a real browser/page failure.
+    const incompletePolicy = { selfHeal: { mode: "fail-closed" } } as unknown as RunPolicy;
+
+    const report = await runJourneyLoadTest({
+      dir,
+      id: "checkout",
+      params: {},
+      concurrency: 2,
+      iterationsPerActor: 3,
+      seed: 1,
+      authorizedOrigins: ["https://example.com"],
+      policy: incompletePolicy,
+      browserPortFactory: fakeBrowserPortFactory(sessions),
+    });
+
+    expect(report.errorRuns).toBe(6); // 2 actors * 3 iterations, every run() rejected
+    expect(sessions).toHaveLength(2);
+    for (const session of sessions) {
+      expect(session.close).toHaveBeenCalledTimes(1);
+    }
   });
 });
