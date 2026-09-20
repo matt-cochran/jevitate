@@ -13,6 +13,7 @@
     "ai": "^7.0.107",
     "@jevitate/daemon": "workspace:*",
     "@jevitate/domain": "workspace:*",
+    "@jevitate/explore": "workspace:*",
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/journey": "workspace:*",
     "@jevitate/load": "workspace:*",

@@ -68,6 +68,9 @@ importers:
       '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
+      '@jevitate/explore':
+        specifier: workspace:*
+        version: link:../explore
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
