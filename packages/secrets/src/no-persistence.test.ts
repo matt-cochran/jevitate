@@ -26,4 +26,16 @@ describe("Hard Floor #6 — nothing stored at rest", () => {
       }
     }
   });
+
+  it("the runtime vault-autofill code path (@jevitate/runtime's JourneyRunner) also touches neither the filesystem nor a database with the fetched secret", () => {
+    // The secret is fetched via SecretManagerPort inside JourneyRunner
+    // (packages/runtime), not this package — so Hard Floor #6's "nothing
+    // stored at rest" guarantee is only real if that call site is scanned
+    // too, not just the manager implementations here.
+    const runtimeJourneyRunnerPath = join(srcDir, "..", "..", "runtime", "src", "journey-runner.ts");
+    const text = readFileSync(runtimeJourneyRunnerPath, "utf8");
+    for (const pattern of FORBIDDEN) {
+      expect(text, `journey-runner.ts matched forbidden persistence pattern ${pattern}`).not.toMatch(pattern);
+    }
+  });
 });

@@ -43,6 +43,26 @@ function fakeInterpreter(handbackResult: any) {
   } as any;
 }
 
+/**
+ * Unlike `fakeInterpreter` above (whose `resumeFrom` always returns a
+ * hard-coded `vars: {}` — which can never surface a leak, since the
+ * secret's own value never has a path into the return value regardless of
+ * what the runner does), this variant ECHOES BACK whatever `resumeFrom` was
+ * actually called with. That makes it a real leak detector: if a future
+ * `JourneyRunner` change ever threaded the fetched secret into `req.params`
+ * (or anywhere else passed to `resumeFrom`), it would show up in
+ * `result.output` and this test would fail.
+ */
+function fakeInterpreterEcho(handbackResult: any) {
+  return {
+    run: vi.fn().mockResolvedValue(handbackResult),
+    resumeFrom: vi.fn(async (_actor: unknown, _recording: unknown, _at: number, params: Record<string, string>) => ({
+      outcome: "completed",
+      vars: { ...params },
+    })),
+  } as any;
+}
+
 const journeyWithSecret = (secretRefs: any[]) =>
   ({
     metadata: { id: "j", name: "j", promoted: true, params: [], secretRefs, createdAtIso: "x" },
@@ -109,18 +129,50 @@ describe("JourneyRunner — vault-autofill fill", () => {
     expect(interp.resumeFrom).toHaveBeenCalledWith(actor, expect.anything(), 1, {});
   });
 
-  it("never puts the secret plaintext into the JourneyRunResult (JSON round-trips clean)", async () => {
+  it("never puts the secret plaintext into the JourneyRunResult (non-vacuous: resumeFrom echoes back whatever it was actually called with)", async () => {
+    const KNOWN_SECRET = "hunter2-known-value-7f3a";
     const locator = fakeLocator();
     const page = fakePage(locator, "https://mail.example.test/login");
     const actor = actorWithPage(page);
+    const interp = fakeInterpreterEcho(handback);
+    const manager = new StubSecretManager({ "login-password": KNOWN_SECRET });
+    const runner = new JourneyRunner(actor, interp, undefined, manager);
+
+    const result = await runner.run({
+      journey: journeyWithSecret([ref]),
+      params: {},
+      policy: vaultPolicy,
+    });
+
+    expect(result.outcome).toBe("ok");
+    // Check outcome and output individually (per the requirement), then the
+    // whole serialized result — any of these would have caught a leak, since
+    // resumeFrom's echoed `vars` genuinely reflects what the runner passed it
+    // (unlike `fakeInterpreter`'s hard-coded `vars: {}`, which can never
+    // surface a leak regardless of what the runner actually does).
+    expect(JSON.stringify(result.outcome)).not.toContain(KNOWN_SECRET);
+    expect(JSON.stringify((result as { outcome: "ok"; output: unknown }).output)).not.toContain(KNOWN_SECRET);
+    const serialized = JSON.stringify(result); // must not throw — would, if a raw Secret object had leaked in
+    expect(serialized).not.toContain(KNOWN_SECRET);
+    // Confirm this is a real assertion, not a vacuous one: resumeFrom really
+    // was called, and only with the original (empty) params — never the secret.
+    expect(interp.resumeFrom).toHaveBeenCalledWith(actor, expect.anything(), 1, {});
+  });
+
+  it("Playwright-tracing guard: vault-autofill never calls startTracing on the actor's browser session (secret-bearing runs must not enable tracing)", async () => {
+    const locator = fakeLocator();
+    const page = fakePage(locator, "https://mail.example.test/login");
+    const startTracing = vi.fn();
+    const session = { page, startTracing, stopTracingToFile: vi.fn(), close: vi.fn() } as any;
+    const actor = CastActor.named("test").whoCan(new BrowseTheWeb(session, []));
     const interp = fakeInterpreter(handback);
     const manager = new StubSecretManager({ "login-password": "hunter2" });
     const runner = new JourneyRunner(actor, interp, undefined, manager);
 
     const result = await runner.run({ journey: journeyWithSecret([ref]), params: {}, policy: vaultPolicy });
 
-    const serialized = JSON.stringify(result); // must not throw — would, if a raw Secret object had leaked in
-    expect(serialized).not.toContain("hunter2");
+    expect(result).toEqual({ outcome: "ok", output: {} });
+    expect(startTracing).not.toHaveBeenCalled();
   });
 
   it("§9a invariant #3: no declared secretRef matches the current page's origin — throws SecretOriginMismatchError and never fills", async () => {

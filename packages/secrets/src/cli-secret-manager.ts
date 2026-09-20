@@ -43,8 +43,16 @@ export class CliSecretManager implements SecretManagerPort {
     try {
       stdout = await this.exec(cmd, args);
     } catch (err) {
+      // Deliberately do NOT include the raw `err.message`/stderr here: a
+      // misconfigured manager CLI could echo the secret itself to stderr
+      // (e.g. a bad shell wrapper), and node's exec/execFile errors fold
+      // stderr into `.message`. Only a generic status (manager, key
+      // reference, exit code if available) is safe to surface — never
+      // arbitrary process output.
+      const code = (err as NodeJS.ErrnoException & { code?: number | string })?.code;
+      const status = code !== undefined ? `exit code ${code}` : "no exit code available";
       throw new SecretUnresolvableError(
-        `manager "${ref.manager}" could not resolve key "${ref.key}": ${(err as Error).message}`,
+        `manager "${ref.manager}" could not resolve key "${ref.key}" (${status}) — see the manager CLI's own logs for details, not this error`,
       );
     }
     return new Secret(stdout.trim());
