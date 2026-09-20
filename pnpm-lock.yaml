@@ -138,6 +138,15 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/load:
+    dependencies:
+      '@doit/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@doit/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+
   packages/mcp-facade:
     dependencies:
       '@doit/application':

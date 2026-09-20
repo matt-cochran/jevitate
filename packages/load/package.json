@@ -1,0 +1,15 @@
+{
+  "name": "@doit/load",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@doit/domain": "workspace:*",
+    "@doit/runtime": "workspace:*"
+  },
+  "scripts": { "build": "tsc --build" }
+}
