@@ -18,6 +18,14 @@ export interface RunJourneyLoadTestOptions {
   params: Record<string, string>;
   concurrency: number;
   iterationsPerActor: number;
+  /**
+   * Governs deterministic actor fan-out/scheduling only (see
+   * `@doit/load`'s `RunLoadTestConfig.seed` doc comment) — the real
+   * `JourneyRunner` this function drives per pool member has no pacing
+   * hook, so this `seed` does NOT (yet) produce human-speed pacing of the
+   * real run the way `modeledCapacityReport`'s `seed` drives
+   * `simulateTiming()`. Known gap, deferred to a future slice.
+   */
   seed: number;
   authorizedOrigins: readonly string[];
   /** Defaults to `safeRunPolicy()`, same convention as `journey-api.ts`'s `runJourneyProgrammatically`. */
@@ -38,6 +46,13 @@ export interface RunJourneyLoadTestOptions {
  * real headless Playwright session + `JourneyRunner` per pool member. The
  * authorized-target check happens inside `runLoadTest` itself — this
  * function does not duplicate or bypass it.
+ *
+ * NOTE on "seeded ⇒ reproducible / human-paced" (corrected post-review):
+ * `opts.seed` makes the ACTOR POOL's composition reproducible (via
+ * `deriveActorSeeds` inside `runLoadTest`) — it does not yet make the real
+ * run human-paced, because `JourneyRunner` (constructed below) has no
+ * pacing hook to seed. Only the offline `modeledCapacityReport` path is
+ * genuinely human-paced today, via `@doit/domain`'s `simulateTiming()`.
  */
 export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promise<CapacityReport> {
   const store = new FsJourneyStore(opts.dir);

@@ -15,10 +15,30 @@ export interface RunLoadTestConfig {
   authorizedOrigins: readonly string[];
   concurrency: number;
   iterationsPerActor: number;
+  /**
+   * Governs deterministic ACTOR FAN-OUT/scheduling only (via
+   * `deriveActorSeeds`) — same `seed` + `concurrency` always derives the
+   * same per-actor sub-seeds, so a `measured` run's pool composition is
+   * reproducible. It does NOT (yet) drive per-actor human-speed pacing of
+   * the real run: `runnerFactory`'s pool members are whatever the caller
+   * builds (e.g. `packages/cli/src/load-api.ts` wires a real
+   * `JourneyRunner`, which has no pacing hook — human-speed pacing exists
+   * only in the separate `ActionRunner`, untouched by this slice). Contrast
+   * with `modeledCapacityReport`'s `seed`, which DOES drive per-iteration
+   * `simulateTiming()` pacing, since that path has no real runner to defer
+   * to.
+   */
   seed: number;
   runnerFactory: LoadActorRunnerFactory;
 }
 
+/**
+ * Drives a pool of `concurrency` actors, each running `iterationsPerActor`
+ * iterations via `config.runnerFactory`, and aggregates the results into a
+ * `provenance: "measured"` `CapacityReport`. See `RunLoadTestConfig.seed`'s
+ * doc comment above for exactly what "seeded" does and does not cover on
+ * this path (actor fan-out/scheduling, not real-run pacing).
+ */
 export async function runLoadTest(config: RunLoadTestConfig): Promise<CapacityReport> {
   assertAuthorizedTarget(config.targetOrigin, config.authorizedOrigins); // #10 — before ANYTHING else
 

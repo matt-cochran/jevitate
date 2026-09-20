@@ -20,6 +20,12 @@ export interface RunModeledCapacityConfig {
  * `provenance: "modeled"`; there is no code path here that returns
  * `"measured"`. See `runLoadTest` (measured-load-runner.ts) for the real
  * path — the two never call into each other.
+ *
+ * This is currently the ONLY genuinely human-paced path in `@doit/load`:
+ * `config.seed` drives both per-actor fan-out (`deriveActorSeeds`) AND
+ * per-iteration `simulateTiming()` pacing. Contrast with `runLoadTest`,
+ * whose `seed` governs fan-out/scheduling only — see that function's doc
+ * comment (measured-load-runner.ts) for why.
  */
 export function modeledCapacityReport(config: RunModeledCapacityConfig): CapacityReport {
   assertAuthorizedTarget(config.targetOrigin, config.authorizedOrigins); // #10 applies offline too
