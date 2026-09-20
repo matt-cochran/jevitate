@@ -12,6 +12,7 @@
     "@doit/journey": "workspace:*",
     "@doit/playwright": "workspace:*",
     "@doit/screenplay": "workspace:*",
+    "@doit/secrets": "workspace:*",
     "@doit/site-sdk": "workspace:*"
   },
   "devDependencies": {

@@ -1,7 +1,8 @@
 import type { Actor } from "@doit/screenplay";
 import type { RunPolicy } from "@doit/domain";
-import { deriveParamSchema, validateParams, type Journey } from "@doit/journey";
-import { RecordingInterpreter, checkAssertion } from "@doit/interpreter";
+import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@doit/journey";
+import { RecordingInterpreter, checkAssertion, type InterpretResult } from "@doit/interpreter";
+import type { SecretManagerPort } from "@doit/secrets";
 import { PolicyEnforcementError } from "./runner.js";
 
 /**
@@ -45,6 +46,7 @@ export class JourneyRunner {
     private readonly actor: Actor,
     private readonly interpreter: RecordingInterpreter,
     private readonly handback?: HandbackHandler,
+    private readonly secretManager?: SecretManagerPort,
   ) {}
 
   /**
@@ -61,6 +63,10 @@ export class JourneyRunner {
   async run(req: JourneyRunRequest): Promise<JourneyRunResult> {
     assertCompletePolicy(req?.policy); // #1 — fires before ANY interpreter call
     validateParams(deriveParamSchema(req.journey.recording), req.params); // #5 — before any step
+
+    if (req.policy.secret.secretMode === "vault-autofill") {
+      await this.preflightSecretRefs(req.journey.metadata.secretRefs ?? []);
+    }
 
     let result = await this.interpreter.run(this.actor, req.journey.recording, req.params);
 
@@ -94,5 +100,21 @@ export class JourneyRunner {
     }
     // result.outcome === "failed"
     return { outcome: "quarantined", reason: `step ${result.at} failed: ${result.error}`, at: result.at };
+  }
+
+  /** §9a invariant #4: preflight — every declared secretRef must resolve
+   * BEFORE any step runs. A missing SecretManagerPort under vault-autofill
+   * is itself an unenforceable policy (mirrors PolicyEnforcementError's
+   * existing "declared hard limit we cannot enforce" pattern in
+   * runner.ts) and fails closed the same way — never a permissive skip. */
+  private async preflightSecretRefs(refs: SecretRef[]): Promise<void> {
+    if (!this.secretManager) {
+      throw new PolicyEnforcementError(
+        "RunPolicy declares secretMode: vault-autofill but this JourneyRunner has no SecretManagerPort wired up — refusing to run (fail-closed)",
+      );
+    }
+    for (const ref of refs) {
+      await this.secretManager.assertResolvable(ref); // throws SecretUnresolvableError, never a silent skip
+    }
   }
 }

@@ -214,6 +214,9 @@ importers:
       '@doit/screenplay':
         specifier: workspace:*
         version: link:../screenplay
+      '@doit/secrets':
+        specifier: workspace:*
+        version: link:../secrets
       '@doit/site-sdk':
         specifier: workspace:*
         version: link:../site-sdk
