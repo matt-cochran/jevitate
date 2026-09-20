@@ -99,9 +99,7 @@ function realSecureIO(): SecureKeyIO {
     async persist(key: CredentialKey, value: string): Promise<void> {
       const { mkdir, writeFile, readFile } = await import("node:fs/promises");
       const { dirname } = await import("node:path");
-      // D8: prefer ~/.jevitate/credentials.json; fall back to a pre-existing
-      // ~/.doit/credentials.json so a pre-rename user's saved key isn't
-      // orphaned (and isn't split across two files going forward).
+      // Credentials live at ~/.jevitate/credentials.json (see data-dir.ts).
       const path = resolveDataDir(["credentials.json"]);
       await mkdir(dirname(path), { recursive: true });
       let existing: Record<string, string> = {};

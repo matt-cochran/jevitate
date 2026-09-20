@@ -491,12 +491,16 @@ test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) o
 test("load run without --authorized-origin errors clearly instead of silently running with an empty allowlist", async () => {
   const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
   const profiles = new ProfileManager(root);
+  const lines: string[] = [];
   const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: () => {} });
   program.exitOverride();
-  program.configureOutput({ writeErr: () => {} }); // suppress commander's own usage output in test logs
-  await expect(
-    program.parseAsync(["load", "run", "some-journey"], { from: "user" }),
-  ).rejects.toThrow(/authorized-origin/);
+  // Enforced in-action (fail envelope + exitCode), NOT via commander's
+  // hard-exiting requiredOption — consistent with the rest of this CLI.
+  await program.parseAsync(["load", "run", "some-journey", "--json"], { from: "user" });
+  const envelope = JSON.parse(lines.join(""));
+  expect(envelope.ok).toBe(false);
+  expect(JSON.stringify(envelope)).toMatch(/authorized-origin/);
 });
 
 test("load run accumulates repeated --authorized-origin flags", async () => {

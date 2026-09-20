@@ -35,9 +35,8 @@ export interface CliDeps {
   ai?: AiCliDeps;
 }
 
-// D8: `~/.jevitate/*` is the current product convention (product = Jevitate);
-// `resolveDataDir` falls back to a pre-existing `~/.doit/*` path so a
-// pre-rename user's local data isn't orphaned. See data-dir.ts.
+// `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
+// See data-dir.ts.
 const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
 const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
 
@@ -551,17 +550,15 @@ export function buildProgram(deps: CliDeps): Command {
     .command("run <journeyId>")
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
-    // NOTE: deliberately NO default value here. `requiredOption` + a `[]`
-    // default would neuter commander's own mandatory-option enforcement —
-    // commander only errors when the resolved value is `undefined`, and a
-    // default makes it never `undefined` even when the flag is never
-    // passed. Omitting the default lets commander genuinely refuse to run
-    // when `--authorized-origin` is missing; the accumulator fn tolerates
-    // `prev === undefined` on its first invocation.
-    .requiredOption(
+    // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
+    // via a `fail` envelope rather than commander's `.requiredOption` — which
+    // hard-exits via `process.exit`, inconsistent with this CLI's convention
+    // of emitting a JSON envelope + setting `process.exitCode` (see emitJson).
+    .option(
       "--authorized-origin <origin>",
       "allowed load-test target origin (repeatable) — required, fails closed if omitted",
-      (v, prev: string[] | undefined) => [...(prev ?? []), v],
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
     )
     .option("--concurrency <n>", "pool size", "1")
     .option("--iterations <n>", "iterations per actor", "1")
@@ -577,6 +574,13 @@ export function buildProgram(deps: CliDeps): Command {
         seed: string;
         json?: boolean;
       }>();
+      if (authorizedOrigin.length === 0) {
+        emitJson(
+          program,
+          fail("E_LOAD_RUN", "at least one --authorized-origin is required (refusing to load-test with an empty allowlist)"),
+        );
+        return;
+      }
       try {
         const report = await runJourneyLoadTest({
           dir: resolveJourneysDir(deps, dir),
