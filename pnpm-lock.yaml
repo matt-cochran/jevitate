@@ -143,6 +143,9 @@ importers:
       '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
+      '@jevitate/interpreter':
+        specifier: workspace:*
+        version: link:../interpreter
       '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
@@ -162,9 +165,6 @@ importers:
       '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
-      '@jevitate/interpreter':
-        specifier: workspace:*
-        version: link:../interpreter
 
   packages/interpreter:
     dependencies:

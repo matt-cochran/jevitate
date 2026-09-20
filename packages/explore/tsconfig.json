@@ -4,6 +4,7 @@
   "references": [
     { "path": "../ai-core" },
     { "path": "../domain" },
+    { "path": "../interpreter" },
     { "path": "../playwright" },
     { "path": "../recorder" },
     { "path": "../recording" },

@@ -9,6 +9,7 @@
   "dependencies": {
     "@jevitate/ai-core": "workspace:*",
     "@jevitate/domain": "workspace:*",
+    "@jevitate/interpreter": "workspace:*",
     "@jevitate/playwright": "workspace:*",
     "@jevitate/recorder": "workspace:*",
     "@jevitate/recording": "workspace:*",
@@ -16,7 +17,6 @@
     "playwright": "^1.49.0"
   },
   "devDependencies": {
-    "@jevitate/example-site": "workspace:*",
-    "@jevitate/interpreter": "workspace:*"
+    "@jevitate/example-site": "workspace:*"
   }
 }
