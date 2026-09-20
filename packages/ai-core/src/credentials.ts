@@ -28,7 +28,15 @@ export function envCredentialStore(
   env: Record<string, string | undefined> = process.env,
   localConfig: Partial<Record<CredentialKey, string>> = {},
 ): CredentialStore {
-  const nonBlank = (v: string | undefined) => (v && v.trim().length > 0 ? v : undefined);
+  // Trimmed so a padded key (trailing newline/space from a copy-paste or a
+  // shell-exported env var) never produces a malformed `Bearer` header. A
+  // whitespace-only value trims to "" and must still count as ABSENT — the
+  // length check runs on the trimmed value, so this preserves the existing
+  // "non-blank env else non-blank localConfig" fallback behavior.
+  const nonBlank = (v: string | undefined) => {
+    const trimmed = v?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : undefined;
+  };
   const resolve = (k: CredentialKey) => nonBlank(env[k]) ?? nonBlank(localConfig[k]);
   return { detect: (k) => resolve(k) !== undefined, read: (k) => resolve(k) };
 }
