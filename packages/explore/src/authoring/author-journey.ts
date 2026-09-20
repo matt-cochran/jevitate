@@ -65,6 +65,30 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     { recording: discovery.recording, values: discoveryGeneration.capturedValues(discovery.recording) },
   ];
 
+  // Corroborating takes: replay toward the same goal `takes - 1` more times so
+  // fields that vary across runs surface as confident variables (vs a single
+  // take, which can only ever materialize constants). NOTE: ticket #1 has not
+  // yet added the planned `seedRecording` param that would make each replay a
+  // deterministic re-drive of the discovered path, so each additional take is
+  // an independent re-exploration and structural alignment across takes is
+  // best-effort. The CLI defaults to `takes: 1` (the fully-supported MVP); a
+  // corroborating take that does not succeed is dropped, never fatal.
+  for (let i = 1; i < takes; i++) {
+    const replayGeneration = new ValueCapturingGenerationPort(req.generation);
+    const replay = await runGoalBasedMission({
+      goal: req.goal,
+      successAssertion: req.successAssertion,
+      allowlist: req.allowlist,
+      startUrl: req.startUrl,
+      bounds: req.bounds,
+      actor: req.actor,
+      judge: req.judgment,
+      gen: replayGeneration,
+    });
+    if (replay.outcome !== "succeeded") continue;
+    authoringTakes.push({ recording: replay.recording, values: replayGeneration.capturedValues(replay.recording) });
+  }
+
   const diff = diffTakes(authoringTakes);
   const decisions = autoDecidePostdoc(authoringTakes[0].recording, diff);
   const parameterizedRecording = applyPostdoc(authoringTakes[0], diff, decisions);

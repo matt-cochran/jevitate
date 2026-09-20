@@ -89,3 +89,34 @@ test("returns not-reached when the discovery mission does not succeed", async ()
 
   expect(result).toEqual({ outcome: "not-reached", reason: "discovery mission blocked" });
 });
+
+test("multi-take authoring (takes: 2) promotes a value that differs across takes to a variable", async () => {
+  // Uses the default mock (which drives cfg.gen once per mission call); the
+  // generation port yields a different value on each of the two takes, so the
+  // single fill step varies across takes and is promoted to a variable.
+  const generation: GenerationPort = {
+    generate: vi
+      .fn()
+      .mockResolvedValueOnce({ output: { text: "widgets" }, provenance: { model: "fake", tookMs: 0 } })
+      .mockResolvedValueOnce({ output: { text: "gadgets" }, provenance: { model: "fake", tookMs: 0 } }),
+  } as unknown as GenerationPort;
+
+  const result = await authorJourney({
+    goal: "search for something",
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    actor: {} as never,
+    judgment: fakeJudgment,
+    generation,
+    takes: 2,
+    journeyId: "explore-search",
+    journeyName: "Explore: search",
+  });
+
+  expect(result.outcome).toBe("authored");
+  if (result.outcome !== "authored") throw new Error("unreachable");
+  expect(result.journey.metadata.params.length).toBe(1); // the fill step was promoted to a variable
+  const fillStep = result.journey.recording.pages[0].steps[1].step;
+  if (fillStep.kind === "fill") expect(fillStep.value).toEqual({ var: expect.any(String) });
+});
