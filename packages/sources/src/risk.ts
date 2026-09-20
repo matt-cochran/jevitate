@@ -1,4 +1,4 @@
-import type { Step } from "@doit/recording";
+import type { Recording, Step } from "@doit/recording";
 import type { SharedJourneyFile } from "./manifest.js";
 
 export type RiskClass = "read-only" | "risky";
@@ -58,4 +58,24 @@ export function classifyRisk(file: SharedJourneyFile): RiskClass {
     }
   }
   return "read-only";
+}
+
+/**
+ * Collects the distinct absolute origins visited by `navigate` steps
+ * (recursively into `forEach`) in a Recording. Used by `LocalSource` to
+ * derive a self-consistent `declaredOrigins` for locally-authored Journeys
+ * that don't (yet) carry an explicit `declaredOrigins` field — the local
+ * author IS the trust boundary, so "what this Journey actually navigates
+ * to" is exactly what it's authorized for.
+ */
+export function collectNavigateOrigins(recording: Recording): string[] {
+  const allSteps = flattenSteps(recording.pages.flatMap((p) => p.steps.map((rs) => rs.step)));
+  const origins = new Set<string>();
+  for (const step of allSteps) {
+    if (step.kind === "navigate") {
+      const origin = originOf(step.url);
+      if (origin !== null) origins.add(origin);
+    }
+  }
+  return [...origins].sort();
 }

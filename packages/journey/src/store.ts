@@ -4,6 +4,19 @@ import type { Journey, JourneyMetadata } from "./journey.js";
 import { JourneySchema } from "./journey.js";
 
 /**
+ * Structural shape `JourneyRegistry` needs from its backing store.
+ * `FsJourneyStore` already satisfies this; exported so other packages
+ * (e.g. `@doit/sources`, federating external Journey sources) can hand a
+ * `JourneyRegistry` a different backing store without `@doit/journey`
+ * importing anything from them (dependency direction stays inward).
+ */
+export interface JourneyStore {
+  get(id: string): Promise<Journey | null>;
+  put(j: Journey): Promise<void>;
+  list(): Promise<JourneyMetadata[]>;
+}
+
+/**
  * Rejects an `id` containing a path separator or `..` segment, since `id`
  * may originate from external/less-trusted callers and is used to build a
  * filesystem path. Mirrors `FsRecordingStore`'s `assertSafeId`.
