@@ -1,0 +1,22 @@
+{
+  "name": "@jevitate/explore",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "scripts": { "build": "tsc --build" },
+  "dependencies": {
+    "@jevitate/ai-core": "workspace:*",
+    "@jevitate/domain": "workspace:*",
+    "@jevitate/playwright": "workspace:*",
+    "@jevitate/recorder": "workspace:*",
+    "@jevitate/recording": "workspace:*",
+    "@jevitate/screenplay": "workspace:*",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@jevitate/example-site": "workspace:*",
+    "@jevitate/interpreter": "workspace:*"
+  }
+}
