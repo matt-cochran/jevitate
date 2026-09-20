@@ -10,6 +10,7 @@
     { "path": "../load" },
     { "path": "../playwright" },
     { "path": "../recording" },
+    { "path": "../regression" },
     { "path": "../runtime" },
     { "path": "../screenplay" },
     { "path": "../storage-sqlite" }

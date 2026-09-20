@@ -83,6 +83,9 @@ importers:
       '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
+      '@jevitate/regression':
+        specifier: workspace:*
+        version: link:../regression
       '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
