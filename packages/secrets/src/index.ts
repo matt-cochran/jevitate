@@ -4,3 +4,4 @@ export { SecretOriginMismatchError, SecretUnresolvableError } from "./errors.js"
 export { assertOriginBound } from "./origin-binding.js";
 export type { SecretManagerPort } from "./secret-manager-port.js";
 export { StubSecretManager } from "./stub-secret-manager.js";
+export { CliSecretManager, type CliCommand, type ExecFn } from "./cli-secret-manager.js";
