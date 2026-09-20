@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/domain" },
+    { "path": "packages/secrets" },
     { "path": "packages/application" },
     { "path": "packages/recording" },
     { "path": "packages/journey" },

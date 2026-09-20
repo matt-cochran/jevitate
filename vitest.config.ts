@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@doit/domain": pkg("domain"),
+      "@doit/secrets": pkg("secrets"),
       "@doit/application": pkg("application"),
       "@doit/recording": pkg("recording"),
       "@doit/interpreter": pkg("interpreter"),
