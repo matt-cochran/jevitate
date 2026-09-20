@@ -483,3 +483,42 @@ test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) o
     process.exitCode = savedExitCode;
   }
 });
+
+// C6: `--authorized-origin` must be genuinely required — a `requiredOption`
+// combined with a `[]` default previously neutered commander's own
+// enforcement (the resolved value was never `undefined`). Covers the fix in
+// `program.ts`'s `load run`.
+test("load run without --authorized-origin errors clearly instead of silently running with an empty allowlist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const program = buildProgram({ profiles });
+  program.exitOverride();
+  program.configureOutput({ writeErr: () => {} }); // suppress commander's own usage output in test logs
+  await expect(
+    program.parseAsync(["load", "run", "some-journey"], { from: "user" }),
+  ).rejects.toThrow(/authorized-origin/);
+});
+
+test("load run accumulates repeated --authorized-origin flags", async () => {
+  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const profiles = new ProfileManager(root);
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  // No matching journey — expect the E_UNKNOWN_JOURNEY path, but ONLY after
+  // commander accepted both --authorized-origin occurrences (proves the
+  // accumulator fn still works without its old `[]` default).
+  await program.parseAsync(
+    [
+      "load", "run", "does-not-exist",
+      "--authorized-origin", "https://a.example.com",
+      "--authorized-origin", "https://b.example.com",
+      "--dir", root,
+      "--json",
+    ],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
+});

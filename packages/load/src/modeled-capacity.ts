@@ -65,5 +65,6 @@ export function modeledCapacityReport(config: RunModeledCapacityConfig): Capacit
     durationMs: maxActorTotalMs,
     throughputPerSecond: maxActorTotalMs > 0 ? (totalRuns * 1000) / maxActorTotalMs : 0,
     latency: computeLatencyPercentiles(durations),
+    latencyPercentilesOver: "completedRuns",
   };
 }

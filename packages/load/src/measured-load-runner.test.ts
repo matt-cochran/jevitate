@@ -38,6 +38,10 @@ describe("runLoadTest", () => {
     expect(report.startedAtIso).toBeDefined();
     expect(report.endedAtIso).toBeDefined();
     expect(report.latency.minMs).toBeGreaterThanOrEqual(0);
+    // C5: the report makes explicit that `latency` covers only runs that
+    // completed (ok + quarantined), never the thrown/errorRuns — so a
+    // reader can't mistake a high-error run for a fast one.
+    expect(report.latencyPercentilesOver).toBe("completedRuns");
   });
 
   it("calls the runner factory once per actor, run() iterationsPerActor times per actor", async () => {

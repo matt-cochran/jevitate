@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDataDir } from "./data-dir.js";
 
 export interface TrustRecord {
   sourceId: string;
@@ -19,7 +19,7 @@ export interface TrustStore {
 /** §14.1 — TrustStore is LOCAL/per-user, never written into the shared
  * `jevitate.lock`: trust is a human judgment made on this machine, not
  * something a teammate's lock can grant (FMECA #2/#5; §9.9 flat sources). */
-export const DEFAULT_TRUST_DIR = join(homedir(), ".doit", "trust");
+export const DEFAULT_TRUST_DIR = resolveDataDir(["trust"]);
 
 /** Rejects a `sourceId`/`journeyId` containing a path separator or `..`
  * segment — mirrors `@jevitate/journey`'s `assertSafeId` — since both are used

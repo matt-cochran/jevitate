@@ -34,6 +34,7 @@ describe("modeledCapacityReport", () => {
     expect(report.startedAtIso).toBeUndefined(); // no real clock to bound
     expect(report.latency.meanMs).toBeGreaterThan(0);
     expect(report.throughputPerSecond).toBeGreaterThan(0);
+    expect(report.latencyPercentilesOver).toBe("completedRuns"); // C5
   });
 
   it("is fully deterministic given the same seed", () => {

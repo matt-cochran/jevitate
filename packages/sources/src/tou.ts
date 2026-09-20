@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JevitateManifest, SiteDeclaration } from "./manifest.js";
 import { UndeclaredTouError } from "./errors.js";
+import { resolveDataDir } from "./data-dir.js";
 
 export interface TouAck {
   sourceName: string;
@@ -20,7 +20,7 @@ export interface AckStore {
 /** §14.1 — acks are LOCAL/per-user, like `TrustStore`: acknowledging a
  * source's Terms of Use is a human act on this machine, never granted by a
  * teammate's shared lockfile. */
-export const DEFAULT_ACK_DIR = join(homedir(), ".doit", "trust", "acks");
+export const DEFAULT_ACK_DIR = resolveDataDir(["trust", "acks"]);
 
 function assertSafeName(name: string): void {
   if (name.includes("/") || name.includes("\\") || name.includes("..") || name.length === 0) {

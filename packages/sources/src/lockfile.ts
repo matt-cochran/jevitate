@@ -5,7 +5,7 @@ import { z } from "zod";
 /**
  * Rejects a `name` containing a path separator or `..` segment — mirrors
  * `@jevitate/journey`'s `assertSafeId` — since a source `name` is used to build
- * filesystem paths under the managed sources dir (`~/.doit/sources/<name>/`)
+ * filesystem paths under the managed sources dir (`~/.jevitate/sources/<name>/`)
  * and trust-store keys.
  */
 const SAFE_NAME_RE = /^[^/\\]+$/;

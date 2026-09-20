@@ -40,7 +40,7 @@ export interface RunJourneyLoadTestOptions {
 }
 
 /**
- * The programmatic surface behind `brauto load run` — resolves a published
+ * The programmatic surface behind `jevitate load run` — resolves a published
  * Journey (unknown id -> `UnknownLoadJourneyError`), validates params UP
  * FRONT, then hands `@jevitate/load`'s `runLoadTest` a factory that opens ONE
  * real headless Playwright session + `JourneyRunner` per pool member. The

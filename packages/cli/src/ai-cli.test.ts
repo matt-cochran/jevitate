@@ -42,20 +42,62 @@ test("ai status --json reports a feature as satisfied when its key is present", 
   expect(lines.join("")).not.toContain("sk-or-should-not-appear");
 });
 
-test("ai generate form.value --json prints an ok envelope from the fake gateway with a deterministic responseHash", async () => {
+test("ai generate form.value --fake --json prints an ok envelope from the fake gateway with a deterministic responseHash", async () => {
   const { program, lines } = newProgram({ env: {} });
   const input = JSON.stringify({ fieldLabel: "email", goal: "log in", visibleContext: "form", history: [] });
 
-  await program.parseAsync(["ai", "generate", "form.value", "--input", input, "--json"], { from: "user" });
+  await program.parseAsync(["ai", "generate", "form.value", "--input", input, "--fake", "--json"], { from: "user" });
   const first = JSON.parse(lines.join(""));
   expect(first.ok).toBe(true);
   expect(first.data.provenance.adapter).toBe("fake");
   const hash1 = first.data.provenance.responseHash;
 
   const { program: program2, lines: lines2 } = newProgram({ env: {} });
-  await program2.parseAsync(["ai", "generate", "form.value", "--input", input, "--json"], { from: "user" });
+  await program2.parseAsync(["ai", "generate", "form.value", "--input", input, "--fake", "--json"], { from: "user" });
   const second = JSON.parse(lines2.join(""));
   expect(second.data.provenance.responseHash).toBe(hash1);
+});
+
+test("ai generate with neither --real nor --fake and no key fails closed with E_AI_SETUP_REQUIRED (no silent fake default)", async () => {
+  const { program, lines } = newProgram({ env: {} });
+  const input = JSON.stringify({ fieldLabel: "email", goal: "log in", visibleContext: "form", history: [] });
+
+  await program.parseAsync(["ai", "generate", "form.value", "--input", input, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_AI_SETUP_REQUIRED");
+  expect(parsed.error.message).toMatch(/ai setup|--fake/);
+});
+
+test("ai generate with neither --real nor --fake but a key configured still fails closed (explicit choice required)", async () => {
+  const { program, lines } = newProgram({ env: { OPENROUTER_API_KEY: "sk-or-configured" } });
+  const input = JSON.stringify({ fieldLabel: "email", goal: "log in", visibleContext: "form", history: [] });
+
+  await program.parseAsync(["ai", "generate", "form.value", "--input", input, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_AI_SETUP_REQUIRED");
+  expect(lines.join("")).not.toContain("sk-or-configured");
+});
+
+test("ai generate --real sanitizes a provider error so the raw message (and any embedded key) never reaches the CLI envelope", async () => {
+  const gateway = {
+    generate: async () => {
+      throw new Error("upstream 401: Authorization: Bearer sk-or-FAKE-LEAK-KEY rejected");
+    },
+  };
+  const { program, lines } = newProgram({ env: { OPENROUTER_API_KEY: "sk-or-FAKE-LEAK-KEY" }, gateway });
+  const input = JSON.stringify({ fieldLabel: "email", goal: "log in", visibleContext: "form", history: [] });
+
+  await program.parseAsync(["ai", "generate", "form.value", "--input", input, "--real", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_AI_GENERATE");
+  expect(lines.join("")).not.toContain("sk-or-FAKE-LEAK-KEY");
+  expect(parsed.error.message).not.toContain("Authorization");
 });
 
 /**

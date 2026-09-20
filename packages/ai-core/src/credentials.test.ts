@@ -19,3 +19,19 @@ describe("requireKeys (fail-closed)", () => {
     expect(requireKeys("judgment", store)).toEqual(["TYPESAFE_API_KEY"]);
   });
 });
+
+describe("envCredentialStore.read (trims on read)", () => {
+  it("trims a padded key so it never produces a malformed Bearer header", () => {
+    const store = envCredentialStore({ OPENROUTER_API_KEY: "  key  " }, {});
+    expect(store.read("OPENROUTER_API_KEY")).toBe("key");
+  });
+  it("treats a whitespace-only value as ABSENT, not as an empty/padded key", () => {
+    const store = envCredentialStore({ OPENROUTER_API_KEY: "   " }, {});
+    expect(store.read("OPENROUTER_API_KEY")).toBeUndefined();
+    expect(store.detect("OPENROUTER_API_KEY")).toBe(false);
+  });
+  it("trims a padded localConfig fallback value too", () => {
+    const store = envCredentialStore({}, { OPENROUTER_API_KEY: "  key  " });
+    expect(store.read("OPENROUTER_API_KEY")).toBe("key");
+  });
+});

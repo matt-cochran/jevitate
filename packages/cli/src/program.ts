@@ -1,6 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
 import type { ProfileManager } from "@jevitate/daemon";
@@ -25,6 +24,7 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { registerAiCommands, type AiCliDeps } from "./ai-cli.js";
+import { resolveDataDir } from "./data-dir.js";
 
 export interface CliDeps {
   profiles: ProfileManager;
@@ -35,8 +35,11 @@ export interface CliDeps {
   ai?: AiCliDeps;
 }
 
-const DEFAULT_DB_PATH = join(homedir(), ".doit", "db.sqlite");
-const DEFAULT_JOURNEYS_DIR = join(homedir(), ".doit", "journeys");
+// D8: `~/.jevitate/*` is the current product convention (product = Jevitate);
+// `resolveDataDir` falls back to a pre-existing `~/.doit/*` path so a
+// pre-rename user's local data isn't orphaned. See data-dir.ts.
+const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
+const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
@@ -45,7 +48,7 @@ function resolveDbPath(deps: CliDeps, flag?: string): string {
 /**
  * Mirrors `resolveDbPath`'s flag > deps > home-dir-default convention: a
  * per-invocation `--dir` flag wins, then a `CliDeps.journeysDir` wired in by
- * the host, then `~/.doit/journeys`.
+ * the host, then `~/.jevitate/journeys`.
  */
 function resolveJourneysDir(deps: CliDeps, flag?: string): string {
   return flag ?? deps.journeysDir ?? DEFAULT_JOURNEYS_DIR;
@@ -125,7 +128,7 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
 
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("brauto").description("Local browser automation platform").version("0.0.0");
+  program.name("jevitate").description("Local browser automation platform").version("0.0.0");
 
   program
     .command("init")
@@ -137,7 +140,7 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.("brauto initialized\n");
+          program.configureOutput().writeOut?.("jevitate initialized\n");
           process.exitCode = 0;
         }
       } catch (err) {
@@ -444,7 +447,7 @@ export function buildProgram(deps: CliDeps): Command {
    */
   journey
     .command("list")
-    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -473,7 +476,7 @@ export function buildProgram(deps: CliDeps): Command {
   // forbidden dependency.
   journey
     .command("find <query>")
-    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, query: string) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -504,7 +507,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   journey
     .command("run <id>")
-    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
@@ -546,9 +549,20 @@ export function buildProgram(deps: CliDeps): Command {
 
   load
     .command("run <journeyId>")
-    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
-    .requiredOption("--authorized-origin <origin>", "allowed load-test target origin (repeatable)", (v, prev: string[]) => [...prev, v], [] as string[])
+    // NOTE: deliberately NO default value here. `requiredOption` + a `[]`
+    // default would neuter commander's own mandatory-option enforcement —
+    // commander only errors when the resolved value is `undefined`, and a
+    // default makes it never `undefined` even when the flag is never
+    // passed. Omitting the default lets commander genuinely refuse to run
+    // when `--authorized-origin` is missing; the accumulator fn tolerates
+    // `prev === undefined` on its first invocation.
+    .requiredOption(
+      "--authorized-origin <origin>",
+      "allowed load-test target origin (repeatable) — required, fails closed if omitted",
+      (v, prev: string[] | undefined) => [...(prev ?? []), v],
+    )
     .option("--concurrency <n>", "pool size", "1")
     .option("--iterations <n>", "iterations per actor", "1")
     .option("--seed <n>", "master RNG seed", "1")
