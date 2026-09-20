@@ -15,3 +15,7 @@ export * from "./authoring/author-journey.js";
 export * from "./authoring/auto-decide.js";
 export * from "./authoring/value-capturing-generation-port.js";
 export * from "./missions/induction.js";
+export * from "./adversarial/input-strategy.js";
+export * from "./adversarial/defect-oracle.js";
+export * from "./adversarial/misuse.js";
+export * from "./missions/adversarial.js";

@@ -13,6 +13,7 @@ import {
   runExploration,
   runAuthorJourney,
   runCoverageMission,
+  runAdversarialCliMission,
 } from "./explore-api.js";
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
@@ -189,5 +190,27 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     // Got PAST the goal-args validation (no E_EXPLORE_ARGS) to gateway setup,
     // proving the coverage strategy is a distinct, goal-free path.
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+});
+
+describe("runAdversarialCliMission — fail-closed (no browser)", () => {
+  it("refuses an undeclared origin before any browser is opened", async () => {
+    let opened = false;
+    await expect(
+      runAdversarialCliMission({
+        seedUrl: "https://not-authorized.test",
+        allowlist: ["https://authorized.test"],
+        strategies: ["ordering-violation"],
+        judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+        generation: new FakeGenerationGateway(),
+        profileDir: "/tmp/unused",
+        // If the guard failed to fail-closed, this factory would run and flip the flag.
+        browserPortFactory: () => {
+          opened = true;
+          throw new Error("browser must not be opened for an unauthorized origin");
+        },
+      }),
+    ).rejects.toThrow(UnauthorizedExploreTargetError);
+    expect(opened).toBe(false);
   });
 });

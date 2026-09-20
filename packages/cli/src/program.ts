@@ -53,6 +53,7 @@ import {
   runExploration,
   runAuthorJourney,
   runCoverageMission,
+  runAdversarialCliMission,
   parseAssertionSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
@@ -715,7 +716,11 @@ export function buildProgram(deps: CliDeps): Command {
     .command("explore")
     .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)")
     .option("--url <url>", "target URL (must be an authorized origin)")
-    .option("--strategy <name>", "goal | coverage | exploratory (default: goal)", "goal")
+    .option(
+      "--strategy <name>",
+      "exploration strategy: goal (default) | coverage | exploratory | adversarial (bounded misuse + trusted hard oracle)",
+      "goal",
+    )
     .option("--goal <text>", "natural-language goal (required for --strategy goal)")
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
     .option(
@@ -800,6 +805,61 @@ export function buildProgram(deps: CliDeps): Command {
             program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
           }
           if (result.coverage.defects.length > 0) process.exitCode = 1;
+        } catch (err) {
+          if (err instanceof UnauthorizedExploreTargetError) {
+            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
+        }
+        return;
+      }
+
+      // Additive adversarial strategy: a bounded "try to break it" run whose
+      // stop decision comes from a trusted hard-signal oracle (never Jev's
+      // Noul). Requires only --url; --goal/--success are goal-strategy inputs.
+      if (strategy === "adversarial") {
+        if (!o.url) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required for --strategy adversarial"));
+          return;
+        }
+        const advAllowlist = resolveExploreAllowlist(o.url, o.allow);
+        let advJudge: JudgmentPort;
+        let advGen: GenerationPort;
+        try {
+          ({ judge: advJudge, gen: advGen } = await buildExploreGateways(deps, {
+            real: o.real ?? false,
+            fakeAi: o.fakeAi ?? false,
+          }));
+        } catch (err) {
+          if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
+
+        try {
+          const profileDir = await mkdtemp(join(tmpdir(), "jevitate-adversarial-"));
+          const result = await runAdversarialCliMission({
+            seedUrl: o.url,
+            allowlist: advAllowlist,
+            strategies: [
+              "ordering-violation",
+              "repeat-rapid",
+              "boundary-input",
+              "contradictory-actions",
+              "nav-during-pending",
+            ],
+            judgment: advJudge,
+            generation: advGen,
+            profileDir,
+            browserPortFactory: deps.explore?.browserPortFactory,
+          });
+          emitJson(program, ok(result));
+          // A discovered defect gates CI, mirroring how a failing test would.
+          if (result.outcome === "defect") process.exitCode = 1;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
