@@ -186,6 +186,9 @@ importers:
       '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey
+      '@jevitate/missions':
+        specifier: workspace:*
+        version: link:../missions
       '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
