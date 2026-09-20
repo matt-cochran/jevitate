@@ -15,6 +15,7 @@
     "@jevitate/ai-core": "workspace:*",
     "@jevitate/domain": "workspace:*",
     "@jevitate/interpreter": "workspace:*",
+    "@jevitate/journey": "workspace:*",
     "@jevitate/playwright": "workspace:*",
     "@jevitate/recorder": "workspace:*",
     "@jevitate/recording": "workspace:*",

@@ -5,6 +5,7 @@
     { "path": "../ai-core" },
     { "path": "../domain" },
     { "path": "../interpreter" },
+    { "path": "../journey" },
     { "path": "../playwright" },
     { "path": "../recorder" },
     { "path": "../recording" },
