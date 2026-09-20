@@ -12,6 +12,7 @@
     "@doit/domain": "workspace:*",
     "@doit/interpreter": "workspace:*",
     "@doit/journey": "workspace:*",
+    "@doit/load": "workspace:*",
     "@doit/playwright": "workspace:*",
     "@doit/recording": "workspace:*",
     "@doit/runtime": "workspace:*",

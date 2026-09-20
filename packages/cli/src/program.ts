@@ -23,6 +23,7 @@ import {
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@doit/journey";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
+import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 
 export interface CliDeps {
   profiles: ProfileManager;
@@ -533,6 +534,53 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
         } else {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
+        }
+      }
+    });
+
+  const load = program.command("load");
+
+  load
+    .command("run <journeyId>")
+    .option("--dir <path>", "journeys directory (default: ~/.doit/journeys)")
+    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .requiredOption("--authorized-origin <origin>", "allowed load-test target origin (repeatable)", (v, prev: string[]) => [...prev, v], [] as string[])
+    .option("--concurrency <n>", "pool size", "1")
+    .option("--iterations <n>", "iterations per actor", "1")
+    .option("--seed <n>", "master RNG seed", "1")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, journeyId: string) {
+      const { dir, param, authorizedOrigin, concurrency, iterations, seed, json } = this.opts<{
+        dir?: string;
+        param: Record<string, string>;
+        authorizedOrigin: string[];
+        concurrency: string;
+        iterations: string;
+        seed: string;
+        json?: boolean;
+      }>();
+      try {
+        const report = await runJourneyLoadTest({
+          dir: resolveJourneysDir(deps, dir),
+          id: journeyId,
+          params: param,
+          concurrency: Number(concurrency),
+          iterationsPerActor: Number(iterations),
+          seed: Number(seed),
+          authorizedOrigins: authorizedOrigin,
+        });
+        const envelope = ok(report);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(report, null, 2)}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownLoadJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else {
+          emitJson(program, fail("E_LOAD_RUN", String(err instanceof Error ? err.message : err)));
         }
       }
     });

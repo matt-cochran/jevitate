@@ -62,6 +62,9 @@ importers:
       '@doit/journey':
         specifier: workspace:*
         version: link:../journey
+      '@doit/load':
+        specifier: workspace:*
+        version: link:../load
       '@doit/playwright':
         specifier: workspace:*
         version: link:../playwright

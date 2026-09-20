@@ -6,6 +6,7 @@
     { "path": "../domain" },
     { "path": "../interpreter" },
     { "path": "../journey" },
+    { "path": "../load" },
     { "path": "../playwright" },
     { "path": "../recording" },
     { "path": "../runtime" },
