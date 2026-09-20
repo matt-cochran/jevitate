@@ -14,6 +14,7 @@
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/journey": "workspace:*",
     "@jevitate/playwright": "workspace:*",
+    "@jevitate/recording": "workspace:*",
     "@jevitate/screenplay": "workspace:*",
     "@jevitate/secrets": "workspace:*",
     "@jevitate/site-sdk": "workspace:*"

@@ -42,6 +42,8 @@ import {
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
+import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
@@ -563,30 +565,76 @@ export function buildProgram(deps: CliDeps): Command {
     .command("run <id>")
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    // Ticket #7 (additive): opt a run into scoped self-healing. Default
+    // `fail-closed` preserves Slice 1 behavior exactly (no healer wired). A
+    // write/irreversible step NEVER auto-heals in any mode (enforced by the
+    // runtime's write floor). `hybrid`/`full` need an AI gateway, selected
+    // with --real/--fake-ai (mirrors `explore`); requesting a heal mode
+    // without one fails CLOSED, never a silent unhealed run.
+    .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full", "fail-closed")
+    .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
+    .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, param, json } = this.opts<{
+      const { dir, param, selfHeal, real, fakeAi, json } = this.opts<{
         dir?: string;
         param: Record<string, string>;
+        selfHeal: string;
+        real?: boolean;
+        fakeAi?: boolean;
         json?: boolean;
       }>();
+
+      if (selfHeal !== "fail-closed" && selfHeal !== "hybrid" && selfHeal !== "full") {
+        emitJson(program, fail("E_SELF_HEAL_MODE", `--self-heal must be one of fail-closed | hybrid | full (got '${selfHeal}')`));
+        return;
+      }
+      const selfHealMode = selfHeal as SelfHealMode;
+
+      // When a heal mode is requested, build the SelfHealer HERE (this action
+      // owns `deps` + the credential preflight); a missing/unselected gateway
+      // fails CLOSED before any browser launch, rather than silently running
+      // with no healer. fail-closed needs no gateway (identical to today).
+      let selfHealer;
+      let policy = safeRunPolicy();
+      if (selfHealMode !== "fail-closed") {
+        let judge: JudgmentPort;
+        let gen: GenerationPort;
+        try {
+          ({ judge, gen } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false }));
+        } catch (err) {
+          if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          } else {
+            emitJson(program, fail("E_JOURNEY_RUN", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
+        selfHealer = makeExploreSelfHealer(judge, gen);
+        policy = { ...policy, selfHeal: { mode: selfHealMode } };
+      }
+
       try {
         // `runJourneyProgrammatically` validates params UP FRONT (before any
-        // browser launch) and defaults to `safeRunPolicy()` (Slice 1:
-        // fail-closed secret mode) — a `--secret-mode` override is a later
-        // slice's concern.
+        // browser launch). The default policy stays `safeRunPolicy()`
+        // (fail-closed secret mode) — only `selfHeal.mode` is threaded from
+        // the flag; a `--secret-mode` override is a later slice's concern.
         const result = await runJourneyProgrammatically({
           dir: resolveJourneysDir(deps, dir),
           id,
           params: param,
+          policy,
+          selfHealer,
         });
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
-          if (result.outcome !== "ok") process.exitCode = 1;
+          // "ok" and "healed" (a recovered run) are both successes; only
+          // "quarantined" is a non-zero exit.
+          if (result.outcome === "quarantined") process.exitCode = 1;
         } else {
           program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
-          process.exitCode = result.outcome === "ok" ? 0 : 1;
+          process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
         if (err instanceof UnknownJourneyError) {

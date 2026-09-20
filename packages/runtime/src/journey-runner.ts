@@ -3,6 +3,7 @@ import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import type { RunPolicy } from "@jevitate/domain";
 import { deriveParamSchema, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
 import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult } from "@jevitate/interpreter";
+import type { Recording } from "@jevitate/recording";
 import {
   SecretOriginMismatchError,
   SecretAmbiguousBindingError,
@@ -10,6 +11,7 @@ import {
   type SecretManagerPort,
 } from "@jevitate/secrets";
 import { PolicyEnforcementError } from "./runner.js";
+import { isWriteStep, postconditionOf, healRecording, flattenRecording, type SelfHealer } from "./self-heal.js";
 
 /**
  * The runner's OWN result type. Deliberately distinct from the interpreter's
@@ -20,6 +22,7 @@ import { PolicyEnforcementError } from "./runner.js";
  */
 export type JourneyRunResult =
   | { outcome: "ok"; output: unknown }
+  | { outcome: "healed"; output: unknown; healedRecording: Recording; healedAt: number }
   | { outcome: "quarantined"; reason: string; at?: number };
 
 export interface HandbackHandler {
@@ -65,6 +68,7 @@ export class JourneyRunner {
     private readonly interpreter: RecordingInterpreter,
     private readonly handback?: HandbackHandler,
     private readonly secretManager?: SecretManagerPort,
+    private readonly selfHealer?: SelfHealer,
   ) {}
 
   /**
@@ -86,45 +90,113 @@ export class JourneyRunner {
       await this.preflightSecretRefs(req.journey.metadata.secretRefs ?? []);
     }
 
-    let result = await this.interpreter.run(this.actor, req.journey.recording, req.params);
+    // The recording is mutable across the run because a successful scoped
+    // repair splices a re-learned step into it (see tryHeal / healRecording).
+    // It starts as the Journey's own recording; a clean (never-healed) run
+    // never mutates it.
+    let recording: Recording = req.journey.recording;
+    let result = await this.interpreter.run(this.actor, recording, req.params);
+    let healedAt: number | undefined;
+    // RULING (invariant #4 / loop-safety, see report): each step index is
+    // healed AT MOST once. If a healed splice, once resumed, itself fails
+    // again at the same index, we do NOT re-heal in a loop — we quarantine,
+    // exactly as we would have without an attempt.
+    const healedIndices = new Set<number>();
 
-    while (result.outcome === "awaiting_human") {
-      if (req.policy.secret.secretMode === "vault-autofill") {
-        const refusal = await this.fillViaVaultAutofill(req, result);
-        if (refusal) return refusal; // quarantined — bail out, never assume success
-        result = await this.interpreter.resumeFrom(this.actor, req.journey.recording, result.at + 1, req.params);
-        continue;
+    for (;;) {
+      if (result.outcome === "awaiting_human") {
+        if (req.policy.secret.secretMode === "vault-autofill") {
+          const refusal = await this.fillViaVaultAutofill(req, result);
+          if (refusal) return refusal; // quarantined — bail out, never assume success
+          result = await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params);
+          continue;
+        }
+
+        // #7: a handback (secret) step. Only proceed if policy explicitly
+        // opts into a visible handback AND a handler is wired up; otherwise
+        // fail closed — never assume a human will show up.
+        if (req.policy.secret.secretMode !== "visible-handback" || !this.handback) {
+          return {
+            outcome: "quarantined",
+            reason: "secret step reached under fail-closed/unattended secretMode",
+            at: result.at,
+          };
+        }
+        await this.handback.present(result.prompt); // human enters the secret in the headed browser; we never hold it
+        const ok = await checkAssertion(this.actor, result.resume); // verify BEFORE resuming — never assume-success
+        if (!ok) {
+          return {
+            outcome: "quarantined",
+            reason: `handback resume postcondition not satisfied at step ${result.at}`,
+            at: result.at,
+          };
+        }
+        result = await this.interpreter.resumeFrom(this.actor, recording, result.at + 1, req.params);
+        continue; // a resumed run may hit another handback.
       }
 
-      // #7: a handback (secret) step. Only proceed if policy explicitly
-      // opts into a visible handback AND a handler is wired up; otherwise
-      // fail closed — never assume a human will show up.
-      if (req.policy.secret.secretMode !== "visible-handback" || !this.handback) {
-        return {
-          outcome: "quarantined",
-          reason: "secret step reached under fail-closed/unattended secretMode",
-          at: result.at,
-        };
+      if (result.outcome === "failed") {
+        const healed = await this.tryHeal(req.policy, recording, result.at, healedIndices);
+        if (healed) {
+          healedAt = result.at;
+          healedIndices.add(result.at);
+          recording = healed.healedRecording;
+          // Resume AT the broken index — the healed recording carries the
+          // re-learned replacement step at that same flat position.
+          result = await this.interpreter.resumeFrom(this.actor, recording, result.at, req.params);
+          continue;
+        }
+        // Invariant #4: no heal (refused, none wired, write floor, or
+        // already-attempted this index) -> quarantine, never mask.
+        return { outcome: "quarantined", reason: `step ${result.at} failed: ${result.error}`, at: result.at };
       }
-      await this.handback.present(result.prompt); // human enters the secret in the headed browser; we never hold it
-      const ok = await checkAssertion(this.actor, result.resume); // verify BEFORE resuming — never assume-success
-      if (!ok) {
-        return {
-          outcome: "quarantined",
-          reason: `handback resume postcondition not satisfied at step ${result.at}`,
-          at: result.at,
-        };
-      }
-      result = await this.interpreter.resumeFrom(this.actor, req.journey.recording, result.at + 1, req.params);
-      // loop: a resumed run may hit another handback.
+
+      // result.outcome === "completed" — Ruling 3: the interpreter's result
+      // has NO "ok" outcome; map explicitly. A run that only succeeded
+      // because of an in-flight repair stays distinguishable ("healed"),
+      // never collapsed into "ok" (invariant #5).
+      return healedAt === undefined
+        ? { outcome: "ok", output: result.vars }
+        : { outcome: "healed", output: result.vars, healedRecording: recording, healedAt };
     }
+  }
 
-    // Ruling 3: the interpreter's result has NO "ok" outcome — map explicitly.
-    if (result.outcome === "completed") {
-      return { outcome: "ok", output: result.vars };
-    }
-    // result.outcome === "failed"
-    return { outcome: "quarantined", reason: `step ${result.at} failed: ${result.error}`, at: result.at };
+  /**
+   * §9a invariant #8 (write floor): a write/irreversible step NEVER
+   * auto-heals, in EITHER `hybrid` or `full` mode — only a `RunPolicy` with
+   * `selfHeal.mode !== "fail-closed"`, a wired `SelfHealer`, and a
+   * READ-ONLY broken step reach the healer at all. Returns `undefined`
+   * (never healed) for every other case, including when the healer itself
+   * reports `"not-healed"` and when this step index was already healed once
+   * (loop-safety per invariant #4). A model/healer judgment NEVER
+   * unilaterally applies to a write step — the write floor short-circuits
+   * before the healer is ever invoked.
+   */
+  private async tryHeal(
+    policy: RunPolicy,
+    recording: Recording,
+    brokenFlatIndex: number,
+    healedIndices: ReadonlySet<number>,
+  ): Promise<{ healedRecording: Recording } | undefined> {
+    if (policy.selfHeal.mode === "fail-closed" || !this.selfHealer) return undefined;
+    if (healedIndices.has(brokenFlatIndex)) return undefined; // already tried once — no re-heal loop
+
+    const flat = flattenRecording(recording);
+    const brokenEntry = flat[brokenFlatIndex];
+    if (!brokenEntry) return undefined;
+    if (isWriteStep(brokenEntry.step)) return undefined; // the floor — never bypassed by "full"
+
+    const postcondition = postconditionOf(brokenEntry.step);
+    if (!postcondition) return undefined;
+
+    const healResult = await this.selfHealer.reLearnStep({
+      actor: this.actor,
+      brokenStep: brokenEntry.step,
+      expectedPostcondition: postcondition,
+    });
+    if (healResult.outcome !== "healed") return undefined;
+
+    return { healedRecording: healRecording(recording, brokenFlatIndex, healResult.segment) };
   }
 
   /** §9a invariant #4: preflight — every declared secretRef must resolve

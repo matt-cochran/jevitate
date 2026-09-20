@@ -6,6 +6,7 @@
     { "path": "../site-sdk" },
     { "path": "../playwright" },
     { "path": "../domain" },
+    { "path": "../recording" },
     { "path": "../secrets" },
     { "path": "../application" },
     { "path": "../interpreter" },
