@@ -77,6 +77,7 @@ import {
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
+import { runUsabilityMission, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
 import { resolveDataDir } from "./data-dir.js";
 import {
   runRecording,
@@ -1175,10 +1176,11 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option(
       "--strategy <name>",
-      "exploration strategy: goal (default) | coverage | exploratory | adversarial (bounded misuse + trusted hard oracle)",
+      "exploration strategy: goal (default) | coverage | exploratory | adversarial | usability (UX review: ranked, cited findings)",
       "goal",
     )
-    .option("--goal <text>", "natural-language goal (required for --strategy goal)")
+    .option("--goal <text>", "natural-language goal / job (required for --strategy goal and usability)")
+    .option("--app-class <class>", "app class for UX calibration (required for --strategy usability), e.g. consumer|admin|internal")
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
@@ -1210,6 +1212,7 @@ export function buildProgram(deps: CliDeps): Command {
         url?: string;
         strategy?: string;
         goal?: string;
+        appClass?: string;
         success?: string;
         feature?: string;
         route: string[];
@@ -1334,6 +1337,64 @@ export function buildProgram(deps: CliDeps): Command {
           }
         } finally {
           await rm(profileDir, { recursive: true, force: true });
+        }
+        return;
+      }
+
+      // Additive: `--strategy usability` (issue #30) — a UX review. Reuses the
+      // explore loop (goal = the job) and analyzes each observed screen against
+      // the cited @jevitate/ux rubric. Findings are ADVISORY: a UX finding never
+      // gates the run (no non-zero exit).
+      if (strategy === "usability") {
+        if (!o.url || !o.goal) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--url and --goal (the job) are required for --strategy usability"));
+          return;
+        }
+        if (!o.appClass) {
+          emitJson(program, fail("E_UX_ARGS", "--app-class is required for --strategy usability"));
+          return;
+        }
+        const uxAllowlist = resolveExploreAllowlist(o.url, o.allow);
+        const uxBounds: Record<string, number> = {};
+        if (o.maxActions !== undefined) uxBounds.maxActions = Number(o.maxActions);
+        if (o.maxDecisions !== undefined) uxBounds.maxDecisions = Number(o.maxDecisions);
+        let uxJudge: JudgmentPort;
+        let uxGen: GenerationPort;
+        try {
+          ({ judge: uxJudge, gen: uxGen } = await buildExploreGateways(deps, {
+            real: o.real ?? false,
+            fakeAi: o.fakeAi ?? false,
+          }));
+        } catch (err) {
+          if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
+        try {
+          const result = await runUsabilityMission({
+            url: o.url,
+            job: o.goal,
+            allowlist: uxAllowlist,
+            appContext: { appClass: o.appClass, job: o.goal },
+            judge: uxJudge,
+            gen: uxGen,
+            bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
+            secrets: o.secret.length > 0 ? o.secret : undefined,
+            outDir: o.out,
+            browserPortFactory: deps.explore?.browserPortFactory,
+          });
+          emitJson(program, ok(result));
+        } catch (err) {
+          if (err instanceof UnauthorizedExploreTargetError) {
+            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof UxAnalysisFailedError) {
+            emitJson(program, fail("E_UX_ANALYSIS", err.message));
+          } else {
+            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
         }
         return;
       }
@@ -1797,6 +1858,72 @@ export function buildProgram(deps: CliDeps): Command {
         });
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  // Additive: `jevitate ux <recording>` (issue #30) — offline UX review of a
+  // saved Recording. Findings are advisory; a `failed` analysis is a non-zero
+  // fail envelope (never a fabricated clean report).
+  program
+    .command("ux <recording>")
+    .description("offline UX review of a saved Recording — ranked, cited usability findings")
+    .option("--app-class <class>", "app class for calibration (required), e.g. consumer|admin|internal")
+    .option("--persona <p>", "optional persona for calibration")
+    .option("--job <text>", "the job the flow pursues (improves relevance)")
+    .option("--out <dir>", "directory to write the UX report")
+    .option("--real", "use live Jev gateways (requires keys)", false)
+    .option("--fake-ai", "use deterministic fake gateways", false)
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, recordingPath: string) {
+      const o = this.opts<{
+        appClass?: string;
+        persona?: string;
+        job?: string;
+        out?: string;
+        real?: boolean;
+        fakeAi?: boolean;
+        json?: boolean;
+      }>();
+      if (!o.appClass) {
+        emitJson(program, fail("E_UX_ARGS", "--app-class is required"));
+        return;
+      }
+      let recording: Recording;
+      try {
+        recording = RecordingSchema.parse(JSON.parse(await readFile(recordingPath, "utf8")));
+      } catch (err) {
+        emitJson(program, fail("E_UX_RECORDING", String(err instanceof Error ? err.message : err)));
+        return;
+      }
+      let uxJudge: JudgmentPort;
+      try {
+        ({ judge: uxJudge } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+      } catch (err) {
+        if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
+          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+        } else {
+          emitJson(program, fail("E_UX_SETUP", String(err instanceof Error ? err.message : err)));
+        }
+        return;
+      }
+      try {
+        const result = await runUxReview({
+          recording,
+          appContext: {
+            appClass: o.appClass,
+            ...(o.persona ? { persona: o.persona } : {}),
+            ...(o.job ? { job: o.job } : {}),
+          },
+          judge: uxJudge,
+          outDir: o.out,
+        });
+        emitJson(program, ok(result));
+      } catch (err) {
+        if (err instanceof UxAnalysisFailedError) {
+          emitJson(program, fail("E_UX_ANALYSIS", err.message));
+        } else {
+          emitJson(program, fail("E_UX_RUN", String(err instanceof Error ? err.message : err)));
+        }
       }
     });
 

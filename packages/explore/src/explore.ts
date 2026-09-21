@@ -13,7 +13,7 @@ import {
   assertAuthorizedExploreTarget,
   isAuthorizedExploreTarget,
 } from "./authorized-targets.js";
-import { snapshot } from "./snapshot.js";
+import { snapshot, type Snapshot } from "./snapshot.js";
 import { decide, OPS_NEEDING_TARGET, type Op } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
@@ -49,6 +49,13 @@ export interface ExploreConfig {
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;
+  /**
+   * Additive, optional observation hook: fired with each authorized observed
+   * `Snapshot` after the origin guard passes. Used by the usability mission to
+   * run UX analysis per screen. Advisory only — it MUST NOT change the loop's
+   * control flow, bounds, or stop decision (its return is awaited but ignored).
+   */
+  readonly onSnapshot?: (snap: Snapshot) => void | Promise<void>;
 }
 
 export interface TranscriptEntry {
@@ -110,6 +117,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       stop = "blocked";
       break;
     }
+
+    // Additive observation hook (usability analysis). Advisory: awaited but its
+    // result never gates the loop, bounds, or stop decision.
+    await cfg.onSnapshot?.(snap);
 
     // #2 — no-progress: the last executed op left the page unchanged N times.
     if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {

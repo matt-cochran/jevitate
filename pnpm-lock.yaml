@@ -141,6 +141,9 @@ importers:
       '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
+      '@jevitate/ux':
+        specifier: workspace:*
+        version: link:../ux
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
@@ -446,6 +449,18 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.0
         version: 7.6.13
+
+  packages/ux:
+    dependencies:
+      '@jevitate/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
+      '@jevitate/recording':
+        specifier: workspace:*
+        version: link:../recording
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
 
   site-integrations/example-network:
     dependencies:

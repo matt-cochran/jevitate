@@ -1,4 +1,16 @@
-import { type JudgmentState, assertNoSecretInPayload } from "@jevitate/ai-core";
+import {
+  type JudgmentState,
+  assertNoSecretInPayload,
+  REDACTION_MASK,
+  redactText,
+  redactContext,
+} from "@jevitate/ai-core";
+
+// The value-based redaction primitives now live in `@jevitate/ai-core` (next to
+// the `assertNoSecretInPayload` choke point) so `@jevitate/ux` shares the exact
+// same implementation — "no divergent redaction path". Re-exported here so every
+// existing `@jevitate/explore` import keeps working unchanged.
+export { REDACTION_MASK, redactText, redactContext };
 
 /**
  * State redaction before ANY model call (guardrail #3: no secrets to models).
@@ -17,18 +29,6 @@ import { type JudgmentState, assertNoSecretInPayload } from "@jevitate/ai-core";
  * never reach this function to begin with; registered secrets that leak in
  * through some other field's value are caught here.
  */
-
-/** What a scrubbed secret is replaced with — a marker, never the value/length. */
-export const REDACTION_MASK = "«redacted»";
-
-/** Replaces every occurrence of every non-blank secret with the mask. */
-export function redactText(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const s of secrets) {
-    if (s && s.trim().length > 0) out = out.split(s).join(REDACTION_MASK);
-  }
-  return out;
-}
 
 export interface BuildStateInput {
   readonly goal: string;
@@ -55,15 +55,4 @@ export function buildJudgmentState(input: BuildStateInput): JudgmentState {
   };
   assertNoSecretInPayload(state, secrets);
   return state;
-}
-
-/**
- * Scrubs a free-text context string bound for the generation gateway
- * (`visibleContext`), and proves the scrub. Same fail-closed contract as
- * `buildJudgmentState`.
- */
-export function redactContext(text: string, secrets: readonly string[]): string {
-  const out = redactText(text, secrets);
-  assertNoSecretInPayload(out, secrets);
-  return out;
 }
