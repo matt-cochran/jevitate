@@ -1704,7 +1704,28 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const { dir } = this.opts<{ dir?: string }>();
       try {
-        await startMcpServer({ journeysDir: resolveJourneysDir(deps, dir) });
+        // Credential store + generation gateway for the allowlisted
+        // `ai_generate_text` tool. The gateway is the REAL OpenRouter adapter:
+        // the key is read only inside it (Authorization header only), every
+        // outbound payload passes the never-to-model guard, and the facade's
+        // preflight returns a typed `setup_required` when the key is absent —
+        // so no `--real/--fake` flag is needed for the non-interactive server.
+        const aiStore = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? {});
+        const generationGateway =
+          deps.ai?.gateway ??
+          new OpenRouterGenerationGateway({
+            store: aiStore,
+            catalog: deps.ai?.catalog ?? DEFAULT_EXPLORE_CATALOG,
+            constraints: deps.ai?.constraints ?? DEFAULT_EXPLORE_CONSTRAINTS,
+            call: await realOpenRouterCall(),
+          });
+        await startMcpServer({
+          journeysDir: resolveJourneysDir(deps, dir),
+          missionTargetsDir: resolveMissionTargetsDir(deps),
+          missionQueueDir: resolveDataDir(["missions", "queue"]),
+          credentialStore: aiStore,
+          generationGateway,
+        });
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
       }
