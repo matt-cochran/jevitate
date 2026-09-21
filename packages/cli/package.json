@@ -39,6 +39,7 @@
     "@jevitate/journey": "workspace:*",
     "@jevitate/load": "workspace:*",
     "@jevitate/playwright": "workspace:*",
+    "@jevitate/recorder": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "@jevitate/regression": "workspace:*",
     "@jevitate/runtime": "workspace:*",

@@ -108,6 +108,9 @@ importers:
       '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright
+      '@jevitate/recorder':
+        specifier: workspace:*
+        version: link:../recorder
       '@jevitate/recording':
         specifier: workspace:*
         version: link:../recording
