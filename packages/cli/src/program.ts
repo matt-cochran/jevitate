@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
@@ -48,6 +48,14 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { runRegressionCapture } from "./regression-api.js";
+import {
+  addMissionTarget,
+  listMissionTargets,
+  promoteMissionTarget,
+  missionTargetContext,
+  UnknownMissionTargetError,
+} from "./mission-api.js";
+import { startMcpServer } from "./mcp-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import {
@@ -69,20 +77,84 @@ import {
   type ExploreCliDeps,
 } from "./explore-api.js";
 import { resolveDataDir } from "./data-dir.js";
+import {
+  runRecording,
+  resolveRecordAllowlist,
+  type RecorderLike,
+} from "./record-api.js";
+import {
+  addSource,
+  listSources,
+  pullSource,
+  updateSource,
+  removeSource,
+  trustJourney,
+  publishJourneyToSource,
+  realGhPort,
+  NotPromotedError,
+  NoDeclaredOriginsError,
+  type SourceApiDeps,
+} from "./source-api.js";
+import {
+  FsTrustStore,
+  FsAckStore,
+  UnknownSourceError,
+  EmbeddedSecretError,
+  UndeclaredOriginError,
+  SourceValidationError,
+  DEFAULT_LOCK_PATH,
+  type GitExec,
+  type GhPort,
+} from "@jevitate/sources";
+import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+
+/** Injectable wiring for the `record` command (all optional; real defaults). */
+export interface RecordCliDeps {
+  /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
+  browserPortFactory?: () => BrowserPort;
+  /** Testing seam — defaults to a real `@jevitate/recorder` `Recorder`. */
+  recorderFactory?: (session: BrowserSession, site: string) => RecorderLike;
+  /** Testing seam — the "user signalled done" wait. Defaults to Enter on stdin. */
+  waitForStop?: () => Promise<void>;
+}
 
 export interface CliDeps {
   profiles: ProfileManager;
   dbPath?: string;
   journeysDir?: string;
+  /** Optional, additive: overrides the mission-targets store directory
+   *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
+   *  resolves promoted targets from. */
+  missionTargetsDir?: string;
   /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
    *  production means real env + the deterministic fake generation gateway. */
   ai?: AiCliDeps;
   /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
   explore?: ExploreCliDeps;
+  /** Optional, additive: `jevitate record` wiring (see record-api.ts). */
+  record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
    *  in production means the real `existsSync`/`homedir`/`cwd` and the real
    *  `~/.jevitate/skills-install-state.json` state path. */
   init?: { detection?: DetectionDeps; statePath?: string };
+  /**
+   * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
+   * Every field is injectable so tests never touch the network, the real home
+   * dir, or the real `git`/`gh` binaries. Omitted in production means the real
+   * `~/.jevitate/sources` clone dir, `<cwd>/jevitate.lock`, `~/.jevitate/trust`
+   * stores, and the real `git`/`gh` ports.
+   */
+  sources?: {
+    sourcesDir?: string;
+    lockPath?: string;
+    trustDir?: string;
+    ackDir?: string;
+    git?: GitExec;
+    gh?: GhPort;
+    now?: () => string;
+    /** Identity recorded in a `TrustRecord`/`TouAck`; defaults to the OS user. */
+    approvedBy?: string;
+  };
 }
 
 // `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
@@ -90,6 +162,7 @@ export interface CliDeps {
 const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
 const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
 const DEFAULT_REGRESSIONS_DIR = resolveDataDir(["regressions"]);
+const DEFAULT_MISSION_TARGETS_DIR = resolveDataDir(["missions", "targets"]);
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
@@ -108,6 +181,42 @@ function resolveJourneysDir(deps: CliDeps, flag?: string): string {
  *  committed-regressions directory `regression capture` writes into. */
 function resolveRegressionsDir(flag?: string): string {
   return flag ?? DEFAULT_REGRESSIONS_DIR;
+}
+
+/** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
+ *  the mission-targets store `mission target ...` reads/writes. */
+function resolveMissionTargetsDir(deps: CliDeps, flag?: string): string {
+  return flag ?? deps.missionTargetsDir ?? DEFAULT_MISSION_TARGETS_DIR;
+}
+
+/**
+ * Assembles the injected `SourceApiDeps` for the distributed-sources commands
+ * from `CliDeps.sources` (test-injected ports) or the real production
+ * defaults: `~/.jevitate/sources` clones, `<cwd>/jevitate.lock`, and the
+ * local, per-user `FsTrustStore`/`FsAckStore` under `~/.jevitate/trust`.
+ * Trust/ack stores are LOCAL by design (§14.1) — never the team-shared lock.
+ */
+function resolveSourceApiDeps(deps: CliDeps): SourceApiDeps {
+  const s = deps.sources ?? {};
+  return {
+    sourcesDir: s.sourcesDir ?? resolveDataDir(["sources"]),
+    lockPath: s.lockPath ?? DEFAULT_LOCK_PATH(),
+    trust: new FsTrustStore(s.trustDir ?? resolveDataDir(["trust"])),
+    ack: new FsAckStore(s.ackDir ?? resolveDataDir(["trust", "acks"])),
+    git: s.git,
+    now: s.now,
+  };
+}
+
+/** The identity recorded in a `TrustRecord`/`TouAck` — an injected value, else
+ *  the OS username, else `"local"`. Never a secret/credential. */
+function resolveApprovedBy(deps: CliDeps): string {
+  if (deps.sources?.approvedBy) return deps.sources.approvedBy;
+  try {
+    return userInfo().username || "local";
+  } catch {
+    return "local";
+  }
 }
 
 /**
@@ -705,6 +814,229 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
+  // #19 — publish a promoted local Journey to a registered distributed source.
+  // Preserves every publish-side guard in `@jevitate/sources` (promoted-only,
+  // secret-references-only, declared-origin coverage); writes onto a NEW
+  // `publish/<id>` branch and degrades gracefully when `gh` is absent.
+  journey
+    .command("publish <id>")
+    .requiredOption("--to <source>", "registered source name to publish into")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--declare-origin <origin>", "origin this Journey is authorized for (repeatable; default: derived from navigate steps)", (v: string, prev: string[]) => [...prev, v], [] as string[])
+    .option("--as <id>", "publish under a different id than the local one")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { to, dir, declareOrigin, as: asId, json } = this.opts<{
+        to: string;
+        dir?: string;
+        declareOrigin: string[];
+        as?: string;
+        json?: boolean;
+      }>();
+      try {
+        const apiDeps = resolveSourceApiDeps(deps);
+        const gh = deps.sources?.gh ?? realGhPort;
+        const result = await publishJourneyToSource(
+          { ...apiDeps, gh },
+          {
+            journeysDir: resolveJourneysDir(deps, dir),
+            id,
+            toSource: to,
+            declareOrigins: declareOrigin,
+            asId,
+          },
+        );
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          out?.(`published '${id}' to '${to}' on branch ${result.branch}\n`);
+          if (result.prUrl) out?.(`PR: ${result.prUrl}\n`);
+          else if (result.instructions) out?.(`${result.instructions}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_UNKNOWN_SOURCE", err.message));
+        } else if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_UNKNOWN_JOURNEY", err.message));
+        } else if (err instanceof NotPromotedError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_NOT_PROMOTED", err.message));
+        } else if (err instanceof NoDeclaredOriginsError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_NO_ORIGINS", err.message));
+        } else if (err instanceof EmbeddedSecretError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_SECRET", err.message));
+        } else if (err instanceof UndeclaredOriginError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_ORIGIN", err.message));
+        } else {
+          emitJson(program, fail("E_JOURNEY_PUBLISH", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #18 — manage distributed Journey sources (add/list/pull/update/remove/
+  // trust). Trust is an explicit user act, content-hash-bound; add/pull/update
+  // never trust anything implicitly.
+  const source = program.command("source");
+
+  source
+    .command("add <name> <gitUrl>")
+    .option("--accept-tou", "acknowledge the source's declared Terms of Use (required before its Journeys can run)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string, gitUrl: string) {
+      const { acceptTou, json } = this.opts<{ acceptTou?: boolean; json?: boolean }>();
+      try {
+        const apiDeps = resolveSourceApiDeps(deps);
+        const result = await addSource(apiDeps, {
+          name,
+          gitUrl,
+          acceptTou: acceptTou ?? false,
+          ackedBy: resolveApprovedBy(deps),
+        });
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          out?.(`added '${name}' pinned at ${result.pinnedCommit}\n`);
+          out?.(`Terms of Use for ${result.touSurface.gitUrl}:\n`);
+          for (const site of result.touSurface.sites) out?.(`  ${site.origin}\t${site.touBasis}\n`);
+          out?.(result.touAccepted ? "ToU acknowledged.\n" : "ToU NOT acknowledged — re-run with --accept-tou before running this source's Journeys.\n");
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof SourceValidationError) {
+          emitJson(program, fail("E_SOURCE_INVALID_MANIFEST", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_ADD", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("list")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const listing = await listSources(resolveSourceApiDeps(deps));
+        const envelope = ok(listing);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const s of listing) {
+            out?.(`${s.name}\t${s.gitUrl}\t${s.pinnedCommit}\ttrusted=[${s.trustedJourneys.join(", ")}]\n`);
+          }
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_SOURCE_LIST", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  source
+    .command("pull <name>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await pullSource(resolveSourceApiDeps(deps), name);
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`pulled '${name}' (pin unchanged at ${result.pinnedCommit}; run 'source update' to advance)\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_PULL", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("update <name>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await updateSource(resolveSourceApiDeps(deps), name);
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`updated '${name}' -> pinned at ${result.pinnedCommit}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_UPDATE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("remove <name>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await removeSource(resolveSourceApiDeps(deps), name);
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`removed '${name}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_REMOVE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("trust <name> <journeyId>")
+    .description("explicitly trust one Journey in a source, bound to its current content hash")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string, journeyId: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await trustJourney(resolveSourceApiDeps(deps), {
+          sourceName: name,
+          journeyId,
+          approvedBy: resolveApprovedBy(deps),
+        });
+        // Never emit the Journey's content — only the address + bound hash.
+        const view = { sourceId: result.sourceId, journeyId: result.journeyId, contentHash: result.contentHash, approvedBy: result.approvedBy, approvedAtIso: result.approvedAtIso };
+        const envelope = ok(view);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`trusted '${name}/${journeyId}' at ${result.contentHash}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN_JOURNEY", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_TRUST", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
   const load = program.command("load");
 
   load
@@ -1132,6 +1464,75 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
+  // Additive: `jevitate record` — record-by-demonstration (Ticket #22). Opens a
+  // real browser on an authorized origin, lets the user demonstrate a flow, and
+  // captures it into a schema-valid, replayable Recording written to disk. The
+  // authorized-origin guard is enforced FIRST (fail-closed) inside runRecording,
+  // before any browser is opened; the temp profile dir is always cleaned up.
+  program
+    .command("record")
+    .description("record a demonstrated flow into a Recording (authoring plane)")
+    .option("--url <url>", "start URL to demonstrate from (must be an authorized origin)")
+    .option("--intent <text>", "your framing of the journey (carried to Recording.intent)")
+    .option("--retro <text>", "optional retrospective note (carried to Recording.retro)")
+    .option(
+      "--allow <origin>",
+      "authorized origin (repeatable); defaults to the URL's own origin",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--headless", "run headless (default: headed — a record session is a live demonstration)", false)
+    .option("--out <dir>", "directory to write the emitted Recording (default: ~/.jevitate/recordings)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<{
+        url?: string;
+        intent?: string;
+        retro?: string;
+        allow: string[];
+        headless?: boolean;
+        out?: string;
+        json?: boolean;
+      }>();
+
+      if (!o.url) {
+        emitJson(program, fail("E_RECORD_ARGS", "--url is required"));
+        return;
+      }
+      const allowlist = resolveRecordAllowlist(o.url, o.allow);
+
+      try {
+        const result = await runRecording({
+          url: o.url,
+          allowlist,
+          intent: o.intent,
+          retro: o.retro,
+          outDir: o.out,
+          headless: o.headless ?? false,
+          browserPortFactory: deps.record?.browserPortFactory,
+          recorderFactory: deps.record?.recorderFactory,
+          waitForStop: deps.record?.waitForStop,
+        });
+        const summary = {
+          recordingPath: result.recordingPath,
+          steps: result.steps,
+          pages: result.pages,
+          finalUrl: result.finalUrl,
+        };
+        if (o.json) {
+          emitJson(program, ok(summary));
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(summary)}\n`);
+        }
+      } catch (err) {
+        if (err instanceof UnauthorizedExploreTargetError) {
+          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_RECORD_RUN", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
   // Additive: `@jevitate/regression` — reproduce -> minimize -> commit a
   // failing Recording into a committed regression artifact (Ticket #5).
   // Independent of the `journey`/`load` commands above; wires a real
@@ -1185,6 +1586,127 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
       } finally {
         for (const close of opened) await close();
+      }
+    });
+
+  // Additive: `mission target` — register/list/promote exploration mission
+  // targets (Ticket #21). Wires the real fs-backed `@jevitate/missions`
+  // store/registry (the SAME store `queue_exploration` resolves promoted
+  // targets from). SECURITY: `add` registers UNPROMOTED — the promoted-only
+  // gate stays intact, so a registered target is not resolvable by
+  // `queue_exploration` until a separate `promote` flips it.
+  const mission = program.command("mission");
+  const missionTarget = mission.command("target");
+
+  missionTarget
+    .command("add <id>")
+    .description("register an exploration mission target (UNPROMOTED — not usable by queue_exploration until promoted)")
+    .option("--name <name>", "human-readable target name")
+    .option("--authorized-origin <origin>", "the single authorized exploration origin for this target")
+    .option("--base-url <url>", "the base URL a mission starts navigation from")
+    .option("--description <text>", "optional human-readable description")
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { name, authorizedOrigin, baseUrl, description, dir, json } = this.opts<{
+        name?: string;
+        authorizedOrigin?: string;
+        baseUrl?: string;
+        description?: string;
+        dir?: string;
+        json?: boolean;
+      }>();
+      // Validate in-action + fail envelope (not commander's hard-exiting
+      // `.requiredOption`), matching this CLI's convention.
+      if (!name || !authorizedOrigin || !baseUrl) {
+        emitJson(program, fail("E_MISSION_TARGET_ARGS", "--name, --authorized-origin and --base-url are all required"));
+        return;
+      }
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const target = await addMissionTarget(ctx, { id, name, authorizedOrigin, baseUrl, description });
+        const envelope = ok(target);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(
+            `registered mission target '${target.id}' (unpromoted — run 'jevitate mission target promote ${target.id}' to make it resolvable)\n`,
+          );
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_MISSION_TARGET_ADD", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  missionTarget
+    .command("list")
+    .description("list ALL mission targets (promoted and unpromoted) — a local/dev-facing listing")
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const targets = await listMissionTargets(ctx);
+        const envelope = ok(targets);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const t of targets) {
+            out?.(`${t.id}\t${t.name}\t${t.authorizedOrigin}${t.promoted ? "" : " (unpromoted)"}\n`);
+          }
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_MISSION_TARGET_LIST", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  missionTarget
+    .command("promote <id>")
+    .description("promote a registered target so queue_exploration can resolve it")
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const target = await promoteMissionTarget(ctx, id);
+        const envelope = ok(target);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`promoted mission target '${target.id}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownMissionTargetError) {
+          emitJson(program, fail("E_UNKNOWN_MISSION_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_MISSION_TARGET_PROMOTE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // Additive: `jevitate mcp` (Ticket #20) — start an MCP stdio server that
+  // exposes ONLY `@jevitate/mcp-facade`'s allowlisted tools (never the raw
+  // browser primitives in FORBIDDEN_TOOLS). This is the subcommand form of the
+  // MCP server (single-bundle deployment — no separate published package).
+  // The server owns stdin/stdout as the MCP protocol channel, so on success it
+  // blocks and writes NOTHING to stdout; only a setup failure (before the
+  // transport connects) emits a JSON envelope.
+  program
+    .command("mcp")
+    .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .action(async function (this: Command) {
+      const { dir } = this.opts<{ dir?: string }>();
+      try {
+        await startMcpServer({ journeysDir: resolveJourneysDir(deps, dir) });
+      } catch (err) {
+        emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
       }
     });
 

@@ -60,6 +60,14 @@ function authoringTakeJson(steps: Step[]): { recording: Recording; values: Recor
   return AuthoringTakeSchema.parse({ recording, values });
 }
 
+test("mcp command is registered on the program (additive #20)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const mcp = program.commands.find((c) => c.name() === "mcp");
+  expect(mcp).toBeTruthy();
+  expect(mcp?.description()).toContain("MCP");
+});
+
 test("profile create prints a success envelope", async () => {
   const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
   const profiles = new ProfileManager(root);
