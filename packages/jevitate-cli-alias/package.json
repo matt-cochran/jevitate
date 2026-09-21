@@ -9,6 +9,10 @@
     "url": "git+https://github.com/matt-cochran/jevitate.git",
     "directory": "packages/jevitate-cli-alias"
   },
+  "homepage": "https://jevitate.com",
+  "bugs": "https://github.com/matt-cochran/jevitate/issues",
+  "author": "Matt Cochran",
+  "keywords": ["jevitate", "browser-automation", "testing", "cli"],
   "engines": {
     "node": ">=20"
   },

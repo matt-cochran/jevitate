@@ -11,3 +11,7 @@ data/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Internal AI planning/spec artifacts — not part of the public product repo.
+/docs/superpowers/
+/Browser_Automation_CONOPS_and_Functional_Specification.md
