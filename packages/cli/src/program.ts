@@ -66,6 +66,12 @@ import {
   type RuntimeId,
   type DetectionDeps,
 } from "./init-skills.js";
+import {
+  registerMcp,
+  resolveMcpTargetPaths,
+  renderPrintConfig,
+  type McpHarness,
+} from "./init-mcp.js";
 import { loadManifest } from "@jevitate/skills";
 import {
   runExploration,
@@ -338,14 +344,16 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .option("--skip-keys", "skip credential collection")
     .option("--skip-skills", "skip skill installation")
+    .option("--skip-mcp", "skip registering the jevitate MCP server in detected harnesses")
     .option("--targets <ids>", "comma-separated runtime ids to force-install to, overriding detection")
-    .option("--force", "overwrite a user-modified installed skill file/block")
-    .option("--dry-run", "report planned skill-install actions without writing")
+    .option("--force", "overwrite a user-modified installed skill file/block or MCP config entry")
+    .option("--dry-run", "report planned skill-install/mcp-register actions without writing")
     .action(async function (this: Command) {
-      const { json, skipKeys, skipSkills, targets, force, dryRun } = this.opts<{
+      const { json, skipKeys, skipSkills, skipMcp, targets, force, dryRun } = this.opts<{
         json?: boolean;
         skipKeys?: boolean;
         skipSkills?: boolean;
+        skipMcp?: boolean;
         targets?: string;
         force?: boolean;
         dryRun?: boolean;
@@ -360,17 +368,29 @@ export function buildProgram(deps: CliDeps): Command {
           const io = deps.ai?.secureIO ?? realSecureIO();
           data.keys = await collectAllMissingKeys(store, io);
         }
+        // Explicit `--targets` overrides detection entirely (the user takes
+        // full control); otherwise `detectRuntimes` decides, always including
+        // the always-on generic fallback. Shared by the skill install and the
+        // MCP registration so a single selection drives both.
+        const runtimes = targets
+          ? (targets.split(",").map((t) => t.trim()).filter((t) => t.length > 0) as RuntimeId[])
+          : detectRuntimes(deps.init?.detection);
+
         if (!skipSkills) {
-          // Explicit `--targets` overrides detection entirely (the user takes
-          // full control); otherwise `detectRuntimes` decides, always including
-          // the always-on generic fallback.
-          const runtimes = targets
-            ? (targets.split(",").map((t) => t.trim()).filter((t) => t.length > 0) as RuntimeId[])
-            : detectRuntimes(deps.init?.detection);
           const paths = resolveInstallTargetPaths(deps.init?.detection);
           const statePath = deps.init?.statePath ?? resolveDataDir(["skills-install-state.json"]);
           const skills = loadManifest();
           data.skills = await installSkills(runtimes, skills, paths, statePath, { force, dryRun });
+        }
+        if (!skipMcp) {
+          // Register the `jevitate mcp` server for each detected/selected
+          // harness, with the SAME never-clobber safety as skills: a user's
+          // conflicting or unparseable config is never overwritten without
+          // --force; each declined target reports a printable instruction
+          // instead (honest, never corrupts a config). `generic` has no MCP
+          // convention and is skipped inside `registerMcp`.
+          const mcpPaths = resolveMcpTargetPaths(deps.init?.detection);
+          data.mcp = await registerMcp(runtimes, mcpPaths, { force, dryRun });
         }
         const envelope = ok(data);
         if (json) {
@@ -380,6 +400,7 @@ export function buildProgram(deps: CliDeps): Command {
           out?.("jevitate initialized\n");
           if (data.keys) out?.(`keys: ${JSON.stringify(data.keys)}\n`);
           if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
+          if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) processed\n`);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -1831,8 +1852,30 @@ export function buildProgram(deps: CliDeps): Command {
     .command("mcp")
     .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option(
+      "--print-config <harness>",
+      "print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing",
+    )
     .action(async function (this: Command) {
-      const { dir } = this.opts<{ dir?: string }>();
+      const { dir, printConfig } = this.opts<{ dir?: string; printConfig?: string }>();
+
+      // `--print-config <harness>` is the universal escape hatch: render the
+      // exact registration snippet and exit WITHOUT starting the server (safe:
+      // no writes, no stdio takeover). An unknown harness is a fail envelope.
+      if (printConfig !== undefined) {
+        const harness = printConfig as McpHarness;
+        if (harness !== "claude" && harness !== "cursor" && harness !== "codex" && harness !== "json") {
+          emitJson(
+            program,
+            fail("E_MCP_PRINT_CONFIG", `--print-config must be one of claude | cursor | codex | json (got '${printConfig}')`),
+          );
+          return;
+        }
+        program.configureOutput().writeOut?.(`${renderPrintConfig(harness)}\n`);
+        process.exitCode = 0;
+        return;
+      }
+
       try {
         // Credential store + generation gateway for the allowlisted
         // `ai_generate_text` tool. The gateway is the REAL OpenRouter adapter:

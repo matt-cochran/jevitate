@@ -82,12 +82,26 @@ quantity.
   come from a `find`/`find_capabilities` result you saw in this session.
 - Never promote anything yourself — recommend, and let a human decide.
 
-## Known gaps (as of 2026-09-20)
+## Registering and promoting a mission target (for queue_exploration)
 
-- `jevitate explore` (all strategies) has shipped; the `queue_exploration` MCP
-  tool exists via `@jevitate/missions`, but there is no `jevitate mcp` server
-  subcommand yet (ticket #20) to expose it as a standalone running server, and
-  `queue_exploration` requires a pre-registered mission target — target
-  registration (`jevitate mission target`, ticket #21) is not yet a command
-  either. If you are not already in an MCP-connected session that offers
-  `queue_exploration`, use the `jevitate explore` CLI directly instead.
+`queue_exploration` runs against a PROMOTED mission target, never a raw URL.
+When you want to queue a scoped mission at an at-risk area via MCP:
+- `jevitate mission target add <id> --url <authorized-url> [--goal ...] [--route
+  <glob> ...] --json` registers the target (unpromoted).
+- `jevitate mission target list --json` shows registered targets and their
+  promoted/unpromoted state.
+- `jevitate mission target promote <id> --json` promotes it — a human-gated act,
+  same as Journey promotion. Only a promoted target is enqueueable.
+
+Then `queue_exploration({ target: "<id>", ... })` (via the `jevitate mcp`
+server, registered with `jevitate mcp --print-config ...` or `jevitate init`)
+enqueues a bounded mission and returns a `missionId`.
+
+## Known gaps
+
+- The MCP inbox/command-queue tools (`queue_retrieval`, `queue_action`,
+  `get_command`, `list_incoming`, `get_thread`, `approve_action`,
+  `cancel_command`, `get_site_health`) are registered on the `jevitate mcp`
+  server but return a typed `not_implemented` error today — the wired tools are
+  `find_capabilities`, `run_journey`, `queue_exploration`, and
+  `ai_generate_text`. Scoping and running work fully through those four.
