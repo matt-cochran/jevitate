@@ -123,6 +123,12 @@ export interface RubricEntry {
   readonly tier: Tier;
   readonly questions: readonly JevQuestionSpec[];
   readonly requiredEvidence: readonly UxEvidenceKey[];
+  /**
+   * Honest attention provenance (constraint #6). When set, findings for this
+   * entry carry a `predictedAttention` label with this provenance string — an
+   * INFERENCE from semantic/visual hierarchy, never eye-tracking or gaze data.
+   */
+  readonly attentionProvenance?: string;
 }
 
 /** A resolved reference into the analyzed evidence, e.g. { id: "control:0" }. */

@@ -62,6 +62,7 @@ export const RubricEntrySchema = z
     tier: z.enum(["semantic", "behavioral", "objective-a11y"]),
     questions: z.array(JevQuestionSpecSchema).min(1, "a rubric entry needs ≥1 question"),
     requiredEvidence: z.array(z.enum(UX_EVIDENCE_KEYS)).min(1),
+    attentionProvenance: z.string().min(1).optional(),
   })
   .strict();
 

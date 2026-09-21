@@ -10,6 +10,7 @@ export const PRIMARY_ACTION: RubricEntry = {
   },
   tier: "semantic",
   requiredEvidence: ["controls", "visibleText", "job"],
+  attentionProvenance: "predicted-from-visual-hierarchy",
   questions: [
     {
       id: "primary-action-unambiguous",
