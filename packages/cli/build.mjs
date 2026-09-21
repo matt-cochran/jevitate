@@ -22,6 +22,10 @@ const EXTERNAL = [
   "ai",
   "@openrouter/ai-sdk-provider",
   "@typesafe-ai/sdk",
+  // MCP server SDK for `jevitate mcp` — a runtime external (declared in
+  // package.json "dependencies"), kept out of the bundle like the natives
+  // above so npm installs it alongside the published CLI.
+  "@modelcontextprotocol/sdk",
 ];
 
 await build({

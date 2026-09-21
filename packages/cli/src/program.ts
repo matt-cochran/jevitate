@@ -55,6 +55,7 @@ import {
   missionTargetContext,
   UnknownMissionTargetError,
 } from "./mission-api.js";
+import { startMcpServer } from "./mcp-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import {
@@ -1304,6 +1305,26 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_MISSION_TARGET_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // Additive: `jevitate mcp` (Ticket #20) — start an MCP stdio server that
+  // exposes ONLY `@jevitate/mcp-facade`'s allowlisted tools (never the raw
+  // browser primitives in FORBIDDEN_TOOLS). This is the subcommand form of the
+  // MCP server (single-bundle deployment — no separate published package).
+  // The server owns stdin/stdout as the MCP protocol channel, so on success it
+  // blocks and writes NOTHING to stdout; only a setup failure (before the
+  // transport connects) emits a JSON envelope.
+  program
+    .command("mcp")
+    .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .action(async function (this: Command) {
+      const { dir } = this.opts<{ dir?: string }>();
+      try {
+        await startMcpServer({ journeysDir: resolveJourneysDir(deps, dir) });
+      } catch (err) {
+        emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
       }
     });
 

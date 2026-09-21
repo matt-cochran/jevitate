@@ -62,6 +62,9 @@ importers:
       '@clack/prompts':
         specifier: ^0.9.1
         version: 0.9.1
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.0.0
+        version: 1.30.0(zod@4.6.5)
       '@openrouter/ai-sdk-provider':
         specifier: ^3.1.0
         version: 3.1.0(ai@7.0.107(zod@4.6.5))(zod@4.6.5)
@@ -105,6 +108,9 @@ importers:
       '@jevitate/load':
         specifier: workspace:*
         version: link:../load
+      '@jevitate/mcp-facade':
+        specifier: workspace:*
+        version: link:../mcp-facade
       '@jevitate/missions':
         specifier: workspace:*
         version: link:../missions
