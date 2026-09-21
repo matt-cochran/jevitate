@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
@@ -107,6 +107,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
             remainingIterations--;
             if (remainingIterations <= 0) {
               await session.close();
+              await rm(profileDir, { recursive: true, force: true });
             }
           }
         },

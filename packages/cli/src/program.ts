@@ -123,7 +123,13 @@ async function makeRealBrowserActor(site: string): Promise<{ actor: Actor; close
   const port = new PlaywrightBrowserPort();
   const session = await port.open({ profileDir, headless: true, allowedOrigins: [site], baseUrl: site });
   const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
-  return { actor, close: () => session.close() };
+  return {
+    actor,
+    close: async () => {
+      await session.close();
+      await rm(profileDir, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
@@ -899,8 +905,8 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
 
+        const profileDir = await mkdtemp(join(tmpdir(), "jevitate-adversarial-"));
         try {
-          const profileDir = await mkdtemp(join(tmpdir(), "jevitate-adversarial-"));
           const result = await runAdversarialCliMission({
             seedUrl: o.url,
             allowlist: advAllowlist,
@@ -925,6 +931,8 @@ export function buildProgram(deps: CliDeps): Command {
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
+        } finally {
+          await rm(profileDir, { recursive: true, force: true });
         }
         return;
       }
