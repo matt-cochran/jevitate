@@ -48,6 +48,7 @@
     "@jevitate/runtime": "workspace:*",
     "@jevitate/screenplay": "workspace:*",
     "@jevitate/skills": "workspace:*",
+    "@jevitate/sources": "workspace:*",
     "@jevitate/storage-sqlite": "workspace:*",
     "esbuild": "^0.28.2"
   },
