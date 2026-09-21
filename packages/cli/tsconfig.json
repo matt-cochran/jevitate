@@ -15,6 +15,7 @@
     { "path": "../runtime" },
     { "path": "../screenplay" },
     { "path": "../skills" },
+    { "path": "../sources" },
     { "path": "../storage-sqlite" }
   ],
   "include": ["src/**/*"],

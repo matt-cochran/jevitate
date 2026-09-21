@@ -123,6 +123,9 @@ importers:
       '@jevitate/skills':
         specifier: workspace:*
         version: link:../skills
+      '@jevitate/sources':
+        specifier: workspace:*
+        version: link:../sources
       '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
