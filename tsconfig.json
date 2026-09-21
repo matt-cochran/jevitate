@@ -23,6 +23,7 @@
     { "path": "packages/sources" },
     { "path": "packages/regression" },
     { "path": "packages/skills" },
+    { "path": "packages/ux" },
     { "path": "apps/example-site" },
     { "path": "site-integrations/example-network" }
   ]

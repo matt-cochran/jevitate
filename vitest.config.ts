@@ -29,6 +29,7 @@ export default defineConfig({
       "@jevitate/missions": pkg("missions"),
       "@jevitate/regression": pkg("regression"),
       "@jevitate/skills": pkg("skills"),
+      "@jevitate/ux": pkg("ux"),
       // Add one line per new package here, e.g.:
       "@jevitate/example-site": fileURLToPath(new URL("./apps/example-site/src/index.ts", import.meta.url)),
       "@jevitate/site-example-network": fileURLToPath(new URL("./site-integrations/example-network/src/index.ts", import.meta.url)),
