@@ -50,6 +50,7 @@
     "@jevitate/skills": "workspace:*",
     "@jevitate/sources": "workspace:*",
     "@jevitate/storage-sqlite": "workspace:*",
+    "@jevitate/ux": "workspace:*",
     "esbuild": "^0.28.2"
   },
   "scripts": {

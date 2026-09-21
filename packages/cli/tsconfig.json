@@ -18,7 +18,8 @@
     { "path": "../screenplay" },
     { "path": "../skills" },
     { "path": "../sources" },
-    { "path": "../storage-sqlite" }
+    { "path": "../storage-sqlite" },
+    { "path": "../ux" }
   ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]

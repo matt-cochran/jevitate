@@ -141,6 +141,9 @@ importers:
       '@jevitate/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
+      '@jevitate/ux':
+        specifier: workspace:*
+        version: link:../ux
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
