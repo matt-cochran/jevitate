@@ -1,0 +1,23 @@
+{
+  "name": "@jevitate/interpreter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@jevitate/recording": "workspace:*",
+    "@jevitate/screenplay": "workspace:*"
+  },
+  "devDependencies": {
+    "@jevitate/playwright": "workspace:*",
+    "playwright": "^1.49.0",
+    "@jevitate/example-site": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  }
+}

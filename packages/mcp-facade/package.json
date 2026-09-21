@@ -1,0 +1,24 @@
+{
+  "name": "@jevitate/mcp-facade",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@jevitate/ai-core": "workspace:*",
+    "@jevitate/application": "workspace:*",
+    "@jevitate/domain": "workspace:*",
+    "@jevitate/journey": "workspace:*",
+    "@jevitate/missions": "workspace:*",
+    "@jevitate/runtime": "workspace:*",
+    "@jevitate/sources": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  }
+}

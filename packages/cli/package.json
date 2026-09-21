@@ -1,0 +1,76 @@
+{
+  "name": "@jevitate/cli",
+  "version": "0.1.0",
+  "description": "Jevitate CLI — author, run, and orchestrate browser-automation Journeys from the command line.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matt-cochran/jevitate.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://jevitate.com",
+  "bugs": "https://github.com/matt-cochran/jevitate/issues",
+  "author": "Matt Cochran",
+  "keywords": [
+    "browser-automation",
+    "testing",
+    "e2e",
+    "playwright",
+    "screenplay",
+    "journeys",
+    "exploration",
+    "usability",
+    "mcp",
+    "cli",
+    "jevitate"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": { "jevitate": "dist/bin.js" },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "files": ["dist", "skills"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "ai": "^7.0.107",
+    "better-sqlite3": "^11.0.0",
+    "commander": "^12.0.0",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@jevitate/ai-core": "workspace:*",
+    "@jevitate/daemon": "workspace:*",
+    "@jevitate/domain": "workspace:*",
+    "@jevitate/example-site": "workspace:*",
+    "@jevitate/explore": "workspace:*",
+    "@jevitate/interpreter": "workspace:*",
+    "@jevitate/journey": "workspace:*",
+    "@jevitate/load": "workspace:*",
+    "@jevitate/mcp-facade": "workspace:*",
+    "@jevitate/missions": "workspace:*",
+    "@jevitate/playwright": "workspace:*",
+    "@jevitate/recorder": "workspace:*",
+    "@jevitate/recording": "workspace:*",
+    "@jevitate/regression": "workspace:*",
+    "@jevitate/runtime": "workspace:*",
+    "@jevitate/screenplay": "workspace:*",
+    "@jevitate/skills": "workspace:*",
+    "@jevitate/sources": "workspace:*",
+    "@jevitate/storage-sqlite": "workspace:*",
+    "@jevitate/ux": "workspace:*",
+    "esbuild": "^0.28.2"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "bundle": "node ./build.mjs"
+  }
+}

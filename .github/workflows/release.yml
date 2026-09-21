@@ -1,0 +1,59 @@
+name: Release
+
+# Manual trigger only (for now). We publish the FIRST release by hand
+# (`bash scripts/release.sh`, interactive 2FA OTP, no stored token — see
+# RELEASING.md), because npm OIDC Trusted Publishing can only be configured for
+# a package that already exists. Once the packages are on npm and OIDC trusted
+# publishing is set up (id-token: write + provenance, no NPM_TOKEN), switch this
+# back to `on: push: branches: [main]`.
+on:
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Node 22: @changesets/cli@3.0.3's bin calls module.enableCompileCache(),
+          # which only exists on Node >=22.8 — on Node 20 it throws
+          # "TypeError: enableCompileCache is not a function" and the publish
+          # never runs. (CI stays on 20; it never invokes changesets. engines: >=20.)
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Bundle @jevitate/cli
+        run: pnpm --filter @jevitate/cli run bundle
+
+      - name: Create release PR or publish to npm
+        uses: changesets/action@v1
+        with:
+          publish: pnpm release
+          version: pnpm version-packages
+          commit: "chore: version packages"
+          title: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

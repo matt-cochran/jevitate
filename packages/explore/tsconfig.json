@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "references": [
+    { "path": "../ai-core" },
+    { "path": "../domain" },
+    { "path": "../interpreter" },
+    { "path": "../journey" },
+    { "path": "../playwright" },
+    { "path": "../recorder" },
+    { "path": "../recording" },
+    { "path": "../screenplay" }
+  ],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "src/testkit.ts"]
+}

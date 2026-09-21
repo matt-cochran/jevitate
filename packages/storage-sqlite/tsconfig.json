@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "references": [{ "path": "../application" }, { "path": "../domain" }],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
+}
