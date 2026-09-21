@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import type { Journey } from "@jevitate/journey";
 import type { GhPort, GitExec, JevitateManifest, SharedJourneyFile } from "@jevitate/sources";
+import type { JourneyRunResult } from "@jevitate/runtime";
+import type { RunResolvedJourney } from "./source-run-api.js";
 import { buildProgram, type CliDeps } from "./program.js";
 
 /**
@@ -167,6 +169,100 @@ test("SECURITY: journey publish refuses a materialized secret -> E_JOURNEY_PUBLI
   expect(env.ok).toBe(false);
   expect(env.error.code).toBe("E_JOURNEY_PUBLISH_SECRET");
   expect(calls.some((c) => c[0] === "push")).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// #26 — jevitate source run (run a Journey from a trusted remote source through
+// the run-gate). A runner spy is injected so no real browser launches.
+// ---------------------------------------------------------------------------
+function makeRunnerSpy(): { runJourney: RunResolvedJourney; calls: { id: string; params: Record<string, string> }[] } {
+  const calls: { id: string; params: Record<string, string> }[] = [];
+  const runJourney: RunResolvedJourney = async (file, params) => {
+    calls.push({ id: file.metadata.id, params });
+    return { outcome: "ok", output: { ran: file.metadata.id } } satisfies JourneyRunResult;
+  };
+  return { runJourney, calls };
+}
+
+test("source run --json runs a read-only journey from a trusted, ToU-acked source", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+  const spy = makeRunnerSpy();
+  const { program, lines } = await newProgram({ git, runJourney: spy.runJourney });
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--accept-tou", "--json"], { from: "user" });
+  lines.length = 0;
+  await program.parseAsync(["source", "run", "shop", "checkout", "--json"], { from: "user" });
+  const env = parse(lines);
+  expect(env.ok).toBe(true);
+  expect(env.data.outcome).toBe("ok");
+  expect(spy.calls).toEqual([{ id: "checkout", params: {} }]);
+});
+
+test("SECURITY: source run refuses an UNTRUSTED risky journey -> E_SOURCE_RUN_UNTRUSTED (never runs)", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("risky", true)]));
+  const spy = makeRunnerSpy();
+  const { program, lines } = await newProgram({ git, runJourney: spy.runJourney });
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--accept-tou", "--json"], { from: "user" });
+  lines.length = 0;
+  await program.parseAsync(["source", "run", "shop", "risky", "--json"], { from: "user" });
+  const env = parse(lines);
+  expect(env.ok).toBe(false);
+  expect(env.error.code).toBe("E_SOURCE_RUN_UNTRUSTED");
+  expect(spy.calls).toHaveLength(0);
+});
+
+test("SECURITY: source run refuses a TOCTOU content change after trust -> E_SOURCE_RUN_HASH_MISMATCH (never runs)", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("risky", true)]));
+  const spy = makeRunnerSpy();
+  const { program, lines, root } = await newProgram({ git, runJourney: spy.runJourney });
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--accept-tou", "--json"], { from: "user" });
+  await program.parseAsync(["source", "trust", "shop", "risky", "--json"], { from: "user" });
+  // Mutate the trusted journey's bytes under the pin.
+  const mutated = sharedJourney("risky", true);
+  mutated.metadata.description = "changed after review";
+  await writeFile(join(root, "sources", "shop", "journeys", "risky.journey.json"), JSON.stringify(mutated));
+  lines.length = 0;
+  await program.parseAsync(["source", "run", "shop", "risky", "--json"], { from: "user" });
+  const env = parse(lines);
+  expect(env.ok).toBe(false);
+  expect(env.error.code).toBe("E_SOURCE_RUN_HASH_MISMATCH");
+  expect(spy.calls).toHaveLength(0);
+});
+
+test("SECURITY: source run refuses when ToU is not acknowledged -> E_SOURCE_RUN_TOU (never runs)", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+  const spy = makeRunnerSpy();
+  const { program, lines } = await newProgram({ git, runJourney: spy.runJourney });
+  // add WITHOUT --accept-tou.
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--json"], { from: "user" });
+  lines.length = 0;
+  await program.parseAsync(["source", "run", "shop", "checkout", "--json"], { from: "user" });
+  const env = parse(lines);
+  expect(env.ok).toBe(false);
+  expect(env.error.code).toBe("E_SOURCE_RUN_TOU");
+  expect(spy.calls).toHaveLength(0);
+});
+
+test("source run on an unregistered source -> E_SOURCE_RUN_UNKNOWN (never runs)", async () => {
+  const { git } = makeFakeGit();
+  const spy = makeRunnerSpy();
+  const { program, lines } = await newProgram({ git, runJourney: spy.runJourney });
+  await program.parseAsync(["source", "run", "ghost", "checkout", "--json"], { from: "user" });
+  const env = parse(lines);
+  expect(env.ok).toBe(false);
+  expect(env.error.code).toBe("E_SOURCE_RUN_UNKNOWN");
+  expect(spy.calls).toHaveLength(0);
+});
+
+test("source run passes --param key=value pairs through to the runner", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+  const spy = makeRunnerSpy();
+  const { program, lines } = await newProgram({ git, runJourney: spy.runJourney });
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--accept-tou", "--json"], { from: "user" });
+  lines.length = 0;
+  await program.parseAsync(["source", "run", "shop", "checkout", "--param", "q=hi", "--param", "n=2", "--json"], { from: "user" });
+  const env = parse(lines);
+  expect(env.ok).toBe(true);
+  expect(spy.calls[0].params).toEqual({ q: "hi", n: "2" });
 });
 
 test("journey publish refuses an unpromoted journey -> E_JOURNEY_PUBLISH_NOT_PROMOTED", async () => {
