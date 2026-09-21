@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
@@ -69,6 +69,30 @@ import {
   type ExploreCliDeps,
 } from "./explore-api.js";
 import { resolveDataDir } from "./data-dir.js";
+import {
+  addSource,
+  listSources,
+  pullSource,
+  updateSource,
+  removeSource,
+  trustJourney,
+  publishJourneyToSource,
+  realGhPort,
+  NotPromotedError,
+  NoDeclaredOriginsError,
+  type SourceApiDeps,
+} from "./source-api.js";
+import {
+  FsTrustStore,
+  FsAckStore,
+  UnknownSourceError,
+  EmbeddedSecretError,
+  UndeclaredOriginError,
+  SourceValidationError,
+  DEFAULT_LOCK_PATH,
+  type GitExec,
+  type GhPort,
+} from "@jevitate/sources";
 
 export interface CliDeps {
   profiles: ProfileManager;
@@ -83,6 +107,24 @@ export interface CliDeps {
    *  in production means the real `existsSync`/`homedir`/`cwd` and the real
    *  `~/.jevitate/skills-install-state.json` state path. */
   init?: { detection?: DetectionDeps; statePath?: string };
+  /**
+   * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
+   * Every field is injectable so tests never touch the network, the real home
+   * dir, or the real `git`/`gh` binaries. Omitted in production means the real
+   * `~/.jevitate/sources` clone dir, `<cwd>/jevitate.lock`, `~/.jevitate/trust`
+   * stores, and the real `git`/`gh` ports.
+   */
+  sources?: {
+    sourcesDir?: string;
+    lockPath?: string;
+    trustDir?: string;
+    ackDir?: string;
+    git?: GitExec;
+    gh?: GhPort;
+    now?: () => string;
+    /** Identity recorded in a `TrustRecord`/`TouAck`; defaults to the OS user. */
+    approvedBy?: string;
+  };
 }
 
 // `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
@@ -108,6 +150,36 @@ function resolveJourneysDir(deps: CliDeps, flag?: string): string {
  *  committed-regressions directory `regression capture` writes into. */
 function resolveRegressionsDir(flag?: string): string {
   return flag ?? DEFAULT_REGRESSIONS_DIR;
+}
+
+/**
+ * Assembles the injected `SourceApiDeps` for the distributed-sources commands
+ * from `CliDeps.sources` (test-injected ports) or the real production
+ * defaults: `~/.jevitate/sources` clones, `<cwd>/jevitate.lock`, and the
+ * local, per-user `FsTrustStore`/`FsAckStore` under `~/.jevitate/trust`.
+ * Trust/ack stores are LOCAL by design (§14.1) — never the team-shared lock.
+ */
+function resolveSourceApiDeps(deps: CliDeps): SourceApiDeps {
+  const s = deps.sources ?? {};
+  return {
+    sourcesDir: s.sourcesDir ?? resolveDataDir(["sources"]),
+    lockPath: s.lockPath ?? DEFAULT_LOCK_PATH(),
+    trust: new FsTrustStore(s.trustDir ?? resolveDataDir(["trust"])),
+    ack: new FsAckStore(s.ackDir ?? resolveDataDir(["trust", "acks"])),
+    git: s.git,
+    now: s.now,
+  };
+}
+
+/** The identity recorded in a `TrustRecord`/`TouAck` — an injected value, else
+ *  the OS username, else `"local"`. Never a secret/credential. */
+function resolveApprovedBy(deps: CliDeps): string {
+  if (deps.sources?.approvedBy) return deps.sources.approvedBy;
+  try {
+    return userInfo().username || "local";
+  } catch {
+    return "local";
+  }
 }
 
 /**
@@ -701,6 +773,229 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
         } else {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
+        }
+      }
+    });
+
+  // #19 — publish a promoted local Journey to a registered distributed source.
+  // Preserves every publish-side guard in `@jevitate/sources` (promoted-only,
+  // secret-references-only, declared-origin coverage); writes onto a NEW
+  // `publish/<id>` branch and degrades gracefully when `gh` is absent.
+  journey
+    .command("publish <id>")
+    .requiredOption("--to <source>", "registered source name to publish into")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--declare-origin <origin>", "origin this Journey is authorized for (repeatable; default: derived from navigate steps)", (v: string, prev: string[]) => [...prev, v], [] as string[])
+    .option("--as <id>", "publish under a different id than the local one")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { to, dir, declareOrigin, as: asId, json } = this.opts<{
+        to: string;
+        dir?: string;
+        declareOrigin: string[];
+        as?: string;
+        json?: boolean;
+      }>();
+      try {
+        const apiDeps = resolveSourceApiDeps(deps);
+        const gh = deps.sources?.gh ?? realGhPort;
+        const result = await publishJourneyToSource(
+          { ...apiDeps, gh },
+          {
+            journeysDir: resolveJourneysDir(deps, dir),
+            id,
+            toSource: to,
+            declareOrigins: declareOrigin,
+            asId,
+          },
+        );
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          out?.(`published '${id}' to '${to}' on branch ${result.branch}\n`);
+          if (result.prUrl) out?.(`PR: ${result.prUrl}\n`);
+          else if (result.instructions) out?.(`${result.instructions}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_UNKNOWN_SOURCE", err.message));
+        } else if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_UNKNOWN_JOURNEY", err.message));
+        } else if (err instanceof NotPromotedError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_NOT_PROMOTED", err.message));
+        } else if (err instanceof NoDeclaredOriginsError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_NO_ORIGINS", err.message));
+        } else if (err instanceof EmbeddedSecretError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_SECRET", err.message));
+        } else if (err instanceof UndeclaredOriginError) {
+          emitJson(program, fail("E_JOURNEY_PUBLISH_ORIGIN", err.message));
+        } else {
+          emitJson(program, fail("E_JOURNEY_PUBLISH", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #18 — manage distributed Journey sources (add/list/pull/update/remove/
+  // trust). Trust is an explicit user act, content-hash-bound; add/pull/update
+  // never trust anything implicitly.
+  const source = program.command("source");
+
+  source
+    .command("add <name> <gitUrl>")
+    .option("--accept-tou", "acknowledge the source's declared Terms of Use (required before its Journeys can run)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string, gitUrl: string) {
+      const { acceptTou, json } = this.opts<{ acceptTou?: boolean; json?: boolean }>();
+      try {
+        const apiDeps = resolveSourceApiDeps(deps);
+        const result = await addSource(apiDeps, {
+          name,
+          gitUrl,
+          acceptTou: acceptTou ?? false,
+          ackedBy: resolveApprovedBy(deps),
+        });
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          out?.(`added '${name}' pinned at ${result.pinnedCommit}\n`);
+          out?.(`Terms of Use for ${result.touSurface.gitUrl}:\n`);
+          for (const site of result.touSurface.sites) out?.(`  ${site.origin}\t${site.touBasis}\n`);
+          out?.(result.touAccepted ? "ToU acknowledged.\n" : "ToU NOT acknowledged — re-run with --accept-tou before running this source's Journeys.\n");
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof SourceValidationError) {
+          emitJson(program, fail("E_SOURCE_INVALID_MANIFEST", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_ADD", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("list")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const listing = await listSources(resolveSourceApiDeps(deps));
+        const envelope = ok(listing);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const s of listing) {
+            out?.(`${s.name}\t${s.gitUrl}\t${s.pinnedCommit}\ttrusted=[${s.trustedJourneys.join(", ")}]\n`);
+          }
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_SOURCE_LIST", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  source
+    .command("pull <name>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await pullSource(resolveSourceApiDeps(deps), name);
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`pulled '${name}' (pin unchanged at ${result.pinnedCommit}; run 'source update' to advance)\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_PULL", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("update <name>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await updateSource(resolveSourceApiDeps(deps), name);
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`updated '${name}' -> pinned at ${result.pinnedCommit}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_UPDATE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("remove <name>")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await removeSource(resolveSourceApiDeps(deps), name);
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`removed '${name}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_REMOVE", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  source
+    .command("trust <name> <journeyId>")
+    .description("explicitly trust one Journey in a source, bound to its current content hash")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string, journeyId: string) {
+      const { json } = this.opts<{ json?: boolean }>();
+      try {
+        const result = await trustJourney(resolveSourceApiDeps(deps), {
+          sourceName: name,
+          journeyId,
+          approvedBy: resolveApprovedBy(deps),
+        });
+        // Never emit the Journey's content — only the address + bound hash.
+        const view = { sourceId: result.sourceId, journeyId: result.journeyId, contentHash: result.contentHash, approvedBy: result.approvedBy, approvedAtIso: result.approvedAtIso };
+        const envelope = ok(view);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`trusted '${name}/${journeyId}' at ${result.contentHash}\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN", err.message));
+        } else if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_SOURCE_UNKNOWN_JOURNEY", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_TRUST", String(err instanceof Error ? err.message : err)));
         }
       }
     });
