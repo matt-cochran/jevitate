@@ -3,6 +3,7 @@ export const AI_CORE = "ai-core" as const;
 
 export * from "./credentials.js";
 export * from "./credential-guard.js";
+export * from "./redaction.js";
 export * from "./generation.js";
 export * from "./model-policy.js";
 export * from "./openrouter.js";

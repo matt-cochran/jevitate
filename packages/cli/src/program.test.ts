@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -58,6 +59,14 @@ function authoringTakeJson(steps: Step[]): { recording: Recording; values: Recor
   };
   return AuthoringTakeSchema.parse({ recording, values });
 }
+
+test("mcp command is registered on the program (additive #20)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const mcp = program.commands.find((c) => c.name() === "mcp");
+  expect(mcp).toBeTruthy();
+  expect(mcp?.description()).toContain("MCP");
+});
 
 test("profile create prints a success envelope", async () => {
   const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
@@ -525,4 +534,90 @@ test("load run accumulates repeated --authorized-origin flags", async () => {
   );
   const parsed = JSON.parse(lines.join(""));
   expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
+});
+
+// === jevitate init (Task 11) ===
+
+/**
+ * Builds a program wired for `init`: credentials satisfied via an injected env
+ * (so no prompt fires) and skill-install detection pinned to fresh temp
+ * home/cwd dirs plus a temp state path (so nothing touches the real machine).
+ */
+function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) => boolean } = {}) {
+  const profiles = new ProfileManager("/unused-in-init-tests");
+  const home = mkdtempSync(join(tmpdir(), "init-home-"));
+  const cwd = mkdtempSync(join(tmpdir(), "init-cwd-"));
+  const statePath = join(mkdtempSync(join(tmpdir(), "init-state-")), "skills-install-state.json");
+  const env = opts.keysPresent === false ? {} : { OPENROUTER_API_KEY: "x", TYPESAFE_API_KEY: "y" };
+  const lines: string[] = [];
+  const program = buildProgram({
+    profiles,
+    ai: { env },
+    init: {
+      detection: { existsSync: opts.existsSync ?? (() => false), homedir: () => home, cwd: () => cwd },
+      statePath,
+    },
+  });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  return { program, lines, home, cwd, statePath };
+}
+
+test("init --json (keys present, first run) emits initialized + keys + skills", async () => {
+  const { program, lines } = newInitProgram();
+  await program.parseAsync(["init", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.initialized).toBe(true);
+  expect(parsed.data.keys).toEqual({
+    generation: { required: ["OPENROUTER_API_KEY"], collected: [] },
+    judgment: { required: ["TYPESAFE_API_KEY"], collected: [] },
+  });
+  expect(Array.isArray(parsed.data.skills)).toBe(true);
+  expect(parsed.data.skills.length).toBeGreaterThan(0);
+  expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
+  // never leaks a key value
+  expect(lines.join("")).not.toContain('"x"');
+});
+
+test("init --skip-keys --json runs the skill install but omits keys", async () => {
+  const { program, lines } = newInitProgram();
+  await program.parseAsync(["init", "--skip-keys", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.keys).toBeUndefined();
+  expect(Array.isArray(parsed.data.skills)).toBe(true);
+});
+
+test("init --skip-skills --json collects keys but omits skills", async () => {
+  const { program, lines } = newInitProgram();
+  await program.parseAsync(["init", "--skip-skills", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.keys).toBeDefined();
+  expect(parsed.data.skills).toBeUndefined();
+});
+
+test("init --targets cursor installs to cursor even with no .cursor dir, and not to claude/codex", async () => {
+  const { program, lines, home } = newInitProgram();
+  await program.parseAsync(["init", "--targets", "cursor", "--skip-keys", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  const targetsHit = new Set(parsed.data.skills.map((r: { target: string }) => r.target));
+  expect(targetsHit.has("cursor")).toBe(true);
+  expect(targetsHit.has("claude-code")).toBe(false);
+  expect(targetsHit.has("codex")).toBe(false);
+  expect(targetsHit.has("generic")).toBe(false);
+  // no claude skills dir was created
+  expect(existsSync(join(home, ".claude", "skills"))).toBe(false);
+});
+
+test("init --dry-run --skip-keys --json reports planned actions but writes nothing", async () => {
+  const { program, lines, cwd, statePath } = newInitProgram();
+  await program.parseAsync(["init", "--dry-run", "--skip-keys", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
+  expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
+  expect(existsSync(statePath)).toBe(false);
 });

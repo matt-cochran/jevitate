@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "references": [{ "path": "../recording" }, { "path": "../ai-core" }],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
+}

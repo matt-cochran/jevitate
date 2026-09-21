@@ -139,3 +139,40 @@ test("journey run with an unknown journey id fails fast with E_UNKNOWN_JOURNEY a
     process.exitCode = savedExitCode;
   }
 });
+
+test("journey run --self-heal hybrid wires a SelfHealer into the JourneyRunner (flag accepted, threaded, fails CLOSED with no AI gateway)", async () => {
+  // Flag-plumbing smoke test: the CLI accepts `--self-heal hybrid` and
+  // threads it into RunPolicy.selfHeal.mode WITHOUT commander rejecting it as
+  // an unknown option and WITHOUT launching a browser. Because no AI gateway
+  // is selected (--real/--fake-ai), self-heal fails CLOSED with a clear
+  // E_AI_SETUP_REQUIRED — never a silent unhealed run. A full self-heal run
+  // is exercised by @jevitate/runtime's tests and self-heal-adapter.test.ts.
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([makeJourney()]);
+    const { program, lines } = newProgram();
+    await expect(
+      program.parseAsync(["journey", "run", "login", "--dir", dir, "--self-heal", "hybrid", "--json"], { from: "user" }),
+    ).resolves.not.toThrow();
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.code).toBe("E_AI_SETUP_REQUIRED");
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("journey run with no --self-heal is unchanged: default fail-closed, no AI setup demanded", async () => {
+  // The additive flag must not change existing behavior. With no --self-heal,
+  // an unknown journey still fails fast the same way (no AI-setup gate).
+  const savedExitCode = process.exitCode;
+  try {
+    const dir = await seedJourneysDir([]);
+    const { program, lines } = newProgram();
+    await program.parseAsync(["journey", "run", "nope", "--dir", dir, "--json"], { from: "user" });
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed.error.code).toBe("E_UNKNOWN_JOURNEY");
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});

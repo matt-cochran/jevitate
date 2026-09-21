@@ -6,6 +6,7 @@
     { "path": "../application" },
     { "path": "../domain" },
     { "path": "../journey" },
+    { "path": "../missions" },
     { "path": "../runtime" },
     { "path": "../sources" }
   ],

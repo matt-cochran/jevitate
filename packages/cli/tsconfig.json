@@ -5,14 +5,21 @@
     { "path": "../ai-core" },
     { "path": "../daemon" },
     { "path": "../domain" },
+    { "path": "../explore" },
     { "path": "../interpreter" },
     { "path": "../journey" },
     { "path": "../load" },
+    { "path": "../mcp-facade" },
+    { "path": "../missions" },
     { "path": "../playwright" },
     { "path": "../recording" },
+    { "path": "../regression" },
     { "path": "../runtime" },
     { "path": "../screenplay" },
-    { "path": "../storage-sqlite" }
+    { "path": "../skills" },
+    { "path": "../sources" },
+    { "path": "../storage-sqlite" },
+    { "path": "../ux" }
   ],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts"]
