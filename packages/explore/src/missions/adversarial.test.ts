@@ -82,6 +82,72 @@ describe("runAdversarialMission — hard defect", () => {
     },
     120_000,
   );
+
+  test(
+    "a real HTTP 5xx during misuse still stops the mission (5xx scoping did not mask it)",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+      const generation = new FakeGenerationGateway({
+        "triage.narrative": { summary: "server error observed", likelyCause: "backend 500" },
+      });
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["ordering-violation"],
+        // A 5xx sub-resource load: the response listener sees the 500 and gates
+        // it as a hard `http-5xx` signal — even though the console-error path is
+        // now scoped to exclude 4xx.
+        userInvariant: async (page) => {
+          await page.evaluate(async () => {
+            await fetch("/adversarial/boom").catch(() => undefined);
+          });
+          return { ok: true };
+        },
+      });
+      expect(result.outcome).toBe("defect");
+      if (result.outcome === "defect") {
+        expect(result.defect.signals.some((s) => s.kind === "http-5xx")).toBe(true);
+      }
+    },
+    120_000,
+  );
+});
+
+describe("runAdversarialMission — a legit 4xx during misuse is NOT a defect (#29)", () => {
+  test(
+    "a 4xx resource load the app returns by design does NOT report a defect",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+      const generation = new FakeGenerationGateway();
+      // Misuse legitimately hits a gated/absent route that returns 404. Chromium
+      // logs "Failed to load resource: ...404" to the console, but the spec
+      // scopes the HTTP hard-signal to 5xx — a 4xx is EXPECTED under misuse and
+      // must never false-positive as a defect. The invariant reports ok:true, so
+      // the only thing that could gate is the (now-scoped) console signal.
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["ordering-violation"],
+        userInvariant: async (page) => {
+          await page.evaluate(async () => {
+            await fetch("/adversarial/notfound").catch(() => undefined);
+          });
+          return { ok: true };
+        },
+      });
+      expect(result.outcome).not.toBe("defect");
+      expect(result.outcome === "clean" || result.outcome === "cap").toBe(true);
+    },
+    120_000,
+  );
 });
 
 describe("runAdversarialMission — model verdict is advisory only (guardrail #4)", () => {

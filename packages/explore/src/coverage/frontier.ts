@@ -1,5 +1,5 @@
 import type { Recording } from "@jevitate/recording";
-import type { Control } from "../index.js";
+import type { Control } from "../snapshot.js";
 import type { FrontierOp } from "./fingerprint.js";
 
 export interface FrontierItem {

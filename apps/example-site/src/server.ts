@@ -48,6 +48,14 @@ export function buildServer(): FastifyInstance {
     reply.code(500).send("internal error");
   });
 
+  // Additive fixture for @jevitate/explore's adversarial mission (ticket #29):
+  // a deterministic 4xx. A legitimate 4xx during MISUSE (a gated/absent route
+  // the app declines by design) is EXPECTED and must NOT be scored as a defect,
+  // even though Chromium logs it to the console as "Failed to load resource".
+  app.get("/adversarial/notfound", async (_req, reply) => {
+    reply.code(404).send("not found");
+  });
+
   app.get<{ Params: { id: string } }>("/thread/:id", async (req, reply) => {
     if (!authed(req)) { reply.redirect("/login"); return; }
     const t = SEED_THREADS.find((x) => x.id === req.params.id);

@@ -58,6 +58,7 @@ import {
 import { startMcpServer } from "./mcp-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
+import { readCliVersion } from "./version.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -315,7 +316,7 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
 
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("jevitate").description("Local browser automation platform").version("0.0.0");
+  program.name("jevitate").description("Local browser automation platform").version(readCliVersion());
 
   program
     .command("init")

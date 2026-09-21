@@ -1,5 +1,5 @@
 import { urlTemplate } from "@jevitate/recording";
-import type { Control, Snapshot } from "../index.js";
+import type { Control, Snapshot } from "../snapshot.js";
 
 /**
  * A control's contribution to a state fingerprint: role + accessible name +
@@ -14,18 +14,30 @@ function controlSignature(c: Pick<Control, "role" | "name" | "enabled">): string
 }
 
 /**
- * The deterministic "same state?" oracle for the proof-by-induction mission
- * (spec §3.3 / §7): a normalized control TABLE plus the URL TEMPLATE. Control
- * ORDER never affects the fingerprint — only which controls exist and their
- * role/name/enabled state — and id-like path segments are normalized by
- * `urlTemplate`, so `/thread/1` and `/thread/2` fingerprint identically.
+ * How a snapshot url is reduced before it enters the fingerprint. This is the
+ * ONE axis on which the two callers of this module genuinely differ (ticket
+ * #28): the proof-by-induction / state-coverage mission templates id-like
+ * segments so `/thread/1` and `/thread/2` collapse to one semantic page, while
+ * the feature-testing mission keys on the CONCRETE url so those two routes stay
+ * distinct reachable states (ticket #2's acceptance). Everything else — the
+ * control table, the action key, the op set — is shared verbatim.
+ */
+export type UrlNormalizer = (url: string) => string;
+
+/**
+ * The deterministic "same state?" oracle (spec §3.3 / §7): a normalized control
+ * TABLE plus the (normalized) URL. Control ORDER never affects the fingerprint
+ * — only which controls exist and their role/name/enabled state. The default
+ * `normalizeUrl` is `urlTemplate`, so `/thread/1` and `/thread/2` fingerprint
+ * identically for the coverage mission; the feature mission passes the identity
+ * normalizer to keep concrete routes distinct.
  *
  * This is fingerprint EQUALITY — a hard, deterministic check — never a Jev
  * judgment (guardrail #4: model verdicts are advisory only).
  */
-export function stateFingerprint(snapshot: Snapshot): string {
+export function stateFingerprint(snapshot: Snapshot, normalizeUrl: UrlNormalizer = urlTemplate): string {
   const controls = snapshot.controls.map(controlSignature).sort().join("\u0002");
-  return `${urlTemplate(snapshot.url)}\u0003${controls}`;
+  return `${normalizeUrl(snapshot.url)}\u0003${controls}`;
 }
 
 /** The ops the coverage frontier may enqueue against an in-page control. */
