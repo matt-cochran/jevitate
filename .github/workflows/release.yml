@@ -29,7 +29,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22: @changesets/cli@3.0.3's bin calls module.enableCompileCache(),
+          # which only exists on Node >=22.8 — on Node 20 it throws
+          # "TypeError: enableCompileCache is not a function" and the publish
+          # never runs. (CI stays on 20; it never invokes changesets. engines: >=20.)
+          node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
