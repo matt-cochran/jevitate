@@ -1,12 +1,17 @@
 name: Release
 
-# Manual trigger only (for now). We publish the FIRST release by hand
-# (`bash scripts/release.sh`, interactive 2FA OTP, no stored token — see
-# RELEASING.md), because npm OIDC Trusted Publishing can only be configured for
-# a package that already exists. Once the packages are on npm and OIDC trusted
-# publishing is set up (id-token: write + provenance, no NPM_TOKEN), switch this
-# back to `on: push: branches: [main]`.
+# Publishes @jevitate/cli and jevitate to npm via OIDC Trusted Publishing —
+# NO stored token (nothing to expire or leak), with build provenance.
+#
+# PREREQUISITE (one-time, per package, on npmjs.com): configure a Trusted
+# Publisher for `@jevitate/cli` AND `jevitate` pointing at this repo
+# (matt-cochran/jevitate) and this workflow file (release.yml). Until that is
+# done, publishing here fails — see RELEASING.md. The FIRST publish is done by
+# hand (`bash scripts/release.sh`), because a Trusted Publisher can only be
+# configured for a package that already exists.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
@@ -17,6 +22,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      id-token: write # required for npm OIDC Trusted Publishing
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,13 +35,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          # Node 22: @changesets/cli@3.0.3's bin calls module.enableCompileCache(),
-          # which only exists on Node >=22.8 — on Node 20 it throws
-          # "TypeError: enableCompileCache is not a function" and the publish
-          # never runs. (CI stays on 20; it never invokes changesets. engines: >=20.)
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - name: Ensure OIDC-capable npm
+        # npm OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles older.
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -55,5 +61,5 @@ jobs:
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No NPM_TOKEN: OIDC provides publish auth. Provenance is attached.
+          NPM_CONFIG_PROVENANCE: "true"
