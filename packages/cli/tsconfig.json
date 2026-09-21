@@ -9,6 +9,7 @@
     { "path": "../interpreter" },
     { "path": "../journey" },
     { "path": "../load" },
+    { "path": "../mcp-facade" },
     { "path": "../playwright" },
     { "path": "../recording" },
     { "path": "../regression" },
