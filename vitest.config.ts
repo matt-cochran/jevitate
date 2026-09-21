@@ -41,5 +41,8 @@ export default defineConfig({
       "apps/**/*.test.ts",
       "scripts/**/*.test.mjs",
     ],
+    // Sweeps throwaway temp dirs the fixtures leak into os.tmpdir() at the end
+    // of a run (a full run otherwise leaks ~0.5 GB). See test/global-temp-cleanup.ts.
+    globalSetup: ["./test/global-temp-cleanup.ts"],
   },
 });
