@@ -26,7 +26,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright browser (chromium)
-        run: pnpm exec playwright install --with-deps chromium
+        # playwright is a dependency of @jevitate/cli (and @jevitate/playwright),
+        # not a root-level bin, so `pnpm exec playwright` fails at the workspace
+        # root. Scope the exec to the package that owns the binary.
+        run: pnpm --filter @jevitate/cli exec playwright install --with-deps chromium
 
       - name: Build
         run: pnpm -r build
