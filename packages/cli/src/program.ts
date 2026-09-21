@@ -69,6 +69,22 @@ import {
   type ExploreCliDeps,
 } from "./explore-api.js";
 import { resolveDataDir } from "./data-dir.js";
+import {
+  runRecording,
+  resolveRecordAllowlist,
+  type RecorderLike,
+} from "./record-api.js";
+import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+
+/** Injectable wiring for the `record` command (all optional; real defaults). */
+export interface RecordCliDeps {
+  /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
+  browserPortFactory?: () => BrowserPort;
+  /** Testing seam — defaults to a real `@jevitate/recorder` `Recorder`. */
+  recorderFactory?: (session: BrowserSession, site: string) => RecorderLike;
+  /** Testing seam — the "user signalled done" wait. Defaults to Enter on stdin. */
+  waitForStop?: () => Promise<void>;
+}
 
 export interface CliDeps {
   profiles: ProfileManager;
@@ -79,6 +95,8 @@ export interface CliDeps {
   ai?: AiCliDeps;
   /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
   explore?: ExploreCliDeps;
+  /** Optional, additive: `jevitate record` wiring (see record-api.ts). */
+  record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
    *  in production means the real `existsSync`/`homedir`/`cwd` and the real
    *  `~/.jevitate/skills-install-state.json` state path. */
@@ -1128,6 +1146,75 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
         } else {
           emitJson(program, fail("E_AUTHOR_JOURNEY", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // Additive: `jevitate record` — record-by-demonstration (Ticket #22). Opens a
+  // real browser on an authorized origin, lets the user demonstrate a flow, and
+  // captures it into a schema-valid, replayable Recording written to disk. The
+  // authorized-origin guard is enforced FIRST (fail-closed) inside runRecording,
+  // before any browser is opened; the temp profile dir is always cleaned up.
+  program
+    .command("record")
+    .description("record a demonstrated flow into a Recording (authoring plane)")
+    .option("--url <url>", "start URL to demonstrate from (must be an authorized origin)")
+    .option("--intent <text>", "your framing of the journey (carried to Recording.intent)")
+    .option("--retro <text>", "optional retrospective note (carried to Recording.retro)")
+    .option(
+      "--allow <origin>",
+      "authorized origin (repeatable); defaults to the URL's own origin",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--headless", "run headless (default: headed — a record session is a live demonstration)", false)
+    .option("--out <dir>", "directory to write the emitted Recording (default: ~/.jevitate/recordings)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<{
+        url?: string;
+        intent?: string;
+        retro?: string;
+        allow: string[];
+        headless?: boolean;
+        out?: string;
+        json?: boolean;
+      }>();
+
+      if (!o.url) {
+        emitJson(program, fail("E_RECORD_ARGS", "--url is required"));
+        return;
+      }
+      const allowlist = resolveRecordAllowlist(o.url, o.allow);
+
+      try {
+        const result = await runRecording({
+          url: o.url,
+          allowlist,
+          intent: o.intent,
+          retro: o.retro,
+          outDir: o.out,
+          headless: o.headless ?? false,
+          browserPortFactory: deps.record?.browserPortFactory,
+          recorderFactory: deps.record?.recorderFactory,
+          waitForStop: deps.record?.waitForStop,
+        });
+        const summary = {
+          recordingPath: result.recordingPath,
+          steps: result.steps,
+          pages: result.pages,
+          finalUrl: result.finalUrl,
+        };
+        if (o.json) {
+          emitJson(program, ok(summary));
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(summary)}\n`);
+        }
+      } catch (err) {
+        if (err instanceof UnauthorizedExploreTargetError) {
+          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_RECORD_RUN", String(err instanceof Error ? err.message : err)));
         }
       }
     });

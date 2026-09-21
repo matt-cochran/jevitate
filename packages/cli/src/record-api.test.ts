@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { ProfileManager } from "@jevitate/daemon";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+import { buildProgram } from "./program.js";
 import { runRecording, resolveRecordAllowlist, type RecorderLike } from "./record-api.js";
 
 /**
@@ -187,5 +189,56 @@ describe("runRecording", () => {
     ).rejects.toThrow(/assembly failed/);
     expect(closed()).toBe(true);
     expect(existsSync(capturedProfileDir)).toBe(false);
+  });
+});
+
+function newProgram(record?: Parameters<typeof buildProgram>[0]["record"]) {
+  const profiles = new ProfileManager("/unused-in-these-tests");
+  const lines: string[] = [];
+  const program = buildProgram({ profiles, record });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  return { program, lines };
+}
+
+describe("record command — wiring (no real browser)", () => {
+  it("fails when --url is missing", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(["record", "--json"], { from: "user" });
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_RECORD_ARGS" } });
+  });
+
+  it("refuses an off-allowlist target (no browser opened)", async () => {
+    const browserPortFactory = vi.fn(() => {
+      throw new Error("browser must not be opened for an unauthorized target");
+    });
+    const { program, lines } = newProgram({ browserPortFactory, waitForStop: async () => {} });
+    await program.parseAsync(
+      ["record", "--url", "https://evil.test/login", "--allow", "https://fixture.test", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_UNAUTHORIZED_EXPLORE_TARGET" } });
+    expect(browserPortFactory).not.toHaveBeenCalled();
+  });
+
+  it("captures and writes a Recording via injected seams, emitting a summary", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "record-cmd-"));
+    const { session } = fakeSession("https://fixture.test/inbox");
+    const { recorder } = fakeRecorder(DEMO_RECORDING);
+    const { program, lines } = newProgram({
+      browserPortFactory: () => ({ async open() { return session; } }),
+      recorderFactory: () => recorder,
+      waitForStop: async () => {},
+    });
+    await program.parseAsync(
+      ["record", "--url", "https://fixture.test/login", "--intent", "sign in", "--out", outDir, "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: true, data: { steps: 2, pages: 1, finalUrl: "https://fixture.test/inbox" } });
+    const onDisk = JSON.parse(await readFile(parsed.data.recordingPath, "utf8"));
+    expect(RecordingSchema.parse(onDisk).site).toBe("https://fixture.test");
   });
 });
