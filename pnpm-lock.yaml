@@ -105,6 +105,9 @@ importers:
       '@jevitate/load':
         specifier: workspace:*
         version: link:../load
+      '@jevitate/missions':
+        specifier: workspace:*
+        version: link:../missions
       '@jevitate/playwright':
         specifier: workspace:*
         version: link:../playwright

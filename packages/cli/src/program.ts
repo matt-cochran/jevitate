@@ -48,6 +48,13 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { runRegressionCapture } from "./regression-api.js";
+import {
+  addMissionTarget,
+  listMissionTargets,
+  promoteMissionTarget,
+  missionTargetContext,
+  UnknownMissionTargetError,
+} from "./mission-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import {
@@ -74,6 +81,10 @@ export interface CliDeps {
   profiles: ProfileManager;
   dbPath?: string;
   journeysDir?: string;
+  /** Optional, additive: overrides the mission-targets store directory
+   *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
+   *  resolves promoted targets from. */
+  missionTargetsDir?: string;
   /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
    *  production means real env + the deterministic fake generation gateway. */
   ai?: AiCliDeps;
@@ -90,6 +101,7 @@ export interface CliDeps {
 const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
 const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
 const DEFAULT_REGRESSIONS_DIR = resolveDataDir(["regressions"]);
+const DEFAULT_MISSION_TARGETS_DIR = resolveDataDir(["missions", "targets"]);
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
@@ -108,6 +120,12 @@ function resolveJourneysDir(deps: CliDeps, flag?: string): string {
  *  committed-regressions directory `regression capture` writes into. */
 function resolveRegressionsDir(flag?: string): string {
   return flag ?? DEFAULT_REGRESSIONS_DIR;
+}
+
+/** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
+ *  the mission-targets store `mission target ...` reads/writes. */
+function resolveMissionTargetsDir(deps: CliDeps, flag?: string): string {
+  return flag ?? deps.missionTargetsDir ?? DEFAULT_MISSION_TARGETS_DIR;
 }
 
 /**
@@ -1185,6 +1203,107 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
       } finally {
         for (const close of opened) await close();
+      }
+    });
+
+  // Additive: `mission target` — register/list/promote exploration mission
+  // targets (Ticket #21). Wires the real fs-backed `@jevitate/missions`
+  // store/registry (the SAME store `queue_exploration` resolves promoted
+  // targets from). SECURITY: `add` registers UNPROMOTED — the promoted-only
+  // gate stays intact, so a registered target is not resolvable by
+  // `queue_exploration` until a separate `promote` flips it.
+  const mission = program.command("mission");
+  const missionTarget = mission.command("target");
+
+  missionTarget
+    .command("add <id>")
+    .description("register an exploration mission target (UNPROMOTED — not usable by queue_exploration until promoted)")
+    .option("--name <name>", "human-readable target name")
+    .option("--authorized-origin <origin>", "the single authorized exploration origin for this target")
+    .option("--base-url <url>", "the base URL a mission starts navigation from")
+    .option("--description <text>", "optional human-readable description")
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { name, authorizedOrigin, baseUrl, description, dir, json } = this.opts<{
+        name?: string;
+        authorizedOrigin?: string;
+        baseUrl?: string;
+        description?: string;
+        dir?: string;
+        json?: boolean;
+      }>();
+      // Validate in-action + fail envelope (not commander's hard-exiting
+      // `.requiredOption`), matching this CLI's convention.
+      if (!name || !authorizedOrigin || !baseUrl) {
+        emitJson(program, fail("E_MISSION_TARGET_ARGS", "--name, --authorized-origin and --base-url are all required"));
+        return;
+      }
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const target = await addMissionTarget(ctx, { id, name, authorizedOrigin, baseUrl, description });
+        const envelope = ok(target);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(
+            `registered mission target '${target.id}' (unpromoted — run 'jevitate mission target promote ${target.id}' to make it resolvable)\n`,
+          );
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_MISSION_TARGET_ADD", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  missionTarget
+    .command("list")
+    .description("list ALL mission targets (promoted and unpromoted) — a local/dev-facing listing")
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const targets = await listMissionTargets(ctx);
+        const envelope = ok(targets);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          const out = program.configureOutput().writeOut;
+          for (const t of targets) {
+            out?.(`${t.id}\t${t.name}\t${t.authorizedOrigin}${t.promoted ? "" : " (unpromoted)"}\n`);
+          }
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_MISSION_TARGET_LIST", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  missionTarget
+    .command("promote <id>")
+    .description("promote a registered target so queue_exploration can resolve it")
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const target = await promoteMissionTarget(ctx, id);
+        const envelope = ok(target);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`promoted mission target '${target.id}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownMissionTargetError) {
+          emitJson(program, fail("E_UNKNOWN_MISSION_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_MISSION_TARGET_PROMOTE", String(err instanceof Error ? err.message : err)));
+        }
       }
     });
 
