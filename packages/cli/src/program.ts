@@ -97,11 +97,20 @@ import {
   type SourceApiDeps,
 } from "./source-api.js";
 import {
+  runSourceJourney,
+  realResolvedJourneyRunner,
+  type RunResolvedJourney,
+  type SourceRunApiDeps,
+} from "./source-run-api.js";
+import {
   FsTrustStore,
   FsAckStore,
   UnknownSourceError,
   EmbeddedSecretError,
   UndeclaredOriginError,
+  UndeclaredTouError,
+  HashMismatchError,
+  UntrustedRiskyJourneyError,
   SourceValidationError,
   DEFAULT_LOCK_PATH,
   type GitExec,
@@ -155,6 +164,11 @@ export interface CliDeps {
     now?: () => string;
     /** Identity recorded in a `TrustRecord`/`TouAck`; defaults to the OS user. */
     approvedBy?: string;
+    /** Optional, additive: `jevitate source run` runner seam (see
+     *  source-run-api.ts). Omitted in production means the real
+     *  Playwright-backed `realResolvedJourneyRunner`; tests inject a fake so no
+     *  browser launches. */
+    runJourney?: RunResolvedJourney;
   };
 }
 
@@ -1034,6 +1048,60 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_SOURCE_UNKNOWN_JOURNEY", err.message));
         } else {
           emitJson(program, fail("E_SOURCE_TRUST", String(err instanceof Error ? err.message : err)));
+        }
+      }
+    });
+
+  // #26 — run a Journey that lives in a trusted remote source, THROUGH the
+  // existing run-gate (`@jevitate/sources`' `resolveForRun`). RULING: this is a
+  // `source run` subcommand (not `journey run --from-source`) because the whole
+  // trust boundary is source-scoped — the `<source>/<id>` address, the
+  // per-source manifest/ToU-ack/trust records all live under `source`. `journey
+  // run` stays the LOCAL FsJourneyStore path; keeping remote runs here keeps the
+  // two trust boundaries visibly separate. The run NEVER bypasses a gate: every
+  // refusal below is a typed error thrown by `resolveForRun` BEFORE any browser.
+  source
+    .command("run <name> <journeyId>")
+    .description("run a Journey from a trusted remote source through the run-gate")
+    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, name: string, journeyId: string) {
+      const { param, json } = this.opts<{ param: Record<string, string>; json?: boolean }>();
+      try {
+        const apiDeps: SourceRunApiDeps = {
+          ...resolveSourceApiDeps(deps),
+          runJourney: deps.sources?.runJourney ?? realResolvedJourneyRunner,
+        };
+        const result = await runSourceJourney(apiDeps, { sourceName: name, journeyId, params: param });
+        const envelope = ok(result);
+        if (json) {
+          emitJson(program, envelope);
+          if (result.outcome === "quarantined") process.exitCode = 1;
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          process.exitCode = result.outcome === "quarantined" ? 1 : 0;
+        }
+      } catch (err) {
+        // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a
+        // caller can tell WHY the run was refused without string-matching.
+        if (err instanceof UnknownSourceError) {
+          emitJson(program, fail("E_SOURCE_RUN_UNKNOWN", err.message));
+        } else if (err instanceof HashMismatchError) {
+          emitJson(program, fail("E_SOURCE_RUN_HASH_MISMATCH", err.message));
+        } else if (err instanceof UntrustedRiskyJourneyError) {
+          emitJson(program, fail("E_SOURCE_RUN_UNTRUSTED", err.message));
+        } else if (err instanceof UndeclaredOriginError) {
+          emitJson(program, fail("E_SOURCE_RUN_ORIGIN", err.message));
+        } else if (err instanceof UndeclaredTouError) {
+          emitJson(program, fail("E_SOURCE_RUN_TOU", err.message));
+        } else if (err instanceof EmbeddedSecretError) {
+          emitJson(program, fail("E_SOURCE_RUN_SECRET", err.message));
+        } else if (err instanceof SourceValidationError) {
+          emitJson(program, fail("E_SOURCE_RUN_INVALID_MANIFEST", err.message));
+        } else if (err instanceof ParamValidationError) {
+          emitJson(program, fail("E_INVALID_PARAMS", err.message));
+        } else {
+          emitJson(program, fail("E_SOURCE_RUN", String(err instanceof Error ? err.message : err)));
         }
       }
     });
