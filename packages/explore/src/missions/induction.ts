@@ -210,7 +210,6 @@ export async function runInductionMission(params: InductionMissionParams): Promi
 
     if (item.fromFingerprint !== currentFingerprint) {
       const reached = await reachFrontierState({
-        page: params.page,
         actor: params.actor,
         seedUrl: params.seedUrl,
         item,
