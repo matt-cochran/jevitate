@@ -1,46 +1,88 @@
 ---
 name: jevitate-sources
-description: Explains Jevitate's distributed Journey sources model (local vs. remote git-backed sources, trust/acknowledgement, lockfile pinning, risk classification) and how a federated Journey would be discovered/run once a CLI or MCP surface exists for it. Use when a user asks about sharing Journeys across repos, trusting a third-party Journey source, or the risk/trust model behind an external Journey — not for running an already-local promoted Journey (use jevitate-run-journey for that).
+description: Manage Jevitate's distributed Journey sources — add/list/pull/update/remove git-backed sources, trust individual Journeys (content-hash-bound), run a trusted remote Journey through the run-gate, and publish a local promoted Journey up to a source — via `jevitate source ...` and `jevitate journey publish`. Use when sharing Journeys across repos or trusting/running a third-party Journey; use jevitate-run-journey for an already-local Journey.
 ---
 
-You explain and reason about Jevitate's federated-Journey-source model. As of
-this writing there is **no CLI or MCP command surface** over this capability —
-`@jevitate/sources` is a fully built, tested TypeScript package
-(git-backed remote sources, a local source, trust/acknowledgement tracking, a
-lockfile for pinning a source at a specific commit, a publish flow, and a
-run-gate that classifies a federated Journey's risk before allowing it to run)
-with nothing yet wired to a command a user or an LLM can invoke directly.
+You add, trust, run, and publish federated Journeys across git-backed sources.
+`@jevitate/sources` (git-backed remote sources, a local source,
+trust/acknowledgement tracking, a lockfile pinning each source at a commit, a
+publish flow, and a risk-classifying run-gate) is fully wired to the
+`jevitate source ...` and `jevitate journey publish` commands — this is a real,
+invokable surface, not a programmatic-only capability.
 
-## What you can do today
+## The model
 
-- Explain the model accurately: a `JourneySource` (local or remote/git) exposes
-  a promoted-only `list()`/`find()` just like a local `JourneyRegistry`; a
-  `FederatedJourneyRegistry` aggregates multiple sources; each result is tagged
-  with `source`, an optional `pin` (a locked commit/version), a `riskClass`
-  (`"read-only" | "risky"`), and `trusted` (whether the consuming project has
-  acknowledged that source) — see `packages/mcp-facade/src/journey-tools.ts`'s
-  `findFederatedCapabilities` for the exact shape a caller would eventually see.
-- Help a user reason about trust/risk **conceptually** — e.g. "a `risky`,
-  untrusted Journey from an unacknowledged source should not run without an
-  explicit acknowledgement step" — without claiming there is a command that
-  performs that acknowledgement today.
-- If asked to actually add, trust, or run a federated source, tell the user
-  plainly that this isn't yet exposed as a CLI/MCP command and point them at
-  `@jevitate/sources`'s programmatic API (for someone with repo access) rather
-  than guessing at a `jevitate source ...` invocation that does not exist.
+- A `JourneySource` (local or remote/git) exposes a promoted-only
+  `list()`/`find()` just like a local `JourneyRegistry`. Each result carries a
+  `source`, an optional `pin` (a locked commit), a `riskClass` (`"read-only" |
+  "risky"`), and `trusted` (whether this project has acknowledged that exact
+  content). Trust is LOCAL and per-user; it is bound to a content hash, so any
+  change to a Journey's content invalidates its trust until re-approved.
+
+## Add and manage sources
+
+- `jevitate source add <name> <gitUrl> [--accept-tou] --json` clones and pins a
+  source at its current commit and prints its declared Terms of Use per origin.
+  A source's Journeys cannot RUN until its ToU is acknowledged — pass
+  `--accept-tou` (an explicit human act) to acknowledge at add time, or re-run
+  later. `add` never trusts any Journey implicitly.
+- `jevitate source list --json` — registered sources, their pinned commit, and
+  the set of trusted Journey ids.
+- `jevitate source pull <name> --json` fetches without moving the pin;
+  `jevitate source update <name> --json` advances the pin to the fetched head.
+- `jevitate source remove <name> --json` — deregister a source.
+
+## Trust an individual Journey
+
+- `jevitate source trust <name> <journeyId> --json` explicitly trusts ONE
+  Journey in a source, bound to its current content hash. This is the gate a
+  `risky`-classified Journey must pass before it can run. Trust never comes from
+  `add`/`pull`/`update` — only from this explicit act, and it emits only the
+  address + bound hash, never the Journey's content.
+
+## Run a trusted remote Journey (through the run-gate)
+
+- `jevitate source run <name> <journeyId> --param k=v ... --json` runs a
+  remote-source Journey THROUGH `@jevitate/sources`' `resolveForRun` gate. Every
+  refusal is a typed error thrown BEFORE any browser launches, each with its own
+  code so a caller knows WHY:
+  - `E_SOURCE_RUN_HASH_MISMATCH` — the pinned content no longer matches what was
+    trusted.
+  - `E_SOURCE_RUN_UNTRUSTED` — a `risky` Journey that was never trusted.
+  - `E_SOURCE_RUN_ORIGIN` — a navigate target outside the Journey's declared
+    origins.
+  - `E_SOURCE_RUN_TOU` — the source's Terms of Use were never acknowledged.
+  - `E_SOURCE_RUN_SECRET` — an embedded secret (Journeys carry secret
+    references, never values).
+- `source run` is the REMOTE trust boundary; `jevitate journey run` stays the
+  LOCAL `FsJourneyStore` path. Keep them separate — a remote run never bypasses
+  the gate.
+
+## Publish a local Journey up to a source
+
+- `jevitate journey publish <id> --to <source> [--declare-origin <origin> ...]
+  [--as <newId>] --json` pushes a PROMOTED local Journey up to a registered
+  source. It preserves every publish-side guard (promoted-only,
+  secret-references-only, declared-origin coverage), writes onto a new
+  `publish/<id>` branch, and opens a PR when `gh` is present (degrading to
+  printed instructions when it is not). It refuses an unpromoted Journey
+  (`E_JOURNEY_PUBLISH_NOT_PROMOTED`) and an embedded secret
+  (`E_JOURNEY_PUBLISH_SECRET`).
 
 ## What you must never do
 
-- Never invent a `jevitate source add/trust/run`-style command — it does not
-  exist. Confidently guessing here produces a broken tool call, which is worse
-  than saying "not yet available."
+- Never acknowledge a source's ToU (`--accept-tou`) or trust a Journey
+  (`source trust`) on the user's behalf without their explicit say-so — both are
+  human-consent gates, not conveniences to auto-satisfy.
 - Never treat an untrusted or `risky`-classified federated Journey as safe to
-  run just because a user asked — the trust/risk model exists precisely to gate
-  that decision behind an explicit human step, even once a command surface
-  ships.
+  run — the run-gate exists precisely to stop that, and a refusal is the correct
+  outcome to surface, not an obstacle to work around.
+- Never widen a Journey's declared origins on publish beyond what the human
+  authorized just to make coverage pass.
 
-## Known gaps (as of 2026-09-20)
+## Known gaps
 
-- There is no `jevitate source` CLI/MCP surface yet (ticket #18) over
-  `@jevitate/sources`, and no `jevitate journey publish` (ticket #19) to push a
-  local promoted Journey up to a source. Both are programmatic-API-only today.
+- There is no MCP-tool surface over federated sources yet — the
+  `find_capabilities`/`run_journey` MCP tools operate over the LOCAL promoted
+  store, not remote sources. Federated add/trust/run/publish are CLI-only today;
+  drive the `jevitate source ...` commands directly.

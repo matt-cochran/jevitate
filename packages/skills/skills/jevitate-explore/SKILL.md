@@ -84,11 +84,25 @@ mission and reading the result honestly.
 - Never fall back to a generic browser-automation tool if `jevitate explore`
   is unavailable — that bypasses every guardrail this skill enforces.
 
-## Known gaps (as of 2026-09-20)
+## Running it through MCP (shipped)
 
-- The `queue_exploration` MCP tool exists (via `@jevitate/missions`), but there
-  is no `jevitate mcp` server subcommand yet (ticket #20) to run it as a
-  standalone server, and no `jevitate mission target` command yet (ticket #21)
-  to register the target id `queue_exploration` requires. When you are not
-  inside an MCP-connected session that already offers `queue_exploration`, drive
-  the `jevitate explore` CLI directly instead.
+- `jevitate mcp` starts the stdio MCP server; `queue_exploration` is one of its
+  allowlisted, wired tools. Register it in your harness with `jevitate mcp
+  --print-config <claude|cursor|codex|json>`, or let `jevitate init` register it
+  for each detected runtime.
+- `queue_exploration` needs a PROMOTED mission target, not a raw URL. Register
+  and promote one first with `jevitate mission target add <id> ...` then
+  `jevitate mission target promote <id>` (see `jevitate-mission-scope`). It
+  enqueues and returns a `missionId` immediately — it never runs inline.
+
+## Known gaps
+
+- Offline only: `queue_exploration` enqueues but does not itself run the
+  mission; a separate runner drains the queue. Treat the returned `missionId`
+  as "accepted," not "finished."
+- The MCP server also registers 8 inbox/command-queue tools
+  (`queue_retrieval`, `queue_action`, `get_command`, `list_incoming`,
+  `get_thread`, `approve_action`, `cancel_command`, `get_site_health`) that
+  currently return a typed `not_implemented` error — they are reserved surface,
+  not usable yet. The four wired tools are `find_capabilities`, `run_journey`,
+  `queue_exploration`, and `ai_generate_text`.

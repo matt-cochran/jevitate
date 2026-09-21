@@ -1,14 +1,27 @@
 ---
 name: jevitate-record
-description: Post-process a captured Jevitate Recording — diff multiple takes, review/classify fill steps (postdoc), fit a timing policy, and promote a value to a variable — via the jevitate CLI. Use after a human has recorded one or more takes of a browser flow and wants to turn them into a parameterized, replayable artifact.
+description: Capture a demonstrated browser flow into a Recording (`jevitate record --url`) and post-process it — diff multiple takes, review/classify fill steps (postdoc), fit a timing policy, promote a value to a variable — via the jevitate CLI. Use to record human-demonstrated takes and turn them into a parameterized, replayable artifact.
 ---
 
-You drive the **post-processing** half of Jevitate's human-driven authoring mode
-(RxD). A human has already recorded one or more "takes" (raw `Recording` JSON
-files, each produced by stepping through a browser flow) — your job is to turn
-those takes into a clean, parameterized `Recording` a Journey can be built from.
-You do not capture the recording yourself; there is no CLI step for that in this
-skill (see Known gaps).
+You drive Jevitate's human-driven authoring mode (RxD): capturing a take from a
+live demonstration, then post-processing one or more takes into a clean,
+parameterized `Recording` a Journey can be built from. Capture is a live,
+headed browser demonstration a human performs — you launch it and they drive.
+
+## Capture a take (live demonstration)
+
+- `jevitate record --url <authorized-url> [--intent "<framing>"] [--retro
+  "<note>"] [--allow <origin>] [--out <dir>] --json` opens a headed browser at
+  an authorized origin and records the human's demonstrated flow into a
+  `Recording` JSON file (default `~/.jevitate/recordings`). The session is
+  headed by design — a record session IS a live human demonstration; add
+  `--headless` only when a caller explicitly asks. The target must be
+  authorized (defaults to `--url`'s own origin; widen only with explicit
+  `--allow`), and an unauthorized target is refused
+  (`E_UNAUTHORIZED_EXPLORE_TARGET`).
+- The emitted `recordingPath` is the take you then feed into the diff/postdoc
+  flow below. Capture two or more takes of the same flow (varying the data each
+  time) when you want `diff` to classify which values are variables.
 
 ## Diff multiple takes
 
@@ -45,19 +58,21 @@ skill (see Known gaps).
   for the simple case of a single take with one known value to parameterize,
   skipping the full diff/postdoc review flow.
 
-## Known gaps (as of 2026-09-20)
+## Publishing the result
 
-- There is no CLI command to **capture** a take from a live browser session in
-  this skill's scope (ticket #22, `jevitate record`, is still pending) —
-  recording capture is driven by `@jevitate/recorder`'s browser-injection
-  primitives, not yet wrapped in a `jevitate` CLI verb. If a user asks you to
-  "record a new take," tell them capture isn't yet a CLI command and ask how the
-  existing take file was produced (or point them at a human with repo access),
-  rather than inventing a `jevitate record start`-style command that does not
-  exist. Note: `jevitate explore-author-journey` (see `jevitate-explore`) is a
-  separate, Jev-driving authoring path that emits its own takes autonomously —
-  it is not human capture, but it may be what a user actually wants.
-- There is no CLI command to publish the `postdoc` result as a runnable Journey
-  (see `jevitate-run-journey`'s Known gaps, ticket #19) — the output of
-  `postdoc`/`promote` is a `Recording` JSON file, one step short of a promoted
-  `Journey`.
+- The output of `postdoc`/`promote` is a `Recording` JSON file — one authoring
+  artifact short of a runnable Journey. Two autonomous authoring paths write a
+  Journey directly from a goal-based exploration: `jevitate
+  explore-author-journey` (see `jevitate-explore`) emits an UNPROMOTED,
+  parameterized Journey a human must still promote. To share a promoted local
+  Journey to a distributed source, use `jevitate journey publish <id> --to
+  <source>` (see `jevitate-sources`).
+
+## Known gaps
+
+- There is no single-command "postdoc result -> promoted local Journey" verb: a
+  `Recording` produced here still becomes a Journey through the authoring paths
+  above (`explore-author-journey`) or the `JourneyRegistry` API, and promotion
+  stays a deliberate human gate. `jevitate explore-author-journey` is a
+  separate, Jev-driving authoring path (not human capture) that may be what a
+  user who wants a Journey "recorded for them" actually needs.
