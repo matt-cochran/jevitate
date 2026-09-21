@@ -38,6 +38,7 @@
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/journey": "workspace:*",
     "@jevitate/load": "workspace:*",
+    "@jevitate/missions": "workspace:*",
     "@jevitate/playwright": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "@jevitate/regression": "workspace:*",
