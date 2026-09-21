@@ -42,6 +42,7 @@
     "@jevitate/mcp-facade": "workspace:*",
     "@jevitate/missions": "workspace:*",
     "@jevitate/playwright": "workspace:*",
+    "@jevitate/recorder": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "@jevitate/regression": "workspace:*",
     "@jevitate/runtime": "workspace:*",
