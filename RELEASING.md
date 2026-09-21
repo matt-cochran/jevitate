@@ -29,15 +29,14 @@ npm install -g @jevitate/cli && jevitate --version
 
 ## Subsequent releases — OIDC Trusted Publishing (recommended)
 
-Once both packages exist on npm, switch to npm **OIDC Trusted Publishing** — GitHub Actions authenticates to npm over OIDC, so there is **no token to store, rotate, or expire**, and every release is published with provenance.
+Once both packages exist on npm, releases run via npm **OIDC Trusted Publishing** — GitHub Actions authenticates to npm over OIDC, so there is **no token to store, rotate, or expire**, and every release is published with provenance.
 
-One-time setup:
+`.github/workflows/release.yml` is already configured for this (`id-token: write`, `NPM_CONFIG_PROVENANCE`, no `NPM_TOKEN`, npm upgraded to an OIDC-capable version, publish on push to `main`). The only remaining step is on npm's side:
 
-1. On npmjs.com, for **each** package (`@jevitate/cli` and `jevitate`) → **Settings → Trusted Publishers** → add this repo and the `Release` workflow.
-2. In `.github/workflows/release.yml`: restore `on: push: branches: [main]`, add `permissions: id-token: write`, and publish with `--provenance` (drop the `NPM_TOKEN` env). The workflow already builds/bundles before publishing.
-3. Delete any leftover `NPM_TOKEN` secret — OIDC makes it unnecessary.
+1. On npmjs.com, for **each** package (`@jevitate/cli` and `jevitate`) → the package's **Settings → Trusted Publishers** → add a GitHub Actions publisher pointing at repo `matt-cochran/jevitate` and workflow `release.yml`.
+2. Delete any leftover `NPM_TOKEN` repository secret — OIDC makes it unnecessary.
 
-Until then the `Release` workflow is `workflow_dispatch`-only, so it does not fail on every push to `main`.
+After that, a push to `main` publishes automatically. You can also trigger a run manually (**Actions → Release → Run workflow**) to test the OIDC path. Until the Trusted Publisher is configured, the publish step will fail (auth) — expected.
 
 ## Versioning
 
