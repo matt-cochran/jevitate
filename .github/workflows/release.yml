@@ -1,13 +1,13 @@
 name: Release
 
-# Runs on every push to `main`. This is a no-op until the NPM_TOKEN secret
-# exists on the repo: with no pending changesets, `changesets/action` opens
-# nothing and publishes nothing; with no NPM_TOKEN, the publish step itself
-# would fail authentication. See README for the one-time setup steps
-# (npm automation token in the @jevitate org -> `gh secret set NPM_TOKEN`).
+# Manual trigger only (for now). We publish the FIRST release by hand
+# (`bash scripts/release.sh`, interactive 2FA OTP, no stored token — see
+# RELEASING.md), because npm OIDC Trusted Publishing can only be configured for
+# a package that already exists. Once the packages are on npm and OIDC trusted
+# publishing is set up (id-token: write + provenance, no NPM_TOKEN), switch this
+# back to `on: push: branches: [main]`.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 

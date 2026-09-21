@@ -9,6 +9,22 @@
     "url": "git+https://github.com/matt-cochran/jevitate.git",
     "directory": "packages/cli"
   },
+  "homepage": "https://jevitate.com",
+  "bugs": "https://github.com/matt-cochran/jevitate/issues",
+  "author": "Matt Cochran",
+  "keywords": [
+    "browser-automation",
+    "testing",
+    "e2e",
+    "playwright",
+    "screenplay",
+    "journeys",
+    "exploration",
+    "usability",
+    "mcp",
+    "cli",
+    "jevitate"
+  ],
   "engines": {
     "node": ">=20"
   },
