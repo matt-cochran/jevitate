@@ -9,7 +9,7 @@ import { Recorder, type ActionCaptureEvent, type CaptureEvent } from "./recorder
 const port = new PlaywrightBrowserPort();
 
 /** Every fixture is served from this origin, whatever the path. */
-const ORIGIN = "http://doit.test";
+const ORIGIN = "http://jevitate.test";
 const FIXTURE_URL = `${ORIGIN}/recorder-fixture`;
 const SITE = "recorder-fixture";
 
@@ -30,7 +30,7 @@ async function withSite(
   routes: Readonly<Record<string, string>>,
   body: (ctx: { recorder: Recorder; page: import("playwright").Page }) => Promise<void>,
 ): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), "doit-recorder-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-recorder-"));
   const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
   try {
     const recorder = new Recorder(session, SITE);
@@ -186,7 +186,7 @@ test(
       // Identify each field by the eid the injected script actually tagged it
       // with, read back from the live DOM.
       const eidFor = async (selector: string): Promise<string> => {
-        const eid = await page.locator(selector).getAttribute("data-doit-eid");
+        const eid = await page.locator(selector).getAttribute("data-jevitate-eid");
         expect(eid, `${selector} was never tagged`).not.toBeNull();
         return eid!;
       };
@@ -225,7 +225,7 @@ test(
   "ignores events on our own recorder UI and does not tag or count those elements",
   async () => {
     const html = `
-      <div data-doit-recorder>
+      <div data-jevitate-recorder>
         <button id="ours"><span>Recorder UI</span></button>
       </div>
       <button id="theirs">Page button</button>`;
@@ -234,7 +234,7 @@ test(
       await page.locator("#ours").click();
       await page.waitForTimeout(250);
       expect(actions(recorder)).toEqual([]);
-      expect(await page.locator("#ours").getAttribute("data-doit-eid")).toBeNull();
+      expect(await page.locator("#ours").getAttribute("data-jevitate-eid")).toBeNull();
 
       await page.locator("#theirs").click();
       await waitUntil("the page button click", () => actions(recorder).length > 0);
@@ -606,7 +606,7 @@ test(
   async () => {
     // The nastiest failure this recorder can have, and the only one that is
     // worse than a handback: `eid`s restart at 1 in every document, so the
-    // doomed `[data-doit-eid="1"]` query left over from the page we just left
+    // doomed `[data-jevitate-eid="1"]` query left over from the page we just left
     // can match a DIFFERENT element that the NEW page has since tagged 1. The
     // description then succeeds — against the wrong element, on the wrong page
     // — and is written onto the previous page's step. It parses, it replays,
