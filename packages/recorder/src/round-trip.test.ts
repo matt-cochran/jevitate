@@ -65,7 +65,7 @@ test(
   "golden round-trip: a journey captured by the Recorder replays through the interpreter in a fresh session",
   async () => {
     // === Phase A — capture a real journey ===
-    const recording = await withSession("doit-round-trip-record-", async (session) => {
+    const recording = await withSession("jevitate-round-trip-record-", async (session) => {
       const recorder = new Recorder(session, "example-site");
       await recorder.start("record a login, open the inbox, and read the first thread");
 
@@ -153,7 +153,7 @@ test(
     // A new profile directory, so no cookie, tab or storage from the recording
     // session survives into the replay: the recording has to log in again from
     // scratch, on its own.
-    await withSession("doit-round-trip-replay-", async (fresh) => {
+    await withSession("jevitate-round-trip-replay-", async (fresh) => {
       const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [site.url]));
       const result = await new RecordingInterpreter().run(actor, edited, { username: "jane" });
       if (result.outcome !== "completed") {

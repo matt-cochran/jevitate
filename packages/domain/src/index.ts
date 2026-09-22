@@ -1,5 +1,5 @@
 export function hello(): string {
-  return "doit";
+  return "jevitate";
 }
 
 export * from "./primitives.js";

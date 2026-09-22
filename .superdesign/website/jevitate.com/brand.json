@@ -1,0 +1,175 @@
+{
+  "meta": {
+    "url": "https://jevitate.com",
+    "title": "Jevitate | Neural Browser Automation",
+    "description": "Jevitate explores your web app like a relentless user — goal-directed, exploratory, and adversarial — turns every failure it finds into a deterministic Playwright regression, and runs the same Journeys as production automation. Powered by Jev; a model claim never counts as proof.",
+    "language": "en",
+    "viewport": "width=device-width, initial-scale=1.0",
+    "themeColor": null,
+    "ogImage": null,
+    "ogTitle": "Jevitate | Neural Browser Automation",
+    "ogDescription": "Jevitate explores your web app like a relentless user — goal-directed, exploratory, and adversarial — turns every failure it finds into a deterministic Playwright regression, and runs the same Journeys as production automation. Powered by Jev; a model claim never counts as proof."
+  },
+  "theme": {
+    "mode": "dark",
+    "bodyBackground": "#050505",
+    "isDark": true,
+    "confidence": 0.9
+  },
+  "brand": {
+    "name": "Jevitate",
+    "favicon": {
+      "href": "https://jevitate.com/favicon.svg",
+      "type": null
+    }
+  },
+  "colors": {
+    "dominant": [
+      {
+        "hex": "#ffffff",
+        "ratio": 0.503
+      },
+      {
+        "hex": "#000000",
+        "ratio": 0.217
+      },
+      {
+        "hex": "#00ffff",
+        "ratio": 0.088
+      },
+      {
+        "hex": "#ff00ff",
+        "ratio": 0.071
+      },
+      {
+        "hex": "#ffff00",
+        "ratio": 0.052
+      },
+      {
+        "hex": "#22c55e",
+        "ratio": 0.046
+      },
+      {
+        "hex": "#050505",
+        "ratio": 0.019
+      },
+      {
+        "hex": "#d1d1d1",
+        "ratio": 0.002
+      },
+      {
+        "hex": "#e5e5e5",
+        "ratio": 0.002
+      },
+      {
+        "hex": "#0a0a0a",
+        "ratio": 0.002
+      }
+    ],
+    "palette": [
+      {
+        "hex": "#050505",
+        "role": "background",
+        "source": "computed"
+      },
+      {
+        "hex": "#ffffff",
+        "role": "foreground",
+        "source": "computed"
+      },
+      {
+        "hex": "#00ffff",
+        "role": "primary",
+        "source": "heuristic"
+      },
+      {
+        "hex": "#ff00ff",
+        "role": "secondary",
+        "source": "heuristic"
+      },
+      {
+        "hex": "#ffff00",
+        "role": "accent",
+        "source": "heuristic"
+      }
+    ],
+    "cssVariables": {
+      "--yellow": "#ff0",
+      "--color-ink": "#050505",
+      "--color-magenta": "#f0f",
+      "--tw-ring-offset-color": "#fff",
+      "--color-white": "#fff",
+      "--color-neon-yellow": "#ff0",
+      "--cyan": "#0ff",
+      "--color-ink-800": "#0a0a0a",
+      "--magenta": "#f0f",
+      "--color-neon-cyan": "#0ff"
+    },
+    "gradients": [
+      {
+        "css": "linear-gradient(rgb(255, 255, 255), rgb(209, 209, 209) 45%, rgb(255, 255, 255) 50%, rgb(229, 229, 229))",
+        "sampleColors": [
+          "#ffffff",
+          "#d1d1d1",
+          "#e5e5e5"
+        ]
+      },
+      {
+        "css": "radial-gradient(rgb(255, 0, 255) 1px, rgba(0, 0, 0, 0) 1px)",
+        "sampleColors": [
+          "#ff00ff",
+          "#000000"
+        ]
+      }
+    ]
+  },
+  "logo": {
+    "status": "unconfirmed",
+    "reason": "no_candidates",
+    "best": null,
+    "candidates": []
+  },
+  "fonts": {
+    "computed": [
+      {
+        "family": "\"Public Sans\", sans-serif",
+        "weights": [
+          "400",
+          "900",
+          "700"
+        ],
+        "source": "web"
+      },
+      {
+        "family": "\"JetBrains Mono\", monospace",
+        "weights": [
+          "700",
+          "400",
+          "900"
+        ],
+        "source": "web"
+      },
+      {
+        "family": "Archivo, sans-serif",
+        "weights": [
+          "900"
+        ],
+        "source": "web"
+      }
+    ],
+    "baseSizePx": 16
+  },
+  "confidence": {
+    "colorExtraction": 0.9,
+    "logoDetection": 0.2,
+    "fontDetection": 0.8
+  },
+  "screenshot": {
+    "url": "https://vgbujcuwptvheqijyjbe.supabase.co/storage/v1/object/public/hmac-uploads/brand/44b6f25c-77d3-4735-a25b-5f5f93d481c4/screenshot.png",
+    "width": 1920,
+    "height": 1080,
+    "sizeBytes": 112438,
+    "uploadedAt": "2026-09-21T15:59:30.344Z"
+  },
+  "assets": {}
+}

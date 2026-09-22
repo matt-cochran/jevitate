@@ -31,9 +31,9 @@
  */
 
 interface RecorderWindow {
-  __doitRecorderArmed?: boolean;
-  __doitEidCounter?: number;
-  __doitRecord?: (payload: Record<string, unknown>) => void;
+  __jevitateRecorderArmed?: boolean;
+  __jevitateEidCounter?: number;
+  __jevitateRecord?: (payload: Record<string, unknown>) => void;
 }
 
 /**
@@ -46,9 +46,9 @@ interface RecorderWindow {
  */
 export function installRecorderListener(): void {
   const w = window as unknown as RecorderWindow;
-  if (w.__doitRecorderArmed === true) return;
-  w.__doitRecorderArmed = true;
-  if (typeof w.__doitEidCounter !== "number") w.__doitEidCounter = 0;
+  if (w.__jevitateRecorderArmed === true) return;
+  w.__jevitateRecorderArmed = true;
+  if (typeof w.__jevitateEidCounter !== "number") w.__jevitateEidCounter = 0;
 
   // Everything below lives inside the function body on purpose: a reference to
   // a module-level `const` typechecks here and throws in the page.
@@ -181,14 +181,14 @@ export function installRecorderListener(): void {
       }
 
       // Our own recorder UI is never recorded: no tag, no eid, no event.
-      if (el.closest("[data-doit-recorder]") !== null) return;
+      if (el.closest("[data-jevitate-recorder]") !== null) return;
 
-      let eid = el.getAttribute("data-doit-eid");
+      let eid = el.getAttribute("data-jevitate-eid");
       if (eid === null) {
-        const next = (typeof w.__doitEidCounter === "number" ? w.__doitEidCounter : 0) + 1;
-        w.__doitEidCounter = next;
+        const next = (typeof w.__jevitateEidCounter === "number" ? w.__jevitateEidCounter : 0) + 1;
+        w.__jevitateEidCounter = next;
         eid = String(next);
-        el.setAttribute("data-doit-eid", eid);
+        el.setAttribute("data-jevitate-eid", eid);
       }
 
       const tag = el.tagName.toLowerCase();
@@ -237,7 +237,7 @@ export function installRecorderListener(): void {
       // race it is bound to lose.
       payload.docUrl = document.location.href;
 
-      const record = w.__doitRecord;
+      const record = w.__jevitateRecord;
       if (typeof record === "function") record(payload);
     } catch {
       // A DOM quirk (detached node, cross-origin access, exotic target) must

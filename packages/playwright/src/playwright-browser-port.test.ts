@@ -7,7 +7,7 @@ import { PlaywrightBrowserPort } from "./playwright-browser-port.js";
 const port = new PlaywrightBrowserPort();
 
 test("opens a persistent context and navigates to a data: URL", async () => {
-  const profileDir = await mkdtemp(join(tmpdir(), "doit-pw-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-pw-"));
   const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
   try {
     await session.page.setContent("<h1>hello</h1>");
