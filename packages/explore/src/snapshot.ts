@@ -15,6 +15,12 @@ import { DEFAULT_BOUNDS } from "./bounds.js";
  * and the NEXT step re-snapshots and re-indexes. The recording is written by
  * descriptor, never by index, so the emitted artifact is index-free.
  *
+ * Only visible controls are surfaced — with ONE exception: an
+ * `<input type=file>` is kept even when visually hidden, because the common
+ * upload pattern hides the real input behind a styled label/dropzone. It is
+ * surfaced with role `file-input` (plus its `accept` filter) so the model can
+ * target it with the `upload` op. No other hidden element is exposed.
+ *
  * A control whose value cannot be described (`computeDescriptor` throws) is
  * dropped, never guessed. Candidates past `maxCandidates` are truncated and
  * therefore un-selectable — a target Jev never sees, it can never pick.
@@ -76,6 +82,8 @@ interface ControlFacts {
   /** Present only for non-secret, non-file text-ish inputs; null otherwise. */
   readonly value: string | null;
   readonly visible: boolean;
+  /** A file input's `accept` filter (e.g. `image/*`); null for every other control. */
+  readonly accept: string | null;
 }
 
 /**
@@ -120,7 +128,10 @@ function readControlFacts(node: Node): ControlFacts {
     number: "spinbutton",
   };
   let role = roleAttr;
-  if (role === "") {
+  // A file input is always `file-input` (the `upload` op's target), whatever
+  // role attribute it carries — so the model recognises it unambiguously.
+  if (inputType === "file") role = "file-input";
+  else if (role === "") {
     if (tag === "input") role = roleByInput[inputType ?? "text"] ?? "textbox";
     else role = roleByTag[tag] ?? "";
   }
@@ -156,7 +167,9 @@ function readControlFacts(node: Node): ControlFacts {
     value = String((el as HTMLInputElement).value ?? "");
   }
 
-  return { tag, inputType, role, name, enabled, checked, value, visible };
+  const accept = inputType === "file" ? norm(el.getAttribute("accept")) : null;
+
+  return { tag, inputType, role, name, enabled, checked, value, visible, accept };
 }
 
 function summarize(facts: ControlFacts): string {
@@ -166,6 +179,7 @@ function summarize(facts: ControlFacts): string {
   if (facts.checked === true) bits.push("checked");
   if (facts.checked === false) bits.push("unchecked");
   if (facts.value !== null && facts.value !== "") bits.push(`value="${facts.value}"`);
+  if (facts.accept !== null && facts.accept !== "") bits.push(`accept=${facts.accept}`);
   return bits.length > 0 ? `${head} (${bits.join(", ")})` : head;
 }
 
@@ -211,7 +225,8 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         continue;
       }
       const facts = await handle.evaluate(readControlFacts);
-      if (!facts.visible) continue;
+      // Hidden file inputs are the sole exception (see the module doc).
+      if (!facts.visible && facts.inputType !== "file") continue;
       // computeDescriptor validates against the live page and throws if nothing
       // resolves uniquely — an un-describable control is dropped, never guessed.
       const computed = await computeDescriptor(page, handle);

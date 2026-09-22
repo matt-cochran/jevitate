@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import {
@@ -13,6 +13,7 @@ import {
   runFeatureMission,
   assertAuthorizedExploreTarget,
   normalizeAllowlist,
+  resolveMissionFixture,
   type Bounds,
   type CoverageReport,
   type GoalBasedOutcome,
@@ -46,10 +47,17 @@ export interface RunExplorationOptions {
   readonly gen: GenerationPort;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /**
+   * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
+   * browser opens: a missing file throws `FixtureNotFoundError`.
+   */
+  readonly fixture?: string;
   /** Where the Recording is written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
 }
@@ -67,6 +75,8 @@ export interface RunExplorationResult {
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  // Fail fast on a missing fixture BEFORE launching Chromium.
+  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -76,6 +86,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
+    ...opts.browser,
   });
 
   try {
@@ -91,6 +102,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,
+      fixture,
     });
 
     const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
@@ -132,6 +144,8 @@ export interface AuthorViaBrowserArgs {
   readonly journeyId: string;
   readonly journeyName: string;
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
 }
 
 export interface RunAuthorJourneyOptions {
@@ -149,6 +163,8 @@ export interface RunAuthorJourneyOptions {
   readonly gen?: GenerationPort;
   readonly bounds?: Partial<Bounds>;
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
   /**
    * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
    * which drives a real Playwright-backed actor through `authorJourney`.
@@ -186,6 +202,7 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
     journeyId: opts.journeyId,
     journeyName: opts.journeyName,
     browserPortFactory: opts.browserPortFactory,
+    browser: opts.browser,
   });
 
   if (result.outcome === "authored") {
@@ -210,6 +227,7 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
     headless: true,
     allowedOrigins: [...args.allowlist],
     baseUrl: args.origin,
+    ...args.browser,
   });
 
   try {
@@ -251,6 +269,8 @@ export interface RunCoverageMissionOptions {
   /** Where the repro Recordings are written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
   readonly nowIso?: () => string;
 }
 
@@ -272,6 +292,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
+    ...opts.browser,
   });
 
   try {
@@ -319,6 +340,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
 }
 
 /**
@@ -339,6 +362,7 @@ export async function runAdversarialCliMission(
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
+    ...opts.browser,
   });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
@@ -374,6 +398,8 @@ export interface RunFeatureCliMissionOptions {
   readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
 }
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureRunResult> {
@@ -387,6 +413,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
+    ...opts.browser,
   });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));

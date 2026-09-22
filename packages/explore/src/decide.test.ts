@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { FakeJudgmentGateway, type Answer } from "@jevitate/ai-core";
-import { decide, PROMPT_INJECTION_GUARD, type Op } from "./index.js";
+import { decide, OPS, OPS_NEEDING_TARGET, PROMPT_INJECTION_GUARD, UPLOAD_OP_GUIDE, type Op } from "./index.js";
 import type { Snapshot, Control } from "./index.js";
 
 function control(index: number, name: string, role = "button"): Control {
@@ -76,5 +76,42 @@ describe("decide — two-head op+target (Task 5)", () => {
     const secretSnap: Snapshot = { ...snap, url: "http://127.0.0.1:3000/x?token=hunter2" };
     await decide(judge, { goal: "x", snapshot: secretSnap, history: ["typed hunter2"], secrets: ["hunter2"] });
     expect(dump).not.toContain("hunter2");
+  });
+});
+
+describe("decide — upload op offering", () => {
+  function capturing(): {
+    judge: { systemOne(args: { state: { controls: string[] }; questions: Record<string, { options?: readonly string[] }> }): Promise<Record<string, Answer>> };
+    seen: { controls: string[]; ops: readonly string[] }[];
+  } {
+    const seen: { controls: string[]; ops: readonly string[] }[] = [];
+    return {
+      seen,
+      judge: {
+        async systemOne(args) {
+          seen.push({ controls: args.state.controls, ops: args.questions.op?.options ?? [] });
+          return { op: choice("upload"), target: choice("0") };
+        },
+      },
+    };
+  }
+
+  it("upload is a target-requiring op", () => {
+    expect(OPS).toContain("upload");
+    expect(OPS_NEEDING_TARGET.has("upload")).toBe(true);
+  });
+
+  it("is offered — with its guide line right after the injection guard — only when uploadAvailable", async () => {
+    const withFixture = capturing();
+    const d = await decide(withFixture.judge, { goal: "x", snapshot: snap, history: [], uploadAvailable: true });
+    expect(withFixture.seen[0]!.ops).toContain("upload");
+    expect(withFixture.seen[0]!.controls.slice(0, 2)).toEqual([PROMPT_INJECTION_GUARD, UPLOAD_OP_GUIDE]);
+    expect(d.op).toBe<Op>("upload");
+    expect(d.control?.index).toBe(0);
+
+    const without = capturing();
+    await decide(without.judge, { goal: "x", snapshot: snap, history: [] });
+    expect(without.seen[0]!.ops).not.toContain("upload");
+    expect(without.seen[0]!.controls).not.toContain(UPLOAD_OP_GUIDE);
   });
 });

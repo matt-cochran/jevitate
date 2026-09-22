@@ -39,7 +39,7 @@ import {
   type OpenRouterCall,
   type JevClientCall,
 } from "@jevitate/ai-core";
-import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
@@ -124,7 +124,7 @@ import {
   type GitExec,
   type GhPort,
 } from "@jevitate/sources";
-import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
 export interface RecordCliDeps {
@@ -282,6 +282,40 @@ async function makeRealBrowserActor(site: string): Promise<{ actor: Actor; close
       await rm(profileDir, { recursive: true, force: true });
     },
   };
+}
+
+/** Raw commander values of the shared `--browser-*` launch flags. */
+interface BrowserLaunchFlags {
+  browserExecutable?: string;
+  browserChannel?: string;
+  browserArg: string[];
+}
+
+/**
+ * Adds the shared Chromium launch flags to a browser-driving command. They map
+ * 1:1 onto `@jevitate/playwright`'s `BrowserLaunchOptions`; `--browser-arg`
+ * EXTENDS the Linux defaults (`--no-sandbox`, `--disable-dev-shm-usage`).
+ */
+function withBrowserLaunchFlags(cmd: Command): Command {
+  return cmd
+    .option("--browser-executable <path>", "launch this Chromium binary instead of Playwright's pinned one")
+    .option("--browser-channel <name>", "Playwright browser channel to launch, e.g. chrome | msedge")
+    .option(
+      "--browser-arg <arg>",
+      "extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    );
+}
+
+/** The `BrowserLaunchOptions` for the parsed flags, or `undefined` when none were given. */
+function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOptions | undefined {
+  const launch: BrowserLaunchOptions = {
+    ...(o.browserExecutable !== undefined ? { executablePath: o.browserExecutable } : {}),
+    ...(o.browserChannel !== undefined ? { channel: o.browserChannel } : {}),
+    ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
+  };
+  return Object.keys(launch).length > 0 ? launch : undefined;
 }
 
 /**
@@ -1212,9 +1246,11 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  program
-    .command("explore")
-    .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)")
+  withBrowserLaunchFlags(
+    program
+      .command("explore")
+      .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+  )
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option(
       "--strategy <name>",
@@ -1243,6 +1279,10 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--fixture <path>",
+      "local file the upload op attaches to a file input (goal and usability strategies); must exist",
+    )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
@@ -1260,15 +1300,24 @@ export function buildProgram(deps: CliDeps): Command {
         route: string[];
         allow: string[];
         secret: string[];
+        fixture?: string;
         maxActions?: string;
         maxDecisions?: string;
         real?: boolean;
         fakeAi?: boolean;
         out?: string;
         json?: boolean;
-      }>();
+      } & BrowserLaunchFlags>();
 
       const strategy = o.strategy ?? "goal";
+      const browser = browserLaunchFromFlags(o);
+      // `--fixture` feeds the upload op, which only the explore loop (goal and
+      // usability strategies) can issue. Refuse it elsewhere rather than
+      // silently ignoring a file the user expected to be uploaded.
+      if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
+        return;
+      }
 
       // Additive coverage/exploratory strategy: proof-by-induction state coverage.
       // It takes no goal/success (the frontier itself is the objective), so it is
@@ -1308,6 +1357,7 @@ export function buildProgram(deps: CliDeps): Command {
             bounds: Object.keys(covBounds).length > 0 ? covBounds : undefined,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
+            browser,
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1367,6 +1417,7 @@ export function buildProgram(deps: CliDeps): Command {
             generation: advGen,
             profileDir,
             browserPortFactory: deps.explore?.browserPortFactory,
+            browser,
           });
           emitJson(program, ok(result));
           // A discovered defect gates CI, mirroring how a failing test would.
@@ -1425,13 +1476,17 @@ export function buildProgram(deps: CliDeps): Command {
             gen: uxGen,
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
+            fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
+            browser,
           });
           emitJson(program, ok(result));
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof FixtureNotFoundError) {
+            emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof UxAnalysisFailedError) {
             emitJson(program, fail("E_UX_ANALYSIS", err.message));
           } else {
@@ -1459,6 +1514,7 @@ export function buildProgram(deps: CliDeps): Command {
             capability: o.feature,
             routeGlobs: o.route ?? [],
             profileDir,
+            browser,
           });
           emitJson(program, ok(result));
         } catch (err) {
@@ -1512,8 +1568,10 @@ export function buildProgram(deps: CliDeps): Command {
           gen,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
+          fixture: o.fixture,
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
+          browser,
         });
         const envelope = ok(result);
         if (o.json) {
@@ -1526,6 +1584,8 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else if (err instanceof FixtureNotFoundError) {
+          emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
         } else {
           emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
@@ -1537,9 +1597,11 @@ export function buildProgram(deps: CliDeps): Command {
   // through RxD's diff/postdoc pipeline, and writes an UNPROMOTED,
   // parameterized Journey to the journeys store. The record-by-demonstration
   // authoring path is untouched.
-  program
-    .command("explore-author-journey")
-    .description("Jev-driving authors a promotable Journey (authoring plane); never auto-promoted")
+  withBrowserLaunchFlags(
+    program
+      .command("explore-author-journey")
+      .description("Jev-driving authors a promotable Journey (authoring plane); never auto-promoted"),
+  )
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option("--goal <text>", "natural-language goal")
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/confirmed")
@@ -1573,7 +1635,7 @@ export function buildProgram(deps: CliDeps): Command {
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
-      }>();
+      } & BrowserLaunchFlags>();
 
       if (!o.url || !o.goal || !o.success || !o.id || !o.name) {
         emitJson(program, fail("E_AUTHOR_ARGS", "--url, --goal, --success, --id and --name are all required"));
@@ -1618,6 +1680,7 @@ export function buildProgram(deps: CliDeps): Command {
           gen,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           browserPortFactory: deps.explore?.browserPortFactory,
+          browser: browserLaunchFromFlags(o),
         });
         const envelope = ok(result);
         if (o.json) {
