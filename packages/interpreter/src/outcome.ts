@@ -1,0 +1,23 @@
+import type { Assertion } from "@jevitate/recording";
+
+/**
+ * The result of running one step via `runStep`.
+ *
+ * `"done"` means the step's action (if any) succeeded and its postcondition
+ * held. `"awaiting_human"` is produced only by a `handback` step: it signals
+ * that replay must pause for a human to act, and carries the `prompt` to
+ * show them, the `resume` assertion a future caller must itself re-check
+ * before continuing (runStep does NOT check it), and the step's `index`
+ * within the recording (see `runStep`'s doc comment for why that's a
+ * parameter rather than something `runStep` computes).
+ *
+ * NOTE (deferred to a future milestone, documentation-only): the originating
+ * `handback` step's schema also carries an optional `timeoutMs`, but it is
+ * accepted by `RecordingSchema` and not enforced or even read anywhere in
+ * A.1 — `runStep`'s `handback` case (see run-step.ts) never looks at it, and
+ * nothing here times a pending `awaiting_human` out. Timeout handling is
+ * real HITL-execution-milestone work, not yet implemented.
+ */
+export type StepOutcome =
+  | { kind: "done" }
+  | { kind: "awaiting_human"; prompt: string; resume: Assertion; index: number };

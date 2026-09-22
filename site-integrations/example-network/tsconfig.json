@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "references": [{ "path": "../../packages/domain" }, { "path": "../../packages/screenplay" }, { "path": "../../packages/site-sdk" }],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
+}

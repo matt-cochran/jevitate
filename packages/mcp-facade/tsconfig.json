@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "references": [
+    { "path": "../ai-core" },
+    { "path": "../application" },
+    { "path": "../domain" },
+    { "path": "../inbox" },
+    { "path": "../journey" },
+    { "path": "../missions" },
+    { "path": "../runtime" },
+    { "path": "../sources" }
+  ],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
+}
