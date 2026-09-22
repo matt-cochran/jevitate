@@ -147,6 +147,7 @@ function strictKey(step: Step): string {
     case "click":
     case "fill":
     case "select":
+    case "upload":
     case "waitFor":
     case "extract":
       return targetDescriptorStrictKey(step.target);
@@ -189,6 +190,7 @@ function structuralKey(step: Step): string {
     case "click":
     case "fill":
     case "select":
+    case "upload":
       return targetDescriptorKey(step.target);
     case "waitFor":
       // `state` is an authored/structural field (like `press.key`), not
