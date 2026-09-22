@@ -1,7 +1,7 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import type { Recording } from "@jevitate/recording";
+import type { Recording, ValueOrVar } from "@jevitate/recording";
 import {
   BoundsTracker,
   NoProgressDetector,
@@ -18,6 +18,8 @@ import { decide, OPS_NEEDING_TARGET, type Op } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
 import { RunRecorder } from "./record.js";
+import { resolveMissionFixture } from "./fixture.js";
+import { redactText } from "./redact.js";
 
 /**
  * explore: the bounded perceive → decide → act → record loop.
@@ -56,6 +58,12 @@ export interface ExploreConfig {
    * control flow, bounds, or stop decision (its return is awaited but ignored).
    */
   readonly onSnapshot?: (snap: Snapshot) => void | Promise<void>;
+  /**
+   * Optional mission fixture file for the `upload` op (never model-chosen).
+   * Validated to exist at loop start (fail fast: `fixture not found: <path>`);
+   * only when present is `upload` offered to the model.
+   */
+  readonly fixture?: string;
 }
 
 export interface TranscriptEntry {
@@ -81,6 +89,8 @@ export interface ExploreRun {
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   // #1 — authorize the start target before ANY snapshot/decision/action.
   const startOrigin = assertAuthorizedExploreTarget(cfg.startUrl, cfg.allowlist);
+  // Mission fixture: validated before any navigation/decision (fail fast).
+  const fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture);
 
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
@@ -134,6 +144,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       history,
       missionContext: cfg.missionContext,
       secrets: cfg.secrets,
+      uploadAvailable: fixture !== null,
     });
     tracker.countDecision();
     step += 1;
@@ -244,6 +255,29 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         history.push(`selected in ${control!.name}`);
       } else {
         history.push(`select failed: ${r.reason ?? "?"}`);
+      }
+      pushTranscript(r.ok, r.reason);
+    } else if (decision.op === "upload") {
+      if (!tracker.mayAct()) {
+        pushTranscript(false, "action budget exhausted");
+        stop = "exhausted";
+        break;
+      }
+      // act fails closed without a fixture, so `ok` implies `fixture !== null`.
+      const r = await act(cfg.actor, { op: "upload", control, fixture });
+      if (r.ok && fixture !== null) {
+        // The recorded path goes through the shared redaction seam: a path that
+        // contains a registered secret is recorded redacted (replay then fails
+        // closed) rather than persisting the secret into the artifact.
+        const recordedFile: ValueOrVar =
+          redactText(fixture, cfg.secrets ?? []) === fixture
+            ? { redacted: false, value: fixture }
+            : { redacted: true, length: fixture.length };
+        recorder.upload(control!.descriptor, recordedFile, at);
+        tracker.countAction();
+        history.push(`uploaded the fixture into ${control!.name}`);
+      } else {
+        history.push(`upload failed: ${r.reason ?? "?"}`);
       }
       pushTranscript(r.ok, r.reason);
     } else {
