@@ -16,7 +16,7 @@ let profileDir: string;
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "doit-journey-"));
+  profileDir = await mkdtemp(join(tmpdir(), "jevitate-journey-"));
 });
 afterAll(async () => {
   await site.close();

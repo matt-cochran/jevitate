@@ -45,7 +45,7 @@ function makeJourney(overrides: Partial<Journey["metadata"]> = {}): Journey {
 }
 
 async function seedJourneysDir(journeys: Journey[]): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "doit-journeys-"));
+  const dir = await mkdtemp(join(tmpdir(), "jevitate-journeys-"));
   for (const journey of journeys) {
     await writeFile(join(dir, `${journey.metadata.id}.json`), JSON.stringify(journey));
   }

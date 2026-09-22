@@ -75,7 +75,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     iterationsPerActor: opts.iterationsPerActor,
     seed: opts.seed,
     runnerFactory: async (actorIndex): Promise<LoadActorRunner> => {
-      const profileDir = await mkdtemp(join(tmpdir(), `doit-load-actor-${actorIndex}-`));
+      const profileDir = await mkdtemp(join(tmpdir(), `jevitate-load-actor-${actorIndex}-`));
       const port = browserPortFactory();
       const session = await port.open({
         profileDir,

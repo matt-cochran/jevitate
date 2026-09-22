@@ -127,7 +127,7 @@ test(
     const flat = base.pages.flatMap((p) => p.steps);
     const checkpoint = flat.length - 1; // base's very last step: the `extract` on /thread/t-1
 
-    const patched = await withSession("doit-patch-record-", async (session) =>
+    const patched = await withSession("jevitate-patch-record-", async (session) =>
       recordPatch({
         base,
         checkpoint,
@@ -163,7 +163,7 @@ test(
     expect(appended.kind === "handback").toBe(false);
 
     // === End-to-end: the combined recording replays in a fresh session ===
-    await withSession("doit-patch-replay-", async (fresh) => {
+    await withSession("jevitate-patch-replay-", async (fresh) => {
       const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [site.url]));
       const result = await new RecordingInterpreter().run(actor, patched, { username: "jane" });
       if (result.outcome !== "completed") {
