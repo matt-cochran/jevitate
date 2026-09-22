@@ -6,6 +6,7 @@
     { "path": "../daemon" },
     { "path": "../domain" },
     { "path": "../explore" },
+    { "path": "../inbox" },
     { "path": "../interpreter" },
     { "path": "../journey" },
     { "path": "../load" },

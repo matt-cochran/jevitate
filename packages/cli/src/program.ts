@@ -56,6 +56,7 @@ import {
   UnknownMissionTargetError,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
+import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { readCliVersion } from "./version.js";
@@ -143,6 +144,17 @@ export interface CliDeps {
    *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
    *  resolves promoted targets from. */
   missionTargetsDir?: string;
+  /** Optional, additive: overrides the inbox store directory (default:
+   *  ~/.jevitate/inbox). Same dir BOTH `jevitate mcp`'s inbox tools AND
+   *  `jevitate ui` resolve against by default — Task 8 threads one resolved
+   *  dir into both so they serve/consume the same store. */
+  inboxDir?: string;
+  /** Optional, additive: `jevitate ui` wiring (see ui-api.ts). Omitted in
+   *  production means the real `startUiServer`, which binds a real loopback
+   *  HTTP port — tests inject a fake so no port is ever bound. */
+  ui?: {
+    startUiServer?: (deps: StartUiServerDeps) => Promise<UiServerHandle>;
+  };
   /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
    *  production means real env + the deterministic fake generation gateway. */
   ai?: AiCliDeps;
@@ -185,6 +197,7 @@ const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
 const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
 const DEFAULT_REGRESSIONS_DIR = resolveDataDir(["regressions"]);
 const DEFAULT_MISSION_TARGETS_DIR = resolveDataDir(["missions", "targets"]);
+const DEFAULT_INBOX_DIR = resolveDataDir(["inbox"]);
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
@@ -209,6 +222,14 @@ function resolveRegressionsDir(flag?: string): string {
  *  the mission-targets store `mission target ...` reads/writes. */
 function resolveMissionTargetsDir(deps: CliDeps, flag?: string): string {
   return flag ?? deps.missionTargetsDir ?? DEFAULT_MISSION_TARGETS_DIR;
+}
+
+/** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
+ *  the inbox store `jevitate mcp`'s inbox tools AND `jevitate ui` both read
+ *  from — the SAME resolved directory, so the two commands agree on where
+ *  approvals/handbacks/reviews live. */
+function resolveInboxDir(deps: CliDeps, flag?: string): string {
+  return flag ?? deps.inboxDir ?? DEFAULT_INBOX_DIR;
 }
 
 /**
@@ -1896,11 +1917,40 @@ export function buildProgram(deps: CliDeps): Command {
           journeysDir: resolveJourneysDir(deps, dir),
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
+          inboxDir: resolveInboxDir(deps),
           credentialStore: aiStore,
           generationGateway,
         });
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  // Additive: `jevitate ui` (Task 8) — starts the local, loopback-only HTTP
+  // HITL approval dashboard (ui-api.ts's `startUiServer`). Resolves the SAME
+  // inbox dir `jevitate mcp`'s inbox tools serve (resolveInboxDir), so the
+  // two commands agree on where approvals/handbacks/reviews live. On success
+  // it prints the bound URL (carrying the capability token) and stays alive —
+  // the open HTTP server keeps the process running, the same way `mcp`'s open
+  // stdio transport does.
+  program
+    .command("ui")
+    .description("start the local HITL approval dashboard (loopback-only HTTP server)")
+    .option("--port <n>", "explicit port (fails on conflict; default 4180, retries on conflict)")
+    .option("--no-open", "do not open the dashboard URL in the default browser")
+    .option("--inbox-dir <path>", "inbox store directory (default: ~/.jevitate/inbox — same dir `jevitate mcp` serves)")
+    .action(async function (this: Command) {
+      const o = this.opts<{ port?: string; open?: boolean; inboxDir?: string }>();
+      try {
+        const start = deps.ui?.startUiServer ?? startUiServer;
+        const handle = await start({
+          inboxDir: resolveInboxDir(deps, o.inboxDir),
+          open: o.open ?? true,
+          ...(o.port !== undefined ? { port: Number(o.port) } : {}),
+        });
+        program.configureOutput().writeOut?.(`${handle.url}\n`);
+      } catch (err) {
+        emitJson(program, fail("E_UI_SERVE", String(err instanceof Error ? err.message : err)));
       }
     });
 

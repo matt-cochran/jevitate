@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { mkdtempSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import { SitePolicySchema } from "@jevitate/domain";
@@ -111,6 +111,45 @@ test("mcp --print-config <bogus> is a fail envelope", async () => {
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(false);
   expect(parsed.error.code).toBe("E_MCP_PRINT_CONFIG");
+});
+
+test("ui --port --no-open --inbox-dir calls the injected startUiServer with the resolved deps", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const inboxDir = mkdtempSync(join(tmpdir(), "doit-cli-inbox-"));
+  const calls: unknown[] = [];
+  const lines: string[] = [];
+  const program = buildProgram({
+    profiles,
+    ui: {
+      startUiServer: async (deps) => {
+        calls.push(deps);
+        return { url: "http://127.0.0.1:4200/?t=faketoken", token: "faketoken", port: 4200, close: async () => {} };
+      },
+    },
+  });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["ui", "--port", "4200", "--no-open", "--inbox-dir", inboxDir], { from: "user" });
+  expect(calls).toEqual([{ inboxDir, open: false, port: 4200 }]);
+  expect(lines.join("")).toContain("http://127.0.0.1:4200/?t=faketoken");
+});
+
+test("ui with no --inbox-dir resolves the default inbox dir under the jevitate home (same as mcp)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const calls: unknown[] = [];
+  const program = buildProgram({
+    profiles,
+    ui: {
+      startUiServer: async (deps) => {
+        calls.push(deps);
+        return { url: "http://127.0.0.1:4180/?t=faketoken", token: "faketoken", port: 4180, close: async () => {} };
+      },
+    },
+  });
+  program.configureOutput({ writeOut: () => {} });
+  program.exitOverride();
+  await program.parseAsync(["ui", "--no-open"], { from: "user" });
+  expect(calls).toEqual([{ inboxDir: join(homedir(), ".jevitate", "inbox"), open: false }]);
 });
 
 test("profile create prints a success envelope", async () => {

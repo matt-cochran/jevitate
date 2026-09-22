@@ -32,7 +32,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
-  "files": ["dist", "skills"],
+  "files": ["dist", "skills", "ui"],
   "publishConfig": {
     "access": "public"
   },
@@ -52,6 +52,7 @@
     "@jevitate/domain": "workspace:*",
     "@jevitate/example-site": "workspace:*",
     "@jevitate/explore": "workspace:*",
+    "@jevitate/inbox": "workspace:*",
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/journey": "workspace:*",
     "@jevitate/load": "workspace:*",
