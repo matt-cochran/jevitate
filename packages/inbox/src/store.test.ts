@@ -142,6 +142,14 @@ describe("FsInboxStore.resolve channel gating (SM1)", () => {
       InboxItemAlreadyResolvedError,
     );
   });
+
+  it("agent-channel resolve on a non-existent id still throws HumanApprovalRequiredError, not NotFound", async () => {
+    const dir = await tmpDir();
+    const store = new FsInboxStore(dir);
+    await expect(store.resolve("never-existed", { channel: "agent", action: "approve" })).rejects.toThrow(
+      HumanApprovalRequiredError,
+    );
+  });
 });
 
 describe("FsInboxStore.resolve resume-with-input redaction", () => {
@@ -264,6 +272,13 @@ describe("FsInboxStore.sweepExpired", () => {
     const archived = JSON.parse(await readFile(join(dir, "archive", "expire-1.json"), "utf8"));
     expect(archived.status).toBe("expired");
     expect(archived.humanInput).toBeUndefined();
+    // SM1: a TTL expiry is an automated timeout, not a human decision — no
+    // fabricated `resolution: { by: "human", ... }` on an expired item.
+    expect(archived.resolution).toBeUndefined();
+
+    const expiredItem = await store.get("expire-1");
+    expect(expiredItem!.status).toBe("expired");
+    expect(expiredItem!.resolution).toBeUndefined();
 
     await expect(stat(join(dir, "expire-1.json"))).rejects.toThrow();
     const summaries = await store.getSummaries();

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.js";
 import { withIdLock } from "./lock.js";
 import type { Action, InboxItem, InboxSummary, ThreadEntry } from "./types.js";
-import { InboxItemSchema, assertSafeInboxId, asSecret, resolveTransition, toSummary } from "./types.js";
+import { InboxItemSchema, SAFE_INBOX_ID_RE, assertSafeInboxId, asSecret, resolveTransition, toSummary } from "./types.js";
 
 export type Channel = "human" | "agent";
 
@@ -188,6 +188,11 @@ export class FsInboxStore implements InboxStore {
 
   async resolve(id: string, req: { channel: Channel; action: Action; input?: string }): Promise<InboxItem> {
     assertSafeInboxId(id);
+    // SM1: agents never resolve — human approval is enforced FIRST, before any
+    // lookup, so an agent caller gets one uniform refusal regardless of
+    // whether the item exists, is pending, or is already terminal (an agent
+    // must not be able to distinguish those states via error type).
+    if (req.channel === "agent") throw new HumanApprovalRequiredError(id);
     return withIdLock(this.dir, id, async () => {
       const item = await this.readHot(id);
       if (!item) {
@@ -197,9 +202,6 @@ export class FsInboxStore implements InboxStore {
         throw new InboxItemNotFoundError(id);
       }
       if (TERMINAL_STATUSES.has(item.status)) throw new InboxItemAlreadyResolvedError(id);
-
-      // SM1: agents never resolve — human approval is enforced here.
-      if (req.channel === "agent") throw new HumanApprovalRequiredError(id);
 
       const transition = resolveTransition(item.kind, req.action);
       if (transition === "illegal") throw new IllegalTransitionError(item.kind, req.action);
@@ -254,6 +256,7 @@ export class FsInboxStore implements InboxStore {
     for (const entry of entries) {
       if (!entry.endsWith(".json") || entry.startsWith(".")) continue;
       const id = entry.slice(0, -".json".length);
+      if (!SAFE_INBOX_ID_RE.test(id)) continue;
       let expired = false;
       try {
         expired = await withIdLock(this.dir, id, async () => {
@@ -262,9 +265,11 @@ export class FsInboxStore implements InboxStore {
           if (now - Date.parse(item.createdAt) <= item.ttlSec * 1000) return false;
 
           const at = new Date(now).toISOString();
+          // TTL expiry is an automated timeout, NOT a human decision (SM1) —
+          // set status only and omit `resolution` entirely so the audit
+          // trail never fabricates `by:"human"` for a machine-driven expiry.
           const updated: InboxItem = { ...item, status: "expired", resolvedAt: at };
           delete updated.humanInput;
-          updated.resolution = { by: "human", decision: "resolved", at };
           const validated = InboxItemSchema.parse(updated);
           await mkdir(this.archiveDir(), { recursive: true, mode: 0o700 });
           await writeFileAtomic(this.archivePath(id), JSON.stringify(validated));
