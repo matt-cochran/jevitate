@@ -39,7 +39,7 @@ import {
   type OpenRouterCall,
   type JevClientCall,
 } from "@jevitate/ai-core";
-import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
@@ -1279,6 +1279,10 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--fixture <path>",
+      "local file the upload op attaches to a file input (goal and usability strategies); must exist",
+    )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
@@ -1296,6 +1300,7 @@ export function buildProgram(deps: CliDeps): Command {
         route: string[];
         allow: string[];
         secret: string[];
+        fixture?: string;
         maxActions?: string;
         maxDecisions?: string;
         real?: boolean;
@@ -1306,6 +1311,13 @@ export function buildProgram(deps: CliDeps): Command {
 
       const strategy = o.strategy ?? "goal";
       const browser = browserLaunchFromFlags(o);
+      // `--fixture` feeds the upload op, which only the explore loop (goal and
+      // usability strategies) can issue. Refuse it elsewhere rather than
+      // silently ignoring a file the user expected to be uploaded.
+      if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
+        return;
+      }
 
       // Additive coverage/exploratory strategy: proof-by-induction state coverage.
       // It takes no goal/success (the frontier itself is the objective), so it is
@@ -1464,6 +1476,7 @@ export function buildProgram(deps: CliDeps): Command {
             gen: uxGen,
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
+            fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
@@ -1472,6 +1485,8 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof FixtureNotFoundError) {
+            emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof UxAnalysisFailedError) {
             emitJson(program, fail("E_UX_ANALYSIS", err.message));
           } else {
@@ -1553,6 +1568,7 @@ export function buildProgram(deps: CliDeps): Command {
           gen,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
+          fixture: o.fixture,
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
@@ -1568,6 +1584,8 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else if (err instanceof FixtureNotFoundError) {
+          emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
         } else {
           emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }

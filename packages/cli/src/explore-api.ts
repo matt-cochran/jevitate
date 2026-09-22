@@ -13,6 +13,7 @@ import {
   runFeatureMission,
   assertAuthorizedExploreTarget,
   normalizeAllowlist,
+  resolveMissionFixture,
   type Bounds,
   type CoverageReport,
   type GoalBasedOutcome,
@@ -46,6 +47,11 @@ export interface RunExplorationOptions {
   readonly gen: GenerationPort;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /**
+   * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
+   * browser opens: a missing file throws `FixtureNotFoundError`.
+   */
+  readonly fixture?: string;
   /** Where the Recording is written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
@@ -69,6 +75,8 @@ export interface RunExplorationResult {
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  // Fail fast on a missing fixture BEFORE launching Chromium.
+  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -94,6 +102,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,
+      fixture,
     });
 
     const outDir = opts.outDir ?? resolveDataDir(["recordings"]);

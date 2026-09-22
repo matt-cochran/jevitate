@@ -18,6 +18,7 @@ import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import {
   explore,
   assertAuthorizedExploreTarget,
+  resolveMissionFixture,
   type Snapshot,
   type Control as ExploreControl,
   type Bounds,
@@ -156,6 +157,8 @@ export interface RunUxReviewOptions {
   readonly appContext: AppContext;
   readonly judge: JudgmentPort;
   readonly secrets?: readonly string[];
+  /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
+  readonly fixture?: string;
   readonly judgmentBudget?: number;
   /** Where to write the report. Default `~/.jevitate/ux-reports`. */
   readonly outDir?: string;
@@ -213,6 +216,8 @@ export interface RunUsabilityMissionOptions {
   readonly gen: GenerationPort;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
+  readonly fixture?: string;
   readonly judgmentBudget?: number;
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
@@ -239,6 +244,7 @@ export interface RunUsabilityMissionResult {
  */
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const profileDir = await mkdtemp(join(tmpdir(), "jevitate-usability-"));
@@ -267,6 +273,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,
+      fixture,
       missionContext:
         "usability review: pursue the stated job as a plausible first-time user, using only what is on screen",
       onSnapshot: async (snap) => {
