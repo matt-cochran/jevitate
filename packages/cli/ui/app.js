@@ -74,7 +74,13 @@
   function apiFetch(path, options) {
     options = options || {};
     var headers = Object.assign({}, options.headers || {});
-    headers[TOKEN_HEADER] = token;
+    // Only attach the header when we actually have a token. On first load
+    // (URL carries `?t=`) this is always true. On any later reload the `?t=`
+    // has already been scrubbed from the URL, so `token` is `""` — sending
+    // an empty-string header would otherwise mask the valid auth cookie
+    // (the server treats a *present* header as authoritative), 401-ing every
+    // /api/* call and rendering a silently-empty queue.
+    if (token) headers[TOKEN_HEADER] = token;
     return fetch(path, Object.assign({}, options, { headers: headers, credentials: "same-origin" }));
   }
 
@@ -271,6 +277,14 @@
     );
   }
 
+  /** Agent-controlled data — only ever render `targetUrl` as a real link
+   *  when it's actually http(s). The CSP already blocks a `javascript:` URI
+   *  from executing, but this is cheap belt-and-braces so a non-http(s)
+   *  value (or garbage) never even becomes a clickable anchor. */
+  function isHttpUrl(url) {
+    return typeof url === "string" && /^https?:\/\//i.test(url);
+  }
+
   function detailActionsHtml(item) {
     var actions = (ACTIONS_BY_KIND[item.kind] || []).filter(function (a) {
       return a !== "view"; // already viewing
@@ -295,6 +309,10 @@
   function renderDetail(item) {
     var meta = KIND_META[item.kind] || KIND_META.approval;
     var glow = item.kind === "handback" ? "glow-c" : "glow-m";
+    var kindActions = ACTIONS_BY_KIND[item.kind] || [];
+    // Only handbacks have a resume/provide-input action — approval/review
+    // items have nothing to do with typed text, so don't show the control.
+    var showInput = kindActions.indexOf("input") !== -1 || kindActions.indexOf("resume") !== -1;
 
     var left =
       '<div>' +
@@ -313,11 +331,15 @@
       escapeHtml(item.step) +
       "</h2>" +
       (item.targetUrl
-        ? '<div class="mono detail-url"><a href="' +
-          escapeHtml(item.targetUrl) +
-          '" target="_blank" rel="noopener noreferrer">' +
-          escapeHtml(item.targetUrl) +
-          "</a></div>"
+        ? '<div class="mono detail-url">' +
+          (isHttpUrl(item.targetUrl)
+            ? '<a href="' +
+              escapeHtml(item.targetUrl) +
+              '" target="_blank" rel="noopener noreferrer">' +
+              escapeHtml(item.targetUrl) +
+              "</a>"
+            : escapeHtml(item.targetUrl)) +
+          "</div>"
         : "") +
       '<div class="mono detail-meta">' +
       "<span>[JOURNEY] <strong>" +
@@ -339,8 +361,10 @@
       findingsHtml(item.findings) +
       '<div class="section-label mono">[THREAD]</div>' +
       threadHtml(item.thread) +
-      '<div class="section-label mono">[PROVIDE INPUT]</div>' +
-      '<textarea class="ta" id="input-textarea" rows="4" placeholder="type a reply or the value the agent needs…"></textarea>' +
+      (showInput
+        ? '<div class="section-label mono">[PROVIDE INPUT]</div>' +
+          '<textarea class="ta" id="input-textarea" rows="4" placeholder="type a reply or the value the agent needs…"></textarea>'
+        : "") +
       '<div class="detail-actions">' +
       detailActionsHtml(item) +
       "</div>" +

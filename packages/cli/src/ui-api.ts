@@ -306,7 +306,14 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
       const headerTokenRaw = req.headers["x-jevitate-token"];
       const headerToken = Array.isArray(headerTokenRaw) ? headerTokenRaw[0] : headerTokenRaw;
       const cookieToken = parseCookies(req.headers.cookie)[TOKEN_COOKIE];
-      const supplied = headerToken ?? cookieToken;
+      // An empty-string header must be treated as ABSENT, not as "supplied
+      // the empty string" — `headerToken ?? cookieToken` only falls through
+      // to the cookie on `undefined`/`null`, so a client that sends
+      // `x-jevitate-token: ""` (e.g. after its in-memory token was cleared
+      // on a reload) would otherwise mask a perfectly valid auth cookie and
+      // 401 every request. This does NOT weaken the actual check below —
+      // `supplied` still must equal `token` exactly.
+      const supplied = typeof headerToken === "string" && headerToken.length > 0 ? headerToken : cookieToken;
       if (supplied !== token) return send(res, 401, { error: "unauthorized" });
     }
 

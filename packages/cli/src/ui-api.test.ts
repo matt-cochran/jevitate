@@ -128,6 +128,35 @@ describe("startUiServer — Host-header + token middleware", () => {
     expect(res.status).toBe(200);
   });
 
+  // Regression (round 1 fix): the SPA's in-memory token is only non-empty on
+  // the very first load (the URL carried `?t=`); every reload after that
+  // scrubs `?t=` from the URL, so the client's `token` variable starts `""`.
+  // The old `headerToken ?? cookieToken` only falls through to the cookie on
+  // `undefined`/`null` — an empty-STRING header from that client masked the
+  // still-valid auth cookie and 401'd every /api/* call, silently rendering
+  // an empty queue. The server must treat an empty-string header as ABSENT.
+  it("falls back to the cookie when the header token is an empty string (client reload case)", async () => {
+    const inboxDir = await tmpDir();
+    const handle = await start({ inboxDir });
+    const indexRes = await fetch(handle.url);
+    const setCookie = indexRes.headers.get("set-cookie");
+    expect(setCookie).toBeTruthy();
+    const cookiePair = setCookie!.split(";")[0]!; // "jevitate_ui_token=<token>"
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/inbox`, {
+      headers: { "x-jevitate-token": "", Cookie: cookiePair },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("still 401s an empty-string header when there is no valid cookie either", async () => {
+    const inboxDir = await tmpDir();
+    const handle = await start({ inboxDir });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/inbox`, {
+      headers: { "x-jevitate-token": "" },
+    });
+    expect(res.status).toBe(401);
+  });
+
   // Regression (security review round 1, Critical): the token gate and the
   // router used to parse the path DIFFERENTLY — the gate read the raw,
   // still-encoded pathname while the router matched on decoded segments —
@@ -185,6 +214,9 @@ describe("startUiServer — GET / and GET /app.js", () => {
     expect(body).toContain('<script src="/app.js">');
     expect(body).not.toContain("cdn.tailwindcss");
     expect(body).not.toContain("iconify");
+    // Actually proves the CSP-safety property (default-src 'self' forbids
+    // inline event handlers), not just the CDN substrings above.
+    expect(body).not.toMatch(/on(click|error|load|submit)=/i);
   });
 
   it("sets the token cookie from ?t= on GET /", async () => {
