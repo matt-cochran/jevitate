@@ -17,6 +17,10 @@ import type { Control } from "./snapshot.js";
  *
  * The caller consumes a decision exactly once — `act` performs a single
  * action and returns; it never retries or re-decides.
+ *
+ * `upload` attaches the MISSION's fixture file (`ActArgs.fixture`) to the chosen
+ * control. The model picks only the op and the target — it never supplies a
+ * path — so a run without a fixture fails closed rather than inventing one.
  */
 
 export interface ActArgs {
@@ -25,6 +29,11 @@ export interface ActArgs {
   readonly control: Control | null;
   /** The value to type — required (non-null) for `type`. */
   readonly value?: string | null;
+  /**
+   * The mission's fixture file path — required for `upload`. Supplied by the
+   * mission/loop (validated to exist at mission start), NEVER by the model.
+   */
+  readonly fixture?: string | null;
 }
 
 export interface ActResult {
@@ -69,6 +78,33 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
   return null;
 }
 
+/**
+ * The `upload` counterpart of `gate`. File inputs are routinely visually
+ * hidden behind a styled label/dropzone (`opacity:0`, 1px, off-screen), so
+ * requiring visibility would reject nearly every real upload control — and
+ * Playwright's `setInputFiles` does not need a visible element. What still
+ * protects against acting on a stale or wrong element is: exactly one match
+ * (unique + attached), it IS an `<input type=file>` (never a guessed nearby
+ * element), and it is enabled (a disabled input must not accept files).
+ */
+async function fileInputGate(actor: Actor, control: Control): Promise<string | null> {
+  const page = actor.ability(BrowseTheWebToken).session.page;
+  const locator = descriptorToLocator(page, control.descriptor);
+  let count: number;
+  try {
+    count = await locator.count();
+  } catch (e) {
+    return `target did not resolve: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  if (count !== 1) return `target no longer unique (count=${count})`;
+  const isFileInput = await locator.evaluate(
+    (el) => el instanceof HTMLInputElement && el.type.toLowerCase() === "file",
+  );
+  if (!isFileInput) return `no <input type=file> for target ${describe(control.descriptor)}`;
+  if (!(await locator.isEnabled())) return "target not enabled";
+  return null;
+}
+
 export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
   const page = actor.ability(BrowseTheWebToken).session.page;
 
@@ -98,6 +134,16 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       await descriptorToLocator(page, args.control.descriptor).selectOption(args.value);
+      return { ok: true, mutated: true };
+    }
+    case "upload": {
+      if (args.control === null) return { ok: false, mutated: false, reason: "upload needs a target" };
+      if (args.fixture === null || args.fixture === undefined) {
+        return { ok: false, mutated: false, reason: "upload has no mission fixture (fail-closed)" };
+      }
+      const bad = await fileInputGate(actor, args.control);
+      if (bad !== null) return { ok: false, mutated: false, reason: bad };
+      await descriptorToLocator(page, args.control.descriptor).setInputFiles(args.fixture);
       return { ok: true, mutated: true };
     }
     case "scroll_up":

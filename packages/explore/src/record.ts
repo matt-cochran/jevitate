@@ -126,6 +126,22 @@ export class RunRecorder {
   }
 
   /**
+   * Record an upload of the mission fixture. `file` follows the same
+   * `ValueOrVar` discipline as `fill`: a plain path is recorded as
+   * `{ redacted:false, value }` so replay re-attaches that same file; pass a
+   * `{ redacted:true, ... }` (a path containing a secret) or `{ var }` instead
+   * to keep it out of the artifact.
+   */
+  upload(descriptor: TargetDescriptor, file: string | ValueOrVar, atMs: number, durationMs = 0): void {
+    this.#ensureSegment("/");
+    const f: ValueOrVar = typeof file === "string" ? { redacted: false, value: file } : file;
+    // Provisional postcondition: the input is still attached — NOT `visible`,
+    // because file inputs are routinely visually hidden behind a styled label.
+    const attached: Assertion = { kind: "count", target: { ...descriptor }, min: 1 };
+    this.#append({ kind: "upload", target: { ...descriptor }, file: f, expect: attached }, atMs, durationMs);
+  }
+
+  /**
    * Called AFTER re-observing. If the URL changed since the current segment,
    * the last recorded step caused the navigation: rewrite its postcondition to
    * `urlIncludes` and queue the next segment (materialized on the next step).
