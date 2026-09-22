@@ -47,6 +47,14 @@ export type Step =
   | { kind: "waitFor"; label?: string; target: TargetDescriptor; state: "visible" | "hidden" | "attached" }
   | { kind: "extract"; label?: string; target: TargetDescriptor; as: string; attr?: string; expect: Assertion }
   | { kind: "select"; label?: string; target: TargetDescriptor; value: ValueOrVar; expect: Assertion }
+  /**
+   * Attach a local file to an `<input type=file>`. `file` is the fixture's
+   * path as a `ValueOrVar` (same discipline as `fill.value`): a plain path
+   * replays by re-attaching that same file; a `{ var }` binds a different one;
+   * a `{ redacted:true }` path (it contained a registered secret) cannot be
+   * replayed and fails closed.
+   */
+  | { kind: "upload"; label?: string; target: TargetDescriptor; file: ValueOrVar; expect: Assertion }
   | { kind: "press"; label?: string; key: string; expect: Assertion }
   | { kind: "forEach"; label?: string; items: TargetDescriptor; as: string; steps: Step[] }
   | { kind: "assert"; label?: string; check: Assertion }
@@ -249,6 +257,15 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       label: z.string().optional(),
       target: TargetDescriptorSchema,
       value: ValueOrVarSchema,
+      expect: AssertionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("upload"),
+      label: z.string().optional(),
+      target: TargetDescriptorSchema,
+      file: ValueOrVarSchema,
       expect: AssertionSchema,
     })
     .strict(),

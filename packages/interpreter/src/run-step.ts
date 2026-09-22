@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
@@ -51,8 +52,8 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
  * an action whose expected outcome didn't materialize must never be
  * swallowed.
  *
- * Handles all 10 `Step` kinds: `navigate | click | fill | waitFor | assert |
- * extract | select | press | forEach` resolve to `{kind:"done"}` on success
+ * Handles all 11 `Step` kinds: `navigate | click | fill | waitFor | assert |
+ * extract | select | upload | press | forEach` resolve to `{kind:"done"}` on success
  * (or throw); `handback` performs no action and resolves to
  * `{kind:"awaiting_human"}` without checking its `resume` assertion — see
  * that case below.
@@ -131,6 +132,23 @@ export async function runStep(
       await descriptorToTarget(step.target).resolve(page).selectOption(value);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "select");
+      }
+      return { kind: "done" };
+    }
+    case "upload": {
+      // Re-attach the SAME fixture the recording names (or a `{var}` binding).
+      // A redacted path throws in `resolveValue`; a path that is gone fails
+      // fast here with the path named, never attaching some other file.
+      const file = resolveValue(step.file, vars);
+      try {
+        await access(file);
+      } catch (err) {
+        throw new Error(`fixture not found: ${file}`, { cause: err });
+      }
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      await descriptorToTarget(step.target).resolve(page).setInputFiles(file);
+      if (!(await checkAssertion(actor, step.expect))) {
+        throw new PostconditionFailed(step.expect, "upload");
       }
       return { kind: "done" };
     }
