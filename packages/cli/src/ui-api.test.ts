@@ -196,12 +196,16 @@ describe("startUiServer — GET / and GET /app.js", () => {
     expect(setCookie).toContain(handle.token);
   });
 
-  it("serves /app.js as text/javascript", async () => {
+  it("serves /app.js as text/javascript with real SPA content (non-trivial, no inline-handler smells)", async () => {
     const inboxDir = await tmpDir();
     const handle = await start({ inboxDir });
     const res = await fetch(`http://127.0.0.1:${handle.port}/app.js`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/javascript");
+    const body = await res.text();
+    expect(body.length).toBeGreaterThan(500);
+    expect(body).toContain("addEventListener");
+    expect(body).toContain("/api/inbox");
   });
 });
 
@@ -225,8 +229,20 @@ describe("startUiServer — /api/inbox", () => {
     const res = await fetch(`http://127.0.0.1:${handle.port}/api/inbox`, {
       headers: { "x-jevitate-token": handle.token },
     });
-    const body = (await res.json()) as { items: Array<{ id: string }> };
-    expect(body.items.map((i) => i.id)).toEqual(["abc-1"]);
+    const body = (await res.json()) as {
+      items: Array<{ id: string; kind: string; status: string; run: string; journey: string; step: string; agent: string; hasScreenshot: boolean }>;
+    };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({
+      id: "abc-1",
+      kind: "approval",
+      status: "pending",
+      run: "r1",
+      journey: "j1",
+      step: "s1",
+      agent: "claude-code",
+      hasScreenshot: false,
+    });
   });
 
   it("GET /api/inbox/:id returns the full item; 404 for unknown", async () => {

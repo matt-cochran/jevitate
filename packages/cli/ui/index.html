@@ -1,13 +1,554 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Jevitate Inbox</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jevitate UI</title>
+    <style>
+      /* ---- design system (approved neon-brutalist export) ---- */
+      /* NOTE: no external font import here — the server's CSP is
+         `default-src 'self'` with no font-src override, so a Google Fonts
+         @import (or any external font file) would be blocked outright and
+         break the page. Font stacks below fall back to system fonts. */
+      :root {
+        --ink: #050505;
+        --surface: #18181b;
+        --surface-alt: #0a0a0a;
+        --magenta: #ff00ff;
+        --cyan: #00ffff;
+        --yellow: #ffff00;
+        --amber: #f0b100;
+        --green: #00c950;
+        --red: #fb2c36;
+        --sec: #99a1af;
+      }
+      * {
+        box-sizing: border-box;
+        border-radius: 0 !important;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--ink);
+        color: #fff;
+      }
+      a {
+        color: inherit;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+      }
+      .dots {
+        background-color: #050505;
+        background-image: radial-gradient(#18181b 1px, transparent 1px);
+        background-size: 24px 24px;
+        min-height: 100vh;
+      }
+      .disp {
+        font-family: "Archivo", system-ui, sans-serif;
+        font-weight: 900;
+        font-style: italic;
+        transform: skewX(-4deg);
+        letter-spacing: -1.9px;
+      }
+      .head {
+        font-family: "Archivo", system-ui, sans-serif;
+        font-weight: 900;
+        letter-spacing: -1px;
+      }
+      .mono {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+      .body-txt {
+        font-family: "Public Sans", system-ui, sans-serif;
+      }
+      .glow-m {
+        text-shadow: 0 0 8px rgba(255, 0, 255, 0.6), 0 0 20px rgba(255, 0, 255, 0.35);
+      }
+      .glow-c {
+        text-shadow: 0 0 8px rgba(0, 255, 255, 0.6), 0 0 20px rgba(0, 255, 255, 0.35);
+      }
+      .card {
+        border: 2px solid #fff;
+        background: var(--surface);
+        transition: box-shadow 0.2s ease, transform 0.2s ease;
+        padding: 24px;
+        display: block;
+        width: 100%;
+        text-align: left;
+        color: inherit;
+      }
+      .card:hover {
+        box-shadow: 8px 8px 0 0 var(--magenta);
+        transform: translate(-1px, -1px);
+      }
+      .led {
+        width: 8px;
+        height: 8px;
+        display: inline-block;
+      }
+      .led-c {
+        background: var(--cyan);
+        box-shadow: 0 0 8px 2px var(--cyan);
+      }
+      .led-m {
+        background: var(--magenta);
+        box-shadow: 0 0 8px 2px var(--magenta);
+      }
+      .led-y {
+        background: var(--amber);
+        box-shadow: 0 0 8px 2px var(--amber);
+      }
+      .led-g {
+        background: var(--green);
+        box-shadow: 0 0 8px 2px var(--green);
+      }
+      .led-r {
+        background: var(--red);
+        box-shadow: 0 0 8px 2px var(--red);
+      }
+      .badge {
+        border: 2px solid;
+        padding: 4px 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn-primary {
+        font-family: "Archivo", system-ui, sans-serif;
+        font-weight: 900;
+        text-transform: uppercase;
+        background: linear-gradient(180deg, #fff 0%, #d1d1d1 45%, #fff 50%, #e5e5e5 100%);
+        color: #000;
+        border: 2px solid var(--magenta);
+        box-shadow: 6px 6px 0 0 var(--magenta);
+        height: 54px;
+        padding: 0 26px;
+        transition: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+        letter-spacing: 0.5px;
+      }
+      .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 8px 8px 0 0 var(--magenta);
+      }
+      .btn-primary:active {
+        transform: translateY(2px);
+        box-shadow: 3px 3px 0 0 var(--magenta);
+      }
+      .btn-primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .btn-ghost-w {
+        font-family: "Archivo", system-ui, sans-serif;
+        font-weight: 900;
+        text-transform: uppercase;
+        background: transparent;
+        color: #fff;
+        border: 2px solid #fff;
+        height: 54px;
+        padding: 0 22px;
+        transition: 0.15s;
+        letter-spacing: 0.5px;
+      }
+      .btn-ghost-w:hover {
+        border-color: var(--red);
+        color: var(--red);
+        box-shadow: 0 0 14px rgba(251, 44, 54, 0.5);
+      }
+      .btn-ghost-c {
+        font-family: "Archivo", system-ui, sans-serif;
+        font-weight: 900;
+        text-transform: uppercase;
+        background: transparent;
+        color: var(--cyan);
+        border: 2px solid var(--cyan);
+        height: 54px;
+        padding: 0 22px;
+        transition: 0.15s;
+        letter-spacing: 0.5px;
+      }
+      .btn-ghost-c:hover {
+        box-shadow: 0 0 14px rgba(0, 255, 255, 0.5);
+      }
+      .count {
+        background: var(--magenta);
+        color: #000;
+        box-shadow: 5px 5px 0 0 rgba(0, 255, 255, 0.9);
+        padding: 4px 16px;
+      }
+      .divider {
+        border-top: 2px solid #18181b;
+      }
+      .ta {
+        background: var(--surface-alt);
+        border: 2px solid #fff;
+        color: #fff;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        outline: none;
+        transition: 0.15s;
+        width: 100%;
+        padding: 14px;
+        font-size: 14px;
+        resize: vertical;
+      }
+      .ta:focus {
+        border-color: var(--cyan);
+        box-shadow: 0 0 0 3px rgba(0, 255, 255, 0.35);
+      }
+      @keyframes blink {
+        0%,
+        49% {
+          opacity: 1;
+        }
+        50%,
+        100% {
+          opacity: 0;
+        }
+      }
+      .cursor-blink {
+        animation: blink 1s step-end infinite;
+      }
+      .scanlines {
+        background: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+        background-size: 100% 3px;
+        pointer-events: none;
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+      }
+
+      /* ---- layout (no Tailwind — CSP blocks the CDN) ---- */
+      .screen {
+        min-height: 100vh;
+        width: 100%;
+        padding: 56px 24px;
+      }
+      @media (min-width: 768px) {
+        .screen {
+          padding-left: 64px;
+          padding-right: 64px;
+        }
+      }
+      .eyebrow {
+        font-size: 12px;
+        color: var(--sec);
+      }
+      .queue-heading {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 24px;
+        margin-top: 24px;
+      }
+      .queue-title {
+        font-size: 44px;
+        margin: 0;
+      }
+      @media (min-width: 768px) {
+        .queue-title {
+          font-size: 68px;
+        }
+      }
+      .count {
+        font-family: "Archivo", system-ui, sans-serif;
+        font-weight: 900;
+        font-size: 24px;
+      }
+      .sub {
+        font-size: 12px;
+        color: var(--sec);
+        margin-top: 16px;
+      }
+      .queue-list {
+        margin-top: 40px;
+        display: flex;
+        flex-direction: column;
+        gap: 32px;
+        max-width: 980px;
+      }
+      .card-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .card-title {
+        font-size: 28px;
+        margin: 16px 0 0;
+      }
+      .card-reason {
+        font-family: "Public Sans", system-ui, sans-serif;
+        font-size: 16px;
+        color: #d1d5dc;
+        margin: 12px 0 0;
+      }
+      .card-meta {
+        display: flex;
+        flex-wrap: wrap;
+        column-gap: 32px;
+        row-gap: 8px;
+        margin-top: 20px;
+        font-size: 12px;
+        color: var(--sec);
+      }
+      .card-meta strong {
+        color: #fff;
+        font-weight: 500;
+      }
+      .card-meta .agent {
+        color: var(--cyan);
+      }
+      .card-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-top: 24px;
+      }
+      .empty-state {
+        min-height: 60vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 40px 16px;
+      }
+      .empty-state h2 {
+        font-size: 48px;
+        color: #3f3f46;
+        margin: 0;
+      }
+      @media (min-width: 768px) {
+        .empty-state h2 {
+          font-size: 76px;
+        }
+      }
+      .empty-state .sub {
+        font-size: 18px;
+        margin-top: 32px;
+      }
+      .empty-state p {
+        font-family: "Public Sans", system-ui, sans-serif;
+        font-size: 14px;
+        color: #52525b;
+        margin-top: 24px;
+      }
+      .back-link {
+        background: transparent;
+        border: none;
+        color: var(--cyan);
+        font-size: 14px;
+        padding: 0;
+      }
+      .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 40px;
+        margin-top: 32px;
+      }
+      @media (min-width: 1024px) {
+        .detail-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      .detail-title {
+        font-size: 40px;
+        margin: 24px 0 0;
+      }
+      @media (min-width: 768px) {
+        .detail-title {
+          font-size: 56px;
+        }
+      }
+      .detail-url {
+        font-size: 14px;
+        color: var(--cyan);
+        margin-top: 24px;
+        word-break: break-all;
+      }
+      .detail-meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 24px;
+        font-size: 12px;
+        color: var(--sec);
+      }
+      .detail-meta strong {
+        color: #fff;
+        font-weight: 500;
+      }
+      .detail-reason {
+        font-family: "Public Sans", system-ui, sans-serif;
+        font-size: 17px;
+        color: #d1d5dc;
+        margin-top: 24px;
+      }
+      .section-label {
+        font-size: 12px;
+        color: var(--sec);
+        margin-top: 32px;
+        margin-bottom: 8px;
+      }
+      .thread {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .thread-entry {
+        border: 2px solid #333;
+        padding: 10px 12px;
+        font-size: 13px;
+      }
+      .thread-entry .who {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--sec);
+        margin-bottom: 4px;
+      }
+      .thread-entry.human {
+        border-color: var(--cyan);
+      }
+      .findings {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .finding {
+        border: 2px solid;
+        padding: 10px 12px;
+      }
+      .finding.low {
+        border-color: var(--sec);
+      }
+      .finding.med {
+        border-color: var(--amber);
+      }
+      .finding.high {
+        border-color: var(--red);
+      }
+      .finding .title {
+        font-weight: 700;
+      }
+      .finding .evidence {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 12px;
+        color: var(--sec);
+        margin-top: 6px;
+      }
+      .detail-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-top: 24px;
+      }
+      .browser-frame {
+        background: var(--surface-alt);
+        border: 2px solid #fff;
+      }
+      .browser-chrome {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        border-bottom: 2px solid #fff;
+        background: var(--surface);
+      }
+      .browser-chrome .chrome-url {
+        font-size: 12px;
+        color: var(--sec);
+        margin-left: 12px;
+      }
+      .screenshot-body {
+        padding: 0;
+        min-height: 320px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .screenshot-body img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .screenshot-placeholder {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 64px 24px;
+        color: var(--sec);
+        width: 100%;
+      }
+      .screenshot-placeholder svg {
+        width: 40px;
+        height: 40px;
+        opacity: 0.6;
+      }
+      .screenshot-caption {
+        font-size: 12px;
+        color: var(--sec);
+        margin-top: 12px;
+      }
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 32px;
+        transform: translateX(-50%);
+        background: var(--surface);
+        border: 2px solid var(--magenta);
+        box-shadow: 6px 6px 0 0 var(--magenta);
+        color: #fff;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 13px;
+        padding: 14px 20px;
+        z-index: 100;
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+    </style>
   </head>
-  <body>
-    <!-- JEVITATE_UI_STUB: minimal placeholder — Task 9 replaces this with the real dashboard. -->
-    <div id="app" data-jevitate-ui="stub">Jevitate UI stub</div>
+  <body class="dots">
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <section id="screen-queue" class="screen">
+      <div class="mono eyebrow">[ QUEUE &middot; PENDING ]</div>
+      <div class="queue-heading">
+        <h1 class="disp glow-m queue-title">PENDING QUEUE</h1>
+        <span class="count head" id="queue-count">00</span>
+      </div>
+      <div class="mono sub" id="queue-sub">[ jevitate ui &middot; single-user ]</div>
+
+      <div class="queue-list" id="queue-list">
+        <!-- queue cards or empty state injected by app.js -->
+      </div>
+    </section>
+
+    <section id="screen-detail" class="screen" hidden>
+      <button type="button" id="back-link" class="mono back-link">[&lt;- QUEUE]</button>
+      <div class="detail-grid" id="detail-root">
+        <!-- item detail injected by app.js -->
+      </div>
+    </section>
+
+    <div id="toast" class="toast mono" role="status" aria-live="polite" hidden></div>
+
     <script src="/app.js"></script>
   </body>
 </html>
