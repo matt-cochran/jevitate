@@ -16,7 +16,7 @@ const clock = { nowIso: () => new Date().toISOString(), monotonicMs: () => Date.
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "doit-e2e-"));
+  profileDir = await mkdtemp(join(tmpdir(), "jevitate-e2e-"));
 });
 afterAll(async () => {
   await site.close();

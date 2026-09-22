@@ -42,7 +42,7 @@ export interface ComputedDescriptor {
 }
 
 /** The temporary attribute the in-page capture listener tags acted elements with. */
-export const EID_ATTRIBUTE = "data-doit-eid";
+export const EID_ATTRIBUTE = "data-jevitate-eid";
 
 // === Stability heuristics ===
 
@@ -604,7 +604,7 @@ export async function validateCandidates(
 
 /**
  * Computes the most stable `TargetDescriptor` that provably resolves back to
- * `handle`, and removes the temporary `data-doit-eid` capture attribute.
+ * `handle`, and removes the temporary `data-jevitate-eid` capture attribute.
  *
  * Removal is unconditional and runs in a `finally`: `computeDescriptor` is
  * also called on elements the recorder never tagged, and a no-op

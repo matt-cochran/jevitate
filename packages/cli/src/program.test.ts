@@ -115,7 +115,7 @@ test("mcp --print-config <bogus> is a fail envelope", async () => {
 
 test("ui --port --no-open --inbox-dir calls the injected startUiServer with the resolved deps", async () => {
   const profiles = {} as unknown as ProfileManager;
-  const inboxDir = mkdtempSync(join(tmpdir(), "doit-cli-inbox-"));
+  const inboxDir = mkdtempSync(join(tmpdir(), "jevitate-cli-inbox-"));
   const calls: unknown[] = [];
   const lines: string[] = [];
   const program = buildProgram({
@@ -153,7 +153,7 @@ test("ui with no --inbox-dir resolves the default inbox dir under the jevitate h
 });
 
 test("profile create prints a success envelope", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const lines: string[] = [];
   const program = buildProgram({ profiles });
@@ -193,7 +193,7 @@ test("profile create prints a failure envelope and sets exit code 1 when the act
 });
 
 test("site policy set then site policy get --json round-trips via a temp --db", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const dbPath = join(root, "db.sqlite");
   const policyPath = join(root, "policy.json");
@@ -227,7 +227,7 @@ test("site policy set then site policy get --json round-trips via a temp --db", 
 });
 
 test("site policy get --json succeeds when the --db parent directory does not yet exist", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   // Only `root` exists; `nested/subdir` must be created by the command itself,
   // matching ProfileManager.create()'s mkdir(dir, { recursive: true }) pattern.
@@ -246,7 +246,7 @@ test("site policy get --json succeeds when the --db parent directory does not ye
 });
 
 test("site policy get --json reports null data when no policy is stored", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const dbPath = join(root, "db.sqlite");
 
@@ -263,7 +263,7 @@ test("site policy get --json reports null data when no policy is stored", async 
 });
 
 test("site simulate prints a timing profile with totalMs, using an empty interaction when no policy is stored", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const dbPath = join(root, "db.sqlite");
   const scriptPath = join(root, "script.json");
@@ -293,7 +293,7 @@ test("site simulate prints a timing profile with totalMs, using an empty interac
 test("site simulate --seed abc returns a failure envelope and sets exit code 1 (invalid seed must not silently become 0)", async () => {
   const savedExitCode = process.exitCode;
   try {
-    const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+    const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
     const profiles = new ProfileManager(root);
     const dbPath = join(root, "db.sqlite");
     const scriptPath = join(root, "script.json");
@@ -317,7 +317,7 @@ test("site simulate --seed abc returns a failure envelope and sets exit code 1 (
 });
 
 test("recording diff of two JSON takes prints a variable column", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
   const takeBPath = join(root, "takeB.json");
@@ -342,7 +342,7 @@ test("recording diff of two JSON takes prints a variable column", async () => {
 });
 
 test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is missing", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
   const takeBPath = join(root, "takeB.json");
@@ -369,7 +369,7 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
 });
 
 test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is malformed (wrong shape)", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
   const takeBPath = join(root, "takeB.json");
@@ -393,7 +393,7 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
 });
 
 test("recording fit prints a policy whose full output round-trips through SitePolicySchema", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const recPath = join(root, "rec.json");
 
@@ -431,7 +431,7 @@ test("recording fit prints a policy whose full output round-trips through SitePo
 });
 
 test("recording promote sets value:{var:...} at the targeted fill step", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const recPath = join(root, "rec.json");
 
@@ -459,7 +459,7 @@ test("recording promote sets value:{var:...} at the targeted fill step", async (
 test("recording promote on a click step returns a fail envelope and sets exit code 1", async () => {
   const savedExitCode = process.exitCode;
   try {
-    const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+    const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
     const profiles = new ProfileManager(root);
     const recPath = join(root, "rec.json");
 
@@ -495,7 +495,7 @@ async function loadAuthoringRecording(path: string): Promise<AuthoringRecording>
 }
 
 test("recording postdoc --decisions applies the decisions and prints the same Recording applyPostdoc would produce", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
   const takeBPath = join(root, "takeB.json");
@@ -544,7 +544,7 @@ test("recording postdoc --decisions applies the decisions and prints the same Re
 test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) on a malformed decisions file", async () => {
   const savedExitCode = process.exitCode;
   try {
-    const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+    const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
     const profiles = new ProfileManager(root);
     const takeAPath = join(root, "takeA.json");
     const takeBPath = join(root, "takeB.json");
@@ -582,7 +582,7 @@ test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) o
 // enforcement (the resolved value was never `undefined`). Covers the fix in
 // `program.ts`'s `load run`.
 test("load run without --authorized-origin errors clearly instead of silently running with an empty allowlist", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const lines: string[] = [];
   const program = buildProgram({ profiles });
@@ -597,7 +597,7 @@ test("load run without --authorized-origin errors clearly instead of silently ru
 });
 
 test("load run accumulates repeated --authorized-origin flags", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const lines: string[] = [];
   const program = buildProgram({ profiles });
