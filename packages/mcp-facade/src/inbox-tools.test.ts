@@ -128,6 +128,18 @@ describe("facadeQueueAction", () => {
     expect(result).toEqual({ error: "invalid_args", message: expect.any(String) });
   });
 
+  it("returns invalid_args for a non-boolean hasScreenshot", async () => {
+    const store = new FsInboxStore(await tmpDir());
+    const result = await facadeQueueAction(store, baseArgs({ hasScreenshot: "yes" }));
+    expect(result).toEqual({ error: "invalid_args", message: expect.any(String) });
+  });
+
+  it("returns invalid_args for a non-string targetUrl", async () => {
+    const store = new FsInboxStore(await tmpDir());
+    const result = await facadeQueueAction(store, baseArgs({ targetUrl: 12345 }));
+    expect(result).toEqual({ error: "invalid_args", message: expect.any(String) });
+  });
+
   it("never throws on malformed args", async () => {
     const store = new FsInboxStore(await tmpDir());
     await expect(facadeQueueAction(store, null)).resolves.toEqual({ error: "invalid_args", message: expect.any(String) });

@@ -1,6 +1,8 @@
 import {
   SAFE_INBOX_ID_RE,
   InboxIdConflictError,
+  FindingSchema,
+  InboxItemKindSchema,
   type InboxStore,
   type InboxItem,
   type InboxItemKind,
@@ -15,8 +17,20 @@ import {
  * `queue_retrieval`, `approve_action`, `cancel_command`, `get_site_health`.
  *
  * Style mirrors `ai-tools.ts`/`journey-tools.ts`: pure functions, the store
- * injected, no fs access here. VALIDATION FAILURES RETURN a typed
- * `{ error: "invalid_args", message }` object — never a throw.
+ * injected, no fs access here. Argument-validation failures RETURN a typed
+ * `{ error: "invalid_args", message }` object — never a throw. Enqueue
+ * failures (`facadeQueueAction`/`facadeQueueRetrieval`) are similarly typed
+ * but distinguished by cause: `{ error: "id_conflict", message }` when id
+ * synthesis exhausts its retries, `{ error: "internal", message }` for any
+ * OTHER store-layer failure (e.g. `LockTimeoutError`, a raw fs error like
+ * EACCES/ENOSPC) — those are never the caller's fault, so they must not be
+ * mislabeled `invalid_args`.
+ *
+ * EXCEPTION to "never a throw": `facadeGetCommand`/`facadeGetThread` call
+ * `store.getForAgent`/`store.get`, which fail closed and THROW (by design,
+ * in `@jevitate/inbox`) if the on-disk item is corrupt or tampered. That is
+ * intentional store behavior this facade layer does not catch or convert —
+ * only ARGUMENT validation is guaranteed to return a typed object here.
  *
  * SM1 (enforced twice, belt-and-braces): `facadeApproveAction` and
  * `facadeCancelCommand` ALWAYS refuse and never touch the store — an agent
@@ -46,13 +60,26 @@ export interface HumanApprovalRequiredError {
   message: string;
 }
 
+/** The genuine retry-exhausted case: id synthesis collided repeatedly. */
+export interface IdConflictError {
+  error: "id_conflict";
+  message: string;
+}
+
+/** Any OTHER store-layer failure (lock contention, raw fs error, …) — never
+ *  the caller's argument fault, so this is deliberately distinct from
+ *  `invalid_args`. The message is a lock/fs message; it carries no secret. */
+export interface InternalError {
+  error: "internal";
+  message: string;
+}
+
 export interface QueuedResult {
   id: string;
   status: "pending";
 }
 
 const DEFAULT_TTL_SEC = 3600;
-const QUEUE_KINDS = ["approval", "handback", "review"] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -113,14 +140,6 @@ interface QueueCommonFields {
   findings?: Finding[];
 }
 
-function isValidFinding(f: unknown): f is Finding {
-  if (!isPlainObject(f)) return false;
-  if (typeof f.id !== "string" || typeof f.title !== "string") return false;
-  if (f.severity !== "low" && f.severity !== "med" && f.severity !== "high") return false;
-  if (f.evidence !== undefined && typeof f.evidence !== "string") return false;
-  return true;
-}
-
 function parseQueueCommonFields(
   args: unknown,
 ): { ok: true; value: QueueCommonFields } | { ok: false; message: string } {
@@ -142,13 +161,24 @@ function parseQueueCommonFields(
 
   let findings: Finding[] | undefined;
   if (args.findings !== undefined) {
-    if (!Array.isArray(args.findings) || !args.findings.every(isValidFinding)) {
+    if (!Array.isArray(args.findings)) {
       return {
         ok: false,
         message: "'findings' must be an array of { id, title, severity: 'low'|'med'|'high', evidence? }",
       };
     }
-    findings = args.findings;
+    const parsedFindings: Finding[] = [];
+    for (const f of args.findings) {
+      const result = FindingSchema.safeParse(f);
+      if (!result.success) {
+        return {
+          ok: false,
+          message: "'findings' must be an array of { id, title, severity: 'low'|'med'|'high', evidence? }",
+        };
+      }
+      parsedFindings.push(result.data);
+    }
+    findings = parsedFindings;
   }
 
   return {
@@ -222,24 +252,24 @@ async function enqueueQueueItem(
  * transition table + UI review path, S-H). Synthesizes the id — callers
  * never supply one.
  */
-export async function facadeQueueAction(store: InboxStore, args: unknown): Promise<QueuedResult | InvalidArgsError> {
+export async function facadeQueueAction(
+  store: InboxStore,
+  args: unknown,
+): Promise<QueuedResult | InvalidArgsError | IdConflictError | InternalError> {
   const common = parseQueueCommonFields(args);
   if (!common.ok) return { error: "invalid_args", message: common.message };
 
   const rawKind = isPlainObject(args) ? args.kind : undefined;
   let kind: InboxItemKind = "approval";
   if (rawKind !== undefined) {
-    if (typeof rawKind !== "string" || !(QUEUE_KINDS as readonly string[]).includes(rawKind)) {
+    const parsedKind = InboxItemKindSchema.safeParse(rawKind);
+    if (!parsedKind.success) {
       return { error: "invalid_args", message: "'kind' must be one of 'approval' | 'handback' | 'review'" };
     }
-    kind = rawKind as InboxItemKind;
+    kind = parsedKind.data;
   }
 
-  try {
-    return await enqueueQueueItem(store, kind, common.value);
-  } catch (err) {
-    return { error: "invalid_args", message: err instanceof Error ? err.message : String(err) };
-  }
+  return enqueueOrTypedError(store, kind, common.value);
 }
 
 /** `queue_retrieval`: same args/validation as `queue_action`, but `kind` is
@@ -247,14 +277,30 @@ export async function facadeQueueAction(store: InboxStore, args: unknown): Promi
 export async function facadeQueueRetrieval(
   store: InboxStore,
   args: unknown,
-): Promise<QueuedResult | InvalidArgsError> {
+): Promise<QueuedResult | InvalidArgsError | IdConflictError | InternalError> {
   const common = parseQueueCommonFields(args);
   if (!common.ok) return { error: "invalid_args", message: common.message };
 
+  return enqueueOrTypedError(store, "handback", common.value);
+}
+
+/** Shared enqueue + typed-error mapping for both queue facades: argument
+ *  validation has already happened by this point (via `parseQueueCommonFields`
+ *  / the `kind` check above), so anything thrown here is a STORE-layer
+ *  failure, never an argument problem — `id_conflict` for retry-exhausted id
+ *  synthesis, `internal` for everything else (lock contention, fs errors). */
+async function enqueueOrTypedError(
+  store: InboxStore,
+  kind: InboxItemKind,
+  fields: QueueCommonFields,
+): Promise<QueuedResult | IdConflictError | InternalError> {
   try {
-    return await enqueueQueueItem(store, "handback", common.value);
+    return await enqueueQueueItem(store, kind, fields);
   } catch (err) {
-    return { error: "invalid_args", message: err instanceof Error ? err.message : String(err) };
+    if (err instanceof InboxIdConflictError) {
+      return { error: "id_conflict", message: err.message };
+    }
+    return { error: "internal", message: err instanceof Error ? err.message : String(err) };
   }
 }
 
