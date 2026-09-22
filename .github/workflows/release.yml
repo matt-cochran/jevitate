@@ -10,12 +10,15 @@ name: Release
 # hand (`bash scripts/release.sh`), because a Trusted Publisher can only be
 # configured for a package that already exists.
 #
-# Trigger: manual-only (`workflow_dispatch`) until the first hand publish +
-# Trusted Publishers are configured. Keeping `push: main` off until then means
-# landing work on `main` does NOT fire a guaranteed-to-fail release. Once npm
-# is set up, restore `on: push: branches: [main]` (see RELEASING.md) so every
-# merge to `main` publishes with provenance over OIDC.
+# Trigger: the first publish (0.1.0) was done by hand and Trusted Publishers
+# are configured, so auto-publishing on merge to `main` is now enabled. A push
+# to `main` with no new package version is a no-op (changesets publishes only
+# bumped versions), so this is safe on every merge; `workflow_dispatch` stays
+# for manual runs. REQUIRES the Trusted Publisher for BOTH packages to be set
+# up on npmjs.com first (see RELEASING.md) — merge this only after that.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
