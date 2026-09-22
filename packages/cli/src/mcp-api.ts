@@ -418,13 +418,13 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     approve_action: {
       description:
         "SM1: an agent can NEVER approve an inbox item over MCP — always refuses with human_approval_required. Approval is only permitted from the local jevitate UI.",
-      inputSchema: { type: "object", properties: { id: { type: "string" } } },
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: async () => errorResult(facadeApproveAction()),
     },
     cancel_command: {
       description:
         "SM1: an agent can NEVER cancel an inbox item over MCP — always refuses with human_approval_required. Cancellation is only permitted from the local jevitate UI.",
-      inputSchema: { type: "object", properties: { id: { type: "string" } } },
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: async () => errorResult(facadeCancelCommand()),
     },
     get_site_health: {
