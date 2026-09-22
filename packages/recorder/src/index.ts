@@ -3,3 +3,4 @@ export * from "./descriptor.js";
 export * from "./inject.js";
 export * from "./patch.js";
 export * from "./recorder.js";
+export * from "./secret-field.js";
