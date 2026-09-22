@@ -31,7 +31,7 @@ describe("FsRecordingStore", () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "doit-recording-store-"));
+    dir = await mkdtemp(join(tmpdir(), "jevitate-recording-store-"));
   });
 
   afterEach(async () => {

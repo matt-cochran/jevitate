@@ -14,7 +14,7 @@ import { join } from "node:path";
  * CLI paths clean their own profile dirs in a `finally` — see explore-api.ts /
  * journey-api.ts / load-api.ts / program.ts.
  */
-const PREFIXES = ["doit-", "jevitate-"] as const;
+const PREFIXES = ["jevitate-"] as const;
 
 async function snapshotMatching(): Promise<Set<string>> {
   const out = new Set<string>();

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ProfileManager } from "./profile-manager.js";
 
 test("create then status reports the profile exists", async () => {
-  const root = await mkdtemp(join(tmpdir(), "doit-prof-"));
+  const root = await mkdtemp(join(tmpdir(), "jevitate-prof-"));
   const pm = new ProfileManager(root);
   expect((await pm.status("main")).exists).toBe(false);
   const created = await pm.create("main");
