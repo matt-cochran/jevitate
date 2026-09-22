@@ -70,7 +70,7 @@ test(
   "recorded fill replays through the interpreter once promoted to a variable",
   async () => {
     // === Phase A — capture a real journey with the Recorder ===
-    const { recording, values } = await withSession("doit-replayable-record-", async (session) => {
+    const { recording, values } = await withSession("jevitate-replayable-record-", async (session) => {
       const recorder = new Recorder(session, "example-site");
       await recorder.start("record a login and reach the inbox");
 
@@ -112,7 +112,7 @@ test(
     expect(() => RecordingSchema.parse(promoted)).not.toThrow();
 
     // === Phase C — replay in a genuinely fresh, cookie-less session ===
-    await withSession("doit-replayable-replay-", async (fresh) => {
+    await withSession("jevitate-replayable-replay-", async (fresh) => {
       const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [site.url]));
       const result = await new RecordingInterpreter().run(actor, promoted, { username: "jane" });
       if (result.outcome !== "completed") {

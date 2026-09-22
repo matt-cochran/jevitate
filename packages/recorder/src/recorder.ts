@@ -13,8 +13,8 @@ import {
 } from "./descriptor.js";
 import { installRecorderListener } from "./inject.js";
 
-/** The name the injected script calls: `window.__doitRecord(payload)`. */
-export const RECORD_BINDING = "__doitRecord";
+/** The name the injected script calls: `window.__jevitateRecord(payload)`. */
+export const RECORD_BINDING = "__jevitateRecord";
 
 /** The raw DOM event kinds the injected listener reports. */
 export type DomEventKind = "click" | "input" | "change" | "keydown" | "submit";
@@ -27,7 +27,7 @@ const DOM_EVENT_KINDS: readonly string[] = ["click", "input", "change", "keydown
  * its value is never read in the page, so it never crosses into Node.
  */
 export interface CapturedActionPayload {
-  /** Value of the temporary `data-doit-eid` attribute, unique per document. */
+  /** Value of the temporary `data-jevitate-eid` attribute, unique per document. */
   readonly eid: string;
   readonly kind: DomEventKind;
   /** Lowercase tag name of the acted element, e.g. `"button"`. */
@@ -176,7 +176,7 @@ export interface AuthoringRecording {
  *     the page read about the acted element *synchronously, in the event
  *     handler* (see `inject.ts`), and its descriptor is settled **as it
  *     arrives**, not at the end — by `stop()` the journey has crossed several
- *     documents and `[data-doit-eid=N]` cannot be queried on a page that was
+ *     documents and `[data-jevitate-eid=N]` cannot be queried on a page that was
  *     navigated away from three steps ago. Resolving per action also disposes
  *     of the "an `eid` is only unique per document" hazard.
  *  3. `stop()` translates the buffer (see `assemble.ts`). Pure: no DOM is
@@ -195,7 +195,7 @@ export class Recorder {
    * The **promise** is memoized, not the result, and that is load-bearing: one
    * field emits several events (a keystroke each, then a blur-time `change`),
    * they arrive while the first computation is still running, and the first
-   * computation *removes* the `data-doit-eid` attribute when it finishes. A
+   * computation *removes* the `data-jevitate-eid` attribute when it finishes. A
    * result-only memo would have every later event miss, re-query a tag that no
    * longer exists, and degrade a perfectly good `fill` into a `handback`.
    *
@@ -220,7 +220,7 @@ export class Recorder {
    *
    * Installing only *buffers raw events*; it computes no descriptors. Those
    * begin at `start()`, because computing a descriptor mutates the page (it
-   * strips the temporary `data-doit-eid` tag), and an armed-but-not-recording
+   * strips the temporary `data-jevitate-eid` tag), and an armed-but-not-recording
    * session should leave the DOM exactly as it found it.
    */
   async install(): Promise<void> {
@@ -486,7 +486,7 @@ export class Recorder {
     });
 
     // `eid` is interpolated into a css attribute selector and arrives from the
-    // page, where any script can call `window.__doitRecord` with one crafted to
+    // page, where any script can call `window.__jevitateRecord` with one crafted to
     // break out of the quotes. The injected listener only ever sends a decimal
     // counter; anything else is refused rather than queried.
     if (!/^[0-9]+$/.test(eid)) {

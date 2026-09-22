@@ -13,7 +13,7 @@ let profileDir: string;
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "doit-golden-"));
+  profileDir = await mkdtemp(join(tmpdir(), "jevitate-golden-"));
 });
 afterAll(async () => {
   await site.close();

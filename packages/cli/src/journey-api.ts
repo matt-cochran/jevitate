@@ -60,7 +60,7 @@ export async function runJourneyProgrammatically(
 
   const policy = opts.policy ?? safeRunPolicy();
 
-  const profileDir = await mkdtemp(join(tmpdir(), "doit-journey-run-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-journey-run-"));
   const port = new PlaywrightBrowserPort();
   const session = await port.open({
     profileDir,
