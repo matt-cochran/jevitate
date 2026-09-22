@@ -99,6 +99,9 @@ importers:
       '@jevitate/explore':
         specifier: workspace:*
         version: link:../explore
+      '@jevitate/inbox':
+        specifier: workspace:*
+        version: link:../inbox
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter
