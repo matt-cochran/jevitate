@@ -12,6 +12,7 @@
     "@jevitate/ai-core": "workspace:*",
     "@jevitate/application": "workspace:*",
     "@jevitate/domain": "workspace:*",
+    "@jevitate/inbox": "workspace:*",
     "@jevitate/journey": "workspace:*",
     "@jevitate/missions": "workspace:*",
     "@jevitate/runtime": "workspace:*",

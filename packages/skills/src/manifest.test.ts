@@ -4,9 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadManifest } from "./manifest.js";
 
-test("loadManifest() returns exactly the six shipped skills", () => {
+test("loadManifest() returns exactly the seven shipped skills, including jevitate-ux-review", () => {
   const skills = loadManifest();
-  expect(skills).toHaveLength(6);
+  expect(skills).toHaveLength(7);
+  const ids = new Set(skills.map((s) => s.id));
+  expect(ids).toEqual(
+    new Set([
+      "jevitate-explore",
+      "jevitate-load-test",
+      "jevitate-mission-scope",
+      "jevitate-record",
+      "jevitate-run-journey",
+      "jevitate-sources",
+      "jevitate-ux-review",
+    ]),
+  );
 });
 
 test("every entry's id equals its directory name and starts with jevitate-", () => {

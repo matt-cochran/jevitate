@@ -14,9 +14,9 @@ import { buildMcpTools, createMcpServer, type McpApiDeps } from "./mcp-api.js";
 
 const baseDeps: McpApiDeps = { journeysDir: "/nonexistent-journeys-dir" };
 
-/** The allowlisted tools that have NO backing service in this slice and must
- *  therefore stay a typed `not_implemented` (never a fabricated success). */
-const STILL_NOT_IMPLEMENTED = [
+/** The 8 inbox tools this slice wires: ALL must be real, never a fabricated
+ *  `not_implemented` stub — that was the whole point of this task. */
+const INBOX_TOOLS = [
   "queue_retrieval",
   "queue_action",
   "get_command",
@@ -231,31 +231,98 @@ describe("mcp-api ai_generate_text wiring", () => {
   });
 });
 
-describe("mcp-api not-yet-wired tools", () => {
-  it("leaves EXACTLY the un-backed inbox/command tools as a typed not_implemented", async () => {
-    const wiredDeps: McpApiDeps = {
-      ...baseDeps,
-      missionTargetsDir: "/nonexistent-targets",
-      missionQueueDir: "/nonexistent-queue",
-      credentialStore: storeWithKey,
-      generationGateway: new FakeGenerationGateway(),
+describe("mcp-api inbox tool wiring", () => {
+  it("NO served tool returns a fabricated not_implemented — all 8 formerly-stubbed inbox tools are real", async () => {
+    const inboxDir = mkdtempSync(join(tmpdir(), "mcp-inbox-"));
+    const tools = buildMcpTools({ ...baseDeps, inboxDir });
+
+    const args: Record<string, Record<string, unknown>> = {
+      list_incoming: {},
+      get_command: { id: "no-such-item" },
+      get_thread: { id: "no-such-item" },
+      queue_action: { run: "r1", journey: "j1", step: "s1", reason: "needs a human", agent: "agent-1" },
+      queue_retrieval: { run: "r2", journey: "j1", step: "s2", reason: "needs a human", agent: "agent-1" },
+      approve_action: { id: "no-such-item" },
+      cancel_command: { id: "no-such-item" },
+      get_site_health: {},
     };
-    const tools = buildMcpTools(wiredDeps);
-    const notImplemented: string[] = [];
-    for (const tool of tools) {
-      const result = await tool.handler({});
-      if (result.isError && result.content[0].text.includes("not_implemented")) {
-        notImplemented.push(tool.name);
-      }
+
+    for (const name of INBOX_TOOLS) {
+      const tool = tools.find((t) => t.name === name)!;
+      const result = await tool.handler(args[name]);
+      expect(result.content[0].text).not.toContain("not_implemented");
     }
-    expect(notImplemented.sort()).toEqual([...STILL_NOT_IMPLEMENTED].sort());
   });
 
-  it("an unwired tool returns not_implemented, not a fake success", async () => {
-    const tools = buildMcpTools(baseDeps);
-    const stub = tools.find((t) => t.name === "get_command")!;
-    const result = await stub.handler({});
+  it("list_incoming projects InboxSummary items (empty on a fresh dir)", async () => {
+    const inboxDir = mkdtempSync(join(tmpdir(), "mcp-inbox-"));
+    const tools = buildMcpTools({ ...baseDeps, inboxDir });
+    const tool = tools.find((t) => t.name === "list_incoming")!;
+    const result = await tool.handler({});
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toEqual({ items: [] });
+  });
+
+  it("queue_action enqueues over the REAL fs inbox store, and get_command retrieves it (burn-after-read)", async () => {
+    const inboxDir = mkdtempSync(join(tmpdir(), "mcp-inbox-"));
+    const tools = buildMcpTools({ ...baseDeps, inboxDir });
+    const queueAction = tools.find((t) => t.name === "queue_action")!;
+    const queued = await queueAction.handler({
+      run: "run-1",
+      journey: "checkout",
+      step: "confirm",
+      reason: "please confirm this purchase",
+      agent: "explorer-agent",
+    });
+    expect(queued.isError).toBeUndefined();
+    const parsedQueued = JSON.parse(queued.content[0].text);
+    expect(parsedQueued.status).toBe("pending");
+    expect(typeof parsedQueued.id).toBe("string");
+
+    const getCommand = tools.find((t) => t.name === "get_command")!;
+    const got = await getCommand.handler({ id: parsedQueued.id });
+    expect(got.isError).toBeUndefined();
+    const parsedGot = JSON.parse(got.content[0].text);
+    expect(parsedGot.id).toBe(parsedQueued.id);
+    expect(parsedGot.status).toBe("pending");
+  });
+
+  it("get_command on an unknown id returns a typed not_found, never not_implemented", async () => {
+    const inboxDir = mkdtempSync(join(tmpdir(), "mcp-inbox-"));
+    const tools = buildMcpTools({ ...baseDeps, inboxDir });
+    const tool = tools.find((t) => t.name === "get_command")!;
+    const result = await tool.handler({ id: "no-such-item" });
+    expect(result.content[0].text).toContain("not_found");
+    expect(result.content[0].text).not.toContain("not_implemented");
+  });
+
+  it("approve_action and cancel_command ALWAYS refuse (SM1: human-only) — never touch the store", async () => {
+    const inboxDir = mkdtempSync(join(tmpdir(), "mcp-inbox-"));
+    const tools = buildMcpTools({ ...baseDeps, inboxDir });
+    for (const name of ["approve_action", "cancel_command"]) {
+      const tool = tools.find((t) => t.name === name)!;
+      const result = await tool.handler({ id: "whatever" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("human_approval_required");
+    }
+  });
+
+  it("get_site_health reports a real health snapshot over the fs store", async () => {
+    const inboxDir = mkdtempSync(join(tmpdir(), "mcp-inbox-"));
+    const tools = buildMcpTools({ ...baseDeps, inboxDir });
+    const tool = tools.find((t) => t.name === "get_site_health")!;
+    const result = await tool.handler({});
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.pending).toBe(0);
+  });
+
+  it("refuses inbox tools with a structured error (never a fake success) when inboxDir is not configured", async () => {
+    const tools = buildMcpTools(baseDeps); // no inboxDir
+    const tool = tools.find((t) => t.name === "list_incoming")!;
+    const result = await tool.handler({});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("not_implemented");
+    expect(result.content[0].text).not.toContain("not_implemented");
   });
 });

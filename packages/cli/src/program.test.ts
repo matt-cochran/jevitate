@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { mkdtempSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import { SitePolicySchema } from "@jevitate/domain";
@@ -66,6 +66,90 @@ test("mcp command is registered on the program (additive #20)", async () => {
   const mcp = program.commands.find((c) => c.name() === "mcp");
   expect(mcp).toBeTruthy();
   expect(mcp?.description()).toContain("MCP");
+});
+
+test("mcp --print-config json prints the bare mcpServers JSON (no server start)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["mcp", "--print-config", "json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.mcpServers.jevitate).toEqual({ command: "jevitate", args: ["mcp"] });
+});
+
+test("mcp --print-config claude prints the claude mcp add line + JSON", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["mcp", "--print-config", "claude"], { from: "user" });
+  const out = lines.join("");
+  expect(out).toContain("claude mcp add jevitate -- jevitate mcp");
+  expect(out).toContain('"mcpServers"');
+});
+
+test("mcp --print-config codex prints the TOML table", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["mcp", "--print-config", "codex"], { from: "user" });
+  expect(lines.join("")).toContain("[mcp_servers.jevitate]");
+});
+
+test("mcp --print-config <bogus> is a fail envelope", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["mcp", "--print-config", "emacs"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_MCP_PRINT_CONFIG");
+});
+
+test("ui --port --no-open --inbox-dir calls the injected startUiServer with the resolved deps", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const inboxDir = mkdtempSync(join(tmpdir(), "doit-cli-inbox-"));
+  const calls: unknown[] = [];
+  const lines: string[] = [];
+  const program = buildProgram({
+    profiles,
+    ui: {
+      startUiServer: async (deps) => {
+        calls.push(deps);
+        return { url: "http://127.0.0.1:4200/?t=faketoken", token: "faketoken", port: 4200, close: async () => {} };
+      },
+    },
+  });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["ui", "--port", "4200", "--no-open", "--inbox-dir", inboxDir], { from: "user" });
+  expect(calls).toEqual([{ inboxDir, open: false, port: 4200 }]);
+  expect(lines.join("")).toContain("http://127.0.0.1:4200/?t=faketoken");
+});
+
+test("ui with no --inbox-dir resolves the default inbox dir under the jevitate home (same as mcp)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const calls: unknown[] = [];
+  const program = buildProgram({
+    profiles,
+    ui: {
+      startUiServer: async (deps) => {
+        calls.push(deps);
+        return { url: "http://127.0.0.1:4180/?t=faketoken", token: "faketoken", port: 4180, close: async () => {} };
+      },
+    },
+  });
+  program.configureOutput({ writeOut: () => {} });
+  program.exitOverride();
+  await program.parseAsync(["ui", "--no-open"], { from: "user" });
+  expect(calls).toEqual([{ inboxDir: join(homedir(), ".jevitate", "inbox"), open: false }]);
 });
 
 test("profile create prints a success envelope", async () => {
@@ -620,4 +704,59 @@ test("init --dry-run --skip-keys --json reports planned actions but writes nothi
   expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
   expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
   expect(existsSync(statePath)).toBe(false);
+});
+
+test("init --targets claude-code,codex --skip-keys --json ALSO registers the MCP server", async () => {
+  const { program, lines, home, cwd } = newInitProgram();
+  await program.parseAsync(["init", "--targets", "claude-code,codex", "--skip-keys", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(Array.isArray(parsed.data.mcp)).toBe(true);
+  const byTarget = new Set(parsed.data.mcp.map((r: { target: string }) => r.target));
+  expect(byTarget.has("claude-code")).toBe(true);
+  expect(byTarget.has("codex")).toBe(true);
+  // real files were written to the injected temp home/cwd
+  expect(existsSync(join(cwd, ".mcp.json"))).toBe(true);
+  expect(existsSync(join(home, ".codex", "config.toml"))).toBe(true);
+  expect(JSON.parse(await readFile(join(cwd, ".mcp.json"), "utf8")).mcpServers.jevitate).toEqual({
+    command: "jevitate",
+    args: ["mcp"],
+  });
+});
+
+test("init --skip-mcp --skip-keys --json installs skills but omits MCP registration", async () => {
+  const { program, lines, cwd } = newInitProgram();
+  await program.parseAsync(["init", "--skip-mcp", "--skip-keys", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.skills).toBeDefined();
+  expect(parsed.data.mcp).toBeUndefined();
+  expect(existsSync(join(cwd, ".mcp.json"))).toBe(false);
+});
+
+test("init MCP registration refuses to clobber a conflicting .mcp.json (skip-conflict + instruction)", async () => {
+  const { program, lines, cwd } = newInitProgram();
+  const mcpPath = join(cwd, ".mcp.json");
+  const userConfig = JSON.stringify({ mcpServers: { jevitate: { command: "node", args: ["mine.js"] } } }, null, 2);
+  await writeFile(mcpPath, userConfig, "utf8");
+
+  await program.parseAsync(["init", "--targets", "claude-code", "--skip-keys", "--skip-skills", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  const entry = parsed.data.mcp.find((r: { target: string }) => r.target === "claude-code");
+  expect(entry.action).toBe("skip-conflict");
+  expect(entry.instruction).toBeTruthy();
+  // the user's config is left intact
+  expect(await readFile(mcpPath, "utf8")).toBe(userConfig);
+});
+
+test("init --dry-run --skip-keys --json plans MCP registration without writing a config", async () => {
+  const { program, lines, cwd } = newInitProgram();
+  await program.parseAsync(["init", "--targets", "claude-code", "--dry-run", "--skip-keys", "--skip-skills", "--json"], {
+    from: "user",
+  });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.mcp.every((r: { action: string }) => r.action === "create")).toBe(true);
+  expect(existsSync(join(cwd, ".mcp.json"))).toBe(false);
 });

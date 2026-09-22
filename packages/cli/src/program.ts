@@ -56,6 +56,7 @@ import {
   UnknownMissionTargetError,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
+import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { readCliVersion } from "./version.js";
@@ -66,6 +67,12 @@ import {
   type RuntimeId,
   type DetectionDeps,
 } from "./init-skills.js";
+import {
+  registerMcp,
+  resolveMcpTargetPaths,
+  renderPrintConfig,
+  type McpHarness,
+} from "./init-mcp.js";
 import { loadManifest } from "@jevitate/skills";
 import {
   runExploration,
@@ -137,6 +144,17 @@ export interface CliDeps {
    *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
    *  resolves promoted targets from. */
   missionTargetsDir?: string;
+  /** Optional, additive: overrides the inbox store directory (default:
+   *  ~/.jevitate/inbox). Same dir BOTH `jevitate mcp`'s inbox tools AND
+   *  `jevitate ui` resolve against by default — Task 8 threads one resolved
+   *  dir into both so they serve/consume the same store. */
+  inboxDir?: string;
+  /** Optional, additive: `jevitate ui` wiring (see ui-api.ts). Omitted in
+   *  production means the real `startUiServer`, which binds a real loopback
+   *  HTTP port — tests inject a fake so no port is ever bound. */
+  ui?: {
+    startUiServer?: (deps: StartUiServerDeps) => Promise<UiServerHandle>;
+  };
   /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
    *  production means real env + the deterministic fake generation gateway. */
   ai?: AiCliDeps;
@@ -179,6 +197,7 @@ const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
 const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
 const DEFAULT_REGRESSIONS_DIR = resolveDataDir(["regressions"]);
 const DEFAULT_MISSION_TARGETS_DIR = resolveDataDir(["missions", "targets"]);
+const DEFAULT_INBOX_DIR = resolveDataDir(["inbox"]);
 
 function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
@@ -203,6 +222,14 @@ function resolveRegressionsDir(flag?: string): string {
  *  the mission-targets store `mission target ...` reads/writes. */
 function resolveMissionTargetsDir(deps: CliDeps, flag?: string): string {
   return flag ?? deps.missionTargetsDir ?? DEFAULT_MISSION_TARGETS_DIR;
+}
+
+/** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
+ *  the inbox store `jevitate mcp`'s inbox tools AND `jevitate ui` both read
+ *  from — the SAME resolved directory, so the two commands agree on where
+ *  approvals/handbacks/reviews live. */
+function resolveInboxDir(deps: CliDeps, flag?: string): string {
+  return flag ?? deps.inboxDir ?? DEFAULT_INBOX_DIR;
 }
 
 /**
@@ -338,14 +365,16 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .option("--skip-keys", "skip credential collection")
     .option("--skip-skills", "skip skill installation")
+    .option("--skip-mcp", "skip registering the jevitate MCP server in detected harnesses")
     .option("--targets <ids>", "comma-separated runtime ids to force-install to, overriding detection")
-    .option("--force", "overwrite a user-modified installed skill file/block")
-    .option("--dry-run", "report planned skill-install actions without writing")
+    .option("--force", "overwrite a user-modified installed skill file/block or MCP config entry")
+    .option("--dry-run", "report planned skill-install/mcp-register actions without writing")
     .action(async function (this: Command) {
-      const { json, skipKeys, skipSkills, targets, force, dryRun } = this.opts<{
+      const { json, skipKeys, skipSkills, skipMcp, targets, force, dryRun } = this.opts<{
         json?: boolean;
         skipKeys?: boolean;
         skipSkills?: boolean;
+        skipMcp?: boolean;
         targets?: string;
         force?: boolean;
         dryRun?: boolean;
@@ -360,17 +389,29 @@ export function buildProgram(deps: CliDeps): Command {
           const io = deps.ai?.secureIO ?? realSecureIO();
           data.keys = await collectAllMissingKeys(store, io);
         }
+        // Explicit `--targets` overrides detection entirely (the user takes
+        // full control); otherwise `detectRuntimes` decides, always including
+        // the always-on generic fallback. Shared by the skill install and the
+        // MCP registration so a single selection drives both.
+        const runtimes = targets
+          ? (targets.split(",").map((t) => t.trim()).filter((t) => t.length > 0) as RuntimeId[])
+          : detectRuntimes(deps.init?.detection);
+
         if (!skipSkills) {
-          // Explicit `--targets` overrides detection entirely (the user takes
-          // full control); otherwise `detectRuntimes` decides, always including
-          // the always-on generic fallback.
-          const runtimes = targets
-            ? (targets.split(",").map((t) => t.trim()).filter((t) => t.length > 0) as RuntimeId[])
-            : detectRuntimes(deps.init?.detection);
           const paths = resolveInstallTargetPaths(deps.init?.detection);
           const statePath = deps.init?.statePath ?? resolveDataDir(["skills-install-state.json"]);
           const skills = loadManifest();
           data.skills = await installSkills(runtimes, skills, paths, statePath, { force, dryRun });
+        }
+        if (!skipMcp) {
+          // Register the `jevitate mcp` server for each detected/selected
+          // harness, with the SAME never-clobber safety as skills: a user's
+          // conflicting or unparseable config is never overwritten without
+          // --force; each declined target reports a printable instruction
+          // instead (honest, never corrupts a config). `generic` has no MCP
+          // convention and is skipped inside `registerMcp`.
+          const mcpPaths = resolveMcpTargetPaths(deps.init?.detection);
+          data.mcp = await registerMcp(runtimes, mcpPaths, { force, dryRun });
         }
         const envelope = ok(data);
         if (json) {
@@ -380,6 +421,7 @@ export function buildProgram(deps: CliDeps): Command {
           out?.("jevitate initialized\n");
           if (data.keys) out?.(`keys: ${JSON.stringify(data.keys)}\n`);
           if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
+          if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) processed\n`);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -1831,8 +1873,30 @@ export function buildProgram(deps: CliDeps): Command {
     .command("mcp")
     .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option(
+      "--print-config <harness>",
+      "print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing",
+    )
     .action(async function (this: Command) {
-      const { dir } = this.opts<{ dir?: string }>();
+      const { dir, printConfig } = this.opts<{ dir?: string; printConfig?: string }>();
+
+      // `--print-config <harness>` is the universal escape hatch: render the
+      // exact registration snippet and exit WITHOUT starting the server (safe:
+      // no writes, no stdio takeover). An unknown harness is a fail envelope.
+      if (printConfig !== undefined) {
+        const harness = printConfig as McpHarness;
+        if (harness !== "claude" && harness !== "cursor" && harness !== "codex" && harness !== "json") {
+          emitJson(
+            program,
+            fail("E_MCP_PRINT_CONFIG", `--print-config must be one of claude | cursor | codex | json (got '${printConfig}')`),
+          );
+          return;
+        }
+        program.configureOutput().writeOut?.(`${renderPrintConfig(harness)}\n`);
+        process.exitCode = 0;
+        return;
+      }
+
       try {
         // Credential store + generation gateway for the allowlisted
         // `ai_generate_text` tool. The gateway is the REAL OpenRouter adapter:
@@ -1853,11 +1917,40 @@ export function buildProgram(deps: CliDeps): Command {
           journeysDir: resolveJourneysDir(deps, dir),
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
+          inboxDir: resolveInboxDir(deps),
           credentialStore: aiStore,
           generationGateway,
         });
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  // Additive: `jevitate ui` (Task 8) — starts the local, loopback-only HTTP
+  // HITL approval dashboard (ui-api.ts's `startUiServer`). Resolves the SAME
+  // inbox dir `jevitate mcp`'s inbox tools serve (resolveInboxDir), so the
+  // two commands agree on where approvals/handbacks/reviews live. On success
+  // it prints the bound URL (carrying the capability token) and stays alive —
+  // the open HTTP server keeps the process running, the same way `mcp`'s open
+  // stdio transport does.
+  program
+    .command("ui")
+    .description("start the local HITL approval dashboard (loopback-only HTTP server)")
+    .option("--port <n>", "explicit port (fails on conflict; default 4180, retries on conflict)")
+    .option("--no-open", "do not open the dashboard URL in the default browser")
+    .option("--inbox-dir <path>", "inbox store directory (default: ~/.jevitate/inbox — same dir `jevitate mcp` serves)")
+    .action(async function (this: Command) {
+      const o = this.opts<{ port?: string; open?: boolean; inboxDir?: string }>();
+      try {
+        const start = deps.ui?.startUiServer ?? startUiServer;
+        const handle = await start({
+          inboxDir: resolveInboxDir(deps, o.inboxDir),
+          open: o.open ?? true,
+          ...(o.port !== undefined ? { port: Number(o.port) } : {}),
+        });
+        program.configureOutput().writeOut?.(`${handle.url}\n`);
+      } catch (err) {
+        emitJson(program, fail("E_UI_SERVE", String(err instanceof Error ? err.message : err)));
       }
     });
 

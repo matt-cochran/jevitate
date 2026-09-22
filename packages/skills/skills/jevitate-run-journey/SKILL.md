@@ -54,14 +54,19 @@ artifact; your job is to find the right one and run it with the right params.
   result in this same session — a promoted id can be revoked; don't rely on a
   memorized id from an earlier conversation.
 
-## Known gaps (as of 2026-09-20)
+## Publishing to a distributed source
 
-- There is currently no CLI/MCP command to *publish* or *promote* an existing
-  Recording as a new Journey (ticket #19, `jevitate journey publish`, is still
-  pending) — promotion happens via the `JourneyRegistry` TypeScript API today.
-  The one autonomous path that DOES write a Journey is
-  `jevitate explore-author-journey` (see `jevitate-explore`), and even that
-  writes an UNPROMOTED Journey a human must still promote. If a user asks you to
-  "save this as a Journey" or "promote this recording," tell them promotion
-  isn't yet a command and point them at a human with repo access, rather than
-  guessing at a command name.
+- `jevitate journey publish <id> --to <source>` pushes a PROMOTED local Journey
+  up to a registered distributed source (see `jevitate-sources`). It preserves
+  every publish-side guard: promoted-only, secret-references-only, and
+  declared-origin coverage; it writes onto a new `publish/<id>` branch and,
+  when `gh` is present, opens a PR. It never publishes an unpromoted Journey.
+
+## Known gaps
+
+- There is no single "raw Recording -> promoted Journey" command: a Recording
+  becomes a Journey through the authoring paths (`jevitate
+  explore-author-journey`, which writes an UNPROMOTED Journey a human still
+  promotes) or the `JourneyRegistry` API, and promotion stays a deliberate
+  human gate. If a user asks you to "promote this recording," recommend those
+  paths rather than guessing at a promote command — do not invent one.
