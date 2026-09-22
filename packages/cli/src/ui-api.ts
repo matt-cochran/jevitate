@@ -282,8 +282,26 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
       return send(res, 403, { error: "forbidden_host" });
     }
 
-    // (2) Capability-token check — every /api/* path.
-    const isApi = pathname === "/api" || pathname.startsWith("/api/");
+    // Defense-in-depth (fix for the token-gate bypass, security review round
+    // 1): reject any RAW pathname carrying an encoded path separator before
+    // it is ever decoded — an id/segment must never be able to smuggle a
+    // `/` or `\` past `decodeURIComponent` and confuse segment matching.
+    if (/%2f|%5c/i.test(pathname)) {
+      return send(res, 400, { error: "invalid_path" });
+    }
+
+    // Single source of truth: the gate and the router MUST parse the path
+    // IDENTICALLY, or a request can be shaped (`/%61pi/inbox`, `//api/inbox`,
+    // ...) so the token gate reads `isApi === false` while the router still
+    // matches an /api handler — the exact capability-token bypass fixed here.
+    // `segments` is computed ONCE, decoded, and used for BOTH the token gate
+    // and routing below.
+    const method = req.method ?? "GET";
+    const segments = pathname.split("/").filter(Boolean).map((s) => decodeURIComponent(s));
+
+    // (2) Capability-token check — every /api/* path, derived from the SAME
+    // decoded `segments` the router uses.
+    const isApi = segments[0] === "api";
     if (isApi) {
       const headerTokenRaw = req.headers["x-jevitate-token"];
       const headerToken = Array.isArray(headerTokenRaw) ? headerTokenRaw[0] : headerTokenRaw;
@@ -293,9 +311,6 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
     }
 
     // (3) Route.
-    const method = req.method ?? "GET";
-    const segments = pathname.split("/").filter(Boolean).map((s) => decodeURIComponent(s));
-
     if (method === "GET" && segments.length === 0) return serveIndex(req, res);
     if (method === "GET" && segments.length === 1 && segments[0] === "app.js") return serveAppJs(res);
 

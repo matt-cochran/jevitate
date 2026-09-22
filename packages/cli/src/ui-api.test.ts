@@ -24,6 +24,25 @@ function requestWithHost(port: number, path: string, hostHeader: string): Promis
   });
 }
 
+/** Sends a RAW, un-normalized path (`node:http`'s client does not collapse
+ *  `//` or touch `%`-encoding, unlike `fetch`/`URL`) — needed to reproduce
+ *  the gate/router path-parsing mismatch (security review round 1). */
+function rawRequest(
+  port: number,
+  method: string,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path, method, headers }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function tmpDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "jevitate-ui-api-"));
 }
@@ -107,6 +126,49 @@ describe("startUiServer — Host-header + token middleware", () => {
       headers: { "x-jevitate-token": handle.token },
     });
     expect(res.status).toBe(200);
+  });
+
+  // Regression (security review round 1, Critical): the token gate and the
+  // router used to parse the path DIFFERENTLY — the gate read the raw,
+  // still-encoded pathname while the router matched on decoded segments —
+  // so a shaped path could read `isApi === false` at the gate while still
+  // routing to an /api handler, skipping the 401 check entirely. The gate
+  // and router now derive `isApi`/routing from the SAME decoded segments;
+  // every one of these must still 401 without a token.
+  it("still 401s on /api/* with no token when the path is %-encoded (gate/router must parse identically)", async () => {
+    const inboxDir = await tmpDir();
+    const handle = await start({ inboxDir });
+    const res = await rawRequest(handle.port, "GET", "/%61pi/inbox");
+    expect(res.status).toBe(401);
+  });
+
+  it("never routes a doubled-leading-slash path to /api without a token (no data leak)", async () => {
+    // NOTE: `new URL("//api/inbox", base)` is WHATWG-parsed as protocol-relative
+    // — "api" becomes the URL's HOST, not a path segment — so `.pathname` comes
+    // out as "/inbox", not "/api/inbox". Both the gate and the router (which now
+    // share that same decoded-segments derivation) correctly see this as a plain
+    // unknown route, not an /api one, and it 404s WITHOUT ever reaching the inbox
+    // handler or leaking data — confirmed by never invoking the store below.
+    const inboxDir = await tmpDir();
+    const store = new FsInboxStore(inboxDir);
+    await store.enqueue(baseItem({ id: "leak-check" }));
+    const handle = await start({ inboxDir });
+    const res = await rawRequest(handle.port, "GET", "//api/inbox");
+    expect(res.status).toBe(404);
+    // Still present/untouched — proves no unauthenticated read occurred.
+    expect((await store.get("leak-check"))?.status).toBe("pending");
+  });
+
+  it("still 401s a state-changing POST with no token when the path is %-encoded", async () => {
+    const inboxDir = await tmpDir();
+    const store = new FsInboxStore(inboxDir);
+    await store.enqueue(baseItem({ id: "some-id", kind: "approval" }));
+    const handle = await start({ inboxDir });
+    const res = await rawRequest(handle.port, "POST", "/%61pi/inbox/some-id/approve");
+    expect(res.status).toBe(401);
+    // And the item must NOT have been resolved by the unauthenticated attempt.
+    const after = await store.get("some-id");
+    expect(after?.status).toBe("pending");
   });
 });
 
@@ -244,13 +306,17 @@ describe("startUiServer — approve/resume actions", () => {
 });
 
 describe("startUiServer — screenshots", () => {
-  it("rejects a traversal id with 404", async () => {
+  it("rejects a traversal id carrying an encoded separator with 400 (raw-path defense-in-depth)", async () => {
     const inboxDir = await tmpDir();
     const handle = await start({ inboxDir });
     const res = await fetch(`http://127.0.0.1:${handle.port}/api/inbox/..%2F..%2Fetc%2Fpasswd/screenshot`, {
       headers: { "x-jevitate-token": handle.token },
     });
-    expect(res.status).toBe(404);
+    // The raw pathname contains `%2F` — rejected up front (400), before the id
+    // is even decoded/regex-checked. See the token-gate-bypass fix (security
+    // review round 1): a `%2f`/`%5c` in the raw path is refused outright so a
+    // segment can never smuggle a separator past `decodeURIComponent`.
+    expect(res.status).toBe(400);
   });
 
   it("serves a real png placed at screenshots/<id>.png", async () => {
