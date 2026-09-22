@@ -271,6 +271,9 @@ importers:
       '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain
+      '@jevitate/inbox':
+        specifier: workspace:*
+        version: link:../inbox
       '@jevitate/journey':
         specifier: workspace:*
         version: link:../journey
