@@ -50,13 +50,28 @@ export class SecretLeakError extends Error {
  * enforced in ONE place rather than reinvented per package. Value-based on
  * purpose: it proves the redactor upstream actually removed the value, and
  * fails closed if it did not. Blank/empty entries are ignored (a "" would
- * match everything and is never a real secret).
+ * match everything and is never a real secret). A secret is matched raw AND
+ * in its `encodeURIComponent` form (`secretForms`).
  */
 export function assertNoSecretInPayload(payload: unknown, secrets: readonly string[]): void {
   if (secrets.length === 0) return;
   const haystack = typeof payload === "string" ? payload : JSON.stringify(payload);
   for (let i = 0; i < secrets.length; i++) {
     const s = secrets[i];
-    if (s && s.length > 0 && haystack.includes(s)) throw new SecretLeakError(i);
+    if (!s || s.length === 0) continue;
+    for (const form of secretForms(s)) {
+      if (haystack.includes(form)) throw new SecretLeakError(i);
+    }
   }
+}
+
+/**
+ * The forms a registered secret is matched in: its raw value and — when it
+ * differs — its `encodeURIComponent` form (how a secret appears once it has
+ * ridden into a URL). Shared by `redactText` and `assertNoSecretInPayload` so
+ * the scrub and its proof always agree on what counts as the secret.
+ */
+export function secretForms(secret: string): readonly string[] {
+  const encoded = encodeURIComponent(secret);
+  return encoded === secret ? [secret] : [secret, encoded];
 }
