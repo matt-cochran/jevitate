@@ -4,7 +4,7 @@ import { resolveDataDir } from "./data-dir.js";
 
 const homedir = () => "/home/u";
 
-describe("resolveDataDir (~/.jevitate, greenfield — no ~/.doit)", () => {
+describe("resolveDataDir (~/.jevitate, greenfield)", () => {
   it("resolves a single segment under ~/.jevitate", () => {
     expect(resolveDataDir(["db.sqlite"], { homedir })).toBe(join("/home/u", ".jevitate", "db.sqlite"));
   });

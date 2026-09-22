@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 /**
  * Resolves a default runtime-data path under `~/.jevitate/<segments>`
- * (product = Jevitate). Greenfield: there is no legacy `~/.doit` location.
+ * (product = Jevitate). Greenfield — no legacy data location to migrate.
  * `homedir` is injectable so this is unit-testable without touching
  * `os.homedir()`. Duplicated (not imported) from `@jevitate/cli`'s identical
  * helper — this package must not depend on the CLI package, and the logic is
