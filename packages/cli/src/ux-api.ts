@@ -12,7 +12,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import {
@@ -216,6 +216,8 @@ export interface RunUsabilityMissionOptions {
   readonly judgmentBudget?: number;
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  readonly browser?: BrowserLaunchOptions;
   readonly nowIso?: () => string;
   /** Test seam: extract a page's visible text. Default reads the live page. */
   readonly extractText?: (session: { page: { evaluate: (fn: () => string) => Promise<string> } }) => Promise<string>;
@@ -245,6 +247,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
+    ...opts.browser,
   });
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
