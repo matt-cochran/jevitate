@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assertSafeInboxId, InboxItemSchema, toSummary, resolveTransition, asSecret } from "./types.js";
+import { assertSafeInboxId, InboxItemSchema, toSummary, resolveTransition, asSecret, revealSecret } from "./types.js";
 
 describe("safe id", () => {
   it("accepts a good id and rejects traversal / uppercase / dots / overlong", () => {
@@ -43,7 +43,24 @@ describe("transition table is total & guarded", () => {
     expect(resolveTransition("approval", "resume")).toBe("illegal");
     expect(resolveTransition("handback", "resume")).toBe("resolved");
     expect(resolveTransition("handback", "approve")).toBe("illegal");
+    expect(resolveTransition("handback", "reject")).toBe("rejected");
     expect(resolveTransition("review", "approve")).toBe("approved");
     expect(resolveTransition("review", "resume")).toBe("illegal");
+    expect(resolveTransition("review", "reject")).toBe("rejected");
+    expect(resolveTransition("approval", "input")).toBe("illegal");
+    expect(resolveTransition("handback", "input")).toBe("illegal");
+    expect(resolveTransition("review", "input")).toBe("illegal");
+  });
+});
+
+describe("branded Secret", () => {
+  it("round-trips through asSecret / the strict schema / revealSecret", () => {
+    const secret = asSecret("4111111111111111");
+    const item = InboxItemSchema.parse({
+      id: "x1", kind: "approval", status: "pending", run: "r", journey: "j", step: "s",
+      reason: "why", agent: "claude-code", hasScreenshot: false, thread: [],
+      humanInput: secret, createdAt: "2026-09-22T00:00:00Z", ttlSec: 3600,
+    });
+    expect(revealSecret(item.humanInput!)).toBe("4111111111111111");
   });
 });
