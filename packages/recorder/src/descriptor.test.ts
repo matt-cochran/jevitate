@@ -22,7 +22,7 @@ const port = new PlaywrightBrowserPort();
  * cheapest way to stand up a fixture here.
  */
 async function withPage(html: string, body: (page: Page) => Promise<void>): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), "doit-descriptor-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-descriptor-"));
   const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
   try {
     await session.page.setContent(`<!doctype html><html><body>${html}</body></html>`);
@@ -263,19 +263,19 @@ test(
 // === Cleanup of the temporary capture attribute ===
 
 test(
-  "the temporary data-doit-eid attribute is removed, whether or not it was there",
+  "the temporary data-jevitate-eid attribute is removed, whether or not it was there",
   async () => {
-    const html = `<button data-doit-eid="7" data-testid="tagged">Tagged</button>
+    const html = `<button data-jevitate-eid="7" data-testid="tagged">Tagged</button>
                   <button data-testid="untagged">Untagged</button>`;
     await withPage(html, async (page) => {
       const tagged = await handleFor(page, `[data-testid="tagged"]`);
       await computeDescriptor(page, tagged);
-      expect(await page.locator(`[data-testid="tagged"]`).getAttribute("data-doit-eid")).toBeNull();
+      expect(await page.locator(`[data-testid="tagged"]`).getAttribute("data-jevitate-eid")).toBeNull();
 
       const untagged = await handleFor(page, `[data-testid="untagged"]`);
       const computed = await computeDescriptor(page, untagged);
       expect(computed.descriptor).toEqual({ testId: "untagged" });
-      expect(await page.locator(`[data-testid="untagged"]`).getAttribute("data-doit-eid")).toBeNull();
+      expect(await page.locator(`[data-testid="untagged"]`).getAttribute("data-jevitate-eid")).toBeNull();
     });
   },
   120_000,
