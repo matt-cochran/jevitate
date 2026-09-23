@@ -95,6 +95,29 @@ jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.j
 
 The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
 
+### Crashes and issue drafts
+
+Every crash records the steps up to it, the error and stack, the page/browser
+crash signals and the page's JS heap per step. It is attributed from that
+evidence: to jevitate (an own-code stack frame and no page/browser crash signal),
+to the system under test (page or browser crash, renderer OOM, unbounded heap
+growth, a hang), or as uncertain (filed to both). Each defect and crash gets a
+ready-to-file, redacted Markdown draft in `<recording>.issues/<fingerprint>.md`.
+
+Filing is off by default. It needs `--file-issues` (or `"enabled": true`) and a
+repo: engine findings go to `--jevitate-repo` (default `matt-cochran/jevitate`);
+findings in the app under test go to the repo configured for that target, with
+`--issue-repo` or `~/.jevitate/filing.json`:
+
+```json
+{ "enabled": false, "targets": { "https://app.example.test": { "repo": "acme/app" } } }
+```
+
+Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API with
+`GITHUB_TOKEN` from jevitate's credential store. Before it opens an issue, it
+searches for an open issue carrying the same fingerprint marker and comments on
+that one instead.
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`

@@ -24,6 +24,8 @@ import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "./mission-failure.js";
+import { HeapLog, buildCrashReport, type CrashReport } from "./crash-report.js";
+import type { HeapSample } from "@jevitate/domain";
 
 export type { TranscriptEntry } from "./transcript.js";
 
@@ -90,6 +92,10 @@ export interface ExploreRun {
   readonly actions: number;
   /** Why the run ended `crashed`/`inconclusive` — absent on every other stop. */
   readonly failure?: MissionFailure;
+  /** The page's JS heap per step (resource evidence for crash attribution). */
+  readonly heap: HeapSample[];
+  /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
 }
 
 function firstLine(e: unknown): string {
@@ -110,6 +116,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets, cfg.onRecording);
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   const crashWatch = new CrashWatch(page);
+  const heap = new HeapLog();
   const now = (): number => Date.now();
 
   const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
@@ -138,6 +145,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
       });
       const snap = perception.snapshot;
+      await heap.sample(page, transcript.nextStep);
       // Re-observe the PREVIOUS action's effect: patch its postcondition + open
       // the next page segment if the URL changed (record-before-reobserve).
       recorder.observed(snap.url, now());
@@ -339,6 +347,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     decisions: tracker.decisions,
     actions: tracker.actions,
     ...(failure === undefined ? {} : { failure }),
+    heap: heap.samples(),
+    ...(stop === "crashed" && failure !== undefined
+      ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples()) }
+      : {}),
   };
 }
 

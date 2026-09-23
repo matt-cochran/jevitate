@@ -1,4 +1,4 @@
-import { CredentialKey } from "./credentials.js";
+import { ALL_CREDENTIAL_KEYS, type CredentialKey } from "./credentials.js";
 
 export class CredentialLeakError extends Error {
   readonly code = "E_CREDENTIAL_LEAK" as const;
@@ -17,7 +17,7 @@ export class CredentialLeakError extends Error {
 export function assertNoOutboundCredential(
   payload: unknown,
   store: { read(k: CredentialKey): string | undefined },
-  keys: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"],
+  keys: readonly CredentialKey[] = ALL_CREDENTIAL_KEYS,
 ): void {
   const haystack = typeof payload === "string" ? payload : JSON.stringify(payload);
   for (const k of keys) {

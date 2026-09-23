@@ -264,6 +264,10 @@ describe("runAdversarialMission — the outcome is a typed result, never a throw
       expect(result.outcome).toBe("crashed");
       expect(result.failure).toMatchObject({ kind: "exception", message: "engine exploded" });
       expect(result.failure?.stack).toContain("engine exploded");
+      // Attributed from evidence: thrown from code under jevitate's roots, no crash signal.
+      expect(result.crash?.attribution.attribution).toBe("jevitate");
+      expect(result.crash?.evidence.pageCrashed).toBe(false);
+      expect(result.heap.length).toBeGreaterThan(0);
       // The step before the failure survived — in the result AND through the incremental seam.
       expect(result.transcript).toHaveLength(1);
       expect(entries).toEqual([1]);

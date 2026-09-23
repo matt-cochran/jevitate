@@ -60,6 +60,9 @@ import {
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
+import { GitHubIssueFiler } from "./github-issue-filer.js";
+import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
@@ -1292,9 +1295,18 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--out <dir>", "directory to write the emitted Recording")
+    .option(
+      "--file-issues",
+      "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
+    )
+    .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
+    .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{
+        fileIssues?: boolean;
+        issueRepo?: string;
+        jevitateRepo?: string;
         url?: string;
         strategy?: string;
         goal?: string;
@@ -1316,6 +1328,32 @@ export function buildProgram(deps: CliDeps): Command {
 
       const strategy = o.strategy ?? "goal";
       const browser = browserLaunchFromFlags(o);
+      // Issue filing: drafts are always written; filing needs --file-issues (or config) AND a repo.
+      let filing: FilingConfig | undefined;
+      if (o.url !== undefined) {
+        try {
+          filing = resolveFilingConfig(
+            loadFilingFileConfig(deps.explore?.filingConfigPath),
+            {
+              ...(o.fileIssues === undefined ? {} : { fileIssues: o.fileIssues }),
+              ...(o.issueRepo === undefined ? {} : { issueRepo: o.issueRepo }),
+              ...(o.jevitateRepo === undefined ? {} : { jevitateRepo: o.jevitateRepo }),
+            },
+            new URL(o.url).origin,
+          );
+        } catch (err) {
+          if (err instanceof FilingConfigError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          if (!(err instanceof TypeError)) throw err;
+          // An unparseable --url is refused by the authorized-target guard below.
+        }
+      }
+      const issueFiler =
+        deps.explore?.issueFiler ??
+        ((): IssueFilerPort =>
+          new GitHubIssueFiler({ store: envCredentialStore(process.env, loadLocalCredentials()) }));
       // `--fixture` feeds the upload op, which only the explore loop (goal and
       // usability strategies) can issue. Refuse it elsewhere rather than
       // silently ignoring a file the user expected to be uploaded.
@@ -1420,6 +1458,9 @@ export function buildProgram(deps: CliDeps): Command {
             seedUrl: o.url,
             allowlist: advAllowlist,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
+            secrets: o.secret.length > 0 ? o.secret : undefined,
+            ...(filing === undefined ? {} : { filing }),
+            issueFiler,
             strategies: [
               "ordering-violation",
               "repeat-rapid",
@@ -1588,6 +1629,8 @@ export function buildProgram(deps: CliDeps): Command {
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(filing === undefined ? {} : { filing }),
+          issueFiler,
         });
         const envelope = ok(result);
         if (o.json) {

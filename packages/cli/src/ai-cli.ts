@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import {
   envCredentialStore,
+  ALL_CREDENTIAL_KEYS,
   FEATURE_KEYS,
   requireKeys,
   MissingCredentialError,
@@ -283,7 +284,7 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
  *  JSON envelope itself never carries provider error text at all. */
 function redactCredentials(message: string, store: { read(k: CredentialKey): string | undefined }): string {
   let out = message;
-  for (const key of ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"] as const) {
+  for (const key of ALL_CREDENTIAL_KEYS) {
     const value = store.read(key);
     if (value) out = out.split(value).join("***REDACTED***");
   }

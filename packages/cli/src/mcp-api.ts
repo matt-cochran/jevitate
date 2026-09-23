@@ -29,6 +29,7 @@ import {
 } from "@jevitate/missions";
 import { FsInboxStore } from "@jevitate/inbox";
 import {
+  ALL_CREDENTIAL_KEYS,
   envCredentialStore,
   type CredentialStore,
   type GenerationPort,
@@ -167,7 +168,7 @@ function errorResult(value: unknown): McpToolResult {
  *  key-free; this is belt-and-braces on top of the gateway's outbound guard. */
 function redactCredentials(message: string, store: CredentialStore): string {
   let out = message;
-  for (const key of ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"] as const) {
+  for (const key of ALL_CREDENTIAL_KEYS) {
     const value = store.read(key);
     if (value) out = out.split(value).join("***REDACTED***");
   }

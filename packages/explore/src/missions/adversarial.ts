@@ -18,6 +18,8 @@ import {
   type TranscriptListener,
 } from "../transcript.js";
 import { CrashWatch, describeFailure, tryTriage, type Triage } from "../mission-failure.js";
+import { HeapLog, buildCrashReport, type CrashReport } from "../crash-report.js";
+import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
 import { PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
 import {
@@ -116,6 +118,10 @@ export interface AdversarialOutcome {
   readonly transcript: TranscriptEntry[];
   /** Why the run ended `crashed`/`inconclusive`. */
   readonly failure?: MissionFailure;
+  /** The page's JS heap per step (resource evidence for crash attribution). */
+  readonly heap: HeapSample[];
+  /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
 }
 
 export interface AdversarialMissionParams {
@@ -143,6 +149,8 @@ export interface AdversarialMissionParams {
   readonly onRecording?: (recording: Recording) => void;
   /** Clock seam (ms). Default `Date.now`. */
   readonly now?: () => number;
+  /** Registered secret values: redacted out of the transcript and the Recording. */
+  readonly secrets?: readonly string[];
 }
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
@@ -197,8 +205,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   // Attach the hard-signal listeners BEFORE navigating, so no signal is missed.
   const collector = new PageSignalCollector(params.page);
   const crashWatch = new CrashWatch(params.page);
-  const recorder = new RunRecorder(site, undefined, [], params.onRecording);
-  const transcript = new TranscriptLog([], params.onTranscriptEntry);
+  const heap = new HeapLog();
+  const secrets = params.secrets ?? [];
+  const recorder = new RunRecorder(site, undefined, secrets, params.onRecording);
+  const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
   const defects = new Map<string, MutableDefect>();
 
   const finish = (
@@ -218,6 +228,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
       transcript: transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
+      heap: heap.samples(),
+      ...(outcome === "crashed" && finalFailure !== undefined
+        ? { crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples()) }
+        : {}),
     };
   };
 
@@ -226,6 +240,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       maxCandidates: bounds.maxCandidates,
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
     });
+    await heap.sample(params.page, transcript.nextStep);
     return p.rendered ? { snapshot: p.snapshot, rendered: true } : { snapshot: p.snapshot, rendered: false, reason: p.reason };
   };
 

@@ -25,9 +25,12 @@ import {
   type TranscriptEntry,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
-import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
+import type { FilingConfig, IssueDraft, IssueFilerPort, MissionFailure, MissionOutcome } from "@jevitate/domain";
+import { currentEnvironment, draftForCrash, draftForDefect, type DraftContext } from "@jevitate/explore";
+import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
+import { readCliVersion } from "./version.js";
 import { resolveDataDir } from "./data-dir.js";
-import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult } from "./mission-journal.js";
+import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 
 /**
@@ -69,6 +72,41 @@ export interface RunExplorationOptions {
   readonly storageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
+  /** Issue filing for a crash (off unless enabled + a repo is configured). Default: drafts only. */
+  readonly filing?: FilingConfig;
+  /** Creates the filer — called only when filing is enabled. */
+  readonly issueFiler?: () => IssueFilerPort;
+}
+
+/** Filing is off by default: drafts only, never a tracker call. */
+const DRAFTS_ONLY: FilingConfig = { enabled: false, jevitateRepo: "matt-cochran/jevitate" };
+const NO_FILER = (): IssueFilerPort => {
+  throw new Error("issue filing is enabled but no filer was configured");
+};
+
+function draftContext(
+  origin: string,
+  journal: MissionJournal,
+  secrets: readonly string[],
+  browserVersion: string | undefined,
+): DraftContext {
+  return {
+    environment: currentEnvironment(origin, {
+      jevitateVersion: readCliVersion(),
+      ...(browserVersion === undefined ? {} : { browser: browserVersion }),
+    }),
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    secrets,
+  };
+}
+
+function browserVersionOf(page: { context(): { browser(): { version(): string } | null } }): string | undefined {
+  try {
+    return page.context().browser()?.version();
+  } catch {
+    return undefined;
+  }
 }
 
 export interface RunExplorationResult {
@@ -90,6 +128,8 @@ export interface RunExplorationResult {
   readonly exitCode: number;
   /** Why the run ended `crashed`/`inconclusive`. */
   readonly failure?: MissionFailure;
+  /** Issue drafts (a crash) written next to the Recording, and what filing did with them. */
+  readonly issues: FindingsIssues;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -133,8 +173,20 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
     journal.writeRecording(mission.recording);
     journal.writeTranscript(mission.transcript);
+    const drafts: IssueDraft[] =
+      mission.run.crash === undefined
+        ? []
+        : [draftForCrash(mission.run.crash, mission.transcript, draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page)))];
+    const issues = await processIssueDrafts(
+      journal.recordingPath,
+      drafts,
+      opts.filing ?? DRAFTS_ONLY,
+      opts.issueFiler ?? NO_FILER,
+      iso,
+    );
 
     return {
+      issues,
       outcome: mission.outcome,
       assertionPassed: mission.assertionPassed,
       stop: mission.run.stop,
@@ -413,6 +465,12 @@ export interface RunAdversarialCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
+  readonly secrets?: readonly string[];
+  /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
+  readonly filing?: FilingConfig;
+  /** Creates the filer — called only when filing is enabled. */
+  readonly issueFiler?: () => IssueFilerPort;
   /** Where the Recording and decision transcript are written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
   /** ISO clock for the transcript filename. Default `Date.now()`. */
@@ -430,6 +488,8 @@ export interface MissionTarget {
 
 export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly target: MissionTarget;
+  /** One ready-to-file draft per defect (and per crash), written next to the Recording. */
+  readonly issues: FindingsIssues;
   readonly recordingPath: string;
   /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath: string;
@@ -474,17 +534,32 @@ export async function runAdversarialCliMission(
       strategies: opts.strategies,
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
+      ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
       onTranscriptEntry: journal.onTranscriptEntry,
       onRecording: journal.onRecording,
     });
     journal.writeRecording(outcome.recording);
     journal.writeTranscript(outcome.transcript);
     const exitCode = missionExitCode(outcome.outcome);
+    const resultPath = resultPathFor(journal.recordingPath);
+    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const drafts: IssueDraft[] = outcome.defects.map((d) =>
+      draftForDefect(d, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${d.fingerprint}` }),
+    );
+    if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, outcome.transcript, ctx));
+    const issues = await processIssueDrafts(
+      journal.recordingPath,
+      drafts,
+      opts.filing ?? DRAFTS_ONLY,
+      opts.issueFiler ?? NO_FILER,
+      iso,
+    );
     const result = {
       ...outcome,
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       exitCode,
+      issues,
       // What `verify-fix` needs to replay a defect later: where, which origins, which session file
       // (the storageState PATH only — its cookies never enter an artifact).
       target: {
@@ -562,6 +637,10 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
 
 /** Injectable wiring for the `explore` CLI command (all optional). */
 export interface ExploreCliDeps {
+  /** Injected issue filer (tests use a fake — nothing real is ever filed from a test). */
+  issueFiler?: () => IssueFilerPort;
+  /** Injected filing config file path (tests). Default `~/.jevitate/filing.json`. */
+  filingConfigPath?: string;
   /** Injected judgment gateway (tests). */
   judge?: JudgmentPort;
   /** Injected generation gateway (tests). */

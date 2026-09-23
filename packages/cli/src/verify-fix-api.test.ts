@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -116,6 +116,65 @@ describe("verify-fix — CLI surface", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("findings → issue drafts and filing (owner ruling 3) — fake filer only", () => {
+  it(
+    "writes a redacted draft per defect next to the Recording; files ONLY when enabled with a repo",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jev-filing-e2e-"));
+      try {
+        state.broken = true;
+        const filed: Array<{ repo: string; title: string; body: string }> = [];
+        let filersMade = 0;
+        const fakeFiler = () => {
+          filersMade += 1;
+          return {
+            findOpenByMarker: async () => null,
+            create: async (repo: string, issue: { title: string; body: string }) => {
+              filed.push({ repo, title: issue.title, body: issue.body });
+              return { number: 1, url: `https://example.test/${repo}/issues/1` };
+            },
+            comment: async (_repo: string, n: number) => ({ number: n, url: "u" }),
+          };
+        };
+        const run = (filing: { enabled: boolean; jevitateRepo: string; targetRepo?: string }, stamp: string) =>
+          runAdversarialCliMission({
+            seedUrl: `${origin}/home`,
+            allowlist: [origin],
+            strategies: ["nav-during-pending"],
+            bounds: { maxDecisions: 1 },
+            judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+            generation: new FakeGenerationGateway(),
+            outDir,
+            nowIso: () => stamp,
+            browserPortFactory: () => new PlaywrightBrowserPort(),
+            // A --secret that occurs in the defect's own evidence (the failing endpoint's path).
+            secrets: ["api/data"],
+            filing,
+            issueFiler: fakeFiler,
+          });
+
+        const disabled = await run({ enabled: false, jevitateRepo: "o/j", targetRepo: "acme/app" }, "2026-09-23T00:00:00.000Z");
+        expect(disabled.outcome).toBe("defects-found");
+        expect(filersMade).toBe(0);
+        expect(disabled.issues.drafts).toHaveLength(1);
+        const draftText = await readFile(disabled.issues.drafts[0]?.path ?? "", "utf8");
+        expect(draftText).toContain("## Steps to reproduce");
+        expect(draftText).not.toContain("api/data");
+        expect(disabled.issues.filing[0]?.outcomes[0]).toMatchObject({ status: "draft-only", reason: "filing is disabled" });
+
+        const enabled = await run({ enabled: true, jevitateRepo: "o/j", targetRepo: "acme/app" }, "2026-09-23T00:00:01.000Z");
+        expect(filersMade).toBe(1);
+        expect(filed.map((f) => f.repo)).toEqual(["acme/app"]);
+        expect(filed[0]?.body).not.toContain("api/data");
+        expect(enabled.issues.filing[0]?.outcomes[0]).toMatchObject({ status: "filed", action: "created", repo: "acme/app" });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
 });
 
 describe("verify-fix — MCP surface", () => {
