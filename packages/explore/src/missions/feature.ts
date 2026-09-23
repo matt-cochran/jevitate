@@ -13,7 +13,7 @@ import {
 import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
-import { perceive, COVERAGE_RENDER_WAIT_MS } from "../perceive.js";
+import { perceive } from "../perceive.js";
 import { targetCandidates, type TargetOp } from "../actions.js";
 import { act } from "../act.js";
 import { toPath } from "../record.js";
@@ -24,6 +24,7 @@ import { isInScope, type CapabilityScope } from "../feature/capability-scope.js"
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
+import { monitorFor } from "../page-monitor.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -142,7 +143,8 @@ export async function runFeatureMission(params: {
   bounds?: Partial<Bounds>;
   maxDepth?: number;
   maxPaths?: number;
-  /** Bound (ms) on waiting for a rendered page on each perception. Default `COVERAGE_RENDER_WAIT_MS`. */
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS` — the shared settle rule
+   *  recognises a control-free leaf state in about the quiet window, so no shorter coverage bound is needed. */
   renderWaitMs?: number;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
@@ -158,7 +160,7 @@ export async function runFeatureMission(params: {
     (
       await perceive(params.page, {
         maxCandidates: bounds.maxCandidates,
-        renderWaitMs: params.renderWaitMs ?? COVERAGE_RENDER_WAIT_MS,
+        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
       })
     ).snapshot;
 
@@ -178,6 +180,7 @@ export async function runFeatureMission(params: {
   });
 
   try {
+    await monitorFor(params.page).instrument();
     await params.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await snapshotNow();
     let currentFingerprint = stateFingerprint(snap);

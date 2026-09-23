@@ -64,6 +64,27 @@ describe("GitHubIssueFiler — REST transport (fake fetch; nothing is filed)", (
     }
   });
 
+  it("retries a transient 502 with backoff (injected clock), but not a 401", async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    const flaky: FetchLike = async () => {
+      calls += 1;
+      return calls < 3
+        ? { status: 502, text: async () => "bad gateway" }
+        : { status: 201, text: async () => JSON.stringify({ number: 4, html_url: "https://github.com/o/a/issues/4" }) };
+    };
+    const retry = { sleep: async (ms: number) => void slept.push(ms), random: () => 0.5 };
+    const filer = new GitHubIssueFiler({ store: withToken, exec: ghMissing, fetch: flaky, retry });
+    expect(await filer.create("o/a", { title: "T", body: "B", labels: [] })).toMatchObject({ number: 4 });
+    expect(slept).toEqual([100, 250]);
+
+    slept.length = 0;
+    const denied: FetchLike = async () => ({ status: 401, text: async () => "no" });
+    const auth = new GitHubIssueFiler({ store: withToken, exec: ghMissing, fetch: denied, retry });
+    await expect(auth.create("o/a", { title: "T", body: "B", labels: [] })).rejects.toThrow(/401/);
+    expect(slept).toEqual([]);
+  });
+
   it("never leaks the token in an error, and needs gh or a token", async () => {
     const fetch: FetchLike = async () => ({ status: 401, text: async () => `Bad credentials for ${TOKEN}` });
     const filer = new GitHubIssueFiler({ store: withToken, exec: ghMissing, fetch });

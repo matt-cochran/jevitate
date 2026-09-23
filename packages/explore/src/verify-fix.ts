@@ -3,6 +3,7 @@ import type { Actor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { perceive } from "./perceive.js";
+import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
 
@@ -88,6 +89,7 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
   try {
     // The oracle listens BEFORE the first replayed step, exactly as in the original run.
     const collector = new PageSignalCollector(session.page);
+    await monitorFor(session.page).instrument();
     const result = await new RecordingInterpreter().runToCheckpoint(
       session.actor,
       params.recording,

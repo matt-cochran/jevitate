@@ -29,6 +29,8 @@ import {
   MissingCredentialError,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
+  RetryingGenerationPort,
+  RetryingJudgmentPort,
   openRouterProviderSettings,
   JevJudgmentGateway,
   realJevClientCall,
@@ -2226,7 +2228,9 @@ async function buildExploreGateways(
       call: await realOpenRouterCall(),
     });
     const judge = new JevJudgmentGateway(store, await realJevClientCall());
-    return { judge, gen };
+    // Transient model/network failures are retried with exponential backoff + jitter (≈16s), then
+    // fail typed; validation/auth errors fail at once (owner ruling 4).
+    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen) };
   }
   if (opts.fakeAi) {
     return { judge: fakeDoneJudge(), gen: new FakeGenerationGateway() };

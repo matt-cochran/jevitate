@@ -5,6 +5,7 @@ export * from "./bounds.js";
 export * from "./authorized-targets.js";
 export * from "./redact.js";
 export * from "./snapshot.js";
+export * from "./page-monitor.js";
 export * from "./perceive.js";
 export * from "./actions.js";
 export * from "./transcript.js";

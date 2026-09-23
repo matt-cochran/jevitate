@@ -6,7 +6,6 @@ import type { Answer, GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import {
   assertAuthorizedExploreTarget,
   perceive,
-  COVERAGE_RENDER_WAIT_MS,
   targetCandidates,
   TranscriptLog,
   act,
@@ -23,6 +22,7 @@ import {
 } from "../index.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
+import { monitorFor } from "../page-monitor.js";
 import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { reachFrontierState } from "../coverage/reach.js";
@@ -84,7 +84,8 @@ export interface InductionMissionParams {
   readonly allowlist: readonly string[];
   readonly bounds?: Partial<Bounds>;
   readonly maxDepth?: number;
-  /** Bound (ms) on waiting for a rendered page on each perception. Default `COVERAGE_RENDER_WAIT_MS`. */
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS` — the shared settle rule
+   *  recognises a control-free leaf state in about the quiet window, so no shorter coverage bound is needed. */
   readonly renderWaitMs?: number;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   readonly onTranscriptEntry?: TranscriptListener;
@@ -178,7 +179,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     (
       await perceive(params.page, {
         maxCandidates: bounds.maxCandidates,
-        renderWaitMs: params.renderWaitMs ?? COVERAGE_RENDER_WAIT_MS,
+        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
       })
     ).snapshot;
   const transcript = new TranscriptLog([], params.onTranscriptEntry);
@@ -196,6 +197,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   });
 
   try {
+    await monitorFor(params.page).instrument();
     await params.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await takeSnapshot();
     let currentFingerprint = stateFingerprint(snap);

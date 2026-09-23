@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
-import { act, explore, perceive, snapshot } from "./index.js";
+import { act, explore, monitorFor, perceive, snapshot } from "./index.js";
 import { ScriptedJudge, withSession } from "./testkit.js";
 
 /**
@@ -13,8 +13,9 @@ import { ScriptedJudge, withSession } from "./testkit.js";
 
 const PAGES: Record<string, string> = {
   "/blank": `<!doctype html><html><body><h1>Nothing to do here</h1><p>Just text.</p></body></html>`,
+  // A real SPA frame: the shell loads, fetches its data (slow), then renders the control.
   "/late": `<!doctype html><html><body><div id="root"></div><script>
-    setTimeout(() => { const b = document.createElement("button"); b.textContent = "Rendered late"; document.getElementById("root").appendChild(b); }, 600);
+    fetch("/slow-data").then(() => { const b = document.createElement("button"); b.textContent = "Rendered late"; document.getElementById("root").appendChild(b); });
   </script></body></html>`,
   "/overlay": `<!doctype html><html><body>
     <button type="button" id="behind" onclick="this.textContent='clicked'">Behind</button>
@@ -23,6 +24,10 @@ const PAGES: Record<string, string> = {
     </div>
   </body></html>`,
   "/number": `<!doctype html><html><body><label>Qty <input type="number" aria-label="Qty" /></label></body></html>`,
+  "/pending": `<!doctype html><html><body><p>Loading…</p><script>fetch("/never").catch(() => undefined);</script></body></html>`,
+  "/churn": `<!doctype html><html><body><button type="button">Go</button><ul></ul><script>
+    let n = 0; const t = setInterval(() => { const li = document.createElement("li"); li.textContent = String(n); document.querySelector("ul").appendChild(li); if (++n === 12) clearInterval(t); }, 100);
+  </script></body></html>`,
 };
 
 let server: Server;
@@ -30,6 +35,11 @@ let origin: string;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if (req.url === "/never") return; // never responds
+    if (req.url === "/slow-data") {
+      setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"), 800);
+      return;
+    }
     const body = PAGES[req.url ?? ""];
     if (body === undefined) {
       res.writeHead(404).end("not found");
@@ -44,6 +54,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
 });
 
@@ -52,8 +63,9 @@ describe("perceive — bounded render wait", () => {
     await withSession(
       "perceive-late-",
       async (session) => {
+        await monitorFor(session.page).instrument();
         await session.page.goto(`${origin}/late`, { waitUntil: "domcontentloaded" });
-        const p = await perceive(session.page, { renderWaitMs: 10_000, pollMs: 100 });
+        const p = await perceive(session.page, { renderWaitMs: 10_000 });
         expect(p.rendered).toBe(true);
         expect(p.snapshot.controls.map((c) => c.name)).toEqual(["Rendered late"]);
       },
@@ -61,17 +73,53 @@ describe("perceive — bounded render wait", () => {
     );
   });
 
-  it("fails closed — rendered:false with a reason — when nothing renders within the bound", async () => {
+  it("judges a control-free page BLANK by the settled signal — in about the quiet window, not the ceiling", async () => {
     await withSession(
       "perceive-blank-",
       async (session) => {
+        await monitorFor(session.page).instrument();
         await session.page.goto(`${origin}/blank`, { waitUntil: "domcontentloaded" });
         const started = Date.now();
-        const p = await perceive(session.page, { renderWaitMs: 400, pollMs: 100 });
+        // The full 15s ceiling is in force: a time guess would take 15s; the settle rule does not.
+        const p = await perceive(session.page);
         expect(Date.now() - started).toBeLessThan(5_000);
         expect(p.rendered).toBe(false);
-        if (!p.rendered) expect(p.reason).toBe("page rendered no interactive controls within 400ms");
+        if (!p.rendered) expect(p.reason).toBe("page settled with no interactive controls");
+        expect(p.settle.settled).toBe(true);
         expect(p.snapshot.controls).toEqual([]);
+      },
+      origin,
+    );
+  });
+
+  it("fails closed at the ceiling when a control-free page never settles (a request stays pending)", async () => {
+    await withSession(
+      "perceive-pending-",
+      async (session) => {
+        await monitorFor(session.page).instrument();
+        await session.page.goto(`${origin}/pending`, { waitUntil: "domcontentloaded" });
+        const p = await perceive(session.page, { renderWaitMs: 1_500 });
+        expect(p.rendered).toBe(false);
+        if (!p.rendered) expect(p.reason).toBe("page rendered no interactive controls within 1500ms");
+        expect(p.settle.settled).toBe(false);
+        expect(p.settle.pending.map((r) => new URL(r.url).pathname)).toEqual(["/never"]);
+      },
+      origin,
+    );
+  });
+
+  it("waits for DOM mutations to stop before reading the page (the settle rule's quiet window)", async () => {
+    await withSession(
+      "perceive-busy-dom-",
+      async (session) => {
+        await monitorFor(session.page).instrument();
+        await session.page.goto(`${origin}/churn`, { waitUntil: "domcontentloaded" });
+        const p = await perceive(session.page);
+        expect(p.rendered).toBe(true);
+        // The page appends a row every 100ms for ~1.2s; the snapshot is taken after the churn.
+        expect(p.settle.settled).toBe(true);
+        expect(p.settle.waitedMs).toBeGreaterThanOrEqual(1_000);
+        expect(await session.page.locator("li").count()).toBe(12);
       },
       origin,
     );
@@ -82,7 +130,7 @@ describe("perceive — bounded render wait", () => {
       "perceive-bad-",
       async (session) => {
         await expect(perceive(session.page, { renderWaitMs: -1 })).rejects.toThrow(/renderWaitMs/);
-        await expect(perceive(session.page, { pollMs: 0 })).rejects.toThrow(/pollMs/);
+        await expect(perceive(session.page, { quietMs: -5 })).rejects.toThrow(/quietMs/);
       },
       origin,
     );
@@ -103,7 +151,6 @@ describe("explore — never decides on an unrendered page", () => {
           goal: "do something",
           allowlist: [origin],
           startUrl: `${origin}/blank`,
-          renderWaitMs: 300,
         });
       },
       origin,
@@ -120,7 +167,7 @@ describe("explore — never decides on an unrendered page", () => {
       chosenBy: "strategy",
       actOk: false,
       controlCount: 0,
-      reason: "page rendered no interactive controls within 300ms (fail-closed)",
+      reason: "page settled with no interactive controls (fail-closed)",
     });
   });
 });

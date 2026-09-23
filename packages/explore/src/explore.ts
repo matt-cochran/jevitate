@@ -15,6 +15,7 @@ import {
 } from "./authorized-targets.js";
 import type { Snapshot } from "./snapshot.js";
 import { perceive } from "./perceive.js";
+import { monitorFor } from "./page-monitor.js";
 import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
@@ -128,6 +129,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let fixtureAttached = false;
 
   try {
+    // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
+    await monitorFor(page).instrument();
     // Initial navigation (authorized above).
     await Navigate.to(cfg.startUrl).performAs(cfg.actor);
     recorder.navigate(cfg.startUrl, now());

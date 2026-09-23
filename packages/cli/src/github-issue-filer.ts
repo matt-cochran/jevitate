@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { redactText, type CredentialStore } from "@jevitate/ai-core";
+import { redactText, retryTransient, type CredentialStore, type RetryDeps } from "@jevitate/ai-core";
 import type { IssueFilerPort, IssueRef, NewIssue } from "@jevitate/domain";
 
 /**
@@ -44,13 +44,18 @@ export interface GitHubIssueFilerDeps {
   readonly exec?: Exec;
   readonly fetch?: FetchLike;
   readonly apiBase?: string;
+  /** Backoff for transient REST failures (injected clock in tests). */
+  readonly retry?: RetryDeps;
 }
 
 export class GitHubFilingError extends Error {
   readonly code = "E_ISSUE_FILING" as const;
-  constructor(message: string) {
+  /** The HTTP status, for a REST failure (drives the transient-retry decision). */
+  readonly status?: number;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "GitHubFilingError";
+    if (status !== undefined) this.status = status;
   }
 }
 
@@ -76,6 +81,7 @@ export class GitHubIssueFiler implements IssueFilerPort {
   readonly #fetch: FetchLike | undefined;
   readonly #store: CredentialStore;
   readonly #apiBase: string;
+  readonly #retry: RetryDeps;
   #mode: Promise<"gh" | "rest"> | undefined;
 
   constructor(deps: GitHubIssueFilerDeps) {
@@ -83,6 +89,7 @@ export class GitHubIssueFiler implements IssueFilerPort {
     this.#fetch = deps.fetch;
     this.#store = deps.store;
     this.#apiBase = deps.apiBase ?? "https://api.github.com";
+    this.#retry = deps.retry ?? {};
   }
 
   /** `gh` when it is installed and runnable, else REST (which needs `GITHUB_TOKEN`). */
@@ -102,7 +109,17 @@ export class GitHubIssueFiler implements IssueFilerPort {
     return r.stdout;
   }
 
+  /** One REST call, retried with backoff on transient failures (429/5xx/network); typed failure after. */
   async #rest(method: string, path: string, body?: unknown): Promise<unknown> {
+    const r = await retryTransient(() => this.#restOnce(method, path, body), this.#retry);
+    if (r.ok) return r.value;
+    const e = r.error;
+    throw e instanceof GitHubFilingError
+      ? e
+      : new GitHubFilingError(this.#scrub(`GitHub API ${method} ${path} failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  async #restOnce(method: string, path: string, body?: unknown): Promise<unknown> {
     const token = this.#store.read("GITHUB_TOKEN");
     if (token === undefined) {
       throw new GitHubFilingError("filing needs the gh CLI or a GITHUB_TOKEN in jevitate's credential store");
@@ -121,7 +138,7 @@ export class GitHubIssueFiler implements IssueFilerPort {
     });
     const text = await res.text();
     if (res.status < 200 || res.status >= 300) {
-      throw new GitHubFilingError(this.#scrub(`GitHub API ${res.status} on ${method} ${path}: ${text.slice(0, 300)}`));
+      throw new GitHubFilingError(this.#scrub(`GitHub API ${res.status} on ${method} ${path}: ${text.slice(0, 300)}`), res.status);
     }
     return text === "" ? null : JSON.parse(text);
   }

@@ -8,6 +8,7 @@ import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../aut
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
+import { monitorFor } from "../page-monitor.js";
 import { act } from "../act.js";
 import { buildJudgmentState } from "../redact.js";
 import { PROMPT_INJECTION_GUARD } from "../decide.js";
@@ -320,6 +321,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   };
 
   try {
+    // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
+    await monitorFor(params.page).instrument();
     await Navigate.to(params.seedUrl).performAs(params.actor);
     recorder.navigate(params.seedUrl, now());
     const started = now();
