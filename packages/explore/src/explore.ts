@@ -96,7 +96,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
   const fillHelper = new FillHelper(cfg.gen);
-  const recorder = new RunRecorder(cfg.site ?? startOrigin);
+  const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, cfg.secrets ?? []);
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   const now = (): number => Date.now();
 
