@@ -9,6 +9,7 @@ import {
   type TargetDescriptor,
   type ValueOrVar,
 } from "@jevitate/recording";
+import { redactUrl } from "@jevitate/ai-core";
 
 /**
  * record: accumulate executed steps into a schema-valid, deterministically
@@ -33,15 +34,19 @@ import {
  * bridge, so the emitted `Recording` is index-free.
  */
 
-/** Reduces any URL to the path convention the recorder/interpreter use. */
+/**
+ * Reduces any URL to the path convention the recorder/interpreter use, then
+ * applies the shared URL redaction rule (a non-absolute input keeps its query,
+ * so a `?token=…` there must not reach the Recording).
+ */
 export function toPath(raw: string): string {
   try {
     const u = new URL(raw);
-    if (u.protocol === "http:" || u.protocol === "https:") return u.pathname || "/";
+    if (u.protocol === "http:" || u.protocol === "https:") return redactUrl(u.pathname || "/");
   } catch {
     // not absolute — fall through
   }
-  return raw.startsWith("/") || /^https?:\/\//.test(raw) ? raw : `/${raw}`;
+  return redactUrl(raw.startsWith("/") || /^https?:\/\//.test(raw) ? raw : `/${raw}`);
 }
 
 function setExpect(step: Step, assertion: Assertion): void {

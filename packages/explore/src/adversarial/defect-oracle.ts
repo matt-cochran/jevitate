@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { redactUrl } from "@jevitate/ai-core";
 
 /**
  * The adversarial mission's TRUSTED HARD-SIGNAL defect oracle (spec §3.1/§9).
@@ -14,6 +15,10 @@ import type { Page } from "playwright";
  * anywhere — so no signal window is missed. `drain()` returns everything
  * buffered since the last drain and clears the buffer, so a signal is never
  * double-counted across two checks.
+ *
+ * Every URL (and any URL quoted in a detail message) is passed through the
+ * shared `redactUrl` rule at capture time: these signals feed the triage model
+ * call and the reported defect.
  */
 
 export type DefectSignal =
@@ -57,27 +62,23 @@ export class PageSignalCollector {
       // §9: the HTTP signal is 5xx-only). Real console errors, page errors and
       // 5xx are untouched and still gate.
       if (isNon5xxResourceConsoleError(text)) return;
-      this.buffer.push({ kind: "console-error", detail: text });
+      this.buffer.push({ kind: "console-error", detail: redactUrl(text) });
     });
     page.on("pageerror", (err) => {
-      this.buffer.push({ kind: "page-error", detail: err.message });
+      this.buffer.push({ kind: "page-error", detail: redactUrl(err.message) });
     });
     page.on("response", (response) => {
       const status = response.status();
       if (status >= 500) {
-        this.buffer.push({
-          kind: "http-5xx",
-          detail: `${status} ${response.url()}`,
-          url: response.url(),
-          status,
-        });
+        const url = redactUrl(response.url());
+        this.buffer.push({ kind: "http-5xx", detail: `${status} ${url}`, url, status });
       }
     });
     page.on("requestfailed", (request) => {
       this.buffer.push({
         kind: "failed-request",
-        detail: request.failure()?.errorText ?? "request failed",
-        url: request.url(),
+        detail: redactUrl(request.failure()?.errorText ?? "request failed"),
+        url: redactUrl(request.url()),
       });
     });
   }

@@ -4,13 +4,14 @@ import {
   REDACTION_MASK,
   redactText,
   redactContext,
+  redactUrl,
 } from "@jevitate/ai-core";
 
 // The value-based redaction primitives now live in `@jevitate/ai-core` (next to
 // the `assertNoSecretInPayload` choke point) so `@jevitate/ux` shares the exact
 // same implementation — "no divergent redaction path". Re-exported here so every
 // existing `@jevitate/explore` import keeps working unchanged.
-export { REDACTION_MASK, redactText, redactContext };
+export { REDACTION_MASK, redactText, redactContext, redactUrl };
 
 /**
  * State redaction before ANY model call (guardrail #3: no secrets to models).
@@ -49,9 +50,11 @@ export function buildJudgmentState(input: BuildStateInput): JudgmentState {
   const secrets = input.secrets ?? [];
   const state: JudgmentState = {
     goal: redactText(input.goal, secrets),
-    url: redactText(input.url, secrets),
+    // URLs (and any URL quoted in history) also go through the shared URL
+    // rule: sensitive query/fragment parameter values are blanked.
+    url: redactText(redactUrl(input.url), secrets),
     controls: input.controls.map((c) => redactText(c, secrets)),
-    history: input.history.map((h) => redactText(h, secrets)),
+    history: input.history.map((h) => redactText(redactUrl(h), secrets)),
   };
   assertNoSecretInPayload(state, secrets);
   return state;

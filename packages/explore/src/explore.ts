@@ -19,7 +19,7 @@ import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
 import { RunRecorder } from "./record.js";
 import { resolveMissionFixture } from "./fixture.js";
-import { redactText } from "./redact.js";
+import { redactText, redactUrl } from "./redact.js";
 
 /**
  * explore: the bounded perceive → decide → act → record loop.
@@ -153,11 +153,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       transcript.push({
         step,
         op: decision.op,
-        target: decision.control ? decision.control.summary : null,
+        target: decision.control ? redactText(decision.control.summary, cfg.secrets ?? []) : null,
         confidence: decision.confidence,
         actOk,
         reason,
-        url: snap.url,
+        url: redactText(redactUrl(snap.url), cfg.secrets ?? []),
         signature: snap.signature,
       });
     };
@@ -293,7 +293,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     stop,
     recording: recorder.finish({ intent: cfg.goal }),
     transcript,
-    finalUrl: page.url(),
+    finalUrl: redactText(redactUrl(page.url()), cfg.secrets ?? []),
     decisions: tracker.decisions,
     actions: tracker.actions,
   };
