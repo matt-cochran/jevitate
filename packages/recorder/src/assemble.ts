@@ -8,6 +8,7 @@ import {
   type StepTiming,
   type TargetDescriptor,
 } from "@jevitate/recording";
+import { redactUrl } from "@jevitate/ai-core";
 import type {
   ActionCaptureEvent,
   CaptureEvent,
@@ -118,12 +119,16 @@ export function pathOf(rawUrl: string): string | null {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  return url.pathname;
+  return redactUrl(url.pathname);
 }
 
-/** `pathOf`, degrading to the raw URL — for `PageSegment.url`/`urlIncludes`, which accept any string. */
+/**
+ * `pathOf`, degrading to the raw URL — for `PageSegment.url`/`urlIncludes`,
+ * which accept any string. The raw fallback keeps any query/fragment, so it goes
+ * through the shared `redactUrl` rule too.
+ */
 export function pathOrRaw(rawUrl: string): string {
-  return pathOf(rawUrl) ?? rawUrl;
+  return pathOf(rawUrl) ?? redactUrl(rawUrl);
 }
 
 /** Page-side `ts` is authoritative for actions; navigations only have a Node-side time. */

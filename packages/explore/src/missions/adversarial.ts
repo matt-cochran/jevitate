@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
-import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
+import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import { snapshot, type Control } from "../snapshot.js";
@@ -119,13 +119,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       // triage.narrative schema is `.strict()`, so a stray key would be rejected.
       const triage = await params.generation.generate("triage.narrative", {
         failureSummary: reasons,
-        url: params.page.url(),
+        url: redactUrl(params.page.url()),
       });
       return {
         outcome: "defect",
         defect: {
           signals: hardSignals,
-          url: params.page.url(),
+          url: redactUrl(params.page.url()),
           recording: recorder.finish({ intent: "adversarial" }),
           triage: triage.output,
         },
@@ -139,7 +139,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     await params.judgment.systemOne({
       state: {
         goal: "try to break it",
-        url: params.page.url(),
+        url: redactUrl(params.page.url()),
         controls: snap.controls.map((c) => c.summary),
         history: [],
       },

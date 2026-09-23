@@ -1,5 +1,5 @@
 import type { GenerationPort } from "@jevitate/ai-core";
-import { redactContext } from "./redact.js";
+import { redactContext, redactUrl } from "./redact.js";
 
 /**
  * fill: the generative-text helper discipline for a `type` op (guardrail #3).
@@ -57,7 +57,7 @@ export class FillHelper {
       fieldLabel: redactContext(req.fieldLabel, secrets),
       goal: redactContext(req.goal, secrets),
       visibleContext: redactContext(req.visibleContext, secrets).slice(0, CONTEXT_CEILING),
-      history: (req.history ?? []).map((h) => redactContext(h, secrets)),
+      history: (req.history ?? []).map((h) => redactContext(redactUrl(h), secrets)),
     };
     const key = JSON.stringify(input);
     if (this.#cacheKey === key) {
