@@ -2,31 +2,36 @@ import { describe, expect, it } from "vitest";
 import type { chromium } from "playwright";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, createBrowserPool } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 
-type LaunchOptions = NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]>;
+type LaunchOptions = NonNullable<Parameters<typeof chromium.launch>[0]>;
 
 /**
  * The `--browser-*` flags must survive the whole thread
  *   commander → program action → run*Mission → PlaywrightBrowserPort.open → chromium launch
  * without being dropped anywhere. The real port is used; only Playwright's
- * `launchPersistentContext` is replaced by a capturing launcher that aborts
- * before any browser starts.
+ * `chromium.launch` (the pooled launch) is replaced by a capturing launcher
+ * that aborts before any browser starts, and admission sees a calm fixture
+ * host so the test never depends on this machine's load.
  */
 function capture(): { program: ReturnType<typeof buildProgram>; lines: string[]; launches: LaunchOptions[] } {
   const launches: LaunchOptions[] = [];
-  const launch: typeof chromium.launchPersistentContext = async (_dir, options) => {
+  const launch: typeof chromium.launch = async (options) => {
     launches.push(options ?? {});
     throw new Error("launch intercepted by test");
   };
+  const pool = createBrowserPool({
+    maxContexts: 1,
+    signals: { sample: async () => ({ memAvailableBytes: 8 * 1024 ** 3, source: "fixture:calm" }) },
+  });
   const lines: string[] = [];
   const program = buildProgram({
     profiles: new ProfileManager("/unused-in-these-tests"),
     explore: {
       judge: new FakeJudgmentGateway({}),
       gen: new FakeGenerationGateway(),
-      browserPortFactory: () => new PlaywrightBrowserPort({ launchPersistentContext: launch, platform: "linux" }),
+      browserPortFactory: () => new PlaywrightBrowserPort({ launch, platform: "linux", pool }),
     },
   });
   program.configureOutput({ writeOut: (s) => lines.push(s) });

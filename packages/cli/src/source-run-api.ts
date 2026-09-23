@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { deriveParamSchema, validateParams } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
@@ -53,10 +50,8 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   // site plus every gate-approved declared origin.
   const allowedOrigins = [...new Set([file.recording.site, ...file.declaredOrigins])];
 
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-source-run-"));
   const port = new PlaywrightBrowserPort();
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins,
     baseUrl: file.recording.site,
@@ -67,7 +62,6 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     return await runner.run({ journey: file, params, policy });
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 };
 

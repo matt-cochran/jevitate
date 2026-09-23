@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
@@ -47,9 +44,7 @@ afterAll(async () => {
 type Session = Awaited<ReturnType<typeof port.open>>;
 
 async function withSession<T>(prefix: string, body: (session: Session) => Promise<T>): Promise<T> {
-  const profileDir = await mkdtemp(join(tmpdir(), prefix));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [site.url],
     baseUrl: site.url,
@@ -58,7 +53,6 @@ async function withSession<T>(prefix: string, body: (session: Session) => Promis
     return await body(session);
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 

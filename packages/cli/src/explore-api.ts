@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
@@ -80,9 +79,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-explore-"));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
@@ -122,7 +119,6 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     };
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -221,9 +217,7 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
 
   const portFactory = args.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-author-"));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [...args.allowlist],
     baseUrl: args.origin,
@@ -247,7 +241,6 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
     });
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -286,9 +279,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-coverage-"));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
@@ -321,7 +312,6 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     return { coverage: result.coverage, outcome: result.outcome, recordingPaths };
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -336,7 +326,6 @@ export interface RunAdversarialCliMissionOptions {
   readonly strategies: readonly MisuseStrategy[];
   readonly judgment: JudgmentPort;
   readonly generation: GenerationPort;
-  readonly profileDir: string;
   readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
@@ -358,7 +347,6 @@ export async function runAdversarialCliMission(
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const session = await port.open({
-    profileDir: opts.profileDir,
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
@@ -394,7 +382,6 @@ export interface RunFeatureCliMissionOptions {
   readonly allowlist: readonly string[];
   readonly capability: string;
   readonly routeGlobs: readonly string[];
-  readonly profileDir: string;
   readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
@@ -409,7 +396,6 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const session = await portFactory().open({
-    profileDir: opts.profileDir,
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,

@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, BrowseTheWebToken } from "@jevitate/screenplay";
@@ -12,15 +9,12 @@ import type { Journey } from "@jevitate/journey";
 import { JourneyRunner, type HandbackHandler } from "./journey-runner.js";
 
 let site: { url: string; close(): Promise<void> };
-let profileDir: string;
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "jevitate-journey-"));
 });
 afterAll(async () => {
   await site.close();
-  await rm(profileDir, { recursive: true, force: true });
 });
 
 // Ruling 4: the example-site fixture's login form is USERNAME-ONLY — there is
@@ -75,7 +69,6 @@ test(
   async () => {
     const port = new PlaywrightBrowserPort();
     const session = await port.open({
-      profileDir,
       headless: true,
       allowedOrigins: [site.url],
       baseUrl: site.url,

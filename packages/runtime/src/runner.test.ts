@@ -19,6 +19,7 @@ function makeFakeBrowser() {
         page: { url: () => "about:blank" } as any,
         startTracing: async () => {},
         stopTracingToFile: async () => {},
+        saveStorageState: async () => {},
         close: async () => {},
       };
     },
@@ -95,7 +96,7 @@ class FakeActivityRepo implements ActivityRepository {
 function baseReq(overrides: Record<string, unknown> = {}) {
   return {
     site: "example-network", account: "primary", actionId: "diag.echo", version: "1.0.0",
-    input: { msg: "hi" }, profileDir: "/tmp/x", baseUrl: "about:blank", headless: true, allowedOrigins: [],
+    input: { msg: "hi" }, storageStatePath: "/nonexistent-jevitate-test/state.json", baseUrl: "about:blank", headless: true, allowedOrigins: [],
     runId: "run-1",
     ...overrides,
   };

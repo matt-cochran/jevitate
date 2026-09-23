@@ -42,3 +42,50 @@ jobs:
 
       - name: No-permissive-fallback gate
         run: node scripts/check-no-permissive-fallback.mjs
+
+  # The browser pool + resource-signal readers must work on Linux, Windows and
+  # macOS (WSL2 is covered by local runs: it is the Linux reader with a
+  # `wsl2:` source label). Each OS builds, runs @jevitate/playwright's unit
+  # tests (fixture-driven signal readers + pool) and a REAL-Chromium pool smoke
+  # (one pooled browser, two isolated contexts, admission sample logged as
+  # `[pool-smoke] <platform> admission: …`, storageState round-trip, crash →
+  # loud failure + relaunch) against that OS's real signal source.
+  cross-platform-pool:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser (chromium)
+        # --with-deps installs Linux system packages; Windows/macOS need none.
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            pnpm --filter @jevitate/cli exec playwright install --with-deps chromium
+          else
+            pnpm --filter @jevitate/cli exec playwright install chromium
+          fi
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Pool + signal unit tests and real-Chromium pool smoke
+        run: pnpm exec vitest run packages/playwright/src
