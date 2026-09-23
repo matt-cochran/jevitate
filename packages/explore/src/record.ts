@@ -85,6 +85,8 @@ export class RunRecorder {
   #prevTime: number | null = null;
 
   readonly #secrets: readonly string[];
+  readonly #listener: ((recording: Recording) => void) | undefined;
+  #steps = 0;
 
   /**
    * `secrets` are the run's registered secret values: every label/descriptor,
@@ -96,8 +98,21 @@ export class RunRecorder {
     readonly site: string,
     private readonly version = "1.0.0",
     secrets: readonly string[] = [],
+    /**
+     * Incremental-flush seam: receives the (validated, secret-free) Recording after every recorded
+     * step, so a run that dies mid-way still leaves its Recording up to the failure on disk. A
+     * snapshot that cannot be validated is simply not emitted (the final `finish` still fails
+     * closed).
+     */
+    listener?: (recording: Recording) => void,
   ) {
     this.#secrets = secrets;
+    this.#listener = listener;
+  }
+
+  /** Number of steps recorded so far — a step's flat replay index is its count minus one. */
+  get stepCount(): number {
+    return this.#steps;
   }
 
   #path(url: string): string {
@@ -135,8 +150,18 @@ export class RunRecorder {
 
   #append(step: Step, atMs: number, durationMs = 0): void {
     const recorded: RecordedStep = { step, timing: this.#timing(atMs, durationMs) };
-    this.#current!.steps.push(recorded);
+    const segment = this.#current;
+    if (segment === null) throw new Error("RunRecorder: no page segment is open");
+    segment.steps.push(recorded);
     this.#lastStep = recorded;
+    this.#steps += 1;
+    this.#emit();
+  }
+
+  #emit(): void {
+    if (this.#listener === undefined) return;
+    const partial = this.tryFinish();
+    if (partial.ok) this.#listener(partial.recording);
   }
 
   /** Record a navigation to `url`. Opens the segment for it. */
@@ -200,6 +225,7 @@ export class RunRecorder {
     if (this.#current !== null && path !== this.#current.url && this.#lastStep !== null) {
       setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });
       this.#pendingSegmentUrl = path;
+      this.#emit();
     }
   }
 
@@ -207,6 +233,20 @@ export class RunRecorder {
    * Emit the schema-valid `Recording`. Throws if assembly produced anything
    * invalid, or if any registered secret survived into it (fail closed).
    */
+  /**
+   * `finish` as DATA: the Recording, or why it could not be produced (never throws). Used when a
+   * run is being wound down after a failure, where a second exception would lose the evidence.
+   */
+  tryFinish(
+    opts?: { intent?: string; retro?: string; startedAtIso?: string },
+  ): { ok: true; recording: Recording } | { ok: false; reason: string } {
+    try {
+      return { ok: true, recording: this.finish(opts) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e) };
+    }
+  }
+
   finish(opts?: { intent?: string; retro?: string; startedAtIso?: string }): Recording {
     const recording: Recording = {
       version: this.version,
@@ -220,4 +260,9 @@ export class RunRecorder {
     assertNoSecretInPayload(parsed, this.#secrets);
     return parsed;
   }
+}
+
+/** A schema-valid, step-free Recording whose retro says why the real one is unavailable. */
+export function emptyRecording(site: string, reason: string): Recording {
+  return { version: "1.0.0", site, pages: [], retro: `recording unavailable: ${reason}` };
 }

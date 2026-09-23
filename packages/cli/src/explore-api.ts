@@ -25,8 +25,10 @@ import {
   type TranscriptEntry,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
+import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { resolveDataDir } from "./data-dir.js";
-import { writeTranscript } from "./transcript-file.js";
+import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult } from "./mission-journal.js";
+import { goalExitCode, missionExitCode } from "./mission-exit.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -84,6 +86,10 @@ export interface RunExplorationResult {
    */
   readonly transcriptPath: string;
   readonly transcript: readonly TranscriptEntry[];
+  /** Process exit code for this outcome (see `goalExitCode`). */
+  readonly exitCode: number;
+  /** Why the run ended `crashed`/`inconclusive`. */
+  readonly failure?: MissionFailure;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -102,9 +108,16 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
 
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  await mkdir(outDir, { recursive: true });
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  // Crash-safe: the transcript and partial Recording are flushed after every step.
+  const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
+      onTranscriptEntry: journal.onTranscriptEntry,
+      onRecording: journal.onRecording,
       actor,
       judge: opts.judge,
       gen: opts.gen,
@@ -118,12 +131,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       fixture,
     });
 
-    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-    await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const recordingPath = join(outDir, `explore-${iso.replace(/[:.]/g, "-")}.json`);
-    await writeFile(recordingPath, `${JSON.stringify(mission.recording, null, 2)}\n`, "utf8");
-    const transcriptPath = await writeTranscript(recordingPath, mission.transcript);
+    journal.writeRecording(mission.recording);
+    journal.writeTranscript(mission.transcript);
 
     return {
       outcome: mission.outcome,
@@ -132,12 +141,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
       actions: mission.run.actions,
-      recordingPath,
-      transcriptPath,
+      recordingPath: journal.recordingPath,
+      transcriptPath: journal.transcriptPath,
       transcript: mission.transcript,
+      exitCode: goalExitCode(mission.outcome),
+      ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
     };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
@@ -308,7 +319,13 @@ export interface RunCoverageMissionOptions {
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap";
+  readonly outcome: "exhausted" | "cap" | "crashed";
+  /** The typed verdict: `crashed` for a broken run, else `defects-found` / `clean`. */
+  readonly missionOutcome: MissionOutcome;
+  readonly exitCode: number;
+  readonly failure?: MissionFailure;
+  /** The persisted typed result (`coverage-<stamp>.result.json`). */
+  readonly resultPath: string;
   readonly recordingPaths: string[];
   /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
@@ -328,6 +345,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
 
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  await mkdir(outDir, { recursive: true });
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const stamp = artifactStamp(iso);
+  const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -338,23 +360,32 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       seedUrl: opts.url,
       allowlist: opts.allowlist,
       bounds: opts.bounds,
+      onTranscriptEntry: journal.onTranscriptEntry,
     });
 
-    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-    await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const stamp = iso.replace(/[:.]/g, "-");
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
       await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
-    const transcriptPath = await writeTranscript(join(outDir, `coverage-${stamp}.json`), result.transcript);
+    journal.writeTranscript(result.transcript);
+    const missionOutcome: MissionOutcome =
+      result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean";
 
-    return { coverage: result.coverage, outcome: result.outcome, recordingPaths, transcriptPath };
+    const exitCode = missionExitCode(missionOutcome);
+    const typed = {
+      coverage: result.coverage,
+      outcome: result.outcome,
+      missionOutcome,
+      exitCode,
+      ...(result.failure === undefined ? {} : { failure: result.failure }),
+      recordingPaths,
+      transcriptPath: journal.transcriptPath,
+    };
+    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
@@ -369,6 +400,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly strategies: readonly MisuseStrategy[];
   readonly judgment: JudgmentPort;
   readonly generation: GenerationPort;
+  /** Step/action budget (CLI `--max-decisions` / `--max-actions`). */
+  readonly bounds?: Partial<Bounds>;
   readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
@@ -380,14 +413,21 @@ export interface RunAdversarialCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
-  /** Where the decision transcript is written. Default `~/.jevitate/recordings`. */
+  /** Where the Recording and decision transcript are written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
   /** ISO clock for the transcript filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
 }
 
-/** The adversarial outcome plus where its decision transcript was written. */
-export type AdversarialCliMissionResult = AdversarialOutcome & { readonly transcriptPath: string };
+/** The adversarial outcome plus where its Recording and decision transcript were written. */
+export type AdversarialCliMissionResult = AdversarialOutcome & {
+  readonly recordingPath: string;
+  /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
+  readonly resultPath: string;
+  readonly transcriptPath: string;
+  /** Process exit code for `outcome` (see `missionExitCode`). */
+  readonly exitCode: number;
+};
 
 /**
  * Runs `@jevitate/explore`'s adversarial "try to break it" mission behind the
@@ -409,6 +449,10 @@ export async function runAdversarialCliMission(
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  // Crash-safe: the transcript and partial Recording are flushed after every step.
+  const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
@@ -420,16 +464,22 @@ export async function runAdversarialCliMission(
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       site: origin,
+      ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
+      onTranscriptEntry: journal.onTranscriptEntry,
+      onRecording: journal.onRecording,
     });
-    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const transcriptPath = await writeTranscript(
-      join(outDir, `adversarial-${iso.replace(/[:.]/g, "-")}.json`),
-      outcome.transcript,
-    );
-    return { ...outcome, transcriptPath };
+    journal.writeRecording(outcome.recording);
+    journal.writeTranscript(outcome.transcript);
+    const exitCode = missionExitCode(outcome.outcome);
+    const result = {
+      ...outcome,
+      recordingPath: journal.recordingPath,
+      transcriptPath: journal.transcriptPath,
+      exitCode,
+    };
+    return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
@@ -459,7 +509,13 @@ export interface RunFeatureCliMissionOptions {
   readonly storageState?: string;
 }
 
-export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureRunResult> {
+/** The feature mission's result plus its typed verdict and exit code. */
+export type FeatureCliMissionResult = FeatureRunResult & {
+  readonly missionOutcome: MissionOutcome;
+  readonly exitCode: number;
+};
+
+export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
@@ -474,15 +530,17 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
-    return await runFeatureMission({
+    const result = await runFeatureMission({
       page: session.page,
       actor,
       seedUrl: opts.seedUrl,
       allowlist: opts.allowlist,
       scope,
     });
+    const missionOutcome: MissionOutcome = result.outcome === "crashed" ? "crashed" : "clean";
+    return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 

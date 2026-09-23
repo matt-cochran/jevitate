@@ -35,7 +35,8 @@ describe("runAdversarialMission — clean run", () => {
         allowlist: [site.url],
         strategies: ["ordering-violation", "repeat-rapid", "boundary-input"],
       });
-      expect(result.outcome === "clean" || result.outcome === "cap").toBe(true);
+      expect(result.outcome).toBe("clean");
+      expect(result.defects).toEqual([]);
     },
     120_000,
   );
@@ -67,12 +68,10 @@ describe("runAdversarialMission — hard defect", () => {
         },
       });
 
-      expect(result.outcome).toBe("defect");
-      if (result.outcome === "defect") {
-        expect(result.defect.signals.some((s) => s.kind === "console-error")).toBe(true);
-        expect(result.defect.triage.summary).toContain("console error");
-        expect(result.defect.recording).toBeDefined();
-      }
+      expect(result.outcome).toBe("defects-found");
+      expect(result.defects[0]?.signals.some((s) => s.kind === "console-error")).toBe(true);
+      expect(result.defects[0]?.triage).toMatchObject({ status: "available", summary: "console error observed" });
+      expect(result.recording.pages.length).toBeGreaterThan(0);
       // The shared transcript explains the stop: the strategy's step, ending in the defect.
       expect(result.transcript).toHaveLength(1);
       expect(result.transcript[0]).toMatchObject({ chosenBy: "strategy", strategy: "ordering-violation", confidence: null });
@@ -106,10 +105,8 @@ describe("runAdversarialMission — hard defect", () => {
           return { ok: true };
         },
       });
-      expect(result.outcome).toBe("defect");
-      if (result.outcome === "defect") {
-        expect(result.defect.signals.some((s) => s.kind === "http-5xx")).toBe(true);
-      }
+      expect(result.outcome).toBe("defects-found");
+      expect(result.defects[0]?.signals.some((s) => s.kind === "http-5xx")).toBe(true);
     },
     120_000,
   );
@@ -141,8 +138,7 @@ describe("runAdversarialMission — a legit 4xx during misuse is NOT a defect (#
           return { ok: true };
         },
       });
-      expect(result.outcome).not.toBe("defect");
-      expect(result.outcome === "clean" || result.outcome === "cap").toBe(true);
+      expect(result.outcome).toBe("clean");
     },
     120_000,
   );
@@ -166,7 +162,7 @@ describe("runAdversarialMission — model verdict is advisory only (guardrail #4
       // No console error, no 5xx, no failed request, no broken invariant was
       // ever produced in this run — a maximally-confident "looks broken" from
       // the model alone must never surface as outcome:"defect".
-      expect(result.outcome).not.toBe("defect");
+      expect(result.outcome).not.toBe("defects-found");
     },
     120_000,
   );
@@ -188,8 +184,77 @@ describe("runAdversarialMission — model verdict is advisory only (guardrail #4
         allowlist: [site.url],
         strategies: ["boundary-input"],
       });
-      expect(result.outcome).not.toBe("defect");
-      expect(result.outcome === "clean" || result.outcome === "cap").toBe(true);
+      expect(result.outcome).toBe("clean");
+    },
+    120_000,
+  );
+});
+
+describe("runAdversarialMission — the outcome is a typed result, never a throw (owner ruling 1)", () => {
+  test(
+    "an unavailable triage narrative keeps the defect with its raw evidence and marks triage unavailable",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+      const generation = {
+        async generate(): Promise<never> {
+          throw new Error("provider unavailable (503)");
+        },
+      };
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["ordering-violation"],
+        userInvariant: async (page) => {
+          await page.evaluate(() => console.error("triage-helper-down"));
+          return { ok: true };
+        },
+      });
+      expect(result.outcome).toBe("defects-found");
+      expect(result.defects).toHaveLength(1);
+      expect(result.defects[0]?.signals.some((s) => s.detail.includes("triage-helper-down"))).toBe(true);
+      expect(result.defects[0]?.triage).toEqual({
+        status: "unavailable",
+        reason: "triage generation failed: provider unavailable (503)",
+      });
+      // The transcript and Recording are always kept.
+      expect(result.transcript.length).toBeGreaterThan(0);
+      expect(result.recording.pages.length).toBeGreaterThan(0);
+    },
+    120_000,
+  );
+
+  test(
+    "an engine failure mid-run returns `crashed` with the partial transcript and Recording — never clean",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+      let calls = 0;
+      const entries: number[] = [];
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        strategies: ["boundary-input", "boundary-input"],
+        onTranscriptEntry: (e) => entries.push(e.step),
+        userInvariant: async () => {
+          calls += 1;
+          if (calls === 2) throw new Error("engine exploded");
+          return { ok: true };
+        },
+      });
+      expect(result.outcome).toBe("crashed");
+      expect(result.failure).toMatchObject({ kind: "exception", message: "engine exploded" });
+      expect(result.failure?.stack).toContain("engine exploded");
+      // The step before the failure survived — in the result AND through the incremental seam.
+      expect(result.transcript).toHaveLength(1);
+      expect(entries).toEqual([1]);
+      expect(result.recording.pages.length).toBeGreaterThan(0);
     },
     120_000,
   );

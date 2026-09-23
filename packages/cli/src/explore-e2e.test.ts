@@ -206,6 +206,13 @@ describe("shared decision transcript — every model-deciding strategy writes on
           nowIso: () => "2026-09-23T00:00:00.000Z",
         });
         expect(result.transcriptPath).toBe(join(outDir, "adversarial-2026-09-23T00-00-00-000Z.transcript.json"));
+        // The typed verdict, its exit code, and the Recording + persisted result next to it.
+        expect(result.outcome).toBe("clean");
+        expect(result.exitCode).toBe(0);
+        expect(result.recordingPath).toBe(join(outDir, "adversarial-2026-09-23T00-00-00-000Z.json"));
+        expect(JSON.parse(await readFile(result.recordingPath, "utf8"))).toEqual(result.recording);
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as { missionOutcome: string; exitCode: number };
+        expect(persisted).toMatchObject({ missionOutcome: "clean", exitCode: 0 });
         const transcript = await readTranscript(result.transcriptPath);
         expect(transcript).toEqual(result.transcript);
         expect(transcript.map((e) => e.strategy)).toEqual(["ordering-violation", "boundary-input"]);

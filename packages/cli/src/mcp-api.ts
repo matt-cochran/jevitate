@@ -15,6 +15,9 @@ import {
   facadeApproveAction,
   facadeCancelCommand,
   facadeGetSiteHealth,
+  isMissionResultId,
+  missionStatus,
+  parseMissionOutcome,
   type AiGenerateTextArgs,
   type AiGenerateTextResult,
 } from "@jevitate/mcp-facade";
@@ -32,6 +35,8 @@ import {
   type SetupRequiredResult,
 } from "@jevitate/ai-core";
 import { safeRunPolicy } from "@jevitate/domain";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { runJourneyProgrammatically } from "./journey-api.js";
 
 /**
@@ -118,6 +123,11 @@ export interface McpApiDeps {
    * returns a typed `setup_required` result instead of calling the model.
    */
   aiGenerateText?: (args: AiGenerateTextArgs) => Promise<AiGenerateTextResult | SetupRequiredResult>;
+  /**
+   * Directory holding mission artifacts (`~/.jevitate/recordings` in production): the typed
+   * `<id>.result.json` files `get_mission_result` reads. A missing dir is a config refusal.
+   */
+  recordingsDir?: string;
 }
 
 const ALLOWED = new Set<string>(ALLOWED_TOOLS);
@@ -259,7 +269,47 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   };
   const queueCommonRequired = ["run", "journey", "step", "reason", "agent"];
 
+  // get_mission_result: reads a persisted typed mission result by ID only (the artifact stem the
+  // CLI wrote) — never a caller-supplied path. The status carries the CLI exit code, and a run that
+  // itself broke (inconclusive/crashed) is an MCP error result, so it can never read as a pass.
+  const getMissionResult = async (args: Record<string, unknown>): Promise<McpToolResult> => {
+    if (!deps.recordingsDir) {
+      return errorResult({ error: "not_configured", message: "get_mission_result requires recordingsDir" });
+    }
+    if (!isMissionResultId(args.id)) {
+      return errorResult({ error: "invalid_args", message: "get_mission_result requires a mission result 'id'" });
+    }
+    let raw: string;
+    try {
+      raw = await readFile(join(deps.recordingsDir, `${args.id}.result.json`), "utf8");
+    } catch {
+      return errorResult({ error: "not_found", id: args.id });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return errorResult({ error: "corrupt_result", id: args.id });
+    }
+    const outcome =
+      parsed !== null && typeof parsed === "object" && "missionOutcome" in parsed
+        ? parseMissionOutcome((parsed as { missionOutcome: unknown }).missionOutcome)
+        : null;
+    if (outcome === null) {
+      return errorResult({ error: "corrupt_result", id: args.id });
+    }
+    const status = missionStatus(outcome);
+    const body = { id: args.id, ...status, result: (parsed as { result?: unknown }).result ?? null };
+    return status.isError ? errorResult(body) : jsonResult(body);
+  };
+
   const wired: Record<string, Omit<McpTool, "name">> = {
+    get_mission_result: {
+      description:
+        "Read a finished mission's TYPED result by id (e.g. adversarial-2026-09-23T00-00-00-000Z): status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      handler: getMissionResult,
+    },
     find_capabilities: {
       description: "Find promoted Journeys (capabilities) whose metadata matches a query.",
       inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },

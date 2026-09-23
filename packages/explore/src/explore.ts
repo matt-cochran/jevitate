@@ -18,10 +18,12 @@ import { perceive } from "./perceive.js";
 import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
-import { RunRecorder } from "./record.js";
+import { RunRecorder, emptyRecording } from "./record.js";
 import { resolveMissionFixture } from "./fixture.js";
 import { redactText, redactUrl } from "./redact.js";
-import { TranscriptLog, type TranscriptEntry } from "./transcript.js";
+import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
+import type { MissionFailure } from "@jevitate/domain";
+import { CrashWatch, describeFailure } from "./mission-failure.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 
@@ -73,6 +75,10 @@ export interface ExploreConfig {
    * Default `RENDER_WAIT_MS` (see `perceive`).
    */
   readonly renderWaitMs?: number;
+  /** Incremental-flush seam: every transcript entry, as it is recorded. */
+  readonly onTranscriptEntry?: TranscriptListener;
+  /** Incremental-flush seam: the partial Recording after every recorded step. */
+  readonly onRecording?: (recording: Recording) => void;
 }
 
 export interface ExploreRun {
@@ -82,6 +88,12 @@ export interface ExploreRun {
   readonly finalUrl: string;
   readonly decisions: number;
   readonly actions: number;
+  /** Why the run ended `crashed`/`inconclusive` — absent on every other stop. */
+  readonly failure?: MissionFailure;
+}
+
+function firstLine(e: unknown): string {
+  return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
 
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
@@ -95,192 +107,247 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
   const fillHelper = new FillHelper(cfg.gen);
-  const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets);
+  const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets, cfg.onRecording);
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
+  const crashWatch = new CrashWatch(page);
   const now = (): number => Date.now();
 
-  const transcript = new TranscriptLog(secrets);
+  const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
   const history: string[] = [];
 
-  // Initial navigation (authorized above).
-  await Navigate.to(cfg.startUrl).performAs(cfg.actor);
-  recorder.navigate(cfg.startUrl, now());
-
   let stop: StopReason = "exhausted";
+  let failure: MissionFailure | undefined;
   let lastActedOp: string | null = null;
   let fixtureAttached = false;
 
-  for (;;) {
-    if (!tracker.mayDecide()) {
-      stop = "exhausted";
-      break;
-    }
+  try {
+    // Initial navigation (authorized above).
+    await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+    recorder.navigate(cfg.startUrl, now());
 
-    // Shared perception: never decide on an unrendered page (bounded render wait) and never
-    // offer an occluded control (see `perceive`).
-    const perception = await perceive(page, {
-      maxCandidates: bounds.maxCandidates,
-      ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
-    });
-    const snap = perception.snapshot;
-    // Re-observe the PREVIOUS action's effect: patch its postcondition + open
-    // the next page segment if the URL changed (record-before-reobserve).
-    recorder.observed(snap.url, now());
+    for (;;) {
+      if (!tracker.mayDecide()) {
+        stop = "exhausted";
+        break;
+      }
 
-    // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
-    if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
-      stop = "blocked";
-      break;
-    }
-
-    // Additive observation hook (usability analysis). Advisory: awaited but its
-    // result never gates the loop, bounds, or stop decision.
-    await cfg.onSnapshot?.(snap);
-
-    if (!perception.rendered) {
-      transcript.record({
-        op: "wait",
-        control: null,
-        confidence: null,
-        chosenBy: "strategy",
-        actOk: false,
-        reason: `${perception.reason} (fail-closed)`,
-        snapshot: snap,
+      // Shared perception: never decide on an unrendered page (bounded render wait) and never
+      // offer an occluded control (see `perceive`).
+      const perception = await perceive(page, {
+        maxCandidates: bounds.maxCandidates,
+        ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
       });
-      stop = "blocked";
-      break;
-    }
+      const snap = perception.snapshot;
+      // Re-observe the PREVIOUS action's effect: patch its postcondition + open
+      // the next page segment if the URL changed (record-before-reobserve).
+      recorder.observed(snap.url, now());
 
-    // #2 — no-progress: the last executed op left the page unchanged N times.
-    if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
-      stop = "no-progress";
-      break;
-    }
-
-    const decision = await decide(cfg.judge, {
-      goal: cfg.goal,
-      snapshot: snap,
-      history,
-      missionContext: cfg.missionContext,
-      secrets,
-      // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
-      // model had kept re-choosing it after a successful attach instead of proceeding).
-      uploadAvailable: fixture !== null && !fixtureAttached,
-    });
-    tracker.countDecision();
-
-    const record = (actOk: boolean, reason?: string): void => {
-      transcript.record({
-        op: decision.op,
-        control: decision.control,
-        confidence: decision.confidence,
-        chosenBy: "model",
-        actOk,
-        ...(reason === undefined ? {} : { reason }),
-        snapshot: snap,
-      });
-    };
-
-    // Advisory terminals (guardrail #4: the loop does not adjudicate success).
-    if (decision.op === "done") {
-      record(true, "model proposed done (advisory)");
-      stop = "done";
-      break;
-    }
-    if (decision.op === "blocked") {
-      record(true, "model blocked");
-      stop = "blocked";
-      break;
-    }
-
-    const control = decision.control;
-    if (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait") {
-      // No recorded mutation.
-      const r = await act(cfg.actor, { op: decision.op, control: null });
-      record(r.ok, r.reason);
-      lastActedOp = decision.op;
-      continue;
-    }
-
-    // Target-requiring op with no valid target → fail-closed.
-    if (control === null || decision.targetMissing) {
-      record(false, "no valid target (fail-closed)");
-      stop = "blocked";
-      break;
-    }
-    if (!tracker.mayAct()) {
-      record(false, "action budget exhausted");
-      stop = "exhausted";
-      break;
-    }
-    const at = now();
-
-    if (decision.op === "type" || decision.op === "select") {
-      // The generator supplies the text/option (never the model's choice head).
-      const { text } = await fillHelper.valueFor({
-        fieldLabel: control.name || control.summary,
-        goal: cfg.goal,
-        visibleContext: snap.controls.map((c) => c.summary).join("; "),
-        history,
-        secrets: cfg.secrets,
-      });
-      if (text === null) {
-        // The generator will not honestly supply a required value → never guess.
-        record(false, "no value available (fail-closed)");
+      // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
+      if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
         stop = "blocked";
         break;
       }
-      const r = await act(cfg.actor, { op: decision.op, control, value: text });
-      if (r.ok) {
-        if (decision.op === "type") recorder.fill(control.descriptor, text, at);
-        else recorder.select(control.descriptor, text, at);
-        tracker.countAction();
-        fillHelper.commit();
-        history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
-      } else {
-        history.push(`${decision.op} failed: ${r.reason ?? "?"}`);
-      }
-      record(r.ok, r.reason);
-    } else if (decision.op === "click") {
-      const r = await act(cfg.actor, { op: "click", control });
-      if (r.ok) {
-        recorder.click(control.descriptor, at);
-        tracker.countAction();
-        history.push(`clicked ${control.name}`);
-      } else {
-        history.push(`click failed: ${r.reason ?? "?"}`);
-      }
-      record(r.ok, r.reason);
-    } else {
-      // upload — act fails closed without a fixture.
-      const r = await act(cfg.actor, { op: "upload", control, fixture });
-      if (r.ok && fixture !== null) {
-        // The recorded path goes through the shared redaction seam: a path that
-        // contains a registered secret is recorded redacted (replay then fails
-        // closed) rather than persisting the secret into the artifact.
-        const recordedFile: ValueOrVar =
-          redactText(fixture, secrets) === fixture
-            ? { redacted: false, value: fixture }
-            : { redacted: true, length: fixture.length };
-        recorder.upload(control.descriptor, recordedFile, at);
-        tracker.countAction();
-        history.push(`uploaded the fixture into ${control.name}`);
-        fixtureAttached = true;
-      } else {
-        history.push(`upload failed: ${r.reason ?? "?"}`);
-      }
-      record(r.ok, r.reason);
-    }
 
-    lastActedOp = decision.op;
+      // Additive observation hook (usability analysis). Advisory: awaited but its
+      // result never gates the loop, bounds, or stop decision.
+      await cfg.onSnapshot?.(snap);
+
+      if (!perception.rendered) {
+        transcript.record({
+          op: "wait",
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          actOk: false,
+          reason: `${perception.reason} (fail-closed)`,
+          snapshot: snap,
+        });
+        stop = "blocked";
+        break;
+      }
+
+      // #2 — no-progress: the last executed op left the page unchanged N times.
+      if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
+        stop = "no-progress";
+        break;
+      }
+
+      let decision: Awaited<ReturnType<typeof decide>>;
+      try {
+        decision = await decide(cfg.judge, {
+          goal: cfg.goal,
+          snapshot: snap,
+          history,
+          missionContext: cfg.missionContext,
+          secrets,
+          // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
+          // model had kept re-choosing it after a successful attach instead of proceeding).
+          uploadAvailable: fixture !== null && !fixtureAttached,
+        });
+      } catch (e) {
+        // The decision IS the goal loop's engine: without it the run can prove nothing more, so it
+        // ends `inconclusive` (typed) with everything recorded so far — never a throw, never clean.
+        failure = { kind: "exception", message: `model decision unavailable: ${firstLine(e)}` };
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "model",
+          actOk: false,
+          reason: failure.message,
+          snapshot: snap,
+        });
+        stop = "inconclusive";
+        break;
+      }
+      tracker.countDecision();
+
+      const record = (actOk: boolean, reason?: string): void => {
+        transcript.record({
+          op: decision.op,
+          control: decision.control,
+          confidence: decision.confidence,
+          chosenBy: "model",
+          actOk,
+          ...(reason === undefined ? {} : { reason }),
+          snapshot: snap,
+        });
+      };
+
+      // Advisory terminals (guardrail #4: the loop does not adjudicate success).
+      if (decision.op === "done") {
+        record(true, "model proposed done (advisory)");
+        stop = "done";
+        break;
+      }
+      if (decision.op === "blocked") {
+        record(true, "model blocked");
+        stop = "blocked";
+        break;
+      }
+
+      const control = decision.control;
+      if (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait") {
+        // No recorded mutation.
+        const r = await act(cfg.actor, { op: decision.op, control: null });
+        record(r.ok, r.reason);
+        lastActedOp = decision.op;
+        continue;
+      }
+
+      // Target-requiring op with no valid target → fail-closed.
+      if (control === null || decision.targetMissing) {
+        record(false, "no valid target (fail-closed)");
+        stop = "blocked";
+        break;
+      }
+      if (!tracker.mayAct()) {
+        record(false, "action budget exhausted");
+        stop = "exhausted";
+        break;
+      }
+      const at = now();
+
+      if (decision.op === "type" || decision.op === "select") {
+        // The generator supplies the text/option (never the model's choice head). It is a HELPER:
+        // when it is unavailable the step fails (recorded, visible to the model) and the run goes on.
+        let text: string | null;
+        try {
+          ({ text } = await fillHelper.valueFor({
+            fieldLabel: control.name || control.summary,
+            goal: cfg.goal,
+            visibleContext: snap.controls.map((c) => c.summary).join("; "),
+            history,
+            secrets: cfg.secrets,
+          }));
+        } catch (e) {
+          const reason = `value generation unavailable: ${firstLine(e)}`;
+          history.push(`${decision.op} skipped: ${reason}`);
+          record(false, reason);
+          lastActedOp = decision.op;
+          continue;
+        }
+        if (text === null) {
+          // The generator will not honestly supply a required value → never guess.
+          record(false, "no value available (fail-closed)");
+          stop = "blocked";
+          break;
+        }
+        const r = await act(cfg.actor, { op: decision.op, control, value: text });
+        if (r.ok) {
+          if (decision.op === "type") recorder.fill(control.descriptor, text, at);
+          else recorder.select(control.descriptor, text, at);
+          tracker.countAction();
+          fillHelper.commit();
+          history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
+        } else {
+          history.push(`${decision.op} failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason);
+      } else if (decision.op === "click") {
+        const r = await act(cfg.actor, { op: "click", control });
+        if (r.ok) {
+          recorder.click(control.descriptor, at);
+          tracker.countAction();
+          history.push(`clicked ${control.name}`);
+        } else {
+          history.push(`click failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason);
+      } else {
+        // upload — act fails closed without a fixture.
+        const r = await act(cfg.actor, { op: "upload", control, fixture });
+        if (r.ok && fixture !== null) {
+          // The recorded path goes through the shared redaction seam: a path that
+          // contains a registered secret is recorded redacted (replay then fails
+          // closed) rather than persisting the secret into the artifact.
+          const recordedFile: ValueOrVar =
+            redactText(fixture, secrets) === fixture
+              ? { redacted: false, value: fixture }
+              : { redacted: true, length: fixture.length };
+          recorder.upload(control.descriptor, recordedFile, at);
+          tracker.countAction();
+          history.push(`uploaded the fixture into ${control.name}`);
+          fixtureAttached = true;
+        } else {
+          history.push(`upload failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason);
+      }
+
+      lastActedOp = decision.op;
+    }
+  } catch (e) {
+    // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
+    // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
+    failure = describeFailure(e, crashWatch.signals());
+    stop = "crashed";
   }
 
+  const finished = recorder.tryFinish({ intent: cfg.goal });
+  if (!finished.ok) {
+    // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
+    // written; the run is reported crashed so this can never read as a pass.
+    failure = failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
+    stop = "crashed";
+  }
   return {
     stop,
-    recording: recorder.finish({ intent: cfg.goal }),
+    recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
     transcript: transcript.entries(),
-    finalUrl: redactText(redactUrl(page.url()), secrets),
+    finalUrl: redactText(redactUrl(safeUrl(page)), secrets),
     decisions: tracker.decisions,
     actions: tracker.actions,
+    ...(failure === undefined ? {} : { failure }),
   };
 }
+
+/** `page.url()` survives a closed page, but guard it: winding down must never throw. */
+function safeUrl(page: { url(): string }): string {
+  try {
+    return page.url();
+  } catch {
+    return "about:blank";
+  }
+}
+

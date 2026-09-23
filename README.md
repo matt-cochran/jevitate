@@ -65,6 +65,24 @@ jevitate --help                                       # everything else
 Autonomous runs are always bounded and restricted to origins you authorize;
 credentials are never sent to a model. See [SECURITY.md](./SECURITY.md).
 
+### Mission outcomes and exit codes
+
+A mission never answers with a crash: every run ends in a typed outcome, and its
+transcript and Recording are flushed to disk step by step, so they survive even
+a run that dies mid-way. A run that could not do its work is never reported as
+clean.
+
+| Outcome | Exit code | Meaning |
+|---|---|---|
+| `clean` | 0 | the run finished its budget and found nothing (goal mission: the success assertion held) |
+| `defects-found` | 1 | at least one confirmed defect (goal mission: the success assertion did not hold) |
+| `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash) |
+| `hang` | 3 | the app under test hung, and the hang reproduced on replay |
+| `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+
+The MCP tool `get_mission_result` returns the same status and code for a
+finished run; a broken run comes back as an error result.
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`

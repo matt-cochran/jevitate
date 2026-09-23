@@ -54,13 +54,22 @@ export interface TranscriptStep {
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
 }
 
+/**
+ * Receives every entry the moment it is recorded — the incremental-flush seam: a caller persists
+ * the transcript step by step so a run that dies mid-way (browser crash, killed process) still
+ * leaves every step up to the failure on disk.
+ */
+export type TranscriptListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
+
 /** Append-only, redacting transcript builder. Steps are numbered from 1 in record order. */
 export class TranscriptLog {
   readonly #entries: TranscriptEntry[] = [];
   readonly #secrets: readonly string[];
+  readonly #listener: TranscriptListener | undefined;
 
-  constructor(secrets: readonly string[] = []) {
+  constructor(secrets: readonly string[] = [], listener?: TranscriptListener) {
     this.#secrets = secrets;
+    this.#listener = listener;
   }
 
   record(step: TranscriptStep): TranscriptEntry {
@@ -79,6 +88,7 @@ export class TranscriptLog {
       ...(step.judgments === undefined ? {} : { judgments: step.judgments }),
     };
     this.#entries.push(entry);
+    this.#listener?.(entry, this.#entries);
     return entry;
   }
 

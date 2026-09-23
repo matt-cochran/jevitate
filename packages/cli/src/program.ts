@@ -1374,7 +1374,8 @@ export function buildProgram(deps: CliDeps): Command {
           } else {
             program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
           }
-          if (result.coverage.defects.length > 0) process.exitCode = 1;
+          // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see mission-exit.ts).
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1410,10 +1411,14 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
 
+        const advBounds: Record<string, number> = {};
+        if (o.maxActions !== undefined) advBounds.maxActions = Number(o.maxActions);
+        if (o.maxDecisions !== undefined) advBounds.maxDecisions = Number(o.maxDecisions);
         try {
           const result = await runAdversarialCliMission({
             seedUrl: o.url,
             allowlist: advAllowlist,
+            bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
             strategies: [
               "ordering-violation",
               "repeat-rapid",
@@ -1429,8 +1434,9 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
-          // A discovered defect gates CI, mirroring how a failing test would.
-          if (result.outcome === "defect") process.exitCode = 1;
+          // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
+          // itself broke (inconclusive/crashed) — see mission-exit.ts.
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1490,13 +1496,13 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
+          // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
-          } else if (err instanceof UxAnalysisFailedError) {
-            emitJson(program, fail("E_UX_ANALYSIS", err.message));
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -1524,6 +1530,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1582,11 +1589,11 @@ export function buildProgram(deps: CliDeps): Command {
         const envelope = ok(result);
         if (o.json) {
           emitJson(program, envelope);
-          if (result.outcome !== "succeeded") process.exitCode = 1;
         } else {
           program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
-          process.exitCode = result.outcome === "succeeded" ? 0 : 1;
         }
+        // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
+        process.exitCode = result.exitCode;
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1996,6 +2003,7 @@ export function buildProgram(deps: CliDeps): Command {
           journeysDir: resolveJourneysDir(deps, dir),
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
+          recordingsDir: resolveDataDir(["recordings"]),
           inboxDir: resolveInboxDir(deps),
           credentialStore: aiStore,
           generationGateway,

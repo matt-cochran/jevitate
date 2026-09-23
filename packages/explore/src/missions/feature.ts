@@ -22,6 +22,8 @@ import { Frontier } from "../feature/frontier.js";
 import { reachFrontierState } from "../feature/reach.js";
 import { isInScope, type CapabilityScope } from "../feature/capability-scope.js";
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
+import type { MissionFailure } from "@jevitate/domain";
+import { CrashWatch, describeFailure } from "../mission-failure.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -64,7 +66,10 @@ export interface FeatureCoverage {
 }
 
 export interface FeatureRunResult {
-  outcome: "exhausted" | "cap" | "path-cap";
+  /** `crashed`: the engine failed; the paths discovered up to the failure are still returned. */
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed";
+  /** Why the run crashed — present only for `crashed`. */
+  failure?: MissionFailure;
   coverage: FeatureCoverage;
   recordings: Recording[];
 }
@@ -111,7 +116,10 @@ function extendRecording(
   navigatedToPath: string | null,
 ): Recording {
   const pages: PageSegment[] = structuredClone(prefix.pages);
-  const last = pages[pages.length - 1]!;
+  // A feature path always starts with its seed navigate segment (`seedRecording`); a prefix with no
+  // page segment is not a path this mission produced, so it is rejected rather than guessed at.
+  const last = pages.at(-1);
+  if (last === undefined) throw new Error("extendRecording: path prefix has no page segment");
   const expect: Assertion =
     navigatedToPath !== null ? { kind: "urlIncludes", text: navigatedToPath } : { kind: "visible", target: { ...descriptor } };
 
@@ -154,83 +162,91 @@ export async function runFeatureMission(params: {
       })
     ).snapshot;
 
-  await params.actor.attemptsTo(Navigate.to(params.seedUrl));
-  let snap = await snapshotNow();
-  let currentFingerprint = stateFingerprint(snap);
-
-  const visited = new Set<string>([currentFingerprint]);
+  const crashWatch = new CrashWatch(params.page);
+  const visited = new Set<string>();
   const boundaryEdges: string[] = [];
   const leaves = new Map<string, Recording>();
   const extended = new Set<string>();
-  const frontier = new Frontier();
-
-  const seedRec = seedRecording(params.seedUrl, site);
-  leaves.set(currentFingerprint, seedRec);
-  for (const { control, op } of frontierCandidates(snap.controls)) {
-    frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
-  }
-
-  let actions = 0;
   let transitionsExercised = 0;
   let pathsDiscovered = 1; // the seed state counts as the first path
 
-  const endRun = (outcome: FeatureRunResult["outcome"]): FeatureRunResult => ({
+  const endRun = (outcome: FeatureRunResult["outcome"], failure?: MissionFailure): FeatureRunResult => ({
     outcome,
+    ...(failure === undefined ? {} : { failure }),
     coverage: { pathsDiscovered, statesExercised: visited.size, transitionsExercised, boundaryEdges },
     recordings: [...leaves.entries()].filter(([fp]) => !extended.has(fp)).map(([, r]) => r),
   });
 
-  while (!frontier.isExhausted()) {
-    if (actions >= bounds.maxActions) return endRun("cap");
-    if (pathsDiscovered >= maxPaths) return endRun("path-cap");
+  try {
+    await params.actor.attemptsTo(Navigate.to(params.seedUrl));
+    let snap = await snapshotNow();
+    let currentFingerprint = stateFingerprint(snap);
+    visited.add(currentFingerprint);
+    const frontier = new Frontier();
 
-    const item = frontier.popPreferring(currentFingerprint);
-    if (item === undefined) break;
-    const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
-    if (depth >= maxDepth) continue;
-
-    if (item.fromFingerprint !== currentFingerprint) {
-      const reached = await reachFrontierState({ actor: params.actor, item, snapshotNow });
-      if (!reached.ok) continue;
-      snap = reached.snapshot;
-      currentFingerprint = item.fromFingerprint;
+    const seedRec = seedRecording(params.seedUrl, site);
+    leaves.set(currentFingerprint, seedRec);
+    for (const { control, op } of frontierCandidates(snap.controls)) {
+      frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
     }
 
-    // Boundary-value stimulation on type; a secret-like field yields NO
-    // candidate and is skipped entirely (guardrail #3 — never synthesized).
-    const fillText = item.op === "type" && !isSecretLike(item.control) ? boundaryValueCandidates(item.control)[0] : undefined;
-    if (item.op === "type" && fillText === undefined) continue;
+    let actions = 0;
 
-    const beforeUrl = snap.url;
-    const result = await act(params.actor, { op: item.op, control: item.control, value: fillText ?? null });
-    actions += 1;
-    if (!result.ok) continue;
+    while (!frontier.isExhausted()) {
+      if (actions >= bounds.maxActions) return endRun("cap");
+      if (pathsDiscovered >= maxPaths) return endRun("path-cap");
 
-    snap = await snapshotNow();
-    const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
-    const newFingerprint = stateFingerprint(snap);
-    const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
-    transitionsExercised += 1;
-    extended.add(item.fromFingerprint);
+      const item = frontier.popPreferring(currentFingerprint);
+      if (item === undefined) break;
+      const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
+      if (depth >= maxDepth) continue;
 
-    if (!isInScope(snap.url, params.scope)) {
-      // Out of scope — recorded as a boundary edge, never expanded (guardrail #4).
-      boundaryEdges.push(snap.url);
-      leaves.set(newFingerprint, branch);
-      currentFingerprint = newFingerprint;
-      continue;
-    }
-
-    if (!visited.has(newFingerprint)) {
-      visited.add(newFingerprint);
-      leaves.set(newFingerprint, branch);
-      pathsDiscovered += 1;
-      for (const { control, op } of frontierCandidates(snap.controls)) {
-        frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
+      if (item.fromFingerprint !== currentFingerprint) {
+        const reached = await reachFrontierState({ actor: params.actor, item, snapshotNow });
+        if (!reached.ok) continue;
+        snap = reached.snapshot;
+        currentFingerprint = item.fromFingerprint;
       }
-    }
-    currentFingerprint = newFingerprint;
-  }
 
-  return endRun("exhausted");
+      // Boundary-value stimulation on type; a secret-like field yields NO
+      // candidate and is skipped entirely (guardrail #3 — never synthesized).
+      const fillText = item.op === "type" && !isSecretLike(item.control) ? boundaryValueCandidates(item.control)[0] : undefined;
+      if (item.op === "type" && fillText === undefined) continue;
+
+      const beforeUrl = snap.url;
+      const result = await act(params.actor, { op: item.op, control: item.control, value: fillText ?? null });
+      actions += 1;
+      if (!result.ok) continue;
+
+      snap = await snapshotNow();
+      const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
+      const newFingerprint = stateFingerprint(snap);
+      const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
+      transitionsExercised += 1;
+      extended.add(item.fromFingerprint);
+
+      if (!isInScope(snap.url, params.scope)) {
+        // Out of scope — recorded as a boundary edge, never expanded (guardrail #4).
+        boundaryEdges.push(snap.url);
+        leaves.set(newFingerprint, branch);
+        currentFingerprint = newFingerprint;
+        continue;
+      }
+
+      if (!visited.has(newFingerprint)) {
+        visited.add(newFingerprint);
+        leaves.set(newFingerprint, branch);
+        pathsDiscovered += 1;
+        for (const { control, op } of frontierCandidates(snap.controls)) {
+          frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
+        }
+      }
+      currentFingerprint = newFingerprint;
+    }
+
+    return endRun("exhausted");
+  } catch (e) {
+    // Engine failure: a typed `crashed` result carrying every path discovered so far.
+    return endRun("crashed", describeFailure(e, crashWatch.signals()));
+  }
 }

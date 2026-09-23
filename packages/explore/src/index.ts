@@ -28,3 +28,4 @@ export * from "./missions/adversarial.js";
 export * from "./feature/capability-scope.js";
 export * from "./feature/boundary-values.js";
 export * from "./missions/feature.js";
+export * from "./mission-failure.js";

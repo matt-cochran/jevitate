@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FakeGenerationGateway } from "@jevitate/ai-core";
+import { FakeGenerationGateway, type JudgmentPort } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { startServer } from "@jevitate/example-site";
@@ -132,4 +132,107 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
       site.url,
     );
   });
+});
+
+describe("explore — typed stops instead of throws (owner ruling 1)", () => {
+  it(
+    "a model decision that stays unavailable ends the run `inconclusive` with its transcript and Recording",
+    async () => {
+      const run = await withSession(
+        "explore-inconclusive-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
+          const judge = {
+            async systemOne(): Promise<never> {
+              throw new Error("judgment provider unavailable");
+            },
+          };
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "sign in",
+            allowlist: [site.url],
+            startUrl: `${site.url}/login`,
+          });
+        },
+        site.url,
+      );
+      expect(run.stop).toBe("inconclusive");
+      expect(run.failure?.message).toBe("model decision unavailable: judgment provider unavailable");
+      expect(run.transcript).toHaveLength(1);
+      expect(run.transcript[0]).toMatchObject({ op: null, actOk: false });
+      expect(run.recording.pages[0]?.steps[0]?.step.kind).toBe("navigate");
+    },
+    120_000,
+  );
+
+  it(
+    "an unavailable value generator is a helper failure: the step fails, and the run carries on",
+    async () => {
+      const run = await withSession(
+        "explore-helper-down-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
+          const judge = new ScriptedJudge([{ op: "type", target: "0" }, { op: "done" }]);
+          const gen = {
+            async generate(): Promise<never> {
+              throw new Error("generation provider unavailable");
+            },
+          };
+          return explore({
+            actor,
+            judge,
+            gen,
+            goal: "sign in",
+            allowlist: [site.url],
+            startUrl: `${site.url}/login`,
+          });
+        },
+        site.url,
+      );
+      expect(run.stop).toBe("done");
+      expect(run.transcript[0]).toMatchObject({
+        op: "type",
+        actOk: false,
+        reason: "value generation unavailable: generation provider unavailable",
+      });
+      expect(run.decisions).toBe(2);
+    },
+    120_000,
+  );
+
+  it(
+    "a page that dies mid-run ends `crashed` (page-closed), never a thrown error",
+    async () => {
+      const run = await withSession(
+        "explore-crash-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
+          const scripted = new ScriptedJudge([{ op: "click", target: "1" }]);
+          // The judge closes the page before answering: the loop's next page read hits a dead page.
+          const judge: JudgmentPort = {
+            async systemOne(args) {
+              await session.page.close();
+              return scripted.systemOne(args);
+            },
+          };
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "sign in",
+            allowlist: [site.url],
+            startUrl: `${site.url}/login`,
+          });
+        },
+        site.url,
+      );
+      expect(run.stop).toBe("crashed");
+      expect(run.failure?.kind).toBe("page-closed");
+      expect(run.transcript.length).toBeLessThanOrEqual(1);
+      expect(run.recording.pages[0]?.steps[0]?.step.kind).toBe("navigate");
+    },
+    120_000,
+  );
 });

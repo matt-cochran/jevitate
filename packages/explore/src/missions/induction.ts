@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
-import type { GenerationPort, JudgmentPort } from "@jevitate/ai-core";
+import type { Answer, GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import {
   assertAuthorizedExploreTarget,
   perceive,
@@ -19,7 +19,10 @@ import {
   type Snapshot,
   type TargetOp,
   type TranscriptEntry,
+  type TranscriptListener,
 } from "../index.js";
+import type { MissionFailure } from "@jevitate/domain";
+import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { reachFrontierState } from "../coverage/reach.js";
@@ -59,7 +62,10 @@ export interface CoverageReport {
 }
 
 export interface InductionRunResult {
-  readonly outcome: "exhausted" | "cap";
+  /** `crashed`: the engine failed; everything discovered up to the failure is still returned. */
+  readonly outcome: "exhausted" | "cap" | "crashed";
+  /** Why the run crashed — present only for `crashed`. */
+  readonly failure?: MissionFailure;
   readonly coverage: CoverageReport;
   /** One replayable repro Recording per distinct state visited (discovery order). */
   readonly recordings: Recording[];
@@ -80,6 +86,8 @@ export interface InductionMissionParams {
   readonly maxDepth?: number;
   /** Bound (ms) on waiting for a rendered page on each perception. Default `COVERAGE_RENDER_WAIT_MS`. */
   readonly renderWaitMs?: number;
+  /** Incremental-flush seam: every transcript entry, as it is recorded. */
+  readonly onTranscriptEntry?: TranscriptListener;
 }
 
 /**
@@ -173,22 +181,11 @@ export async function runInductionMission(params: InductionMissionParams): Promi
         renderWaitMs: params.renderWaitMs ?? COVERAGE_RENDER_WAIT_MS,
       })
     ).snapshot;
-  const transcript = new TranscriptLog();
-
-  await params.actor.attemptsTo(Navigate.to(params.seedUrl));
-  let snap = await takeSnapshot();
-  let currentFingerprint = stateFingerprint(snap);
-
-  const visited = new Set<string>([currentFingerprint]);
+  const transcript = new TranscriptLog([], params.onTranscriptEntry);
+  const crashWatch = new CrashWatch(params.page);
+  const visited = new Set<string>();
   const statePaths = new Map<string, Recording>();
   const defects: DefectRecord[] = [];
-  const frontier = new Frontier();
-
-  const seedRecording: Recording = { version: "1", site, pages: [] };
-  statePaths.set(currentFingerprint, seedRecording);
-  enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
-
-  let actions = 0;
   let transitionsExercised = 0;
 
   const report = (frontierExhausted: boolean): CoverageReport => ({
@@ -198,113 +195,144 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     defects,
   });
 
-  while (!frontier.isExhausted()) {
-    // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
-    if (actions >= bounds.maxActions) {
-      return {
-        outcome: "cap",
-        coverage: report(false),
-        recordings: [...statePaths.values()],
-        transcript: transcript.entries(),
-      };
-    }
+  try {
+    await params.actor.attemptsTo(Navigate.to(params.seedUrl));
+    let snap = await takeSnapshot();
+    let currentFingerprint = stateFingerprint(snap);
+    visited.add(currentFingerprint);
+    const frontier = new Frontier();
 
-    const item = frontier.popPreferring(currentFingerprint);
-    if (item === undefined) break;
+    const seedRecording: Recording = { version: "1", site, pages: [] };
+    statePaths.set(currentFingerprint, seedRecording);
+    enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
 
-    const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
-    if (depth >= maxDepth) continue; // bounded exploration depth
+    let actions = 0;
 
-    if (item.fromFingerprint !== currentFingerprint) {
-      const reached = await reachFrontierState({
-        actor: params.actor,
-        seedUrl: params.seedUrl,
-        item,
-        snapshotNow: takeSnapshot,
+    while (!frontier.isExhausted()) {
+      // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
+      if (actions >= bounds.maxActions) {
+        return {
+          outcome: "cap",
+          coverage: report(false),
+          recordings: [...statePaths.values()],
+          transcript: transcript.entries(),
+        };
+      }
+
+      const item = frontier.popPreferring(currentFingerprint);
+      if (item === undefined) break;
+
+      const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
+      if (depth >= maxDepth) continue; // bounded exploration depth
+
+      if (item.fromFingerprint !== currentFingerprint) {
+        const reached = await reachFrontierState({
+          actor: params.actor,
+          seedUrl: params.seedUrl,
+          item,
+          snapshotNow: takeSnapshot,
+        });
+        if (!reached.ok) continue; // stale frontier item — dropped, never guessed at
+        snap = reached.snapshot;
+        currentFingerprint = item.fromFingerprint;
+      }
+
+      const liveControl = resolveControl(snap, item.control);
+      if (liveControl === null) continue; // control vanished between snapshots — dropped
+
+      const result = await act(params.actor, {
+        op: item.op,
+        control: liveControl,
+        value: item.op === "click" ? null : "",
       });
-      if (!reached.ok) continue; // stale frontier item — dropped, never guessed at
-      snap = reached.snapshot;
-      currentFingerprint = item.fromFingerprint;
-    }
+      actions += 1;
+      const decidedOn = snap;
+      if (!result.ok) {
+        transcript.record({
+          op: item.op,
+          control: liveControl,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "coverage-frontier",
+          actOk: false,
+          ...(result.reason === undefined ? {} : { reason: result.reason }),
+          snapshot: decidedOn,
+        });
+        continue;
+      }
 
-    const liveControl = resolveControl(snap, item.control);
-    if (liveControl === null) continue; // control vanished between snapshots — dropped
+      snap = await takeSnapshot();
+      const newFingerprint = stateFingerprint(snap);
+      const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
+      transitionsExercised += 1;
 
-    const result = await act(params.actor, {
-      op: item.op,
-      control: liveControl,
-      value: item.op === "click" ? null : "",
-    });
-    actions += 1;
-    const decidedOn = snap;
-    if (!result.ok) {
+      // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
+      // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
+      // guard (guardrail #5). The verdict NEVER gates termination or expansion — so an
+      // unavailable judgment is a missing advisory, recorded, and the run goes on.
+      let isDefect: Answer | undefined;
+      let judgmentNote: string | undefined;
+      try {
+        const answers = await params.judgment.systemOne({
+          state: buildJudgmentState({
+            goal: "state coverage",
+            url: snap.url,
+            controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
+            history: [],
+          }),
+          questions: { isDefect: { kind: "noul" } },
+        });
+        isDefect = answers.isDefect;
+      } catch (e) {
+        judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
+      }
+      const flagged = isDefect?.kind === "noul" && isDefect.value;
       transcript.record({
         op: item.op,
         control: liveControl,
         confidence: null,
         chosenBy: "strategy",
         strategy: "coverage-frontier",
-        actOk: false,
-        ...(result.reason === undefined ? {} : { reason: result.reason }),
+        actOk: true,
         snapshot: decidedOn,
+        ...(judgmentNote === undefined ? {} : { reason: judgmentNote }),
+        ...(isDefect?.kind === "noul"
+          ? { judgments: { isDefect: { value: isDefect.value, probability: isDefect.probability } } }
+          : {}),
       });
-      continue;
-    }
+      if (flagged) {
+        defects.push({
+          stateFingerprint: newFingerprint,
+          url: snap.url,
+          reason: "judgment flagged defect",
+          recording: branch,
+        });
+        currentFingerprint = newFingerprint;
+        continue; // recorded, but a flagged state is never expanded
+      }
 
-    snap = await takeSnapshot();
-    const newFingerprint = stateFingerprint(snap);
-    const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
-    transitionsExercised += 1;
-
-    // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
-    // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
-    // guard (guardrail #5). The verdict NEVER gates termination or expansion.
-    const answers = await params.judgment.systemOne({
-      state: buildJudgmentState({
-        goal: "state coverage",
-        url: snap.url,
-        controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
-        history: [],
-      }),
-      questions: { isDefect: { kind: "noul" } },
-    });
-    const isDefect = answers.isDefect;
-    const flagged = isDefect?.kind === "noul" && isDefect.value;
-    transcript.record({
-      op: item.op,
-      control: liveControl,
-      confidence: null,
-      chosenBy: "strategy",
-      strategy: "coverage-frontier",
-      actOk: true,
-      snapshot: decidedOn,
-      ...(isDefect?.kind === "noul"
-        ? { judgments: { isDefect: { value: isDefect.value, probability: isDefect.probability } } }
-        : {}),
-    });
-    if (flagged) {
-      defects.push({
-        stateFingerprint: newFingerprint,
-        url: snap.url,
-        reason: "judgment flagged defect",
-        recording: branch,
-      });
+      if (!visited.has(newFingerprint)) {
+        visited.add(newFingerprint);
+        statePaths.set(newFingerprint, branch);
+        enqueueFrom(frontier, newFingerprint, branch, snap.controls);
+      }
       currentFingerprint = newFingerprint;
-      continue; // recorded, but a flagged state is never expanded
     }
 
-    if (!visited.has(newFingerprint)) {
-      visited.add(newFingerprint);
-      statePaths.set(newFingerprint, branch);
-      enqueueFrom(frontier, newFingerprint, branch, snap.controls);
-    }
-    currentFingerprint = newFingerprint;
+    return {
+      outcome: "exhausted",
+      coverage: report(true),
+      recordings: [...statePaths.values()],
+      transcript: transcript.entries(),
+    };
+  } catch (e) {
+    // Engine failure: a typed `crashed` result with every state path and transcript step so far.
+    return {
+      outcome: "crashed",
+      failure: describeFailure(e, crashWatch.signals()),
+      coverage: report(false),
+      recordings: [...statePaths.values()],
+      transcript: transcript.entries(),
+    };
   }
-
-  return {
-    outcome: "exhausted",
-    coverage: report(true),
-    recordings: [...statePaths.values()],
-    transcript: transcript.entries(),
-  };
 }
