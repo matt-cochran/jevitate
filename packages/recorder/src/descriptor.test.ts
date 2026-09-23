@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, test } from "vitest";
 import type { ElementHandle, Page } from "playwright";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
@@ -22,14 +19,12 @@ const port = new PlaywrightBrowserPort();
  * cheapest way to stand up a fixture here.
  */
 async function withPage(html: string, body: (page: Page) => Promise<void>): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-descriptor-"));
-  const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
+  const session = await port.open({ headless: true, allowedOrigins: [], baseUrl: "about:blank" });
   try {
     await session.page.setContent(`<!doctype html><html><body>${html}</body></html>`);
     await body(session.page);
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 

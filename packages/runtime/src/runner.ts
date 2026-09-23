@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import type { BrowserPort } from "@jevitate/playwright";
 import type { ActionRegistry } from "@jevitate/site-sdk";
@@ -5,13 +6,30 @@ import { CastActor, BrowseTheWeb, PaceInteractions, type Ability } from "@jevita
 import { evaluateGate, resolveThrottle, seedFrom, makeRng, Pacer } from "@jevitate/domain";
 import type { SitePolicyRepository, BudgetRepository, ActivityRepository } from "@jevitate/application";
 
+/** True when `path` exists; any error other than "not found" is thrown, never read as absence. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (err) {
+    if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 export interface RunRequest {
   site: string;
   account: string;
   actionId: string;
   version: string;
   input: unknown;
-  profileDir: string;
+  /**
+   * Playwright storageState file carrying this account's auth across runs:
+   * loaded into the run's fresh browser context when it exists, and written
+   * back after the action (success or failure) so a login survives into the
+   * next run.
+   */
+  storageStatePath: string;
   baseUrl: string;
   headless: boolean;
   allowedOrigins: string[];
@@ -155,8 +173,9 @@ export class ActionRunner {
     input: unknown,
     extraAbilities: Ability[],
   ): Promise<RunResult> {
+    const priorState = await pathExists(req.storageStatePath);
     const session = await this.browser.open({
-      profileDir: req.profileDir,
+      ...(priorState ? { storageState: req.storageStatePath } : {}),
       headless: req.headless,
       allowedOrigins: req.allowedOrigins,
       baseUrl: req.baseUrl,
@@ -168,8 +187,15 @@ export class ActionRunner {
         ...extraAbilities,
       );
       const raw = await action.execute(actor, input);
-      return { outcome: "ok", output: action.output.parse(raw) };
+      const output = action.output.parse(raw);
+      await session.saveStorageState(req.storageStatePath);
+      return { outcome: "ok", output };
     } catch (err) {
+      try {
+        await session.saveStorageState(req.storageStatePath);
+      } catch {
+        /* don't mask the original error */
+      }
       if (req.traceDir) {
         try {
           await session.stopTracingToFile(join(req.traceDir, `trace-${req.actionId}.zip`));

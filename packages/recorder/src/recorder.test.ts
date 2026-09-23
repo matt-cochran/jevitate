@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { RecordingSchema, type RecordedStep, type Step } from "@jevitate/recording";
@@ -30,8 +27,7 @@ async function withSite(
   routes: Readonly<Record<string, string>>,
   body: (ctx: { recorder: Recorder; page: import("playwright").Page }) => Promise<void>,
 ): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-recorder-"));
-  const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
+  const session = await port.open({ headless: true, allowedOrigins: [], baseUrl: "about:blank" });
   try {
     const recorder = new Recorder(session, SITE);
     await recorder.install();
@@ -43,7 +39,6 @@ async function withSite(
     await body({ recorder, page: session.page });
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 

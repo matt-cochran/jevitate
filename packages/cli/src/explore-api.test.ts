@@ -141,7 +141,6 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
         allowlist: ["https://authorized.test"],
         capability: "checkout",
         routeGlobs: ["/checkout/**"],
-        profileDir: "/tmp/unused",
       }),
     ).rejects.toThrow(UnauthorizedExploreTargetError);
   });
@@ -216,7 +215,6 @@ describe("runAdversarialCliMission — fail-closed (no browser)", () => {
         strategies: ["ordering-violation"],
         judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
         generation: new FakeGenerationGateway(),
-        profileDir: "/tmp/unused",
         // If the guard failed to fail-closed, this factory would run and flip the flag.
         browserPortFactory: () => {
           opened = true;
