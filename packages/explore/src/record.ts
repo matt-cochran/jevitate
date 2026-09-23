@@ -83,6 +83,8 @@ export class RunRecorder {
   #current: PageSegment | null = null;
   #pendingSegmentUrl: string | null = null;
   #lastStep: RecordedStep | null = null;
+  /** Whether `observed` already ran for the last step (only the FIRST observation after a step counts). */
+  #lastStepObserved = false;
   #t0: number | null = null;
   #prevTime: number | null = null;
 
@@ -173,6 +175,7 @@ export class RunRecorder {
     if (segment === null) throw new Error("RunRecorder: no page segment is open");
     segment.steps.push(recorded);
     this.#lastStep = recorded;
+    this.#lastStepObserved = false;
     this.#steps += 1;
     this.#emit();
   }
@@ -239,7 +242,7 @@ export class RunRecorder {
    * the last recorded step caused the navigation: rewrite its postcondition to
    * `urlIncludes` and queue the next segment (materialized on the next step).
    */
-  observed(url: string, _atMs: number, timing?: PageTiming): void {
+  observed(url: string, _atMs: number, timing?: PageTiming, opts?: { readonly lastTargetStillPresent?: boolean }): void {
     // The first observation after a step carries how the page got there (a measurement, never a
     // postcondition): it is attached to that step's timing, redacted like everything else.
     if (timing !== undefined && this.#lastStep !== null && this.#lastStep.timing !== undefined && this.#lastStep.timing.page === undefined) {
@@ -250,7 +253,20 @@ export class RunRecorder {
       setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });
       this.#pendingSegmentUrl = path;
       this.#emit();
+    } else if (
+      opts?.lastTargetStillPresent === false &&
+      this.#lastStep !== null &&
+      !this.#lastStepObserved &&
+      "expect" in this.#lastStep.step &&
+      this.#lastStep.step.expect.kind !== "urlIncludes"
+    ) {
+      // An in-place action whose target is gone afterwards (an SPA step that swaps the view): the
+      // provisional "target visible" postcondition did NOT hold in this run, so it must not be
+      // recorded — the page's URL is what held, and a replay checks that instead.
+      setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });
+      this.#emit();
     }
+    this.#lastStepObserved = true;
   }
 
   /**
@@ -289,4 +305,26 @@ export class RunRecorder {
 /** A schema-valid, step-free Recording whose retro says why the real one is unavailable. */
 export function emptyRecording(site: string, reason: string): Recording {
   return { version: "1.0.0", site, pages: [], retro: `recording unavailable: ${reason}` };
+}
+
+/**
+ * A copy of `recording` whose step at flat index `index` asserts nothing about its outcome (an
+ * always-true `urlIncludes ""`). Used when replaying a finding's repro to OBSERVE what the app does
+ * after that step — the check that follows (a defect signal, a hang) is the verdict, and a fixed
+ * app that now behaves differently after the step must not turn the replay into a failure.
+ * Every earlier step keeps its postcondition, so the replay still proves it reached the same place.
+ */
+export function observeAfterStep(recording: Recording, index: number): Recording {
+  const copy: Recording = structuredClone(recording);
+  let i = 0;
+  for (const page of copy.pages) {
+    for (const recorded of page.steps) {
+      if (i === index && "expect" in recorded.step) {
+        recorded.step.expect = { kind: "urlIncludes", text: "" };
+        return copy;
+      }
+      i += 1;
+    }
+  }
+  return copy;
 }

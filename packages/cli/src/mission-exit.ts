@@ -27,6 +27,8 @@ export function goalExitCode(outcome: GoalBasedOutcome): number {
       return 1;
     case "inconclusive":
     case "crashed":
+    case "hang":
+    case "intermittent":
       return MISSION_EXIT_CODES[outcome];
   }
 }

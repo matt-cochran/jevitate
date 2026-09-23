@@ -2,7 +2,10 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
-import { perceive } from "./perceive.js";
+import { perceive, type PerceiveOptions } from "./perceive.js";
+import { observeAfterStep } from "./record.js";
+import type { HangSignal } from "./hang.js";
+import { replayAndDetectHang } from "./hang-repro.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
@@ -45,6 +48,15 @@ export interface VerifyFixParams {
   readonly openSession: () => Promise<VerifySession>;
   /** Render/settle ceiling after the replay (ms). Default: perceive's default. */
   readonly settleCeilingMs?: number;
+  /**
+   * For a `hang` finding: the hang signal. Its fix is verified by replaying and re-applying the hang
+   * rule — it passes only if the replay now settles within the bound.
+   */
+  readonly hang?: HangSignal;
+  /** Perception bounds for the hang re-check (the ones the mission used). */
+  readonly perceive?: PerceiveOptions;
+  /** Stall window for a stalled-state `ui-no-progress` hang (ms). */
+  readonly stallMs?: number;
 }
 
 export type VerifyFixVerdict = "fixed" | "still-reproduces" | "inconclusive";
@@ -65,6 +77,34 @@ function firstLine(e: unknown): string {
 
 export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResult> {
   const base = { fingerprint: params.fingerprint };
+  if (params.defectKind === "hang") {
+    if (params.hang === undefined) {
+      return {
+        ...base,
+        verdict: "inconclusive",
+        observedFingerprints: [],
+        replay: { outcome: "failed", at: -1, error: "not replayed" },
+        reason: "a hang finding needs its hang signal to be re-checked",
+      };
+    }
+    const attempt = await replayAndDetectHang({
+      recording: params.recording,
+      recordingStepIndex: params.recordingStepIndex,
+      hang: params.hang,
+      openSession: params.openSession,
+      ...(params.perceive === undefined ? {} : { perceive: params.perceive }),
+      ...(params.stallMs === undefined ? {} : { stallMs: params.stallMs }),
+    });
+    const replay: VerifyFixResult["replay"] =
+      attempt.replay === "failed" ? { outcome: "failed", at: -1, error: attempt.detail } : { outcome: "completed" };
+    if (attempt.reproduced) {
+      return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}` };
+    }
+    if (attempt.replay === "failed") {
+      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay, reason: `${attempt.detail}; absence of the hang proves nothing` };
+    }
+    return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})` };
+  }
   if (params.defectKind === "invariant") {
     return {
       ...base,
@@ -90,9 +130,11 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     // The oracle listens BEFORE the first replayed step, exactly as in the original run.
     const collector = new PageSignalCollector(session.page);
     await monitorFor(session.page).instrument();
+    // The defect's step is replayed to OBSERVE what the app does next — its own postcondition is not
+    // the verdict (a fixed app may legitimately behave differently after it); the signal check is.
     const result = await new RecordingInterpreter().runToCheckpoint(
       session.actor,
-      params.recording,
+      observeAfterStep(params.recording, params.recordingStepIndex),
       params.recordingStepIndex,
     );
     // Let async work the replayed step started (the late 500, the deferred console error) land.

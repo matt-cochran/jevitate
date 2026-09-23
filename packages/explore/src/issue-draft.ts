@@ -3,6 +3,9 @@ import { fingerprintMarker, targetsFor, contentHash, type Attribution, type Issu
 import type { TranscriptEntry } from "./transcript.js";
 import type { AdversarialDefect } from "./missions/adversarial.js";
 import type { CrashReport } from "./crash-report.js";
+import type { HangFinding } from "./hang-repro.js";
+import { attributeCrash } from "@jevitate/domain";
+import { jevitateCodeRoots } from "./crash-report.js";
 
 /**
  * Ready-to-file issue drafts (owner ruling 3): a title and a Markdown body with the repro steps,
@@ -157,6 +160,49 @@ export function draftForCrash(crash: CrashReport, steps: readonly TranscriptEntr
     [summary, repro, evidence, environmentSection(ctx.environment), artifactSection(ctx)],
     ["jevitate", "crash"],
     crash.attribution.attribution,
+    ctx.secrets,
+  );
+}
+
+/**
+ * A hang, filed like a defect. Attributed by the same evidence rule as a crash: a hang is the
+ * system under test's behaviour (the rule's `hang` signal), so it routes there.
+ */
+export function draftForHang(hang: HangFinding, ctx: DraftContext): IssueDraft {
+  const attribution = attributeCrash(
+    { pageCrashed: false, browserDisconnected: false, rendererOom: false, heapSamples: [], hang: true },
+    jevitateCodeRoots(),
+  );
+  const r = hang.reproduction;
+  const summary = [
+    `jevitate observed a **hang** (\`${hang.hangKind}\`) on \`${hang.route}\`: ${hang.signal.detail}.`,
+    `Reproduced **${r.reproduced}/${r.attempts}** in fresh browser contexts (${r.status}). Fingerprint \`${hang.fingerprint}\`.`,
+  ].join("\n\n");
+  const repro = [
+    "## Steps to reproduce",
+    ...hang.repro.steps.map(stepLine),
+    "",
+    `Replay the Recording up to flat step index ${hang.repro.recordingStepIndex}, then wait: the page does not settle/progress.`,
+  ].join("\n");
+  const evidence = [
+    "## Evidence",
+    ...(hang.signal.pending.length === 0
+      ? ["- Pending requests: none"]
+      : hang.signal.pending.map((p) => `- Pending: \`${p.endpoint}\` for ${Math.round(p.ageMs)}ms`)),
+    `- Last page state: ${hang.signal.lastState.controls.length} controls${
+      hang.signal.lastState.controls.length === 0 ? "" : ` (${hang.signal.lastState.controls.slice(0, 12).join("; ")})`
+    }`,
+    ...(hang.signal.heapBytes === undefined ? [] : [`- JS heap: ${(hang.signal.heapBytes / 1_048_576).toFixed(1)} MB`]),
+    "",
+    "### Replays",
+    ...r.runs.map((run, i) => `${i + 1}. ${run.reproduced ? "reproduced" : "did not reproduce"} (replay ${run.replay}): ${run.detail}`),
+  ].join("\n");
+  return finalize(
+    hang.fingerprint,
+    `[jevitate] Hang (${hang.hangKind}) on ${hang.route}`,
+    [summary, repro, evidence, environmentSection(ctx.environment), artifactSection(ctx)],
+    ["jevitate", "hang"],
+    attribution.attribution,
     ctx.secrets,
   );
 }

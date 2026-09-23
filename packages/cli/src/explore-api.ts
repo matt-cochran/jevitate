@@ -3,7 +3,7 @@ import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import type { Assertion, TargetDescriptor } from "@jevitate/recording";
+import type { Assertion, Recording, TargetDescriptor } from "@jevitate/recording";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -30,9 +30,12 @@ import {
   currentEnvironment,
   draftForCrash,
   draftForDefect,
+  draftForHang,
   summarizeTimings,
   type DraftContext,
+  type HangFinding,
   type TimingSummary,
+  type VerifySession,
 } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { readCliVersion } from "./version.js";
@@ -83,6 +86,8 @@ export interface RunExplorationOptions {
   readonly filing?: FilingConfig;
   /** Creates the filer — called only when filing is enabled. */
   readonly issueFiler?: () => IssueFilerPort;
+  /** Fresh-context replays that confirm a hang (default 2). */
+  readonly hangReplays?: number;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -105,6 +110,22 @@ function draftContext(
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     secrets,
+  };
+}
+
+/**
+ * Opens a FRESH browser session for replays (hang reproduction): a new context from the same port
+ * and options — same authenticated storageState, never the session the finding was made in.
+ */
+function freshSessionOpener(
+  portFactory: () => BrowserPort,
+  launch: Parameters<BrowserPort["open"]>[0],
+  allowlist: readonly string[],
+): () => Promise<VerifySession> {
+  return async () => {
+    const session = await portFactory().open(launch);
+    const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [...allowlist]));
+    return { page: session.page, actor, close: () => session.close() };
   };
 }
 
@@ -139,6 +160,14 @@ export interface RunExplorationResult {
   readonly issues: FindingsIssues;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
   readonly timing: TimingSummary;
+  /** Hang findings (0 or 1: the loop stops at a hang), each with its fresh-context reproduction. */
+  readonly hangs: HangFinding[];
+  /** The run's Recording (also written to `recordingPath`). */
+  readonly recording: Recording;
+  /** Where the run happened — what `verify-fix` needs to replay a finding. */
+  readonly target: MissionTarget;
+  /** The persisted typed result (`<recording>.result.json`). */
+  readonly resultPath: string;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -149,13 +178,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
 
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
   await mkdir(outDir, { recursive: true });
@@ -165,6 +195,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
+      // A hang is reproduced by replaying its steps in fresh contexts (same auth).
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
       onTranscriptEntry: journal.onTranscriptEntry,
       onRecording: journal.onRecording,
       actor,
@@ -182,10 +215,18 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
     journal.writeRecording(mission.recording);
     journal.writeTranscript(mission.transcript);
-    const drafts: IssueDraft[] =
-      mission.run.crash === undefined
-        ? []
-        : [draftForCrash(mission.run.crash, mission.transcript, draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page)))];
+    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const resultPath = resultPathFor(journal.recordingPath);
+    const drafts: IssueDraft[] = [];
+    if (mission.run.crash !== undefined) drafts.push(draftForCrash(mission.run.crash, mission.transcript, ctx));
+    if (mission.hang !== undefined) {
+      drafts.push(
+        draftForHang(mission.hang, {
+          ...ctx,
+          verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${mission.hang.fingerprint}`,
+        }),
+      );
+    }
     const issues = await processIssueDrafts(
       journal.recordingPath,
       drafts,
@@ -194,7 +235,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       iso,
     );
 
-    return {
+    const result: RunExplorationResult = {
       issues,
       timing: mission.run.timing,
       outcome: mission.outcome,
@@ -207,8 +248,19 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       transcriptPath: journal.transcriptPath,
       transcript: mission.transcript,
       exitCode: goalExitCode(mission.outcome),
+      resultPath,
+      target: {
+        seedUrl: opts.url,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
+      recording: mission.recording,
+      hangs: mission.hang === undefined ? [] : [mission.hang],
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
     };
+    // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
+    writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
+    return result;
   } finally {
     await closeQuietly(session);
   }
@@ -484,6 +536,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly filing?: FilingConfig;
   /** Creates the filer — called only when filing is enabled. */
   readonly issueFiler?: () => IssueFilerPort;
+  /** Fresh-context replays that confirm a hang (default 2). */
+  readonly hangReplays?: number;
   /** Where the Recording and decision transcript are written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
   /** ISO clock for the transcript filename. Default `Date.now()`. */
@@ -524,13 +578,14 @@ export async function runAdversarialCliMission(
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
@@ -548,6 +603,9 @@ export async function runAdversarialCliMission(
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
       ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+      // A hang is reproduced by replaying its steps in fresh contexts (same auth).
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
       onTranscriptEntry: journal.onTranscriptEntry,
       onRecording: journal.onRecording,
     });
@@ -559,6 +617,9 @@ export async function runAdversarialCliMission(
     const drafts: IssueDraft[] = outcome.defects.map((d) =>
       draftForDefect(d, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${d.fingerprint}` }),
     );
+    for (const h of outcome.hangs) {
+      drafts.push(draftForHang(h, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${h.fingerprint}` }));
+    }
     if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, outcome.transcript, ctx));
     const issues = await processIssueDrafts(
       journal.recordingPath,

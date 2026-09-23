@@ -1,7 +1,18 @@
 import type { Page } from "playwright";
 import { snapshot, type Snapshot } from "./snapshot.js";
 import { monitorFor, SETTLE_QUIET_MS, type SettleResult } from "./page-monitor.js";
-import { measurePageTiming, type PageTiming } from "./timing.js";
+import { measurePageTiming, unreadablePageTiming, type PageTiming } from "./timing.js";
+import {
+  classifyHang,
+  hangDetail,
+  hangRoute,
+  pendingEvidence,
+  probeResponsive,
+  visibleBusyIndicator,
+  type HangSignal,
+} from "./hang.js";
+import { contentHash } from "@jevitate/domain";
+import { redactUrl } from "@jevitate/ai-core";
 
 /**
  * perceive: the ONE "look at a rendered page" step every mission loop uses (goal/usability
@@ -31,13 +42,22 @@ export interface PerceiveOptions {
   readonly renderWaitMs?: number;
   /** Quiet window for "settled" (ms). Default `SETTLE_QUIET_MS` (500). */
   readonly quietMs?: number;
+  /** Bound (ms) on the main-thread probe (a trivial evaluate). Default `HANG_PROBE_MS` (5s). */
+  readonly hangProbeMs?: number;
+  /** A request pending longer than this (ms) is stuck. Default: the ceiling. */
+  readonly requestBoundMs?: number;
 }
+
+/** Default bound on the main-thread responsiveness probe (ms). */
+export const HANG_PROBE_MS = 5_000;
 
 interface PerceptionBase {
   readonly snapshot: Snapshot;
   readonly settle: SettleResult;
   /** How the page got here: navigation/transition timing and its network (owner ruling 6). */
   readonly timing: PageTiming;
+  /** A hang detected while perceiving (owner ruling 7), or null. */
+  readonly hang: HangSignal | null;
 }
 
 export type Perception =
@@ -79,8 +99,41 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     throw new Error(`perceive: quietMs must be a non-negative number, got ${String(quietMs)}`);
   }
   const snapOpts = opts.maxCandidates === undefined ? {} : { maxCandidates: opts.maxCandidates };
+  const hangProbeMs = opts.hangProbeMs ?? HANG_PROBE_MS;
+  const requestBoundMs = opts.requestBoundMs ?? ceiling;
   const monitor = monitorFor(page);
 
+  // 1. Is the page's main thread answering at all? If not, nothing else can be read (every page
+  //    API would block too): that is a hang of its own kind.
+  if (!(await probeResponsive(page, hangProbeMs))) {
+    const now = Date.now();
+    const win = monitor.window();
+    const pending = monitor.pending();
+    const settle: SettleResult = { settled: false, waitedMs: hangProbeMs, pending };
+    const timing = unreadablePageTiming(page.url(), monitor.completedSince(win.start), pending, now);
+    monitor.closeWindow(now, null);
+    const evidence = pendingEvidence(pending, now);
+    const url = redactUrl(page.url());
+    const snap: Snapshot = { url: page.url(), controls: [], truncated: false, signature: contentHash({ url, unresponsive: true }) };
+    return {
+      rendered: false,
+      snapshot: snap,
+      settle,
+      timing,
+      reason: "the page's main thread is unresponsive",
+      hang: {
+        kind: "main-thread-unresponsive",
+        detail: hangDetail("main-thread-unresponsive", { pending: evidence, ceilingMs: ceiling, busy: null, probeMs: hangProbeMs }),
+        route: hangRoute(page.url()),
+        url,
+        pending: evidence,
+        lastState: { signature: snap.signature, controls: [] },
+      },
+    };
+  }
+
+  // 2. Render + settle (event-driven; one ceiling).
+  const started = Date.now();
   const settledP = monitor.waitSettled({ quietMs, ceilingMs: ceiling });
   // Resolves as soon as a control renders (event-driven); a timeout/navigation just means "not yet".
   const controlsP = page
@@ -98,6 +151,23 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     settledP.then((settle) => ({ kind: "settled" as const, settle })),
   ]);
   const settle = first.kind === "settled" ? first.settle : await settledP;
+
+  // 3. A settled page that still shows a busy indicator: give it the rest of the ceiling to finish.
+  let stuckBusy: string | null = null;
+  if (settle.settled) {
+    const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
+    if (busy !== null) {
+      const remaining = Math.max(1, ceiling - (Date.now() - started));
+      const gone = await page
+        .waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" })
+        .then(
+          () => true,
+          () => false,
+        );
+      if (!gone) stuckBusy = busy;
+    }
+  }
+
   const settleEndedAt = Date.now();
   const win = monitor.window();
   const { timing, docId } = await measurePageTiming(page, {
@@ -111,12 +181,34 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   monitor.closeWindow(settleEndedAt, docId);
   const snap = await snapshot(page, snapOpts);
 
-  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing };
+  // 4. Classify (pure rule) — a hang is evidence, never a guess.
+  const evidence = pendingEvidence(settle.pending, settleEndedAt);
+  const kind = classifyHang({
+    responsive: true,
+    settle,
+    pendingAgesMs: evidence.map((p) => p.ageMs),
+    stuckBusyIndicator: stuckBusy,
+    requestBoundMs,
+  });
+  const hang: HangSignal | null =
+    kind === null
+      ? null
+      : {
+          kind,
+          detail: hangDetail(kind, { pending: evidence, ceilingMs: ceiling, busy: stuckBusy, probeMs: hangProbeMs }),
+          route: hangRoute(page.url()),
+          url: redactUrl(page.url()),
+          pending: evidence,
+          lastState: { signature: snap.signature, controls: snap.controls.map((c) => c.summary) },
+        };
+
+  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing, hang };
   return {
     rendered: false,
     snapshot: snap,
     settle,
     timing,
+    hang,
     reason: settle.settled
       ? "page settled with no interactive controls"
       : `page rendered no interactive controls within ${ceiling}ms`,

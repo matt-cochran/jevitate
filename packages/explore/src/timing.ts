@@ -140,6 +140,30 @@ export async function measurePageTiming(
   return { timing, docId: side.docId };
 }
 
+/**
+ * The timing of a page that cannot be read (its main thread is not answering): only what the
+ * Node-side monitor saw — no page API is called, since it would block too.
+ */
+export function unreadablePageTiming(
+  url: string,
+  completed: readonly CompletedRequest[],
+  pending: readonly InflightRequest[],
+  now: number,
+): PageTiming {
+  const all = [...completed.map((r) => toRequestTiming(r, now)), ...pending.map((r) => toRequestTiming(r, now))];
+  return {
+    route: normalizeRoute(redactUrl(url)),
+    kind: "idle",
+    settled: false,
+    requests: {
+      count: completed.length,
+      pending: pending.length,
+      slowest: [...all].sort((a, b) => b.durationMs - a.durationMs).slice(0, SLOWEST),
+      samples: all.slice(0, MAX_SAMPLES),
+    },
+  };
+}
+
 // ---------- the per-run summary (pure) ----------
 
 export interface TimingStat {

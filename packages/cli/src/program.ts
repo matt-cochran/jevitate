@@ -1302,12 +1302,14 @@ export function buildProgram(deps: CliDeps): Command {
       "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
     )
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
+    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2)")
     .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{
         fileIssues?: boolean;
         issueRepo?: string;
+        hangReplays?: string;
         jevitateRepo?: string;
         url?: string;
         strategy?: string;
@@ -1463,6 +1465,7 @@ export function buildProgram(deps: CliDeps): Command {
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(filing === undefined ? {} : { filing }),
             issueFiler,
+            ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
             strategies: [
               "ordering-violation",
               "repeat-rapid",
@@ -1633,6 +1636,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(filing === undefined ? {} : { filing }),
           issueFiler,
+          ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
         });
         const envelope = ok(result);
         if (o.json) {

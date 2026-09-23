@@ -95,6 +95,20 @@ jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.j
 
 The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
 
+### Hangs
+
+A hung app is its own finding (`hang`), never folded into "no progress" or a
+timeout. jevitate distinguishes four kinds: the page never settles within the
+ceiling; the main thread does not answer a trivial probe; a request stays pending
+past its bound; or the UI makes no progress after an action while the page is
+still alive (a busy indicator that never ends, or an action that silently puts
+the page back in an earlier state). The evidence is recorded: pending requests,
+the last page state, timings and the JS heap. The steps that led to the hang are
+then replayed in fresh browser contexts (`--hang-replays`, default 2). If every
+replay hangs, it is a confirmed `hang`; otherwise it is `intermittent`, with the
+evidence from each attempt. `verify-fix` works on a hang too: it passes only if
+the replay now settles within the bound.
+
 ### Page timing
 
 Every transcript step (and the Recording step before it) records how the page

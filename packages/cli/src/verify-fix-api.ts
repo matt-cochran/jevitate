@@ -6,6 +6,7 @@ import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
   assertAuthorizedExploreTarget,
   verifyFix,
+  type HangSignal,
   type VerifyFixResult,
   type VerifyFixVerdict,
 } from "@jevitate/explore";
@@ -59,6 +60,21 @@ interface PersistedFinding {
   readonly kind: string;
   readonly title?: string;
   readonly repro: { readonly recordingStepIndex: number };
+  /** For a hang finding: its signal (what the replay must no longer show). */
+  readonly hang?: HangSignal;
+}
+
+const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
+
+/** A persisted hang signal, validated just enough to re-check it (fail closed otherwise). */
+function asHangSignal(v: unknown): HangSignal | null {
+  if (!isRecord(v) || typeof v.kind !== "string" || !HANG_KINDS.has(v.kind)) return null;
+  const last = v.lastState;
+  if (!isRecord(last) || typeof last.signature !== "string" || !Array.isArray(last.controls)) return null;
+  if (typeof v.detail !== "string" || typeof v.route !== "string" || typeof v.url !== "string" || !Array.isArray(v.pending)) {
+    return null;
+  }
+  return v as unknown as HangSignal;
 }
 
 interface PersistedMission {
@@ -75,10 +91,13 @@ function asFinding(v: unknown): PersistedFinding | null {
   if (!isRecord(v) || typeof v.fingerprint !== "string" || typeof v.kind !== "string") return null;
   const repro = v.repro;
   if (!isRecord(repro) || typeof repro.recordingStepIndex !== "number") return null;
+  const hang = v.kind === "hang" ? asHangSignal(v.signal) : null;
+  if (v.kind === "hang" && hang === null) return null;
   return {
     fingerprint: v.fingerprint,
     kind: v.kind,
     repro: { recordingStepIndex: repro.recordingStepIndex },
+    ...(hang === null ? {} : { hang }),
     ...(Array.isArray(v.related) ? { related: v.related.filter((r): r is string => typeof r === "string") } : {}),
     ...(typeof v.title === "string" ? { title: v.title } : {}),
   };
@@ -139,7 +158,10 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     recordingStepIndex: finding.repro.recordingStepIndex,
     fingerprint: finding.fingerprint,
     defectKind: finding.kind,
-    ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
+    ...(finding.hang === undefined ? {} : { hang: finding.hang }),
+    ...(opts.settleCeilingMs === undefined
+      ? {}
+      : { settleCeilingMs: opts.settleCeilingMs, perceive: { renderWaitMs: opts.settleCeilingMs } }),
     openSession: async () => {
       const session = await portFactory().open({
         headless: true,

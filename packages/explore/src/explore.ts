@@ -17,6 +17,9 @@ import type { Snapshot } from "./snapshot.js";
 import { perceive } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type TimingSummary } from "./timing.js";
+import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
+import { HANG_PROBE_MS } from "./perceive.js";
+import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
@@ -26,7 +29,7 @@ import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "./mission-failure.js";
-import { HeapLog, buildCrashReport, type CrashReport } from "./crash-report.js";
+import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
 export type { TranscriptEntry } from "./transcript.js";
@@ -79,6 +82,15 @@ export interface ExploreConfig {
    * Default `RENDER_WAIT_MS` (see `perceive`).
    */
   readonly renderWaitMs?: number;
+  /** Bound on the main-thread probe (ms). Default `HANG_PROBE_MS`. */
+  readonly hangProbeMs?: number;
+  /** A request pending longer than this (ms) is a hang. Default: the render ceiling. */
+  readonly requestBoundMs?: number;
+  /**
+   * How long a page must stay stuck in an earlier state after an action before it counts as a
+   * `ui-no-progress` hang (ms). Default `DEFAULT_STALL_MS`.
+   */
+  readonly stallMs?: number;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   readonly onTranscriptEntry?: TranscriptListener;
   /** Incremental-flush seam: the partial Recording after every recorded step. */
@@ -100,6 +112,8 @@ export interface ExploreRun {
   readonly crash?: CrashReport;
   /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
   readonly timing: TimingSummary;
+  /** For a `hang` stop: what hung, and the Recording step to replay up to (to reproduce it). */
+  readonly hang?: { readonly signal: HangSignal; readonly recordingStepIndex: number };
 }
 
 function firstLine(e: unknown): string {
@@ -130,6 +144,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let failure: MissionFailure | undefined;
   let lastActedOp: string | null = null;
   let fixtureAttached = false;
+  let hang: ExploreRun["hang"];
+  /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
+  const seen = new Set<string>();
+  /** The last executed page-changing action: when, from which state, and its Recording index. */
+  const track: {
+    lastMutation: { at: number; before: string; seenBefore: Set<string>; label: string; recordIndex: number } | null;
+    /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
+    lastRecordedTarget: string | null;
+  } = { lastMutation: null, lastRecordedTarget: null };
+  const perceiveOpts = {
+    maxCandidates: bounds.maxCandidates,
+    ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
+    ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
+    ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+  };
+  const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
+  const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1 };
+    track.lastRecordedTarget = JSON.stringify(descriptor);
+  };
 
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
@@ -146,15 +180,41 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // Shared perception: never decide on an unrendered page (bounded render wait) and never
       // offer an occluded control (see `perceive`).
-      const perception = await perceive(page, {
-        maxCandidates: bounds.maxCandidates,
-        ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
-      });
+      const perception = await perceive(page, perceiveOpts);
       const snap = perception.snapshot;
       await heap.sample(page, transcript.nextStep);
       // Re-observe the PREVIOUS action's effect: patch its postcondition + open
       // the next page segment if the URL changed (record-before-reobserve).
-      recorder.observed(snap.url, now(), perception.timing);
+      const target = track.lastRecordedTarget;
+      recorder.observed(
+        snap.url,
+        now(),
+        perception.timing,
+        target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
+      );
+      track.lastRecordedTarget = null;
+
+      // A hang is its own first-class stop (owner ruling 7) — detected by perception's rule.
+      if (perception.hang !== null) {
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "hang-check",
+          actOk: false,
+          reason: `hang (${perception.hang.kind}): ${perception.hang.detail}`,
+          snapshot: snap,
+          timing: perception.timing,
+        });
+        const heapNow = await sampleHeap(page, 1_000);
+        hang = {
+          signal: heapNow === null ? perception.hang : { ...perception.hang, heapBytes: heapNow.usedBytes },
+          recordingStepIndex: Math.max(0, recorder.stepCount - 1),
+        };
+        stop = "hang";
+        break;
+      }
 
       // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
       if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
@@ -183,9 +243,53 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // #2 — no-progress: the last executed op left the page unchanged N times.
       if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
+        // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
+        // sent it BACK to a state it had already been in (it changed, then reverted — an action
+        // that silently undid itself, like an import that never starts), and it stays there for
+        // the stall window: a `ui-no-progress` hang, not generic no-progress. An action that simply
+        // did nothing (same state before and after) stays plain no-progress.
+        const m = track.lastMutation;
+        if (m !== null && snap.signature !== m.before && m.seenBefore.has(snap.signature)) {
+          const waited = now() - m.at;
+          if (waited < stallMs) await page.waitForTimeout(stallMs - waited);
+          const again = await perceive(page, perceiveOpts);
+          const stuck =
+            again.hang ??
+            (again.snapshot.signature === snap.signature && (await probeResponsive(page, cfg.hangProbeMs ?? HANG_PROBE_MS))
+              ? ({
+                  kind: "ui-no-progress",
+                  detail: `after "${m.label}" the page returned to an earlier state and made no progress for ${Math.round((now() - m.at) / 1000)}s`,
+                  route: hangRoute(snap.url),
+                  url: redactUrl(snap.url),
+                  pending: [],
+                  lastState: { signature: snap.signature, controls: snap.controls.map((c) => c.summary) },
+                } satisfies HangSignal)
+              : null);
+          if (stuck !== null) {
+            transcript.record({
+              op: null,
+              control: null,
+              confidence: null,
+              chosenBy: "strategy",
+              strategy: "hang-check",
+              actOk: false,
+              reason: `hang (${stuck.kind}): ${stuck.detail}`,
+              snapshot: again.snapshot,
+              timing: again.timing,
+            });
+            const heapNow = await sampleHeap(page, 1_000);
+            hang = {
+              signal: heapNow === null ? stuck : { ...stuck, heapBytes: heapNow.usedBytes },
+              recordingStepIndex: stuck.kind === "ui-no-progress" ? m.recordIndex : Math.max(0, recorder.stepCount - 1),
+            };
+            stop = "hang";
+            break;
+          }
+        }
         stop = "no-progress";
         break;
       }
+      seen.add(snap.signature);
 
       let decision: Awaited<ReturnType<typeof decide>>;
       try {
@@ -294,6 +398,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (r.ok) {
           if (decision.op === "type") recorder.fill(control.descriptor, text, at);
           else recorder.select(control.descriptor, text, at);
+          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
           fillHelper.commit();
           history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
@@ -305,6 +410,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const r = await act(cfg.actor, { op: "click", control });
         if (r.ok) {
           recorder.click(control.descriptor, at);
+          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
           history.push(`clicked ${control.name}`);
         } else {
@@ -323,6 +429,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               ? { redacted: false, value: fixture }
               : { redacted: true, length: fixture.length };
           recorder.upload(control.descriptor, recordedFile, at);
+        noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
           history.push(`uploaded the fixture into ${control.name}`);
           fixtureAttached = true;
@@ -358,6 +465,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     ...(failure === undefined ? {} : { failure }),
     heap: heap.samples(),
     timing: summarizeTimings(transcript.entries().map((e) => e.timing)),
+    ...(hang === undefined ? {} : { hang }),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples()) }
       : {}),

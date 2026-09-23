@@ -20,6 +20,8 @@ describe("mission outcome → exit code (owner ruling 1: a distinct code per out
     expect(goalExitCode("blocked")).toBe(1);
     expect(goalExitCode("inconclusive")).toBe(2);
     expect(goalExitCode("crashed")).toBe(2);
+    expect(goalExitCode("hang")).toBe(3);
+    expect(goalExitCode("intermittent")).toBe(4);
   });
 
   it("a broken run dominates any finding and is never clean", () => {

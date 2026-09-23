@@ -3,13 +3,16 @@ import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
-import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
+import { combineOutcomes, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
 import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
+import type { HangSignal } from "../hang.js";
+import { hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
+import type { VerifySession } from "../verify-fix.js";
 import { act } from "../act.js";
 import { buildJudgmentState } from "../redact.js";
 import { PROMPT_INJECTION_GUARD } from "../decide.js";
@@ -20,7 +23,7 @@ import {
   type TranscriptListener,
 } from "../transcript.js";
 import { CrashWatch, describeFailure, tryTriage, type Triage } from "../mission-failure.js";
-import { HeapLog, buildCrashReport, type CrashReport } from "../crash-report.js";
+import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
 import { PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
@@ -107,14 +110,17 @@ export type AdversarialStop =
   | "time-budget"
   | "strategies-exhausted"
   | "not-rendered"
+  | "hang"
   | "crashed";
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
-  readonly outcome: Extract<MissionOutcome, "clean" | "defects-found" | "inconclusive" | "crashed">;
+  readonly outcome: MissionOutcome;
   readonly stop: AdversarialStop;
   /** Distinct defects (deduped by fingerprint), in first-seen order. */
   readonly defects: AdversarialDefect[];
+  /** Hangs found (the run stops at a hang), each with its fresh-context reproduction k/N. */
+  readonly hangs: HangFinding[];
   /** The run's Recording (partial when the run crashed) — every defect's repro path. */
   readonly recording: Recording;
   readonly transcript: TranscriptEntry[];
@@ -155,6 +161,17 @@ export interface AdversarialMissionParams {
   readonly now?: () => number;
   /** Registered secret values: redacted out of the transcript and the Recording. */
   readonly secrets?: readonly string[];
+  /**
+   * Opens a FRESH browser session — used to reproduce a hang by replaying its steps. Without it a
+   * hang cannot be confirmed and is reported `intermittent` (0 replays), never dropped.
+   */
+  readonly openFreshSession?: () => Promise<VerifySession>;
+  /** How many fresh-context replays confirm a hang. Default 2. */
+  readonly hangReplays?: number;
+  /** Bound on the main-thread probe (ms). Default `HANG_PROBE_MS`. */
+  readonly hangProbeMs?: number;
+  /** A request pending longer than this (ms) is a hang. Default: the render ceiling. */
+  readonly requestBoundMs?: number;
 }
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
@@ -214,6 +231,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const recorder = new RunRecorder(site, undefined, secrets, params.onRecording);
   const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
   const defects = new Map<string, MutableDefect>();
+  const hangs: HangFinding[] = [];
+  const perceiveOpts = {
+    maxCandidates: bounds.maxCandidates,
+    ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+    ...(params.hangProbeMs === undefined ? {} : { hangProbeMs: params.hangProbeMs }),
+    ...(params.requestBoundMs === undefined ? {} : { requestBoundMs: params.requestBoundMs }),
+  };
 
   const finish = (
     outcome: AdversarialOutcome["outcome"],
@@ -229,6 +253,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       outcome: finished.ok ? outcome : "crashed",
       stop: finished.ok ? stop : "crashed",
       defects: [...defects.values()].map(freeze),
+      hangs,
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
       transcript: transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
@@ -240,16 +265,61 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     };
   };
 
-  const perceiveNow = async (): Promise<{ snapshot: Snapshot; timing: PageTiming; rendered: boolean; reason?: string }> => {
-    const p = await perceive(params.page, {
-      maxCandidates: bounds.maxCandidates,
-      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
-    });
+  const perceiveNow = async (): Promise<{
+    snapshot: Snapshot;
+    timing: PageTiming;
+    rendered: boolean;
+    reason?: string;
+    hang: HangSignal | null;
+  }> => {
+    const p = await perceive(params.page, perceiveOpts);
     await heap.sample(params.page, transcript.nextStep);
     return p.rendered
-      ? { snapshot: p.snapshot, timing: p.timing, rendered: true }
-      : { snapshot: p.snapshot, timing: p.timing, rendered: false, reason: p.reason };
+      ? { snapshot: p.snapshot, timing: p.timing, rendered: true, hang: p.hang }
+      : { snapshot: p.snapshot, timing: p.timing, rendered: false, reason: p.reason, hang: p.hang };
   };
+
+  /**
+   * A hang ends the hunt (the page is stuck): it is recorded in the transcript, its steps are
+   * replayed in fresh contexts to reproduce it, and it becomes a finding with k/N.
+   */
+  const recordHang = async (signal: HangSignal, snapshot: Snapshot, timing: PageTiming): Promise<void> => {
+    let h = signal;
+    transcript.record({
+      op: null,
+      control: null,
+      confidence: null,
+      chosenBy: "strategy",
+      strategy: "hang-check",
+      actOk: false,
+      reason: `hang (${h.kind}): ${h.detail}`,
+      snapshot,
+      timing,
+    });
+    const heapNow = await sampleHeap(params.page, 1_000);
+    if (heapNow !== null) h = { ...h, heapBytes: heapNow.usedBytes };
+    const recordingStepIndex = Math.max(0, recorder.stepCount - 1);
+    const partial = recorder.tryFinish({ intent: "adversarial" });
+    const reproduction: HangReproduction =
+      params.openFreshSession === undefined || !partial.ok
+        ? { attempts: 0, reproduced: 0, status: "intermittent", runs: [] }
+        : await reproduceHang({
+            recording: partial.recording,
+            recordingStepIndex,
+            hang: h,
+            openSession: params.openFreshSession,
+            ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+            perceive: perceiveOpts,
+          });
+    hangs.push(hangFinding(h, transcript.entries(), recordingStepIndex, reproduction));
+  };
+
+  /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
+  const verdict = (): MissionOutcome =>
+    combineOutcomes([
+      defects.size > 0 ? "defects-found" : "clean",
+      ...hangs.map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+    ]);
 
   /**
    * The independent oracle for one step: drains the hard signals and checks the user invariant.
@@ -341,6 +411,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const started = now();
 
     const seed = await perceiveNow();
+    if (seed.hang !== null) {
+      await recordHang(seed.hang, seed.snapshot, seed.timing);
+      return finish(verdict(), "hang");
+    }
     if (!seed.rendered) {
       // Nothing to misuse: the run proves nothing (fail closed on meaning — never `clean`).
       transcript.record({
@@ -383,6 +457,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     }
 
     let lastDecision: MisuseDecision | undefined;
+    let lastRecordedTarget: string | null = null;
     let actions = 0;
     let strategySteps = 0;
     let idleStreak = 0;
@@ -428,6 +503,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           if (decision.op === "click") recorder.click(control.descriptor, at);
           else if (decision.op === "type") recorder.fill(control.descriptor, decision.fillText ?? "", at);
           else if (decision.op === "select") recorder.select(control.descriptor, decision.fillText ?? "", at);
+          lastRecordedTarget = JSON.stringify(control.descriptor);
         }
         if (strategy === "visit-route" && control !== null) visitedLinks.add(control.name);
         lastDecision = decision;
@@ -494,7 +570,19 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         const next = await perceiveNow();
         snap = next.snapshot;
         snapTiming = next.timing;
-        recorder.observed(snap.url, now(), snapTiming);
+        const target = lastRecordedTarget;
+        recorder.observed(
+          snap.url,
+          now(),
+          snapTiming,
+          target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
+        );
+        lastRecordedTarget = null;
+        if (next.hang !== null) {
+          await recordHang(next.hang, next.snapshot, next.timing);
+          stop = "hang";
+          break;
+        }
         if (!isAuthorizedExploreTarget(snap.url, params.allowlist)) {
           // Guardrail #1: never act off an authorized origin — go back to the seed and hunt on.
           await Navigate.to(params.seedUrl).performAs(params.actor);
@@ -512,7 +600,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
     }
 
-    return finish(defects.size > 0 ? "defects-found" : "clean", stop);
+    return finish(verdict(), stop);
   } catch (e) {
     return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));
   }
