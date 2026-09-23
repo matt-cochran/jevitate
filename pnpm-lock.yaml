@@ -310,6 +310,9 @@ importers:
 
   packages/recorder:
     dependencies:
+      '@jevitate/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
       '@jevitate/interpreter':
         specifier: workspace:*
         version: link:../interpreter

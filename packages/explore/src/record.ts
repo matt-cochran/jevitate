@@ -9,6 +9,7 @@ import {
   type TargetDescriptor,
   type ValueOrVar,
 } from "@jevitate/recording";
+import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
 
 /**
  * record: accumulate executed steps into a schema-valid, deterministically
@@ -33,15 +34,19 @@ import {
  * bridge, so the emitted `Recording` is index-free.
  */
 
-/** Reduces any URL to the path convention the recorder/interpreter use. */
+/**
+ * Reduces any URL to the path convention the recorder/interpreter use, then
+ * applies the shared URL redaction rule (a non-absolute input keeps its query,
+ * so a `?token=…` there must not reach the Recording).
+ */
 export function toPath(raw: string): string {
   try {
     const u = new URL(raw);
-    if (u.protocol === "http:" || u.protocol === "https:") return u.pathname || "/";
+    if (u.protocol === "http:" || u.protocol === "https:") return redactUrl(u.pathname || "/");
   } catch {
     // not absolute — fall through
   }
-  return raw.startsWith("/") || /^https?:\/\//.test(raw) ? raw : `/${raw}`;
+  return redactUrl(raw.startsWith("/") || /^https?:\/\//.test(raw) ? raw : `/${raw}`);
 }
 
 function setExpect(step: Step, assertion: Assertion): void {
@@ -49,6 +54,27 @@ function setExpect(step: Step, assertion: Assertion): void {
 }
 
 const visible = (d: TargetDescriptor): Assertion => ({ kind: "visible", target: { ...d } });
+
+/**
+ * Passes every free-text field of a target descriptor (page labels, names,
+ * text, selectors — recursively through `container`) through the shared
+ * redaction seam, so a registered secret rendered on the page never lands in
+ * the Recording. `frameUrl` also gets the URL rule.
+ */
+function redactDescriptor(d: TargetDescriptor, secrets: readonly string[]): TargetDescriptor {
+  const r = (v: string): string => redactText(v, secrets);
+  const out: TargetDescriptor = {};
+  if (d.testId !== undefined) out.testId = r(d.testId);
+  if (d.role !== undefined) out.role = r(d.role);
+  if (d.name !== undefined) out.name = r(d.name);
+  if (d.label !== undefined) out.label = r(d.label);
+  if (d.text !== undefined) out.text = r(d.text);
+  if (d.css !== undefined) out.css = r(d.css);
+  if (d.frameUrl !== undefined) out.frameUrl = r(redactUrl(d.frameUrl));
+  if (d.ordinal !== undefined) out.ordinal = d.ordinal;
+  if (d.container !== undefined) out.container = redactDescriptor(d.container, secrets);
+  return out;
+}
 
 export class RunRecorder {
   #pages: PageSegment[] = [];
@@ -58,10 +84,29 @@ export class RunRecorder {
   #t0: number | null = null;
   #prevTime: number | null = null;
 
+  readonly #secrets: readonly string[];
+
+  /**
+   * `secrets` are the run's registered secret values: every label/descriptor,
+   * path, intent and retro recorded is scrubbed of them, and `finish` proves the
+   * whole Recording clean via `assertNoSecretInPayload` (fail closed — a
+   * survivor, e.g. in a plain fill value, throws rather than being written).
+   */
   constructor(
     readonly site: string,
     private readonly version = "1.0.0",
-  ) {}
+    secrets: readonly string[] = [],
+  ) {
+    this.#secrets = secrets;
+  }
+
+  #path(url: string): string {
+    return redactText(toPath(url), this.#secrets);
+  }
+
+  #target(d: TargetDescriptor): TargetDescriptor {
+    return redactDescriptor(d, this.#secrets);
+  }
 
   #timing(atMs: number, durationMs = 0): StepTiming {
     if (this.#t0 === null) this.#t0 = atMs;
@@ -85,7 +130,7 @@ export class RunRecorder {
       this.#openSegment(this.#pendingSegmentUrl);
       return;
     }
-    if (this.#current === null) this.#openSegment(toPath(url));
+    if (this.#current === null) this.#openSegment(this.#path(url));
   }
 
   #append(step: Step, atMs: number, durationMs = 0): void {
@@ -96,14 +141,15 @@ export class RunRecorder {
 
   /** Record a navigation to `url`. Opens the segment for it. */
   navigate(url: string, atMs: number): void {
-    const path = toPath(url);
+    const path = this.#path(url);
     if (this.#current === null || this.#current.url !== path) this.#openSegment(path);
     this.#append({ kind: "navigate", url: path, expect: { kind: "urlIncludes", text: path } }, atMs);
   }
 
   /** Record a click on a control. Provisional postcondition: target visible. */
-  click(descriptor: TargetDescriptor, atMs: number, durationMs = 0): void {
+  click(rawDescriptor: TargetDescriptor, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
+    const descriptor = this.#target(rawDescriptor);
     this.#append({ kind: "click", target: { ...descriptor }, expect: visible(descriptor) }, atMs, durationMs);
   }
 
@@ -112,15 +158,17 @@ export class RunRecorder {
    * `{ redacted:false, value }` by default (self-contained replay). Pass an
    * explicit `ValueOrVar` to keep the value out of the artifact.
    */
-  fill(descriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
+  fill(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
+    const descriptor = this.#target(rawDescriptor);
     const v: ValueOrVar = typeof value === "string" ? { redacted: false, value } : value;
     this.#append({ kind: "fill", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
 
   /** Record a select. Same value discipline as `fill`. */
-  select(descriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
+  select(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
+    const descriptor = this.#target(rawDescriptor);
     const v: ValueOrVar = typeof value === "string" ? { redacted: false, value } : value;
     this.#append({ kind: "select", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
@@ -132,8 +180,9 @@ export class RunRecorder {
    * `{ redacted:true, ... }` (a path containing a secret) or `{ var }` instead
    * to keep it out of the artifact.
    */
-  upload(descriptor: TargetDescriptor, file: string | ValueOrVar, atMs: number, durationMs = 0): void {
+  upload(rawDescriptor: TargetDescriptor, file: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
+    const descriptor = this.#target(rawDescriptor);
     const f: ValueOrVar = typeof file === "string" ? { redacted: false, value: file } : file;
     // Provisional postcondition: the input is still attached — NOT `visible`,
     // because file inputs are routinely visually hidden behind a styled label.
@@ -147,23 +196,28 @@ export class RunRecorder {
    * `urlIncludes` and queue the next segment (materialized on the next step).
    */
   observed(url: string, _atMs: number): void {
-    const path = toPath(url);
+    const path = this.#path(url);
     if (this.#current !== null && path !== this.#current.url && this.#lastStep !== null) {
       setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });
       this.#pendingSegmentUrl = path;
     }
   }
 
-  /** Emit the schema-valid `Recording`. Throws if assembly produced anything invalid. */
+  /**
+   * Emit the schema-valid `Recording`. Throws if assembly produced anything
+   * invalid, or if any registered secret survived into it (fail closed).
+   */
   finish(opts?: { intent?: string; retro?: string; startedAtIso?: string }): Recording {
     const recording: Recording = {
       version: this.version,
       site: this.site,
       pages: this.#pages,
       ...(opts?.startedAtIso ? { startedAtIso: opts.startedAtIso } : {}),
-      ...(opts?.intent ? { intent: opts.intent } : {}),
-      ...(opts?.retro ? { retro: opts.retro } : {}),
+      ...(opts?.intent ? { intent: redactText(opts.intent, this.#secrets) } : {}),
+      ...(opts?.retro ? { retro: redactText(opts.retro, this.#secrets) } : {}),
     };
-    return RecordingSchema.parse(recording);
+    const parsed = RecordingSchema.parse(recording);
+    assertNoSecretInPayload(parsed, this.#secrets);
+    return parsed;
   }
 }

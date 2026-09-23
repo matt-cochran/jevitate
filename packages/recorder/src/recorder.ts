@@ -12,6 +12,7 @@ import {
   type Stability,
 } from "./descriptor.js";
 import { installRecorderListener } from "./inject.js";
+import { isSecretField } from "./secret-field.js";
 
 /** The name the injected script calls: `window.__jevitateRecord(payload)`. */
 export const RECORD_BINDING = "__jevitateRecord";
@@ -234,7 +235,12 @@ export class Recorder {
         await this.onAction(source, payload);
       },
     );
-    await page.addInitScript(installRecorderListener);
+    // The shared `isSecretField` predicate is spliced in as the listener's
+    // argument, as SOURCE: `addInitScript` arguments are JSON, so a function
+    // cannot be passed as data. Both are self-contained browser-safe functions.
+    await page.addInitScript({
+      content: `(${installRecorderListener.toString()})(${isSecretField.toString()});`,
+    });
 
     page.on("framenavigated", (frame: Frame) => {
       const isMainFrame = frame === page.mainFrame();

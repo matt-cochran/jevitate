@@ -7,7 +7,7 @@
 // (which internally proves the scrub via `assertNoSecretInPayload`) and FAILS
 // CLOSED: if the redactor cannot run, or leaves any registered secret behind, it
 // THROWS and never returns a raw/partial value.
-import { assertNoSecretInPayload, redactContext } from "@jevitate/ai-core";
+import { assertNoSecretInPayload, redactContext, redactUrl } from "@jevitate/ai-core";
 import type { A11yFacts, AppContext, BehaviorSignals, ScreenRef, UxEvidence } from "./types.js";
 
 declare const REDACTED_BRAND: unique symbol;
@@ -90,7 +90,7 @@ export function redactEvidence(
   try {
     redacted = {
       screenId: evidence.screenId,
-      url: scrub(evidence.url, secrets),
+      url: scrub(redactUrl(evidence.url), secrets),
       controls: evidence.controls.map((c) => ({
         index: c.index,
         role: c.role,
@@ -102,7 +102,7 @@ export function redactEvidence(
       visibleText: scrub(evidence.visibleText, secrets),
       appContext: evidence.appContext,
       ...(evidence.job !== undefined ? { job: scrub(evidence.job, secrets) } : {}),
-      history: evidence.history,
+      history: evidence.history.map((h) => ({ ...h, url: scrub(redactUrl(h.url), secrets) })),
       behavior: evidence.behavior,
       a11yFacts: evidence.a11yFacts,
       refs: deriveRefs(evidence),

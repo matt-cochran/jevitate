@@ -5,7 +5,8 @@
  * `page.addInitScript`, which serializes it with `Function.prototype.toString`
  * and evaluates the source in every new document of every frame. Therefore:
  *
- *  - zero imports (nothing Node-side survives serialization),
+ *  - zero runtime imports (nothing Node-side survives serialization; the one
+ *    `import type` below is erased at compile time),
  *  - zero references to anything outside the function body (a closure over a
  *    module-level `const` typechecks but throws at runtime in the page),
  *  - only `window` / `document` / DOM APIs,
@@ -30,6 +31,8 @@
  * └─────────────────────────────────────────────────────────────────────────┘
  */
 
+import type { SecretFieldPredicate } from "./secret-field.js";
+
 interface RecorderWindow {
   __jevitateRecorderArmed?: boolean;
   __jevitateEidCounter?: number;
@@ -40,11 +43,14 @@ interface RecorderWindow {
  * Installs capture-phase listeners for `click`, `input`, `change`, `keydown`
  * and `submit` on `document`.
  *
+ * `isSecret` is the shared `isSecretField` predicate, passed in (as source,
+ * by `Recorder.install`) because this function cannot import it.
+ *
  * Capture phase (rather than bubble) is deliberate: it sees the event before
  * page code can call `stopPropagation()`, so an app that swallows its own
  * events is still recorded.
  */
-export function installRecorderListener(): void {
+export function installRecorderListener(isSecret: SecretFieldPredicate): void {
   const w = window as unknown as RecorderWindow;
   if (w.__jevitateRecorderArmed === true) return;
   w.__jevitateRecorderArmed = true;
@@ -198,24 +204,13 @@ export function installRecorderListener(): void {
       if (tag === "input") payload.typeAttr = inputType;
 
       // Secret fields: their value is never read, so it cannot leave the page.
-      // Both autocomplete spellings need their own clause: "one-time-code"
-      // does not contain "otp" as a substring.
-      //
-      // The `autocomplete`-contains-"password" clause is NOT redundant with
-      // the `type === "password"` one. A "show password" toggle is universally
-      // implemented by flipping the input's `type` between `password` and
-      // `text`, so a user who reveals the field *before* typing (and a page
-      // that ships a text-type field it masks in JS) yields
-      // `inputType === "text"` with `autocomplete="current-password"` — a
-      // genuine human-only field the type check alone reads as an ordinary
-      // machine-fillable one. A substring match covers both standard tokens
-      // ("current-password", "new-password") without enumerating them.
-      const autocomplete = (el.getAttribute("autocomplete") || "").toLowerCase();
-      const secret =
-        inputType === "password" ||
-        autocomplete.indexOf("password") !== -1 ||
-        autocomplete.indexOf("one-time-code") !== -1 ||
-        autocomplete.indexOf("otp") !== -1;
+      // `isSecret` is `secret-field.ts`'s `isSecretField` — the single shared
+      // predicate (type=password OR a password/one-time-code autocomplete
+      // token, so a "show password" toggle that flips type to text is still
+      // secret). It arrives as this function's argument because browser code
+      // cannot import; `Recorder.install` splices its source into the init
+      // script.
+      const secret = isSecret(tag === "input" ? inputType : null, el.getAttribute("autocomplete"));
 
       if (event.type === "click" || event.type === "submit") {
         payload.rawText = (el.textContent || "").trim();
