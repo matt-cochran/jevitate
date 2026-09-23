@@ -39,6 +39,8 @@ function fakeBrowserPortFactory(sessions: FakeSession[]): () => BrowserPort {
         page: {} as BrowserSession["page"],
         startTracing: vi.fn(async () => {}),
         stopTracingToFile: vi.fn(async () => {}),
+        saveStorageState: vi.fn(async () => {}),
+        admission: undefined,
         close: vi.fn(async () => {}),
       };
       sessions.push(session);
