@@ -20,6 +20,7 @@ import {
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
 import { resolveDataDir } from "./data-dir.js";
+import { loadLocalCredentials } from "./credentials-file.js";
 
 /**
  * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
@@ -103,10 +104,22 @@ export function realSecureIO(): SecureKeyIO {
       const path = resolveDataDir(["credentials.json"]);
       await mkdir(dirname(path), { recursive: true });
       let existing: Record<string, string> = {};
+      let raw: string | undefined;
       try {
-        existing = JSON.parse(await readFile(path, "utf8"));
-      } catch {
-        // no existing file yet — start fresh
+        raw = await readFile(path, "utf8");
+      } catch (err) {
+        // Only a MISSING file starts fresh; any other read failure fails closed.
+        const missing = typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+        if (!missing) throw err;
+      }
+      if (raw !== undefined) {
+        // Never silently overwrite a file we cannot parse — that would drop the
+        // other stored key. Fail closed with an actionable message instead.
+        try {
+          existing = JSON.parse(raw);
+        } catch {
+          throw new Error(`${path} is not valid JSON — fix or delete it, then re-run setup`);
+        }
       }
       existing[key] = value;
       await writeFile(path, JSON.stringify(existing, null, 2), { mode: 0o600 });
@@ -133,7 +146,7 @@ async function realOpenRouterCall(): Promise<OpenRouterCall> {
 }
 
 function buildStore(ai: AiCliDeps | undefined) {
-  return envCredentialStore(ai?.env ?? process.env, ai?.localConfig ?? {});
+  return envCredentialStore(ai?.env ?? process.env, ai?.localConfig ?? loadLocalCredentials());
 }
 
 export function registerAiCommands(program: Command, deps: CliDeps): void {
