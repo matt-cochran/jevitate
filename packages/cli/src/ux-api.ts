@@ -222,6 +222,12 @@ export interface RunUsabilityMissionOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) — the
+   * deterministic authenticated pre-step. Holds live session cookies: handed only to the
+   * browser, never to a model or a finding.
+   */
+  readonly storageState?: string;
   readonly nowIso?: () => string;
   /** Test seam: extract a page's visible text. Default reads the live page. */
   readonly extractText?: (session: { page: { evaluate: (fn: () => string) => Promise<string> } }) => Promise<string>;
@@ -251,6 +257,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
