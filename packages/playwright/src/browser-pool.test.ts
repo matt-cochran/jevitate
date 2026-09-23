@@ -110,11 +110,25 @@ describe("admission policy", () => {
     expect(
       admissionViolation(
         { cpuPressure: 99, cpuMetric: "cpu-busy-delta", memAvailableBytes: GiB, source: "win32:cpus-delta+freemem" },
-        DEFAULT_PRESSURE_THRESHOLDS,
+        { ...DEFAULT_PRESSURE_THRESHOLDS, "cpu-busy-delta": 95 },
         0,
       ),
     ).toBe("cpu busy=99% > 95% (source=win32:cpus-delta+freemem)");
     expect(admissionViolation(calm, DEFAULT_PRESSURE_THRESHOLDS, 0)).toBeUndefined();
+  });
+
+  test("non-stall CPU signals are advisory by default; PSI CPU stall still blocks", () => {
+    // Regression (PR #59, first macOS CI run): a healthy GitHub macOS runner read loadavg1-per-core
+    // ~194% and the old 200% limit held the pool for 129s. Load average / busy% are not stalls.
+    const macBusy: ResourceSample = { cpuPressure: 260, cpuMetric: "loadavg1-per-core", memPressure: 1, memMetric: "vm-pressure-level", memAvailableBytes: GiB, source: "darwin" };
+    expect(admissionViolation(macBusy, DEFAULT_PRESSURE_THRESHOLDS, 0)).toBeUndefined();
+    const winBusy: ResourceSample = { cpuPressure: 100, cpuMetric: "cpu-busy-delta", memAvailableBytes: GiB, source: "win32:cpus-delta+freemem" };
+    expect(admissionViolation(winBusy, DEFAULT_PRESSURE_THRESHOLDS, 0)).toBeUndefined();
+    // Opt-in enforcement still works per metric.
+    expect(admissionViolation(macBusy, { ...DEFAULT_PRESSURE_THRESHOLDS, "loadavg1-per-core": 200 }, 0)).toMatch(/> 200%/);
+    // A true CPU stall (Linux PSI) blocks by default.
+    const psiStall: ResourceSample = { ...calm, cpuPressure: 90, cpuMetric: "psi-cpu-some-avg10" };
+    expect(admissionViolation(psiStall, DEFAULT_PRESSURE_THRESHOLDS, 0)).toMatch(/> 80%/);
   });
 
   test("macOS warn level admits, critical blocks", () => {
