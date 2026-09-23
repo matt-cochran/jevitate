@@ -4,6 +4,7 @@ import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
+import { occluderOf } from "./occlusion.js";
 
 /**
  * act: execute one decided op against the live page, GATED.
@@ -78,16 +79,8 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
   // Occlusion: a visible, enabled element can still be covered (a modal overlay, a sticky bar).
   // Clicking it would wait out Playwright's actionability timeout and then throw — so refuse it
   // up front, naming what covers it, exactly as a user could not click it either.
-  const cover = await locator.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    const x = r.left + r.width / 2;
-    const y = r.top + r.height / 2;
-    const top = document.elementFromPoint(x, y);
-    if (top === null || top === el || el.contains(top)) return null;
-    // Name the cover by its nearest test id (the overlay itself, not whichever child sits on top).
-    const id = top.closest("[data-testid]")?.getAttribute("data-testid");
-    return id ? `[data-testid=${id}]` : `<${top.tagName.toLowerCase()}${top.id ? `#${top.id}` : ""}>`;
-  });
+  // The SAME predicate the snapshot filter uses (./occlusion.ts), so the two never disagree.
+  const cover = await locator.evaluate(occluderOf);
   if (cover !== null) return `target obscured by ${cover}`;
   return null;
 }

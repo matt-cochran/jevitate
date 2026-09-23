@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
-import { act, explore, monitorFor, perceive, snapshot } from "./index.js";
+import { act, explore, monitorFor, occluderOf, perceive, snapshot } from "./index.js";
 import { ScriptedJudge, withSession } from "./testkit.js";
 
 /**
@@ -24,6 +24,17 @@ const PAGES: Record<string, string> = {
     </div>
   </body></html>`,
   "/number": `<!doctype html><html><body><label>Qty <input type="number" aria-label="Qty" /></label></body></html>`,
+  // The covering element is the control's own ANCESTOR (the button lets clicks fall through).
+  "/ancestor": `<!doctype html><html><body>
+    <div data-testid="wrap" style="padding:24px;background:#eee">
+      <button type="button" id="ghost" onclick="this.textContent='clicked'">Ghost</button>
+    </div>
+    <button type="button">Other</button>
+  </body></html>`,
+  // The topmost element is the control's own DESCENDANT (its label span): never a cover.
+  "/descendant": `<!doctype html><html><body>
+    <button type="button" id="labelled" onclick="this.dataset.clicked='yes'"><span style="padding:8px">Inner label</span></button>
+  </body></html>`,
   "/pending": `<!doctype html><html><body><p>Loading…</p><script>fetch("/never").catch(() => undefined);</script></body></html>`,
   "/churn": `<!doctype html><html><body><button type="button">Go</button><ul></ul><script>
     let n = 0; const t = setInterval(() => { const li = document.createElement("li"); li.textContent = String(n); document.querySelector("ul").appendChild(li); if (++n === 12) clearInterval(t); }, 100);
@@ -210,6 +221,77 @@ describe("occlusion — a covered control is neither perceived nor acted on", ()
         // Refused up front — not after waiting out Playwright's actionability timeout.
         expect(Date.now() - started).toBeLessThan(5_000);
         expect(await session.page.locator("#behind").textContent()).toBe("Behind");
+      },
+      origin,
+    );
+  });
+});
+
+describe("occlusion — ONE shared predicate for the snapshot filter and the act() gate (owner ruling 5)", () => {
+  it("an ANCESTOR on top covers the control: the snapshot drops it AND act() refuses it, naming the ancestor", async () => {
+    await withSession(
+      "occlusion-ancestor-",
+      async (session) => {
+        await session.page.goto(`${origin}/ancestor`, { waitUntil: "domcontentloaded" });
+        const ghost = (await snapshot(session.page)).controls.find((c) => c.name === "Ghost");
+        if (ghost === undefined) throw new Error("Ghost not perceived while clickable");
+        // Now clicks at the button's centre fall through to its wrapper (its ancestor).
+        await session.page.evaluate(() => {
+          const b = document.getElementById("ghost");
+          if (b !== null) b.style.pointerEvents = "none";
+        });
+        const names = (await snapshot(session.page)).controls.map((c) => c.name);
+        expect(names).not.toContain("Ghost");
+        expect(names).toContain("Other");
+
+        const actor = CastActor.named("occlusion").whoCan(new BrowseTheWeb(session, [origin]));
+        const r = await act(actor, { op: "click", control: ghost });
+        expect(r).toEqual({ ok: false, mutated: false, reason: "target obscured by [data-testid=wrap]" });
+        expect(await session.page.locator("#ghost").textContent()).toBe("Ghost");
+      },
+      origin,
+    );
+  });
+
+  it("a DESCENDANT on top is the control's own content: perceived AND clickable", async () => {
+    await withSession(
+      "occlusion-descendant-",
+      async (session) => {
+        await session.page.goto(`${origin}/descendant`, { waitUntil: "domcontentloaded" });
+        const btn = (await snapshot(session.page)).controls.find((c) => c.name === "Inner label");
+        if (btn === undefined) throw new Error("the button with a label span must be perceived");
+        const actor = CastActor.named("occlusion").whoCan(new BrowseTheWeb(session, [origin]));
+        expect(await act(actor, { op: "click", control: btn })).toEqual({ ok: true, mutated: true });
+        expect(await session.page.locator("#labelled").getAttribute("data-clicked")).toBe("yes");
+      },
+      origin,
+    );
+  });
+
+  it("the snapshot and the gate agree on every control of every fixture (one predicate, one answer)", async () => {
+    await withSession(
+      "occlusion-agree-",
+      async (session) => {
+        const actor = CastActor.named("occlusion").whoCan(new BrowseTheWeb(session, [origin]));
+        for (const path of ["/overlay", "/ancestor", "/descendant"]) {
+          await session.page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
+          await session.page.evaluate(() => {
+            const b = document.getElementById("ghost");
+            if (b !== null) b.style.pointerEvents = "none";
+          });
+          const offered = new Set((await snapshot(session.page)).controls.map((c) => c.name));
+          for (const handle of await session.page.locator("button").elementHandles()) {
+            const name = (await handle.textContent())?.trim() ?? "";
+            const covered = (await handle.evaluate(occluderOf)) !== null;
+            expect(offered.has(name), `${path} ${name}: snapshot vs predicate`).toBe(!covered);
+            await handle.dispose();
+          }
+        }
+        // And the gate says the same as the snapshot for a control it did offer.
+        await session.page.goto(`${origin}/overlay`, { waitUntil: "domcontentloaded" });
+        const close = (await snapshot(session.page)).controls.find((c) => c.name === "Close");
+        if (close === undefined) throw new Error("Close must be offered");
+        expect((await act(actor, { op: "click", control: close })).ok).toBe(true);
       },
       origin,
     );
