@@ -12,7 +12,9 @@ import {
 } from "@jevitate/recording";
 import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
-import { snapshot, type Control, type Snapshot } from "../snapshot.js";
+import type { Control, Snapshot } from "../snapshot.js";
+import { perceive } from "../perceive.js";
+import { targetCandidates, type TargetOp } from "../actions.js";
 import { act } from "../act.js";
 import { toPath } from "../record.js";
 import { stateFingerprint, actionKey, type FrontierOp } from "../feature/fingerprint.js";
@@ -69,12 +71,19 @@ export interface FeatureRunResult {
 
 const TIMING: StepTiming = { atMs: 0, durationMs: 0, gapBeforeMs: 0 };
 
-function candidateOpsFor(control: Control): FrontierOp[] {
-  const r = control.role;
-  if (r === "textbox" || r === "searchbox" || r === "spinbutton") return ["type"];
-  if (r === "combobox") return ["select"];
-  if (r === "button" || r === "link" || r === "checkbox" || r === "radio") return ["click"];
-  return [];
+/** The ops the feature frontier issues — never `upload` (the mission carries no fixture). */
+const FRONTIER_OPS: ReadonlySet<TargetOp> = new Set<TargetOp>(["click", "type", "select"]);
+
+/**
+ * The frontier candidates a state offers, by the SHARED affordance mapping (`affordedOp`,
+ * ./actions.ts) — the same op the goal loop would use on each control.
+ */
+function frontierCandidates(controls: readonly Control[]): Array<{ control: Control; op: FrontierOp }> {
+  const out: Array<{ control: Control; op: FrontierOp }> = [];
+  for (const c of targetCandidates(controls, { ops: FRONTIER_OPS })) {
+    if (c.op === "click" || c.op === "type" || c.op === "select") out.push({ control: c.control, op: c.op });
+  }
+  return out;
 }
 
 function seedRecording(seedUrl: string, site: string): Recording {
@@ -125,6 +134,8 @@ export async function runFeatureMission(params: {
   bounds?: Partial<Bounds>;
   maxDepth?: number;
   maxPaths?: number;
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS`. */
+  renderWaitMs?: number;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
@@ -133,7 +144,15 @@ export async function runFeatureMission(params: {
   const maxPaths = params.maxPaths ?? 20;
   const site = new URL(params.seedUrl).origin;
 
-  const snapshotNow = (): Promise<Snapshot> => snapshot(params.page, { maxCandidates: bounds.maxCandidates });
+  // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
+  // still-rendering frame — including right after a reset-and-replay.
+  const snapshotNow = async (): Promise<Snapshot> =>
+    (
+      await perceive(params.page, {
+        maxCandidates: bounds.maxCandidates,
+        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      })
+    ).snapshot;
 
   await params.actor.attemptsTo(Navigate.to(params.seedUrl));
   let snap = await snapshotNow();
@@ -147,10 +166,8 @@ export async function runFeatureMission(params: {
 
   const seedRec = seedRecording(params.seedUrl, site);
   leaves.set(currentFingerprint, seedRec);
-  for (const control of snap.controls) {
-    for (const op of candidateOpsFor(control)) {
-      frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
-    }
+  for (const { control, op } of frontierCandidates(snap.controls)) {
+    frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
   }
 
   let actions = 0;
@@ -167,7 +184,8 @@ export async function runFeatureMission(params: {
     if (actions >= bounds.maxActions) return endRun("cap");
     if (pathsDiscovered >= maxPaths) return endRun("path-cap");
 
-    const item = frontier.popPreferring(currentFingerprint)!;
+    const item = frontier.popPreferring(currentFingerprint);
+    if (item === undefined) break;
     const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
     if (depth >= maxDepth) continue;
 
@@ -207,10 +225,8 @@ export async function runFeatureMission(params: {
       visited.add(newFingerprint);
       leaves.set(newFingerprint, branch);
       pathsDiscovered += 1;
-      for (const control of snap.controls) {
-        for (const op of candidateOpsFor(control)) {
-          frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
-        }
+      for (const { control, op } of frontierCandidates(snap.controls)) {
+        frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
       }
     }
     currentFingerprint = newFingerprint;

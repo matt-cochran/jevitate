@@ -1,56 +1,27 @@
-import type {
-  JudgmentPort,
-  JudgmentState,
-  Question,
-  ChoiceQuestion,
-  ChoiceAnswer,
-} from "@jevitate/ai-core";
+import type { JudgmentPort, JudgmentState, Question, ChoiceQuestion } from "@jevitate/ai-core";
 import { assertNoSecretInPayload } from "@jevitate/ai-core";
 import type { Control, Snapshot } from "./snapshot.js";
 import { buildJudgmentState, redactText } from "./redact.js";
+import { OPS_NEEDING_TARGET, TARGET_FREE_ACTIONS, targetCandidates, type Op, type TargetOp } from "./actions.js";
 
 /**
- * decide: one `JudgmentPort.systemOne` round-trip with TWO heads —
- *   op:     Choice<click|type|select|upload|scroll_up|scroll_down|wait|done|blocked>
- *   target: Choice over the snapshot's indexed control indices
- * — and the loop consumes ONLY the chosen op's target. Every prompt carries the
- * prompt-injection guard (guardrail #5) as the first line of the control list,
- * and the whole state is redacted first (guardrail #3, via `buildJudgmentState`).
+ * decide: one `JudgmentPort.systemOne` round-trip with ONE head — `action`, a
+ * Choice over the COMPLETE candidate actions the page affords (the
+ * candidate-action technique browser agents such as browser-use / Stagehand
+ * use): `<op>:<controlIndex>` for every control (its op derived by
+ * `affordedOp`, see ./actions.ts) plus the target-free ops. An op and a target
+ * can therefore never disagree. Every prompt carries the prompt-injection guard
+ * (guardrail #5) as the first line of the control list, and the whole state and
+ * every candidate description are redacted first (guardrail #3).
  *
- * `upload` is offered ONLY when the mission carries a fixture file
- * (`DecideInput.uploadAvailable`); it then attaches that fixture to the chosen
- * file-input control. The model picks the op and the target — never a path.
+ * Upload candidates are offered ONLY when the mission carries a fixture file
+ * (`DecideInput.uploadAvailable`); choosing one attaches that fixture to that
+ * file-input control. The model picks the action — never a path.
  *
  * Jev makes exactly ONE typed decision per step. `done`/`blocked` are advisory
  * signals to the loop, never the success verdict (that is the independent
  * oracle's job — guardrail #4).
  */
-
-export type Op =
-  | "click"
-  | "type"
-  | "select"
-  | "upload"
-  | "scroll_up"
-  | "scroll_down"
-  | "wait"
-  | "done"
-  | "blocked";
-
-export const OPS: readonly Op[] = [
-  "click",
-  "type",
-  "select",
-  "upload",
-  "scroll_up",
-  "scroll_down",
-  "wait",
-  "done",
-  "blocked",
-];
-
-/** The ops that require a chosen control; every other op ignores the target head. */
-export const OPS_NEEDING_TARGET: ReadonlySet<Op> = new Set<Op>(["click", "type", "select", "upload"]);
 
 /**
  * Model-facing description of the `upload` op, added to the prompt (right after
@@ -99,51 +70,6 @@ export interface DecideInput {
   readonly uploadAvailable?: boolean;
 }
 
-/** Text-entry `<input>` types: typing is their interaction. Anything else (checkbox, radio, range, color…) is clicked. */
-const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
-  "", "text", "email", "search", "tel", "url", "password", "number", "date", "datetime-local", "month", "time", "week",
-]);
-
-/**
- * The single interaction a control affords, by its kind — the model chooses WHAT to act on and this
- * derives HOW, so an incoherent pair (e.g. "upload" + a button) is inexpressible. File inputs upload,
- * text fields type, native selects select, everything else is clicked.
- */
-export function affordedOp(c: Control): "click" | "type" | "select" | "upload" {
-  if (c.tag === "input" && c.inputType === "file") return "upload";
-  if (c.tag === "select") return "select";
-  if (c.tag === "textarea") return "type";
-  if (c.tag === "input" && TEXT_INPUT_TYPES.has(c.inputType ?? "")) return "type";
-  if (c.role === "textbox" || c.role === "searchbox" || c.role === "spinbutton") return "type";
-  return "click";
-}
-
-/** Target-free actions, always offered, with what each means. */
-const NON_TARGET_ACTIONS: ReadonlyArray<{ op: Op; description: string }> = [
-  { op: "wait", description: "wait for the page to finish updating" },
-  { op: "scroll_down", description: "scroll down to reveal more of the page" },
-  { op: "scroll_up", description: "scroll up" },
-  { op: "done", description: "the goal is achieved on the current page" },
-  { op: "blocked", description: "the goal cannot be advanced from here" },
-];
-
-function describeAction(op: "click" | "type" | "select" | "upload", summary: string): string {
-  switch (op) {
-    case "upload":
-      return `upload the mission's file into ${summary}`;
-    case "type":
-      return `type into ${summary}`;
-    case "select":
-      return `choose an option in ${summary}`;
-    case "click":
-      return `click ${summary}`;
-    default: {
-      const exhaustive: never = op;
-      return exhaustive;
-    }
-  }
-}
-
 /**
  * One judgment per step over the COMPLETE actions available on this page (the candidate-action
  * technique browser agents such as browser-use / Stagehand use), instead of independent op and
@@ -167,15 +93,16 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
 
   const candidates = new Map<string, { op: Op; control: Control | null }>();
   const descriptions: Record<string, string> = {};
-  for (const c of snapshot.controls) {
-    const op = affordedOp(c);
-    if (op === "upload" && !uploadAvailable) continue; // an upload that could only fail closed is never offered
-    const id = `${op}:${c.index}`;
-    candidates.set(id, { op, control: c });
+  // An upload that could only fail closed is never offered.
+  const ops: ReadonlySet<TargetOp> = new Set<TargetOp>(
+    uploadAvailable ? ["click", "type", "select", "upload"] : ["click", "type", "select"],
+  );
+  for (const c of targetCandidates(snapshot.controls, { ops })) {
+    candidates.set(c.id, { op: c.op, control: c.control });
     // Page text is untrusted and may contain secrets: redacted like the state.
-    descriptions[id] = redactText(describeAction(op, c.summary), secrets);
+    descriptions[c.id] = redactText(c.description, secrets);
   }
-  for (const a of NON_TARGET_ACTIONS) {
+  for (const a of TARGET_FREE_ACTIONS) {
     candidates.set(a.op, { op: a.op, control: null });
     descriptions[a.op] = a.description;
   }
@@ -194,12 +121,13 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
   // buildJudgmentState does for the state (fail-closed choke point).
   assertNoSecretInPayload(questions, secrets);
   const answers = await judge.systemOne({ state, questions });
-  const answer = answers.action as ChoiceAnswer<string> | undefined;
-  const chosen = answer ? candidates.get(answer.value) : undefined;
-  if (answer === undefined || chosen === undefined) {
+  const answer = answers.action;
+  const chosen = answer?.kind === "choice" ? candidates.get(answer.value) : undefined;
+  if (answer?.kind !== "choice" || chosen === undefined) {
     // The judgment port validates choices against the offered options; reaching here means an
-    // unusable answer — fail closed as a target-requiring op with no target.
-    return { op: "click", control: null, confidence: answer?.confidence ?? 0, targetMissing: true, state };
+    // unusable answer (missing, wrong kind, or an id that was not offered) — fail closed as a
+    // target-requiring op with no target, never a guessed action.
+    return { op: "click", control: null, confidence: answer?.kind === "choice" ? answer.confidence : 0, targetMissing: true, state };
   }
   return {
     op: chosen.op,

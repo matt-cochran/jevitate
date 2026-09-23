@@ -26,6 +26,7 @@ import {
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { resolveDataDir } from "./data-dir.js";
+import { writeTranscript } from "./transcript-file.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -122,8 +123,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
     const recordingPath = join(outDir, `explore-${iso.replace(/[:.]/g, "-")}.json`);
     await writeFile(recordingPath, `${JSON.stringify(mission.recording, null, 2)}\n`, "utf8");
-    const transcriptPath = recordingPath.replace(/\.json$/, ".transcript.json");
-    await writeFile(transcriptPath, `${JSON.stringify(mission.transcript, null, 2)}\n`, "utf8");
+    const transcriptPath = await writeTranscript(recordingPath, mission.transcript);
 
     return {
       outcome: mission.outcome,
@@ -310,6 +310,8 @@ export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
   readonly outcome: "exhausted" | "cap";
   readonly recordingPaths: string[];
+  /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
+  readonly transcriptPath: string;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -348,8 +350,9 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
+    const transcriptPath = await writeTranscript(join(outDir, `coverage-${stamp}.json`), result.transcript);
 
-    return { coverage: result.coverage, outcome: result.outcome, recordingPaths };
+    return { coverage: result.coverage, outcome: result.outcome, recordingPaths, transcriptPath };
   } finally {
     await session.close();
   }
@@ -377,7 +380,14 @@ export interface RunAdversarialCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** Where the decision transcript is written. Default `~/.jevitate/recordings`. */
+  readonly outDir?: string;
+  /** ISO clock for the transcript filename. Default `Date.now()`. */
+  readonly nowIso?: () => string;
 }
+
+/** The adversarial outcome plus where its decision transcript was written. */
+export type AdversarialCliMissionResult = AdversarialOutcome & { readonly transcriptPath: string };
 
 /**
  * Runs `@jevitate/explore`'s adversarial "try to break it" mission behind the
@@ -387,7 +397,7 @@ export interface RunAdversarialCliMissionOptions {
  */
 export async function runAdversarialCliMission(
   opts: RunAdversarialCliMissionOptions,
-): Promise<AdversarialOutcome> {
+): Promise<AdversarialCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
@@ -401,7 +411,7 @@ export async function runAdversarialCliMission(
   });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
-    return await runAdversarialMission({
+    const outcome = await runAdversarialMission({
       page: session.page,
       actor,
       judgment: opts.judgment,
@@ -411,6 +421,13 @@ export async function runAdversarialCliMission(
       strategies: opts.strategies,
       site: origin,
     });
+    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+    const transcriptPath = await writeTranscript(
+      join(outDir, `adversarial-${iso.replace(/[:.]/g, "-")}.json`),
+      outcome.transcript,
+    );
+    return { ...outcome, transcriptPath };
   } finally {
     await session.close();
   }

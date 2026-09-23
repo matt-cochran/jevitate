@@ -34,6 +34,7 @@ import {
   type UxReport,
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
+import { writeTranscript } from "./transcript-file.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -238,6 +239,8 @@ export interface RunUsabilityMissionResult {
   readonly reportPath: string;
   readonly stop: string;
   readonly screensObserved: number;
+  /** The explore loop's decision transcript, written next to the report. */
+  readonly transcriptPath: string;
 }
 
 /**
@@ -310,7 +313,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
     const reportPath = join(outDir, `usability-${iso.replace(/[:.]/g, "-")}.json`);
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    return { report, reportPath, stop: run.stop, screensObserved: collected.length };
+    const transcriptPath = await writeTranscript(reportPath, run.transcript);
+    return { report, reportPath, stop: run.stop, screensObserved: collected.length, transcriptPath };
   } finally {
     await session.close();
   }

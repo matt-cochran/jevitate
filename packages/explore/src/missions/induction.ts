@@ -2,10 +2,12 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
-import type { GenerationPort, JudgmentPort, NoulAnswer } from "@jevitate/ai-core";
+import type { GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import {
   assertAuthorizedExploreTarget,
-  snapshot,
+  perceive,
+  targetCandidates,
+  TranscriptLog,
   act,
   toPath,
   resolveBounds,
@@ -14,6 +16,8 @@ import {
   type Bounds,
   type Control,
   type Snapshot,
+  type TargetOp,
+  type TranscriptEntry,
 } from "../index.js";
 import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
@@ -58,6 +62,8 @@ export interface InductionRunResult {
   readonly coverage: CoverageReport;
   /** One replayable repro Recording per distinct state visited (discovery order). */
   readonly recordings: Recording[];
+  /** The shared decision transcript: each frontier action, whether it landed, and Jev's advisory `isDefect`. */
+  readonly transcript: TranscriptEntry[];
 }
 
 export interface InductionMissionParams {
@@ -71,6 +77,8 @@ export interface InductionMissionParams {
   readonly allowlist: readonly string[];
   readonly bounds?: Partial<Bounds>;
   readonly maxDepth?: number;
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS`. */
+  readonly renderWaitMs?: number;
 }
 
 /**
@@ -80,24 +88,10 @@ export interface InductionMissionParams {
  * deliberately excluded. `type`/`select` only mutate a value, so they can never
  * expand the state frontier; enqueuing them would only burn the action budget
  * against guardrail #2 (bounded). Clicks (navigations / control toggles) are
- * the only fingerprint-affecting transitions, so the frontier enqueues clicks.
+ * the only fingerprint-affecting transitions, so the frontier enqueues the
+ * controls whose SHARED afforded op (`affordedOp`, ./actions.ts) is `click`.
  */
-const CLICKABLE_ROLES = new Set([
-  "button",
-  "link",
-  "checkbox",
-  "radio",
-  "tab",
-  "switch",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "option",
-]);
-
-function candidateOpsFor(control: Control): FrontierOp[] {
-  return CLICKABLE_ROLES.has(control.role) ? ["click"] : [];
-}
+const FRONTIER_OPS: ReadonlySet<TargetOp> = new Set<TargetOp>(["click"]);
 
 function enqueueFrom(
   frontier: Frontier,
@@ -105,11 +99,9 @@ function enqueueFrom(
   pathPrefix: Recording,
   controls: readonly Control[],
 ): void {
-  for (const control of controls) {
-    if (!control.enabled) continue; // a disabled control can never be acted on — never enqueue it
-    for (const op of candidateOpsFor(control)) {
-      frontier.push({ key: actionKey(fingerprint, control, op), fromFingerprint: fingerprint, pathPrefix, control, op });
-    }
+  // A disabled control can never be acted on — never enqueue it.
+  for (const { control } of targetCandidates(controls, { ops: FRONTIER_OPS, enabledOnly: true })) {
+    frontier.push({ key: actionKey(fingerprint, control, "click"), fromFingerprint: fingerprint, pathPrefix, control, op: "click" });
   }
 }
 
@@ -171,7 +163,16 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const site = new URL(params.seedUrl).origin;
-  const takeSnapshot = (): Promise<Snapshot> => snapshot(params.page, { maxCandidates: bounds.maxCandidates });
+  // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
+  // still-rendering frame — including right after a reset-and-replay.
+  const takeSnapshot = async (): Promise<Snapshot> =>
+    (
+      await perceive(params.page, {
+        maxCandidates: bounds.maxCandidates,
+        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      })
+    ).snapshot;
+  const transcript = new TranscriptLog();
 
   await params.actor.attemptsTo(Navigate.to(params.seedUrl));
   let snap = await takeSnapshot();
@@ -199,7 +200,12 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   while (!frontier.isExhausted()) {
     // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
     if (actions >= bounds.maxActions) {
-      return { outcome: "cap", coverage: report(false), recordings: [...statePaths.values()] };
+      return {
+        outcome: "cap",
+        coverage: report(false),
+        recordings: [...statePaths.values()],
+        transcript: transcript.entries(),
+      };
     }
 
     const item = frontier.popPreferring(currentFingerprint);
@@ -229,7 +235,20 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       value: item.op === "click" ? null : "",
     });
     actions += 1;
-    if (!result.ok) continue;
+    const decidedOn = snap;
+    if (!result.ok) {
+      transcript.record({
+        op: item.op,
+        control: liveControl,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "coverage-frontier",
+        actOk: false,
+        ...(result.reason === undefined ? {} : { reason: result.reason }),
+        snapshot: decidedOn,
+      });
+      continue;
+    }
 
     snap = await takeSnapshot();
     const newFingerprint = stateFingerprint(snap);
@@ -248,7 +267,21 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       }),
       questions: { isDefect: { kind: "noul" } },
     });
-    if ((answers.isDefect as NoulAnswer).value) {
+    const isDefect = answers.isDefect;
+    const flagged = isDefect?.kind === "noul" && isDefect.value;
+    transcript.record({
+      op: item.op,
+      control: liveControl,
+      confidence: null,
+      chosenBy: "strategy",
+      strategy: "coverage-frontier",
+      actOk: true,
+      snapshot: decidedOn,
+      ...(isDefect?.kind === "noul"
+        ? { judgments: { isDefect: { value: isDefect.value, probability: isDefect.probability } } }
+        : {}),
+    });
+    if (flagged) {
       defects.push({
         stateFingerprint: newFingerprint,
         url: snap.url,
@@ -267,5 +300,10 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     currentFingerprint = newFingerprint;
   }
 
-  return { outcome: "exhausted", coverage: report(true), recordings: [...statePaths.values()] };
+  return {
+    outcome: "exhausted",
+    coverage: report(true),
+    recordings: [...statePaths.values()],
+    transcript: transcript.entries(),
+  };
 }

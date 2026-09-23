@@ -1,4 +1,5 @@
 import type { Control, Op, Snapshot } from "../index.js";
+import { affordedOp } from "../actions.js";
 import { valueFor } from "./input-strategy.js";
 
 /**
@@ -39,8 +40,13 @@ function terminalControl(controls: readonly Control[]): Control | undefined {
   return controls.find((c) => c.role === "button" && TERMINAL_NAME.test(c.name) && c.enabled);
 }
 
+/**
+ * The first enabled text-entry control — by the SHARED affordance mapping (`affordedOp`), so a
+ * boundary input targets exactly the controls the goal loop would type into (textarea, search,
+ * number, `role=textbox` widgets…) and never a control that cannot take text.
+ */
 function firstTextbox(controls: readonly Control[]): Control | undefined {
-  return controls.find((c) => c.role === "textbox" && c.enabled);
+  return controls.find((c) => affordedOp(c) === "type" && c.enabled);
 }
 
 export function pickMisuseAction(params: {

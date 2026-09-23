@@ -2,7 +2,7 @@ import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Target } from "@jevitate/screenplay";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
-import type { Op } from "./decide.js";
+import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 
 /**

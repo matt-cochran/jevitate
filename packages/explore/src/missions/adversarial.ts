@@ -5,8 +5,12 @@ import type { Recording } from "@jevitate/recording";
 import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
-import { snapshot, type Control } from "../snapshot.js";
+import type { Control, Snapshot } from "../snapshot.js";
+import { perceive } from "../perceive.js";
 import { act } from "../act.js";
+import { buildJudgmentState } from "../redact.js";
+import { PROMPT_INJECTION_GUARD } from "../decide.js";
+import { TranscriptLog, type TranscriptEntry, type TranscriptJudgment } from "../transcript.js";
 import { RunRecorder } from "../record.js";
 import { PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
 import { pickMisuseAction, type MisuseDecision, type MisuseStrategy } from "../adversarial/misuse.js";
@@ -31,6 +35,12 @@ import { pickMisuseAction, type MisuseDecision, type MisuseStrategy } from "../a
  * On a defect the mission stops, keeps the run `Recording` as the exact repro,
  * and hands a REDACTED failure summary + URL (never raw form state — guardrail
  * #3) to the generation gateway for a triage narrative.
+ *
+ * Perception is the shared `perceive()` step (render wait + occlusion), so a
+ * misuse strategy never picks from a blank, still-rendering frame or a control
+ * hidden behind an overlay; every outcome carries the shared decision
+ * transcript (the strategy's action, whether it landed, and Jev's advisory
+ * `looksBroken` judgment — recorded, never gating).
  */
 
 export interface AdversarialDefect {
@@ -41,9 +51,9 @@ export interface AdversarialDefect {
 }
 
 export type AdversarialOutcome =
-  | { outcome: "clean"; recording: Recording }
-  | { outcome: "cap"; recording: Recording }
-  | { outcome: "defect"; defect: AdversarialDefect };
+  | { outcome: "clean"; recording: Recording; transcript: TranscriptEntry[] }
+  | { outcome: "cap"; recording: Recording; transcript: TranscriptEntry[] }
+  | { outcome: "defect"; defect: AdversarialDefect; transcript: TranscriptEntry[] };
 
 export interface AdversarialMissionParams {
   readonly page: Page;
@@ -58,6 +68,8 @@ export interface AdversarialMissionParams {
   readonly userInvariant?: (page: Page) => Promise<{ ok: boolean; reason?: string }>;
   /** Recording.site label. Defaults to the seed origin. */
   readonly site?: string;
+  /** Bound (ms) on waiting for a rendered page before each strategy step. Default `RENDER_WAIT_MS`. */
+  readonly renderWaitMs?: number;
 }
 
 export async function runAdversarialMission(params: AdversarialMissionParams): Promise<AdversarialOutcome> {
@@ -68,24 +80,36 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   // Attach the hard-signal listeners BEFORE navigating, so no signal is missed.
   const collector = new PageSignalCollector(params.page);
   const recorder = new RunRecorder(params.site ?? origin);
+  const transcript = new TranscriptLog();
   const now = (): number => Date.now();
+  const perceiveNow = async (): Promise<Snapshot> =>
+    (
+      await perceive(params.page, {
+        maxCandidates: bounds.maxCandidates,
+        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      })
+    ).snapshot;
 
   await Navigate.to(params.seedUrl).performAs(params.actor);
   recorder.navigate(params.seedUrl, now());
 
-  let snap = await snapshot(params.page, { maxCandidates: bounds.maxCandidates });
+  let snap = await perceiveNow();
   let lastDecision: MisuseDecision | undefined;
   let actions = 0;
 
   for (const strategy of params.strategies) {
     if (actions >= bounds.maxActions) {
-      return { outcome: "cap", recording: recorder.finish({ intent: "adversarial" }) };
+      return { outcome: "cap", recording: recorder.finish({ intent: "adversarial" }), transcript: transcript.entries() };
     }
 
+    const decidedOn = snap;
     const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random });
     let acted = false;
+    let control: Control | null = null;
+    let actOk = false;
+    let actReason: string | undefined = "strategy found no applicable action";
     if (decision) {
-      const control: Control | null =
+      control =
         decision.targetIndex !== undefined
           ? snap.controls.find((c) => c.index === decision.targetIndex) ?? null
           : null;
@@ -93,6 +117,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       const result = await act(params.actor, { op: decision.op, control, value: decision.fillText ?? null });
       actions += 1;
       acted = true;
+      actOk = result.ok;
+      actReason = result.reason;
       if (result.ok && control !== null) {
         if (decision.op === "click") recorder.click(control.descriptor, at);
         else if (decision.op === "type") recorder.fill(control.descriptor, decision.fillText ?? "", at);
@@ -100,6 +126,20 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
       lastDecision = decision;
     }
+    const recordStep = (extra: { reason?: string; judgments?: Record<string, TranscriptJudgment> }): void => {
+      const reason = extra.reason ?? actReason;
+      transcript.record({
+        op: decision ? decision.op : null,
+        control,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy,
+        actOk,
+        ...(reason === undefined ? {} : { reason }),
+        snapshot: decidedOn,
+        ...(extra.judgments === undefined ? {} : { judgments: extra.judgments }),
+      });
+    };
 
     // Independent oracle — runs EVERY iteration, even when a strategy chose no
     // action: the user invariant is an independent probe of live page state,
@@ -114,6 +154,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       const reasons = [...hardSignals.map((s) => s.detail), invariantResult.reason]
         .filter((r): r is string => Boolean(r))
         .join("; ");
+      recordStep({ reason: `defect: ${reasons}` });
       // Guardrail #3: the generation call receives only a redacted failure
       // summary (hard-signal details — never raw form state) + the URL. The
       // triage.narrative schema is `.strict()`, so a stray key would be rejected.
@@ -129,28 +170,36 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           recording: recorder.finish({ intent: "adversarial" }),
           triage: triage.output,
         },
+        transcript: transcript.entries(),
       };
     }
 
     // SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and
-    // then DISCARDED — it is never read into the stop decision above. Removing
-    // the discard and wiring this answer into the defect condition would be the
-    // single most dangerous regression this mission can suffer (see Task 7).
-    await params.judgment.systemOne({
-      state: {
+    // recorded in the transcript — it is never read into the stop decision above.
+    // Wiring this answer into the defect condition would be the single most
+    // dangerous regression this mission can suffer (see Task 7). The state is
+    // redacted and carries the prompt-injection guard like every other prompt.
+    const answers = await params.judgment.systemOne({
+      state: buildJudgmentState({
         goal: "try to break it",
-        url: redactUrl(params.page.url()),
-        controls: snap.controls.map((c) => c.summary),
+        url: params.page.url(),
+        controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
         history: [],
-      },
+      }),
       questions: { looksBroken: { kind: "noul" } },
     });
+    const looksBroken = answers.looksBroken;
+    recordStep(
+      looksBroken?.kind === "noul"
+        ? { judgments: { looksBroken: { value: looksBroken.value, probability: looksBroken.probability } } }
+        : {},
+    );
 
     if (acted) {
-      snap = await snapshot(params.page, { maxCandidates: bounds.maxCandidates });
+      snap = await perceiveNow();
       recorder.observed(snap.url, now());
     }
   }
 
-  return { outcome: "clean", recording: recorder.finish({ intent: "adversarial" }) };
+  return { outcome: "clean", recording: recorder.finish({ intent: "adversarial" }), transcript: transcript.entries() };
 }
