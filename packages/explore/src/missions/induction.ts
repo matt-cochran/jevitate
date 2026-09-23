@@ -337,7 +337,11 @@ export async function runInductionMission(params: InductionMissionParams): Promi
           found: hangs,
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
-          ...(params.settle === undefined ? {} : { perceive: { settleConfig: params.settle } }),
+          // Re-detected with the SAME perception bounds the mission used.
+          perceive: {
+            ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+            ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+          },
         });
         if (!(await sessions.reset(hang))) {
           return {

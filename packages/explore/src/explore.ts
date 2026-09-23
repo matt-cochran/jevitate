@@ -85,7 +85,7 @@ export interface ExploreConfig {
   readonly renderWaitMs?: number;
   /** Bound on the main-thread probe (ms). Default `HANG_PROBE_MS`. */
   readonly hangProbeMs?: number;
-  /** A request pending longer than this (ms) is a hang. Default: the render ceiling. */
+  /** A request pending longer than this (ms) is a hang. Default: half the render ceiling. */
   readonly requestBoundMs?: number;
   /**
    * How long a page must stay stuck in an earlier state after an action before it counts as a

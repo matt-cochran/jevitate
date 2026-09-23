@@ -266,7 +266,11 @@ export async function runFeatureMission(params: {
           found: hangs,
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
-          ...(params.settle === undefined ? {} : { perceive: { settleConfig: params.settle } }),
+          // Re-detected with the SAME perception bounds the mission used.
+          perceive: {
+            ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+            ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+          },
         });
         if (!(await sessions.reset(hang))) return endRun("hang");
         await monitorFor(sessions.page).instrument();

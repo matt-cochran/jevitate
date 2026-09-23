@@ -45,7 +45,7 @@ export interface PerceiveOptions {
   readonly quietMs?: number;
   /** Bound (ms) on the main-thread probe (a trivial evaluate). Default `HANG_PROBE_MS` (5s). */
   readonly hangProbeMs?: number;
-  /** A request pending longer than this (ms) is stuck. Default: the ceiling. */
+  /** A request pending longer than this (ms) is stuck. Default: half the ceiling. */
   readonly requestBoundMs?: number;
   /** The target's settle configuration (background requests, long-poll threshold). */
   readonly settleConfig?: SettleConfig;
@@ -105,7 +105,10 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   }
   const snapOpts = opts.maxCandidates === undefined ? {} : { maxCandidates: opts.maxCandidates };
   const hangProbeMs = opts.hangProbeMs ?? HANG_PROBE_MS;
-  const requestBoundMs = opts.requestBoundMs ?? ceiling;
+  // Half the ceiling by default: a request that started a little AFTER this perception began (the
+  // page an action opened) is still recognised as the stuck one when the ceiling passes, instead of
+  // the verdict flipping between request-pending and never-settled on timing alone.
+  const requestBoundMs = opts.requestBoundMs ?? ceiling / 2;
   const monitor = monitorFor(page);
   monitor.configure(opts.settleConfig);
   const ignoreNoProgress = textMatcher(opts.hangConfig?.ignoreNoProgress);

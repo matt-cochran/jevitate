@@ -177,7 +177,7 @@ export interface AdversarialMissionParams {
   readonly hangReplays?: number;
   /** Bound on the main-thread probe (ms). Default `HANG_PROBE_MS`. */
   readonly hangProbeMs?: number;
-  /** A request pending longer than this (ms) is a hang. Default: the render ceiling. */
+  /** A request pending longer than this (ms) is a hang. Default: half the render ceiling. */
   readonly requestBoundMs?: number;
   /** The target's settle configuration (background requests, long-poll threshold). */
   readonly settle?: SettleConfig;
