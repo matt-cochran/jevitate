@@ -11,6 +11,7 @@ import { perceive } from "../perceive.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import type { HangSignal } from "../hang.js";
+import type { HangConfig, SettleConfig } from "../settle-config.js";
 import { hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import { act } from "../act.js";
@@ -172,6 +173,10 @@ export interface AdversarialMissionParams {
   readonly hangProbeMs?: number;
   /** A request pending longer than this (ms) is a hang. Default: the render ceiling. */
   readonly requestBoundMs?: number;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  readonly settle?: SettleConfig;
+  /** The target's hang configuration (`ui-no-progress` ignores). */
+  readonly hangs?: HangConfig;
 }
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
@@ -239,6 +244,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
     ...(params.hangProbeMs === undefined ? {} : { hangProbeMs: params.hangProbeMs }),
     ...(params.requestBoundMs === undefined ? {} : { requestBoundMs: params.requestBoundMs }),
+    ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+    ...(params.hangs === undefined ? {} : { hangConfig: params.hangs }),
   };
 
   const finish = (

@@ -44,12 +44,14 @@ beforeAll(async () => {
         return;
       case "/stuck":
         res.writeHead(200, { "content-type": "text/html" }).end(
-          html(`<h1>Report</h1><button type="button">Refresh</button><script>fetch("/api/never");</script>`),
+          // The page cannot be used until its data arrives: a stuck request here IS a hang (on an
+          // interactive page the same pending request would be a long-poll, not a hang).
+          html(`<h1>Report</h1><p id="s">Loading…</p><script>fetch("/api/never").then(() => { document.getElementById("s").innerHTML = '<button type="button">Refresh</button>'; });</script>`),
         );
         return;
       case "/flaky":
         res.writeHead(200, { "content-type": "text/html" }).end(
-          html(`<h1>Report</h1><button type="button">Refresh</button><script>fetch("/api/flaky");</script>`),
+          html(`<h1>Report</h1><p id="s">Loading…</p><script>fetch("/api/flaky").then(() => { document.getElementById("s").innerHTML = '<button type="button">Refresh</button>'; });</script>`),
         );
         return;
       case "/busy":
@@ -132,7 +134,7 @@ describe("hangs are detected, classified and REPRODUCED in fresh contexts", () =
       expect(h?.signal.pending[0]?.endpoint).toBe("GET /api/never");
       expect(h?.reproduction).toMatchObject({ attempts: 2, reproduced: 2, status: "reproduced" });
       expect(h?.repro.recordingStepIndex).toBe(0);
-      expect(h?.signal.lastState.controls).toEqual(['button "Refresh"']);
+      expect(h?.signal.lastState.controls).toEqual([]);
       // Its own transcript step says why the run stopped.
       expect(result.transcript.at(-1)?.reason).toMatch(/^hang \(request-pending\): GET \/api\/never was still pending/);
 

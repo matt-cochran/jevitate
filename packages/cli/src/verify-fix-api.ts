@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
@@ -39,6 +40,8 @@ export interface RunVerifyFixOptions {
   readonly browser?: BrowserLaunchOptions;
   /** Settle ceiling after the replay (ms). */
   readonly settleCeilingMs?: number;
+  /** Per-target settle/hang configuration, keyed by origin (`~/.jevitate/targets.json`). */
+  readonly targets?: Readonly<Record<string, TargetConfig>>;
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
@@ -153,15 +156,20 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  const target = resolveTargetConfig(opts.targets ?? {}, origin);
+  const perceiveOpts = {
+    ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
+    ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
+    ...(target.hangs === undefined ? {} : { hangConfig: target.hangs }),
+  };
   const result = await verifyFix({
+    perceive: perceiveOpts,
     recording: mission.recording,
     recordingStepIndex: finding.repro.recordingStepIndex,
     fingerprint: finding.fingerprint,
     defectKind: finding.kind,
     ...(finding.hang === undefined ? {} : { hang: finding.hang }),
-    ...(opts.settleCeilingMs === undefined
-      ? {}
-      : { settleCeilingMs: opts.settleCeilingMs, perceive: { renderWaitMs: opts.settleCeilingMs } }),
+    ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
     openSession: async () => {
       const session = await portFactory().open({
         headless: true,

@@ -23,6 +23,7 @@ import { reachFrontierState } from "../feature/reach.js";
 import { isInScope, type CapabilityScope } from "../feature/capability-scope.js";
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
 import type { MissionFailure } from "@jevitate/domain";
+import type { SettleConfig } from "../settle-config.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 
@@ -146,6 +147,8 @@ export async function runFeatureMission(params: {
   /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS` — the shared settle rule
    *  recognises a control-free leaf state in about the quiet window, so no shorter coverage bound is needed. */
   renderWaitMs?: number;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  settle?: SettleConfig;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
@@ -161,6 +164,7 @@ export async function runFeatureMission(params: {
       await perceive(params.page, {
         maxCandidates: bounds.maxCandidates,
         ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+        ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
       })
     ).snapshot;
 

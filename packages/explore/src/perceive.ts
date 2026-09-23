@@ -12,6 +12,7 @@ import {
   type HangSignal,
 } from "./hang.js";
 import { contentHash } from "@jevitate/domain";
+import { textMatcher, type HangConfig, type SettleConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
 
 /**
@@ -46,6 +47,10 @@ export interface PerceiveOptions {
   readonly hangProbeMs?: number;
   /** A request pending longer than this (ms) is stuck. Default: the ceiling. */
   readonly requestBoundMs?: number;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  readonly settleConfig?: SettleConfig;
+  /** The target's hang configuration (`ui-no-progress` ignores). */
+  readonly hangConfig?: HangConfig;
 }
 
 /** Default bound on the main-thread responsiveness probe (ms). */
@@ -102,6 +107,8 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   const hangProbeMs = opts.hangProbeMs ?? HANG_PROBE_MS;
   const requestBoundMs = opts.requestBoundMs ?? ceiling;
   const monitor = monitorFor(page);
+  monitor.configure(opts.settleConfig);
+  const ignoreNoProgress = textMatcher(opts.hangConfig?.ignoreNoProgress);
 
   // 1. Is the page's main thread answering at all? If not, nothing else can be read (every page
   //    API would block too): that is a hang of its own kind.
@@ -164,7 +171,8 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
           () => true,
           () => false,
         );
-      if (!gone) stuckBusy = busy;
+      // A target can declare an indicator (or a route) where a lasting busy state is expected.
+      if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) stuckBusy = busy;
     }
   }
 

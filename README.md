@@ -100,14 +100,61 @@ The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
 A hung app is its own finding (`hang`), never folded into "no progress" or a
 timeout. jevitate distinguishes four kinds: the page never settles within the
 ceiling; the main thread does not answer a trivial probe; a request stays pending
-past its bound; or the UI makes no progress after an action while the page is
-still alive (a busy indicator that never ends, or an action that silently puts
-the page back in an earlier state). The evidence is recorded: pending requests,
-the last page state, timings and the JS heap. The steps that led to the hang are
-then replayed in fresh browser contexts (`--hang-replays`, default 2). If every
-replay hangs, it is a confirmed `hang`; otherwise it is `intermittent`, with the
-evidence from each attempt. `verify-fix` works on a hang too: it passes only if
-the replay now settles within the bound.
+past its bound on a page that cannot be used; or the UI makes no progress after an
+action while the page is still alive (a busy indicator that never ends, or an
+action that silently puts the page back in an earlier state). The evidence is
+recorded: pending requests, the last page state, timings and the JS heap. The
+steps that led to the hang are then replayed in fresh browser contexts
+(`--hang-replays`, default 2). If every replay hangs, it is a confirmed `hang`;
+otherwise it is `intermittent`, with the evidence from each attempt.
+`verify-fix` works on a hang too: it passes only if the replay now settles within
+the bound.
+
+#### When is a page "settled"?
+
+No request in flight and no *structural* DOM change (nodes added or removed, or an
+attribute that changes what can be acted on) for 500ms, within a 15s ceiling.
+These do not count:
+
+- long-lived connections: WebSocket, EventSource, and any response streamed as
+  `text/event-stream`;
+- requests the target marks as background (`settle.ignoreRequests`);
+- auto-detected long-polls: a request pending longer than `settle.longPollMs`
+  (default 5000) while the page is otherwise interactive (a control is rendered
+  and no busy indicator shows);
+- text-only updates of existing nodes (a clock, a live counter) and inline-style
+  animation.
+
+Configure a target in `~/.jevitate/targets.json`, keyed by origin (or per run
+with `--settle-ignore`, `--long-poll-ms` and `--ignore-no-progress`):
+
+```json
+{ "https://app.example.test": {
+    "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000 },
+    "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] } } }
+```
+
+`*` matches any run of characters. A pattern containing `://` is matched against
+the full URL; any other pattern is matched against the path and query.
+
+#### Known limits of the hang heuristics
+
+- A request that runs longer than `longPollMs` on an interactive page is treated
+  as background, so a genuinely stuck request on a page that still shows
+  controls is not reported as `request-pending`. It can still surface as
+  `ui-no-progress` if the UI shows a busy indicator.
+- DOM churn that keeps adding or removing nodes more often than every 500ms (an
+  infinite feed, a JS animation that rebuilds nodes) never settles and reads as
+  `never-settled`. Declare it or treat such routes carefully.
+- Stalled-state `ui-no-progress` means an action sent the page back to a state it
+  had already shown, no new state appeared, and it stayed there for 8s. Actions
+  named like "Back", "Cancel", "Close" or "Undo" are exempt. Any other UI that
+  returns to an earlier state by design needs `hangs.ignoreNoProgress`.
+- Busy indicators are recognised by `aria-busy="true"`, an indeterminate
+  `role="progressbar"`, or a spinner class name. Custom spinners without these are
+  not seen.
+- A hang is confirmed only if it reproduces on every replay. A deterministic
+  false positive of any kind above would therefore reproduce too.
 
 ### Page timing
 

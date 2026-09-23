@@ -64,6 +64,7 @@ import { startMcpServer } from "./mcp-api.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
+import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
@@ -1303,6 +1304,19 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
     .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2)")
+    .option(
+      "--settle-ignore <pattern>",
+      "a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)")
+    .option(
+      "--ignore-no-progress <pattern>",
+      "a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
@@ -1310,6 +1324,9 @@ export function buildProgram(deps: CliDeps): Command {
         fileIssues?: boolean;
         issueRepo?: string;
         hangReplays?: string;
+        settleIgnore: string[];
+        longPollMs?: string;
+        ignoreNoProgress: string[];
         jevitateRepo?: string;
         url?: string;
         strategy?: string;
@@ -1352,6 +1369,23 @@ export function buildProgram(deps: CliDeps): Command {
           }
           if (!(err instanceof TypeError)) throw err;
           // An unparseable --url is refused by the authorized-target guard below.
+        }
+      }
+      // Per-target settle/hang configuration: ~/.jevitate/targets.json by origin, plus flags.
+      let target: TargetConfig | undefined;
+      if (o.url !== undefined) {
+        try {
+          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(o.url).origin, {
+            settleIgnore: o.settleIgnore,
+            ignoreNoProgress: o.ignoreNoProgress,
+            ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
+          });
+        } catch (err) {
+          if (err instanceof TargetConfigError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          if (!(err instanceof TypeError)) throw err;
         }
       }
       const issueFiler =
@@ -1401,6 +1435,7 @@ export function buildProgram(deps: CliDeps): Command {
 
         try {
           const result = await runCoverageMission({
+            ...(target === undefined ? {} : { target }),
             url: o.url,
             allowlist: covAllowlist,
             judge: covJudge,
@@ -1459,6 +1494,7 @@ export function buildProgram(deps: CliDeps): Command {
         if (o.maxDecisions !== undefined) advBounds.maxDecisions = Number(o.maxDecisions);
         try {
           const result = await runAdversarialCliMission({
+            ...(target === undefined ? {} : { target }),
             seedUrl: o.url,
             allowlist: advAllowlist,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
@@ -1530,6 +1566,7 @@ export function buildProgram(deps: CliDeps): Command {
         }
         try {
           const result = await runUsabilityMission({
+            ...(target === undefined ? {} : { target }),
             url: o.url,
             job: o.goal,
             allowlist: uxAllowlist,
@@ -1621,6 +1658,7 @@ export function buildProgram(deps: CliDeps): Command {
 
       try {
         const result = await runExploration({
+            ...(target === undefined ? {} : { target }),
           url: o.url,
           goal: o.goal,
           successAssertion,
@@ -1672,6 +1710,7 @@ export function buildProgram(deps: CliDeps): Command {
       const o = this.opts<{ result: string; fingerprint: string; storageState?: string; json?: boolean } & BrowserLaunchFlags>();
       try {
         const report = await runVerifyFix({
+          targets: loadTargetsFile(deps.explore?.targetsConfigPath),
           resultPath: o.result,
           fingerprint: o.fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
@@ -1681,7 +1720,7 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, ok(report));
         process.exitCode = report.exitCode;
       } catch (err) {
-        if (err instanceof VerifyFixInputError) {
+        if (err instanceof VerifyFixInputError || err instanceof TargetConfigError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));

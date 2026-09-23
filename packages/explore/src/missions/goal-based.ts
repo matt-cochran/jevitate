@@ -80,6 +80,8 @@ export async function runGoalBasedMission(
               ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
               ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
               ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+              ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
+              ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
             },
             ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
           });

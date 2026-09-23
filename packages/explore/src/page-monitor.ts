@@ -1,10 +1,34 @@
 import type { Page, Request } from "playwright";
+import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
+import { visibleBusyIndicator } from "./hang.js";
+
+/** The interactive-control selector (kept in step with `snapshot`). */
+const INTERACTIVE_SELECTOR =
+  "a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=textbox],[role=checkbox],[role=combobox],[contenteditable=true]";
+
+/** BROWSER CODE — true when an enabled interactive control has a rendered box. */
+function hasEnabledControl(selector: string): boolean {
+  for (const el of Array.from(document.querySelectorAll(selector))) {
+    const r = (el as HTMLElement).getBoundingClientRect();
+    const s = window.getComputedStyle(el as HTMLElement);
+    if (r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && !(el as HTMLButtonElement).disabled) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * PageMonitor — the ONE place a page's activity is observed, so every mission shares one definition
  * of "the page has SETTLED" (owner ruling 4):
  *
- *   settled ⇔ no in-flight requests AND no DOM mutations for a quiet window (default 500ms).
+ *   settled ⇔ no in-flight requests AND no STRUCTURAL DOM mutations for a quiet window (500ms).
+ *
+ * Not in-flight work: long-lived connections — WebSocket, EventSource, any response streamed as
+ * `text/event-stream` (SSE over fetch/XHR) — requests the target marks as background
+ * (`settle.ignoreRequests`), and auto-detected long-polls (a request pending longer than
+ * `settle.longPollMs` while the page is otherwise interactive; see ./settle-config.ts). Not a DOM
+ * change: text-only updates of existing nodes and inline-style animation.
  *
  * Network activity is observed Node-side from Playwright's request events (event-driven: a waiter
  * wakes the moment a request starts or ends). DOM activity is observed in the page by a
@@ -42,6 +66,8 @@ export interface SettleResult {
   readonly waitedMs: number;
   /** Requests still in flight when the wait ended (empty when settled). */
   readonly pending: InflightRequest[];
+  /** Long-lived requests treated as background while waiting (evidence: why they did not count). */
+  readonly background?: Array<InflightRequest & { readonly why: "stream" | "ignored" | "long-poll" }>;
 }
 
 /**
@@ -54,13 +80,28 @@ const INSTRUMENT = `(() => {
   if (window.__jevitateMonitor) return;
   const state = { lastMutation: Date.now(), docId: Math.random().toString(36).slice(2), lcp: null };
   Object.defineProperty(window, "__jevitateMonitor", { value: state, enumerable: false });
+  const SEL = "a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=textbox],[role=checkbox],[role=combobox],[contenteditable=true]";
+  const VIS_ATTRS = new Set(["disabled", "hidden", "aria-hidden", "aria-busy", "aria-disabled", "open", "inert", "checked", "value"]);
+  const textOnly = (nodes) => Array.from(nodes).every((n) => n.nodeType === 3 || n.nodeType === 8);
+  // Only STRUCTURAL change resets the quiet window: nodes added/removed, or an attribute that can
+  // change what is actionable. Text-only changes of existing nodes (a ticking clock, a live counter,
+  // a re-rendered label) and inline-style animation do not — the page's structure is settled.
+  const structural = (r) => {
+    if (r.type === "characterData") return false;
+    if (r.type === "childList") return !(textOnly(r.addedNodes) && textOnly(r.removedNodes));
+    if (r.type === "attributes") {
+      if (r.attributeName === "style") return false;
+      if (VIS_ATTRS.has(r.attributeName)) return true;
+      const el = r.target;
+      return el.nodeType === 1 && (el.matches(SEL) || el.querySelector(SEL) !== null);
+    }
+    return true;
+  };
   const start = () => {
     try {
-      // A batch that only rewrites inline styles is animation, not new content: it does not count.
       new MutationObserver((records) => {
-        if (records.some((r) => !(r.type === "attributes" && r.attributeName === "style"))) state.lastMutation = Date.now();
-      })
-        .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+        if (records.some(structural)) state.lastMutation = Date.now();
+      }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     } catch (e) { /* no document yet */ }
   };
   start();
@@ -83,6 +124,10 @@ export class PageMonitor {
   readonly #statuses = new WeakMap<Request, number>();
   readonly #now: () => number;
   #lastNetworkActivity: number;
+  /** Long-lived requests that are not in-flight work, and why. */
+  readonly #background = new Map<Request, "stream" | "ignored" | "long-poll">();
+  #ignore: (url: string) => boolean = () => false;
+  #longPollMs = DEFAULT_LONG_POLL_MS;
   #documentNavStartedAt: number | null = null;
   #instrumented: Promise<void> | undefined;
 
@@ -94,6 +139,10 @@ export class PageMonitor {
       const startedAt = this.#now();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.#documentNavStartedAt = startedAt;
       this.#inflight.set(r, { url: r.url(), method: r.method(), resourceType: r.resourceType(), startedAt });
+      if (this.#ignore(r.url())) {
+        this.#background.set(r, "ignored"); // the target's own background traffic: no activity either
+        return;
+      }
       this.#touch();
     });
     // A new document replaced the old one: requests the OLD document started before the navigation
@@ -110,17 +159,25 @@ export class PageMonitor {
     const end = (r: Request, failed: boolean): void => {
       const started = this.#inflight.get(r);
       this.#inflight.delete(r);
+      const ignored = this.#background.get(r) === "ignored";
+      this.#background.delete(r);
       if (started !== undefined) {
         const status = failed ? null : (this.#statuses.get(r) ?? null);
         const endedAt = this.#now();
         this.#completed.push({ ...started, status, failed, endedAt, durationMs: Math.max(0, endedAt - started.startedAt) });
       }
-      this.#touch();
+      if (!ignored) this.#touch();
     };
     page.on("requestfinished", (r) => end(r, false));
     page.on("requestfailed", (r) => end(r, true));
     page.on("response", (res) => {
       this.#statuses.set(res.request(), res.status());
+      // SSE over fetch/XHR never "finishes": it is a long-lived connection, not pending work.
+      const type = res.headers()["content-type"] ?? "";
+      if (type.includes("text/event-stream")) {
+        this.#background.set(res.request(), "stream");
+        this.#touch(); // wake a settle wait that was counting it as pending
+      }
     });
     // A navigation is activity too (a request abandoned by an unloading document is reported by
     // Chromium as `requestfailed`, which ends it above).
@@ -143,9 +200,46 @@ export class PageMonitor {
     return this.#instrumented;
   }
 
-  /** Requests that are pending work (streams excluded). */
+  /** Applies the target's settle configuration (idempotent; the latest call wins). */
+  configure(cfg: SettleConfig | undefined): void {
+    this.#ignore = urlMatcher(cfg?.ignoreRequests);
+    this.#longPollMs = cfg?.longPollMs ?? DEFAULT_LONG_POLL_MS;
+    for (const [r] of this.#inflight) if (this.#ignore(r.url())) this.#background.set(r, "ignored");
+  }
+
+  /** Requests that are pending WORK: long-lived connections and background requests excluded. */
   pending(): InflightRequest[] {
-    return [...this.#inflight.values()].filter((r) => !STREAM_TYPES.has(r.resourceType));
+    return [...this.#inflight.entries()]
+      .filter(([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r))
+      .map(([, info]) => info);
+  }
+
+  /** In-flight requests currently treated as background, and why. */
+  background(): Array<InflightRequest & { why: "stream" | "ignored" | "long-poll" }> {
+    const out: Array<InflightRequest & { why: "stream" | "ignored" | "long-poll" }> = [];
+    for (const [r, info] of this.#inflight) {
+      const why = STREAM_TYPES.has(info.resourceType) ? "stream" : this.#background.get(r);
+      if (why !== undefined) out.push({ ...info, why });
+    }
+    return out;
+  }
+
+  /** Is the page otherwise interactive: a control rendered and no busy indicator showing? */
+  async #interactive(boundMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), Math.max(1, boundMs));
+    });
+    const probe = (async (): Promise<boolean> => {
+      const controls = await this.#page.evaluate(hasEnabledControl, INTERACTIVE_SELECTOR);
+      if (!controls) return false;
+      return (await this.#page.evaluate(visibleBusyIndicator)) === null;
+    })().catch(() => false);
+    try {
+      return await Promise.race([probe, bound]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   /** Requests that ended since `sinceMs` (wall clock). */
@@ -227,18 +321,45 @@ export class PageMonitor {
    * request activity rather than polling; the DOM side is checked when a quiet window could have
    * elapsed.
    */
+  #result(settled: boolean, start: number): SettleResult {
+    const background = this.background();
+    return {
+      settled,
+      waitedMs: this.#now() - start,
+      pending: settled ? [] : this.pending(),
+      ...(background.length === 0 ? {} : { background }),
+    };
+  }
+
   async waitSettled(opts: { quietMs?: number; ceilingMs: number }): Promise<SettleResult> {
     await this.instrument();
     const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
     const start = this.#now();
     const remaining = (): number => opts.ceilingMs - (this.#now() - start);
     for (;;) {
-      if (remaining() <= 0) return { settled: false, waitedMs: this.#now() - start, pending: this.pending() };
-      if (this.pending().length > 0) {
-        await this.#sleepOrActivity(remaining());
+      if (remaining() <= 0) return this.#result(false, start);
+      const pending = [...this.#inflight.entries()].filter(
+        ([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r),
+      );
+      if (pending.length > 0) {
+        const oldest = Math.min(...pending.map(([, info]) => info.startedAt));
+        const untilLongPoll = oldest + this.#longPollMs - this.#now();
+        if (untilLongPoll > 0) {
+          await this.#sleepOrActivity(Math.min(remaining(), untilLongPoll));
+          continue;
+        }
+        // A request has been pending past the long-poll threshold. On an otherwise interactive page
+        // that is a long-lived connection (a long-poll): background. On a page that is NOT
+        // interactive it is what a stuck page looks like, so it keeps counting.
+        if (await this.#interactive(Math.min(remaining(), 2_000))) {
+          const cutoff = this.#now() - this.#longPollMs;
+          for (const [r, info] of pending) if (info.startedAt <= cutoff) this.#background.set(r, "long-poll");
+          continue;
+        }
+        await this.#sleepOrActivity(Math.min(remaining(), quietMs));
         continue;
       }
-      if (this.#page.isClosed()) return { settled: false, waitedMs: this.#now() - start, pending: this.pending() };
+      if (this.#page.isClosed()) return this.#result(false, start);
       const lastDom = await this.#lastMutation(Math.min(remaining(), 2_000));
       if (lastDom === null) {
         // The page did not answer (a busy main thread): not quiet. Give it a moment, within the ceiling.
@@ -247,9 +368,7 @@ export class PageMonitor {
       }
       const t = this.#now();
       const quietFor = Math.min(t - this.#lastNetworkActivity, t - lastDom);
-      if (quietFor >= quietMs && this.pending().length === 0) {
-        return { settled: true, waitedMs: t - start, pending: [] };
-      }
+      if (quietFor >= quietMs && this.pending().length === 0) return this.#result(true, start);
       await this.#sleepOrActivity(Math.min(quietMs - Math.max(0, quietFor), remaining()));
     }
   }

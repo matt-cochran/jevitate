@@ -21,6 +21,7 @@ import {
   type TranscriptListener,
 } from "../index.js";
 import type { MissionFailure } from "@jevitate/domain";
+import type { SettleConfig } from "../settle-config.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
@@ -92,6 +93,8 @@ export interface InductionMissionParams {
   readonly renderWaitMs?: number;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   readonly onTranscriptEntry?: TranscriptListener;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  readonly settle?: SettleConfig;
 }
 
 /**
@@ -185,6 +188,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     const p = await perceive(params.page, {
       maxCandidates: bounds.maxCandidates,
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
     });
     lastTiming = p.timing;
     timings.push(p.timing);

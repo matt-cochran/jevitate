@@ -39,6 +39,7 @@ import {
 } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { readCliVersion } from "./version.js";
+import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
@@ -82,6 +83,8 @@ export interface RunExplorationOptions {
   readonly storageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
   /** Issue filing for a crash (off unless enabled + a repo is configured). Default: drafts only. */
   readonly filing?: FilingConfig;
   /** Creates the filer — called only when filing is enabled. */
@@ -195,6 +198,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
+      ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
@@ -429,6 +434,8 @@ export interface RunCoverageMissionOptions {
    */
   readonly storageState?: string;
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
 }
 
 export interface RunCoverageMissionResult {
@@ -469,6 +476,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       page: session.page,
       actor,
       judgment: opts.judge,
@@ -542,6 +550,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly outDir?: string;
   /** ISO clock for the transcript filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -593,6 +603,8 @@ export async function runAdversarialCliMission(
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
+      ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       page: session.page,
       actor,
       judgment: opts.judgment,
@@ -715,6 +727,8 @@ export interface ExploreCliDeps {
   issueFiler?: () => IssueFilerPort;
   /** Injected filing config file path (tests). Default `~/.jevitate/filing.json`. */
   filingConfigPath?: string;
+  /** Injected per-target config file path (tests). Default `~/.jevitate/targets.json`. */
+  targetsConfigPath?: string;
   /** Injected judgment gateway (tests). */
   judge?: JudgmentPort;
   /** Injected generation gateway (tests). */

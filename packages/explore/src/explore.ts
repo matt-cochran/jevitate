@@ -19,6 +19,7 @@ import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
 import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
 import { HANG_PROBE_MS } from "./perceive.js";
+import { textMatcher, type HangConfig, type SettleConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
@@ -91,6 +92,10 @@ export interface ExploreConfig {
    * `ui-no-progress` hang (ms). Default `DEFAULT_STALL_MS`.
    */
   readonly stallMs?: number;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  readonly settle?: SettleConfig;
+  /** The target's hang configuration (`ui-no-progress` ignores). */
+  readonly hangs?: HangConfig;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   readonly onTranscriptEntry?: TranscriptListener;
   /** Incremental-flush seam: the partial Recording after every recorded step. */
@@ -115,6 +120,12 @@ export interface ExploreRun {
   /** For a `hang` stop: what hung, and the Recording step to replay up to (to reproduce it). */
   readonly hang?: { readonly signal: HangSignal; readonly recordingStepIndex: number };
 }
+
+/**
+ * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
+ * state is exactly their target state, never a stall.
+ */
+const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit)\b/i;
 
 function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
@@ -149,7 +160,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const seen = new Set<string>();
   /** The last executed page-changing action: when, from which state, and its Recording index. */
   const track: {
-    lastMutation: { at: number; before: string; seenBefore: Set<string>; label: string; recordIndex: number } | null;
+    lastMutation: {
+      at: number;
+      before: string;
+      seenBefore: Set<string>;
+      label: string;
+      recordIndex: number;
+      /** Did ANY page state never seen before appear since this action? (then it made progress) */
+      sawNewState: boolean;
+    } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
   } = { lastMutation: null, lastRecordedTarget: null };
@@ -158,12 +177,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
     ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
     ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+    ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
+    ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
   };
+  const ignoreNoProgress = textMatcher(cfg.hangs?.ignoreNoProgress);
   const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
   const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
-    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1 };
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
     track.lastRecordedTarget = JSON.stringify(descriptor);
   };
 
@@ -185,6 +207,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const perception = await perceive(page, perceiveOpts);
       timings.push(perception.timing);
       const snap = perception.snapshot;
+      {
+        const m = track.lastMutation;
+        if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
+      }
       await heap.sample(page, transcript.nextStep);
       // Re-observe the PREVIOUS action's effect: patch its postcondition + open
       // the next page segment if the URL changed (record-before-reobserve).
@@ -251,8 +277,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // that silently undid itself, like an import that never starts), and it stays there for
         // the stall window: a `ui-no-progress` hang, not generic no-progress. An action that simply
         // did nothing (same state before and after) stays plain no-progress.
+        // The action's target state must NEVER have appeared (no new state since the action), and
+        // the target must not have declared this route/action as expected to return (per-target ignore).
         const m = track.lastMutation;
-        if (m !== null && snap.signature !== m.before && m.seenBefore.has(snap.signature)) {
+        if (
+          m !== null &&
+          !m.sawNewState &&
+          snap.signature !== m.before &&
+          m.seenBefore.has(snap.signature) &&
+          !EXPECTED_RETURN.test(m.label) &&
+          !ignoreNoProgress(m.label) &&
+          !ignoreNoProgress(hangRoute(snap.url))
+        ) {
           const waited = now() - m.at;
           if (waited < stallMs) await page.waitForTimeout(stallMs - waited);
           const again = await perceive(page, perceiveOpts);

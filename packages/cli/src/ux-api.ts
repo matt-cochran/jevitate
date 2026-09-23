@@ -38,6 +38,7 @@ import { resolveDataDir } from "./data-dir.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
+import type { TargetConfig } from "./target-config.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -233,6 +234,8 @@ export interface RunUsabilityMissionOptions {
    */
   readonly storageState?: string;
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
   /** Test seam: extract a page's visible text. Default reads the live page. */
   readonly extractText?: (session: { page: { evaluate: (fn: () => string) => Promise<string> } }) => Promise<string>;
 }
@@ -292,6 +295,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
+      ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       onTranscriptEntry: journal.onTranscriptEntry,
       actor,
       judge: opts.judge,
