@@ -40,6 +40,7 @@ import {
   type JevClientCall,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
+import { apiKeyFromAuthHeader, fromSdkAnswers, toSdkQuestions, type SdkQuestion } from "./jev-sdk-adapter.js";
 import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
@@ -2141,19 +2142,36 @@ async function realOpenRouterCall(): Promise<OpenRouterCall> {
   };
 }
 
+/** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
+interface TypeSafeSdk {
+  TypeSafeClient: new (config: { apiKey: string }) => {
+    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown }>;
+  };
+}
+
+function isTypeSafeSdk(mod: unknown): mod is TypeSafeSdk {
+  return typeof mod === "object" && mod !== null && "TypeSafeClient" in mod && typeof mod.TypeSafeClient === "function";
+}
+
 /**
- * Real Jev seam (documented, lazy, not unit-tested). Uses a non-literal
- * specifier so this package builds and tests without `@typesafe-ai/sdk`
- * installed; the host installs + wires it for live judgment.
+ * Real Jev seam (lazy). Uses a non-literal specifier so this package builds and
+ * tests without `@typesafe-ai/sdk` installed. All translation between jevitate's
+ * judgment questions/answers and the SDK's `systemOne` shapes lives in the pure,
+ * unit-tested `jev-sdk-adapter.ts`; this only constructs the client and calls it.
  */
 async function realJevClientCall(): Promise<JevClientCall> {
   const specifier = "@typesafe-ai/sdk";
-  const sdk = (await import(specifier).catch(() => {
-    throw new Error("live judgment requires @typesafe-ai/sdk to be installed and wired (see jev.ts seam)");
-  })) as { createClient(args: { authHeader: string }): { systemOne(a: unknown): Promise<Record<string, Answer>> } };
+  const mod: unknown = await import(specifier).catch(() => {
+    throw new Error("live judgment requires @typesafe-ai/sdk — install it next to the jevitate CLI (npm i @typesafe-ai/sdk)");
+  });
+  if (!isTypeSafeSdk(mod)) {
+    throw new Error("@typesafe-ai/sdk does not export TypeSafeClient — unsupported SDK version (expected >= 0.6)");
+  }
+  const sdk = mod;
   return async ({ state, questions, authHeader }) => {
-    const client = sdk.createClient({ authHeader });
-    return client.systemOne({ state, questions });
+    const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader) });
+    const result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
+    return fromSdkAnswers(questions, result.answers);
   };
 }
 
