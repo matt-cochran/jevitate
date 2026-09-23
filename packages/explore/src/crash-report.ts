@@ -84,6 +84,16 @@ export interface CrashReport {
   readonly attribution: AttributionResult;
 }
 
+/**
+ * A navigation that timed out (`page.goto: Timeout 30000ms exceeded`, `navigating to …`) is the
+ * app not loading within its bound — hang evidence about the system under test, even though the
+ * exception surfaced through jevitate's own call stack.
+ */
+export function isNavigationTimeout(failure: MissionFailure): boolean {
+  const text = `${failure.message}\n${failure.stack ?? ""}`;
+  return /Timeout \d+ms exceeded/i.test(text) && /\b(?:page\.goto|navigating to|waitForNavigation|waitForURL)\b/i.test(text);
+}
+
 /** Assembles the evidence for a crashed run and attributes it. */
 export function buildCrashReport(
   failure: MissionFailure,
@@ -97,7 +107,7 @@ export function buildCrashReport(
     browserDisconnected: signals.browserDisconnected,
     rendererOom: looksLikeRendererOom(signals.pageCrashed, heapSamples),
     heapSamples: [...heapSamples],
-    hang: opts.hang ?? false,
+    hang: opts.hang ?? isNavigationTimeout(failure),
   };
   return { failure, evidence, attribution: attributeCrash(evidence, opts.ownCodeRoots ?? jevitateCodeRoots()) };
 }

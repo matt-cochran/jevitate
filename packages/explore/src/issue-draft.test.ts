@@ -85,6 +85,17 @@ describe("issue drafts — ready to file, and redacted (owner ruling 3)", () => 
     expect(d.body).toContain("(the crash happened before the first step)");
   });
 
+  it("a navigation that timed out is the app not loading (hang evidence), even through jevitate's own stack", () => {
+    const err = new Error("page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"http://app.test/x\", waiting until \"load\"");
+    const report = buildCrashReport(
+      { kind: "exception", message: err.message.split("\n")[0] ?? "", ...(err.stack === undefined ? {} : { stack: err.stack }) },
+      { pageCrashed: false, pageClosed: false, browserDisconnected: false },
+      [],
+    );
+    expect(report.evidence.hang).toBe(true);
+    expect(report.attribution).toEqual({ attribution: "system-under-test", reasons: ["the app under test hung"] });
+  });
+
   it("a renderer crash is the system under test's, and an uncertain crash is routed to both", () => {
     const crashed = buildCrashReport(
       { kind: "page-crash", message: "Target crashed" },
