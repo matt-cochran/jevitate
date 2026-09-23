@@ -52,14 +52,16 @@ export interface PageTiming {
     readonly pending: number;
     /** The slowest few requests in the window, slowest first. */
     readonly slowest: RequestTiming[];
-    /** Every request in the window (capped), for per-endpoint aggregation. */
+    /**
+     * Every request in the window, for the run's per-endpoint aggregation. Held in memory for the
+     * summary only — transcript entries keep `count`/`pending`/`slowest` and drop this list.
+     */
     readonly samples: RequestTiming[];
   };
   /** Largest Contentful Paint (ms from navigation start), where exposed. */
   readonly lcpMs?: number;
 }
 
-const MAX_SAMPLES = 100;
 const SLOWEST = 3;
 
 /** `METHOD /normalized/path` — the endpoint pattern a request is aggregated under. */
@@ -133,7 +135,7 @@ export async function measurePageTiming(
       count: window.completed.length,
       pending: window.pending.length,
       slowest,
-      samples: all.slice(0, MAX_SAMPLES),
+      samples: all,
     },
     ...(side.lcp !== null ? { lcpMs: side.lcp } : {}),
   };
@@ -159,7 +161,7 @@ export function unreadablePageTiming(
       count: completed.length,
       pending: pending.length,
       slowest: [...all].sort((a, b) => b.durationMs - a.durationMs).slice(0, SLOWEST),
-      samples: all.slice(0, MAX_SAMPLES),
+      samples: all,
     },
   };
 }

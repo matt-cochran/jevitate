@@ -16,7 +16,7 @@ import {
 import type { Snapshot } from "./snapshot.js";
 import { perceive } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
-import { summarizeTimings, type TimingSummary } from "./timing.js";
+import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
 import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
 import { HANG_PROBE_MS } from "./perceive.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
@@ -160,6 +160,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
   };
   const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  const timings: PageTiming[] = [];
   const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1 };
     track.lastRecordedTarget = JSON.stringify(descriptor);
@@ -181,6 +183,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // Shared perception: never decide on an unrendered page (bounded render wait) and never
       // offer an occluded control (see `perceive`).
       const perception = await perceive(page, perceiveOpts);
+      timings.push(perception.timing);
       const snap = perception.snapshot;
       await heap.sample(page, transcript.nextStep);
       // Re-observe the PREVIOUS action's effect: patch its postcondition + open
@@ -253,6 +256,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const waited = now() - m.at;
           if (waited < stallMs) await page.waitForTimeout(stallMs - waited);
           const again = await perceive(page, perceiveOpts);
+          timings.push(again.timing);
           const stuck =
             again.hang ??
             (again.snapshot.signature === snap.signature && (await probeResponsive(page, cfg.hangProbeMs ?? HANG_PROBE_MS))
@@ -464,7 +468,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     actions: tracker.actions,
     ...(failure === undefined ? {} : { failure }),
     heap: heap.samples(),
-    timing: summarizeTimings(transcript.entries().map((e) => e.timing)),
+    timing: summarizeTimings(timings),
     ...(hang === undefined ? {} : { hang }),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples()) }

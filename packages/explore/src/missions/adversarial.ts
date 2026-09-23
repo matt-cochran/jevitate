@@ -232,6 +232,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
   const defects = new Map<string, MutableDefect>();
   const hangs: HangFinding[] = [];
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  const timings: PageTiming[] = [];
   const perceiveOpts = {
     maxCandidates: bounds.maxCandidates,
     ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
@@ -258,7 +260,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       transcript: transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
       heap: heap.samples(),
-      timing: summarizeTimings(transcript.entries().map((e) => e.timing)),
+      timing: summarizeTimings(timings),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? { crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples()) }
         : {}),
@@ -273,6 +275,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     hang: HangSignal | null;
   }> => {
     const p = await perceive(params.page, perceiveOpts);
+    timings.push(p.timing);
     await heap.sample(params.page, transcript.nextStep);
     return p.rendered
       ? { snapshot: p.snapshot, timing: p.timing, rendered: true, hang: p.hang }

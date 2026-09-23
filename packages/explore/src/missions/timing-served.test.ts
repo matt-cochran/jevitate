@@ -23,6 +23,10 @@ beforeAll(async () => {
       setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"), SLOW_MS);
       return;
     }
+    if (path.startsWith("/asset/")) {
+      res.writeHead(200, { "content-type": "text/plain" }).end("x");
+      return;
+    }
     if (path === "/api/fast") {
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
       return;
@@ -30,7 +34,13 @@ beforeAll(async () => {
     if (path === "/app") {
       res.writeHead(200, { "content-type": "text/html" }).end(`<!doctype html><html><body>
         <button type="button" onclick="fetch('/api/slow/' + Date.now())">Reload report</button>
-        <script>fetch("/api/fast"); fetch("/api/slow/" + Math.floor(Math.random() * 1e6));</script>
+        <script>
+          // 150 asset requests first: the slow API call comes late in the window and must still
+          // reach the summary (no per-step sample cap truncates it).
+          Promise.all(Array.from({ length: 150 }, (_, i) => fetch("/asset/" + i))).then(() => {
+            fetch("/api/fast"); fetch("/api/slow/" + Math.floor(Math.random() * 1e6));
+          });
+        </script>
       </body></html>`);
       return;
     }
@@ -86,6 +96,10 @@ describe("page timing — the slow endpoint is found and measured (owner ruling 
       expect(seed?.navigation?.ttfbMs).toBeGreaterThanOrEqual(0);
       expect(seed?.navigation?.domContentLoadedMs).toBeGreaterThanOrEqual(seed?.navigation?.ttfbMs ?? 0);
       expect(seed?.requests.slowest[0]?.endpoint).toBe("GET /api/slow/:id");
+      expect(seed?.requests.count).toBeGreaterThanOrEqual(152);
+      // The transcript keeps count/pending/slowest; the per-request list feeds the summary only.
+      expect(seed?.requests.samples).toEqual([]);
+      expect(result.timing.endpoints["GET /asset/:id"]?.samples).toBe(150);
       expect(result.timing.slowestPages[0]?.key).toBe("navigation /app");
       // One page load is ONE sample, however many steps were decided on that perception.
       expect(result.timing.pages["navigation /app"]?.samples).toBe(1);

@@ -491,7 +491,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
-      timing: summarizeTimings(result.transcript.map((e) => e.timing)),
+      timing: result.timing,
       coverage: result.coverage,
       outcome: result.outcome,
       missionOutcome,

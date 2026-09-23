@@ -3,14 +3,18 @@ import type { Control, Snapshot } from "./snapshot.js";
 import { redactText, redactUrl } from "./redact.js";
 import type { PageTiming, RequestTiming } from "./timing.js";
 
-function redactTiming(t: PageTiming, secrets: readonly string[]): PageTiming {
-  if (secrets.length === 0) return t;
-  const r = (v: string): string => redactText(v, secrets);
+/**
+ * The transcript's copy of a perception's timing: redacted, and WITHOUT the per-request sample list
+ * (count, pending and the slowest requests stay) — the samples feed the run summary only, so a busy
+ * page's hundreds of requests are not copied into every transcript file.
+ */
+function transcriptTiming(t: PageTiming, secrets: readonly string[]): PageTiming {
+  const r = (v: string): string => (secrets.length === 0 ? v : redactText(v, secrets));
   const req = (q: RequestTiming): RequestTiming => ({ ...q, endpoint: r(q.endpoint), url: r(q.url) });
   return {
     ...t,
     route: r(t.route),
-    requests: { ...t.requests, slowest: t.requests.slowest.map(req), samples: t.requests.samples.map(req) },
+    requests: { ...t.requests, slowest: t.requests.slowest.map(req), samples: [] },
   };
 }
 
@@ -105,7 +109,7 @@ export class TranscriptLog {
       signature: step.snapshot.signature,
       controlCount: step.snapshot.controls.length,
       ...(step.judgments === undefined ? {} : { judgments: step.judgments }),
-      ...(step.timing === undefined ? {} : { timing: redactTiming(step.timing, this.#secrets) }),
+      ...(step.timing === undefined ? {} : { timing: transcriptTiming(step.timing, this.#secrets) }),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);

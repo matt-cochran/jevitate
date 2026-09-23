@@ -23,7 +23,7 @@ import {
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
-import type { PageTiming } from "../timing.js";
+import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { reachFrontierState } from "../coverage/reach.js";
@@ -72,6 +72,8 @@ export interface InductionRunResult {
   readonly recordings: Recording[];
   /** The shared decision transcript: each frontier action, whether it landed, and Jev's advisory `isDefect`. */
   readonly transcript: TranscriptEntry[];
+  /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
+  readonly timing: TimingSummary;
 }
 
 export interface InductionMissionParams {
@@ -177,12 +179,15 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
   // still-rendering frame — including right after a reset-and-replay.
   let lastTiming: PageTiming | undefined;
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  const timings: PageTiming[] = [];
   const takeSnapshot = async (): Promise<Snapshot> => {
     const p = await perceive(params.page, {
       maxCandidates: bounds.maxCandidates,
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
     });
     lastTiming = p.timing;
+    timings.push(p.timing);
     return p.snapshot;
   };
   const transcript = new TranscriptLog([], params.onTranscriptEntry);
@@ -221,6 +226,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
           coverage: report(false),
           recordings: [...statePaths.values()],
           transcript: transcript.entries(),
+          timing: summarizeTimings(timings),
         };
       }
 
@@ -334,6 +340,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       coverage: report(true),
       recordings: [...statePaths.values()],
       transcript: transcript.entries(),
+      timing: summarizeTimings(timings),
     };
   } catch (e) {
     // Engine failure: a typed `crashed` result with every state path and transcript step so far.
@@ -343,6 +350,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       coverage: report(false),
       recordings: [...statePaths.values()],
       transcript: transcript.entries(),
+      timing: summarizeTimings(timings),
     };
   }
 }
