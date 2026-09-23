@@ -252,7 +252,9 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       });
       actions += 1;
       const decidedOn = snap;
+    // Each perception's timing is reported once (a failed act re-uses the same snapshot).
     const decidedOnTiming = lastTiming;
+    lastTiming = undefined;
       if (!result.ok) {
         transcript.record({
           op: item.op,

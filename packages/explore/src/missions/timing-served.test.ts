@@ -60,9 +60,10 @@ describe("page timing — the slow endpoint is found and measured (owner ruling 
             generation: new FakeGenerationGateway(),
             seedUrl: `${origin}/app`,
             allowlist: [origin],
-            // The seed load itself calls the slow endpoint; the strategy only scrolls.
-            strategies: ["nav-during-pending"],
-            bounds: { maxDecisions: 2 },
+            // The seed load itself calls the slow endpoint. ordering-violation finds nothing to do (so
+            // two steps are decided on the same perception); nav-during-pending scrolls.
+            strategies: ["ordering-violation", "nav-during-pending"],
+            bounds: { maxDecisions: 3 },
           });
         },
         origin,
@@ -86,6 +87,9 @@ describe("page timing — the slow endpoint is found and measured (owner ruling 
       expect(seed?.navigation?.domContentLoadedMs).toBeGreaterThanOrEqual(seed?.navigation?.ttfbMs ?? 0);
       expect(seed?.requests.slowest[0]?.endpoint).toBe("GET /api/slow/:id");
       expect(result.timing.slowestPages[0]?.key).toBe("navigation /app");
+      // One page load is ONE sample, however many steps were decided on that perception.
+      expect(result.timing.pages["navigation /app"]?.samples).toBe(1);
+      expect(result.transcript.filter((e) => e.timing?.kind === "navigation")).toHaveLength(1);
       // …and on the Recording's navigate step (measurement only; never replayed).
       const navigateStep = result.recording.pages[0]?.steps[0];
       expect(navigateStep?.step.kind).toBe("navigate");

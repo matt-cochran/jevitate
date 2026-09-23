@@ -434,8 +434,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       });
     }
     let snap = seed.snapshot;
-    let snapTiming = seed.timing;
-    recorder.observed(snap.url, now(), snapTiming);
+    // A perception's timing is reported ONCE — on the first step decided on it — so a run whose
+    // strategies found nothing to do on a page does not count that page's load several times.
+    let snapTiming: PageTiming | undefined = seed.timing;
+    recorder.observed(snap.url, now(), seed.timing);
 
     // Step 1 is the seed load itself: an AMBIENT defect (a 5xx fired while the page loads, before
     // any misuse) is attributed to loading the page, and its repro is just the navigation.
@@ -451,8 +453,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         actOk: true,
         reason: verdict === null ? "seed page loaded" : verdict.reason,
         snapshot: snap,
-        timing: snapTiming,
+        timing: seed.timing,
       });
+      snapTiming = undefined;
       if (verdict !== null) await fold(step, verdict.findings);
     }
 
@@ -483,6 +486,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 
       const decidedOn = snap;
       const decidedOnTiming = snapTiming;
+      snapTiming = undefined;
       const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random, visitedLinks });
       let acted = false;
       let control: Control | null = null;
@@ -522,7 +526,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           actOk,
           ...(reason === undefined ? {} : { reason }),
           snapshot: decidedOn,
-          timing: decidedOnTiming,
+          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
           ...(extra.judgments === undefined ? {} : { judgments: extra.judgments }),
         });
       };
@@ -574,7 +578,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         recorder.observed(
           snap.url,
           now(),
-          snapTiming,
+          next.timing,
           target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
         );
         lastRecordedTarget = null;
@@ -590,7 +594,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           const back = await perceiveNow();
           snap = back.snapshot;
           snapTiming = back.timing;
-          recorder.observed(snap.url, now(), snapTiming);
+          recorder.observed(snap.url, now(), back.timing);
         }
       }
       if (idleStreak >= params.strategies.length) {
