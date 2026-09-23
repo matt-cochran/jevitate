@@ -24,6 +24,10 @@ import { isInScope, type CapabilityScope } from "../feature/capability-scope.js"
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
 import type { MissionFailure } from "@jevitate/domain";
 import type { SettleConfig } from "../settle-config.js";
+import type { HangSignal } from "../hang.js";
+import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import { MissionSessions } from "../mission-session.js";
+import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 
@@ -68,8 +72,13 @@ export interface FeatureCoverage {
 }
 
 export interface FeatureRunResult {
-  /** `crashed`: the engine failed; the paths discovered up to the failure are still returned. */
-  outcome: "exhausted" | "cap" | "path-cap" | "crashed";
+  /**
+   * `crashed`: the engine failed; the paths discovered up to the failure are still returned.
+   * `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session).
+   */
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang";
+  /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
+  hangs: HangFinding[];
   /** Why the run crashed — present only for `crashed`. */
   failure?: MissionFailure;
   coverage: FeatureCoverage;
@@ -149,6 +158,10 @@ export async function runFeatureMission(params: {
   renderWaitMs?: number;
   /** The target's settle configuration (background requests, long-poll threshold). */
   settle?: SettleConfig;
+  /** Opens a FRESH browser session: reproduces a hang and resets to it after one. */
+  openFreshSession?: () => Promise<VerifySession>;
+  /** Fresh-context replays that confirm a hang. Default 2. */
+  hangReplays?: number;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
@@ -157,18 +170,27 @@ export async function runFeatureMission(params: {
   const maxPaths = params.maxPaths ?? 20;
   const site = new URL(params.seedUrl).origin;
 
+  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
+  const hangs = new Map<string, HangFinding>();
+  /** The hang the latest perception saw (a holder: it is set inside the perception closure). */
+  const seenHang: { last: HangSignal | null } = { last: null };
+
   // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
   // still-rendering frame — including right after a reset-and-replay.
-  const snapshotNow = async (): Promise<Snapshot> =>
-    (
-      await perceive(params.page, {
-        maxCandidates: bounds.maxCandidates,
-        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
-        ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
-      })
-    ).snapshot;
+  const snapshotNow = async (): Promise<Snapshot> => {
+    const p = await perceive(sessions.page, {
+      maxCandidates: bounds.maxCandidates,
+      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+    });
+    seenHang.last = p.hang;
+    return p.snapshot;
+  };
 
-  const crashWatch = new CrashWatch(params.page);
+  let crashWatch = new CrashWatch(sessions.page);
+  sessions.onReset((page) => {
+    crashWatch = new CrashWatch(page);
+  });
   const visited = new Set<string>();
   const boundaryEdges: string[] = [];
   const leaves = new Map<string, Recording>();
@@ -181,11 +203,12 @@ export async function runFeatureMission(params: {
     ...(failure === undefined ? {} : { failure }),
     coverage: { pathsDiscovered, statesExercised: visited.size, transitionsExercised, boundaryEdges },
     recordings: [...leaves.entries()].filter(([fp]) => !extended.has(fp)).map(([, r]) => r),
+    hangs: [...hangs.values()],
   });
 
   try {
-    await monitorFor(params.page).instrument();
-    await params.actor.attemptsTo(Navigate.to(params.seedUrl));
+    await monitorFor(sessions.page).instrument();
+    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await snapshotNow();
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
@@ -209,7 +232,7 @@ export async function runFeatureMission(params: {
       if (depth >= maxDepth) continue;
 
       if (item.fromFingerprint !== currentFingerprint) {
-        const reached = await reachFrontierState({ actor: params.actor, item, snapshotNow });
+        const reached = await reachFrontierState({ actor: sessions.actor, item, snapshotNow });
         if (!reached.ok) continue;
         snap = reached.snapshot;
         currentFingerprint = item.fromFingerprint;
@@ -221,7 +244,7 @@ export async function runFeatureMission(params: {
       if (item.op === "type" && fillText === undefined) continue;
 
       const beforeUrl = snap.url;
-      const result = await act(params.actor, { op: item.op, control: item.control, value: fillText ?? null });
+      const result = await act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null });
       actions += 1;
       if (!result.ok) continue;
 
@@ -231,6 +254,25 @@ export async function runFeatureMission(params: {
       const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
       transitionsExercised += 1;
       extended.add(item.fromFingerprint);
+
+      // A hang: record it (reproduced from the path that led here), reset to a known state and keep
+      // exploring the rest of the frontier. The hung state is never expanded.
+      const hang = seenHang.last;
+      if (hang !== null) {
+        await recordCoverageHang({
+          hang,
+          recording: { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) },
+          steps: [],
+          found: hangs,
+          ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
+          ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+          ...(params.settle === undefined ? {} : { perceive: { settleConfig: params.settle } }),
+        });
+        if (!(await sessions.reset(hang))) return endRun("hang");
+        await monitorFor(sessions.page).instrument();
+        currentFingerprint = ""; // the next item is reached afresh from the seed
+        continue;
+      }
 
       if (!isInScope(snap.url, params.scope)) {
         // Out of scope — recorded as a boundary edge, never expanded (guardrail #4).
@@ -255,5 +297,7 @@ export async function runFeatureMission(params: {
   } catch (e) {
     // Engine failure: a typed `crashed` result carrying every path discovered so far.
     return endRun("crashed", describeFailure(e, crashWatch.signals()));
+  } finally {
+    await sessions.closeOwned();
   }
 }

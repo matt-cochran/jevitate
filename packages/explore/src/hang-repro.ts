@@ -149,7 +149,14 @@ export interface HangFinding {
   readonly url: string;
   readonly signal: HangSignal;
   readonly firstSeenStep: number;
-  readonly repro: { readonly steps: TranscriptEntry[]; readonly recordingStepIndex: number };
+  /** How many times this same hang (by fingerprint) was hit in the run, and at which steps. */
+  readonly occurrences: number;
+  readonly occurrenceSteps: number[];
+  /**
+   * `recording` is set when the hang was found after the mission RESET (a fresh page): the steps to
+   * replay are then this segment's own Recording, not the run's first one.
+   */
+  readonly repro: { readonly steps: TranscriptEntry[]; readonly recordingStepIndex: number; readonly recording?: Recording };
   readonly reproduction: HangReproduction;
 }
 
@@ -169,6 +176,8 @@ export function hangFinding(
     url: signal.url,
     signal,
     firstSeenStep: steps.length,
+    occurrences: 1,
+    occurrenceSteps: [steps.length],
     // The repro is the ordered steps; their timing stays in the run transcript.
     repro: {
       steps: steps.map((e): TranscriptEntry => {
@@ -179,4 +188,41 @@ export function hangFinding(
     },
     reproduction,
   };
+}
+
+/**
+ * Records a hang met by a COVERAGE mission (induction / feature) into its deduped set: a new
+ * fingerprint is reproduced by replaying `recording` (the path that led to it) in fresh contexts; a
+ * known one is one more occurrence. The caller then resets and keeps exploring the frontier.
+ */
+export async function recordCoverageHang(p: {
+  readonly hang: HangSignal;
+  readonly recording: Recording;
+  readonly steps: readonly TranscriptEntry[];
+  readonly found: Map<string, HangFinding>;
+  readonly openSession?: () => Promise<VerifySession>;
+  readonly attempts?: number;
+  readonly perceive?: PerceiveOptions;
+}): Promise<void> {
+  const fingerprint = hangFingerprint(p.hang);
+  const known = p.found.get(fingerprint);
+  const step = p.steps.length;
+  if (known !== undefined) {
+    p.found.set(fingerprint, { ...known, occurrences: known.occurrences + 1, occurrenceSteps: [...known.occurrenceSteps, step] });
+    return;
+  }
+  const index = Math.max(0, p.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1);
+  const reproduction: HangReproduction =
+    p.openSession === undefined
+      ? { attempts: 0, reproduced: 0, status: "intermittent", runs: [] }
+      : await reproduceHang({
+          recording: p.recording,
+          recordingStepIndex: index,
+          hang: p.hang,
+          openSession: p.openSession,
+          ...(p.attempts === undefined ? {} : { attempts: p.attempts }),
+          ...(p.perceive === undefined ? {} : { perceive: p.perceive }),
+        });
+  const finding = hangFinding(p.hang, p.steps, index, reproduction);
+  p.found.set(fingerprint, { ...finding, repro: { ...finding.repro, recording: p.recording } });
 }

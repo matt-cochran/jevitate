@@ -22,6 +22,10 @@ import {
 } from "../index.js";
 import type { MissionFailure } from "@jevitate/domain";
 import type { SettleConfig } from "../settle-config.js";
+import type { HangSignal } from "../hang.js";
+import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import { MissionSessions } from "../mission-session.js";
+import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
@@ -65,7 +69,10 @@ export interface CoverageReport {
 
 export interface InductionRunResult {
   /** `crashed`: the engine failed; everything discovered up to the failure is still returned. */
-  readonly outcome: "exhausted" | "cap" | "crashed";
+  /** `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session). */
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
+  readonly hangs: HangFinding[];
   /** Why the run crashed — present only for `crashed`. */
   readonly failure?: MissionFailure;
   readonly coverage: CoverageReport;
@@ -95,6 +102,13 @@ export interface InductionMissionParams {
   readonly onTranscriptEntry?: TranscriptListener;
   /** The target's settle configuration (background requests, long-poll threshold). */
   readonly settle?: SettleConfig;
+  /**
+   * Opens a FRESH browser session: reproduces a hang and resets to it after one, so the frontier
+   * keeps being explored. Without it the same page is reused (and an unresponsive page ends the run).
+   */
+  readonly openFreshSession?: () => Promise<VerifySession>;
+  /** Fresh-context replays that confirm a hang. Default 2. */
+  readonly hangReplays?: number;
 }
 
 /**
@@ -181,21 +195,29 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const site = new URL(params.seedUrl).origin;
   // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
   // still-rendering frame — including right after a reset-and-replay.
+  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
+  const hangs = new Map<string, HangFinding>();
+  /** The hang the latest perception saw (a holder: it is set inside the perception closure). */
+  const seenHang: { last: HangSignal | null } = { last: null };
   let lastTiming: PageTiming | undefined;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
   const takeSnapshot = async (): Promise<Snapshot> => {
-    const p = await perceive(params.page, {
+    const p = await perceive(sessions.page, {
       maxCandidates: bounds.maxCandidates,
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
       ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
     });
     lastTiming = p.timing;
+    seenHang.last = p.hang;
     timings.push(p.timing);
     return p.snapshot;
   };
   const transcript = new TranscriptLog([], params.onTranscriptEntry);
-  const crashWatch = new CrashWatch(params.page);
+  let crashWatch = new CrashWatch(sessions.page);
+  sessions.onReset((page) => {
+    crashWatch = new CrashWatch(page);
+  });
   const visited = new Set<string>();
   const statePaths = new Map<string, Recording>();
   const defects: DefectRecord[] = [];
@@ -209,8 +231,8 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   });
 
   try {
-    await monitorFor(params.page).instrument();
-    await params.actor.attemptsTo(Navigate.to(params.seedUrl));
+    await monitorFor(sessions.page).instrument();
+    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await takeSnapshot();
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
@@ -231,6 +253,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
           recordings: [...statePaths.values()],
           transcript: transcript.entries(),
           timing: summarizeTimings(timings),
+          hangs: [...hangs.values()],
         };
       }
 
@@ -242,7 +265,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
 
       if (item.fromFingerprint !== currentFingerprint) {
         const reached = await reachFrontierState({
-          actor: params.actor,
+          actor: sessions.actor,
           seedUrl: params.seedUrl,
           item,
           snapshotNow: takeSnapshot,
@@ -255,7 +278,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       const liveControl = resolveControl(snap, item.control);
       if (liveControl === null) continue; // control vanished between snapshots — dropped
 
-      const result = await act(params.actor, {
+      const result = await act(sessions.actor, {
         op: item.op,
         control: liveControl,
         value: item.op === "click" ? null : "",
@@ -284,6 +307,52 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       const newFingerprint = stateFingerprint(snap);
       const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
       transitionsExercised += 1;
+
+      // A hang: record it (reproduced from the path that led here), reset to a known state and keep
+      // exploring the rest of the frontier. The hung state is never expanded.
+      const hang = seenHang.last;
+      if (hang !== null) {
+        transcript.record({
+          op: item.op,
+          control: liveControl,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "coverage-frontier",
+          actOk: true,
+          reason: `hang (${hang.kind}): ${hang.detail}`,
+          snapshot: decidedOn,
+          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
+        });
+        await recordCoverageHang({
+          hang,
+          // The path starts at the seed (the frontier's reach navigates there first): prepend it.
+          recording: {
+            ...branch,
+            pages: [
+              { url: toPath(params.seedUrl), steps: [{ step: { kind: "navigate", url: toPath(params.seedUrl), expect: { kind: "urlIncludes", text: toPath(params.seedUrl) } } }] },
+              ...branch.pages.filter((p) => p.steps.length > 0),
+            ],
+          },
+          steps: transcript.entries(),
+          found: hangs,
+          ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
+          ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+          ...(params.settle === undefined ? {} : { perceive: { settleConfig: params.settle } }),
+        });
+        if (!(await sessions.reset(hang))) {
+          return {
+            outcome: "hang",
+            coverage: report(false),
+            recordings: [...statePaths.values()],
+            transcript: transcript.entries(),
+            timing: summarizeTimings(timings),
+            hangs: [...hangs.values()],
+          };
+        }
+        await monitorFor(sessions.page).instrument();
+        currentFingerprint = ""; // the next item is reached afresh from the seed
+        continue;
+      }
 
       // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
       // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
@@ -345,6 +414,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       recordings: [...statePaths.values()],
       transcript: transcript.entries(),
       timing: summarizeTimings(timings),
+      hangs: [...hangs.values()],
     };
   } catch (e) {
     // Engine failure: a typed `crashed` result with every state path and transcript step so far.
@@ -355,6 +425,9 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       recordings: [...statePaths.values()],
       transcript: transcript.entries(),
       timing: summarizeTimings(timings),
+      hangs: [...hangs.values()],
     };
+  } finally {
+    await sessions.closeOwned();
   }
 }

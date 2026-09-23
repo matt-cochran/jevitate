@@ -25,7 +25,14 @@ import {
   type TranscriptEntry,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
-import type { FilingConfig, IssueDraft, IssueFilerPort, MissionFailure, MissionOutcome } from "@jevitate/domain";
+import {
+  combineOutcomes,
+  type FilingConfig,
+  type IssueDraft,
+  type IssueFilerPort,
+  type MissionFailure,
+  type MissionOutcome,
+} from "@jevitate/domain";
 import {
   currentEnvironment,
   draftForCrash,
@@ -440,7 +447,13 @@ export interface RunCoverageMissionOptions {
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
+  readonly hangs: HangFinding[];
+  /** A coverage run has no single Recording: each finding carries the path that reached it. */
+  readonly recording: null;
+  /** Where the run happened — what `verify-fix` needs to replay a finding. */
+  readonly target: MissionTarget;
   /** The typed verdict: `crashed` for a broken run, else `defects-found` / `clean`. */
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
@@ -460,13 +473,14 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
 
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
   await mkdir(outDir, { recursive: true });
@@ -476,6 +490,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
+      // A hang is reproduced in fresh contexts, and the frontier keeps being explored after it.
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       page: session.page,
       actor,
@@ -494,11 +510,20 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       recordingPaths.push(p);
     }
     journal.writeTranscript(result.transcript);
-    const missionOutcome: MissionOutcome =
-      result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean";
+    const missionOutcome: MissionOutcome = combineOutcomes([
+      result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean",
+      ...result.hangs.map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+    ]);
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
+      hangs: result.hangs,
+      recording: null,
+      target: {
+        seedUrl: opts.url,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
       timing: result.timing,
       coverage: result.coverage,
       outcome: result.outcome,
@@ -698,23 +723,28 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
-  const session = await portFactory().open({
+  const launch = {
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await portFactory().open(launch);
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       page: session.page,
       actor,
       seedUrl: opts.seedUrl,
       allowlist: opts.allowlist,
       scope,
     });
-    const missionOutcome: MissionOutcome = result.outcome === "crashed" ? "crashed" : "clean";
+    const missionOutcome: MissionOutcome = combineOutcomes([
+      result.outcome === "crashed" ? "crashed" : "clean",
+      ...result.hangs.map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+    ]);
     return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
   } finally {
     await closeQuietly(session);

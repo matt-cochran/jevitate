@@ -106,7 +106,13 @@ action that silently puts the page back in an earlier state). The evidence is
 recorded: pending requests, the last page state, timings and the JS heap. The
 steps that led to the hang are then replayed in fresh browser contexts
 (`--hang-replays`, default 2). If every replay hangs, it is a confirmed `hang`;
-otherwise it is `intermittent`, with the evidence from each attempt.
+otherwise it is `intermittent`, with the evidence from each attempt. The
+exploring missions (adversarial, coverage and feature) then keep hunting: they
+reset to a known state (a fresh page at the start URL), skip the hung route, and
+go on within budget. A repeated hang counts as another occurrence of the same
+finding. Findings made after a reset carry their own Recording, so they replay
+from the start URL and never through the hang. The goal mission still ends at a
+hang, because the hang blocks its goal.
 `verify-fix` works on a hang too: it passes only if the replay now settles within
 the bound.
 

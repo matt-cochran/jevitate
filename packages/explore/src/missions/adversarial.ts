@@ -10,7 +10,8 @@ import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
-import type { HangSignal } from "../hang.js";
+import { hangFingerprint, type HangSignal } from "../hang.js";
+import { MissionSessions } from "../mission-session.js";
 import type { HangConfig, SettleConfig } from "../settle-config.js";
 import { hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
@@ -80,6 +81,11 @@ export interface DefectRepro {
   readonly steps: TranscriptEntry[];
   /** Flat index (pages→steps) of the last Recording step to replay; `runToCheckpoint` target. */
   readonly recordingStepIndex: number;
+  /**
+   * The Recording to replay, when the finding came after a RESET (the mission started over on a
+   * fresh page after a hang): that segment's own Recording. Absent ⇒ the run's `recording`.
+   */
+  readonly recording?: Recording;
 }
 
 export interface AdversarialDefect {
@@ -195,13 +201,16 @@ interface StepFinding {
 
 interface MutableDefect extends Omit<StepFinding, "related"> {
   readonly related: Set<string>;
+  /** The recording segment (0 = before any reset) the defect was found in. */
+  readonly epoch: number;
   readonly firstSeenStep: number;
   readonly occurrenceSteps: number[];
   readonly repro: DefectRepro;
   readonly triage: Triage;
 }
 
-function freeze(d: MutableDefect): AdversarialDefect {
+function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): AdversarialDefect {
+  const segment = d.epoch === 0 ? null : (segments[d.epoch] ?? null);
   return {
     fingerprint: d.fingerprint,
     related: [...d.related],
@@ -214,7 +223,7 @@ function freeze(d: MutableDefect): AdversarialDefect {
     firstSeenStep: d.firstSeenStep,
     occurrences: d.occurrenceSteps.length,
     occurrenceSteps: [...d.occurrenceSteps],
-    repro: d.repro,
+    repro: segment === null ? d.repro : { ...d.repro, recording: segment },
     triage: d.triage,
   };
 }
@@ -228,15 +237,24 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const timeBudgetMs = params.timeBudgetMs ?? DEFAULT_ADVERSARIAL_TIME_BUDGET_MS;
   if (params.strategies.length === 0) throw new Error("runAdversarialMission: at least one strategy is required");
 
-  // Attach the hard-signal listeners BEFORE navigating, so no signal is missed.
-  const collector = new PageSignalCollector(params.page);
-  const crashWatch = new CrashWatch(params.page);
+  // The live session; after a hang the mission resets to a fresh page and keeps hunting.
+  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
+  // Attach the hard-signal listeners BEFORE navigating (on every page the run works in).
+  let collector = new PageSignalCollector(params.page);
+  let crashWatch = new CrashWatch(params.page);
+  sessions.onReset((page) => {
+    collector = new PageSignalCollector(page);
+    crashWatch = new CrashWatch(page);
+  });
   const heap = new HeapLog();
   const secrets = params.secrets ?? [];
-  const recorder = new RunRecorder(site, undefined, secrets, params.onRecording);
+  // One Recording per segment: segment 0 from the seed; a new one after each reset (its findings
+  // replay from that segment's start, never through the hang that ended the previous one).
+  const segments: RunRecorder[] = [new RunRecorder(site, undefined, secrets, params.onRecording)];
+  let recorder = segments[0] as RunRecorder;
   const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
   const defects = new Map<string, MutableDefect>();
-  const hangs: HangFinding[] = [];
+  const hangs = new Map<string, HangFinding>();
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
   const perceiveOpts = {
@@ -253,7 +271,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     stop: AdversarialStop,
     failure?: MissionFailure,
   ): AdversarialOutcome => {
-    const finished = recorder.tryFinish({ intent: "adversarial" });
+    const finished = (segments[0] as RunRecorder).tryFinish({ intent: "adversarial" });
+    const later = segments.map((r, i) => {
+      if (i === 0) return null;
+      const f = r.tryFinish({ intent: "adversarial (after reset)" });
+      return f.ok ? f.recording : null;
+    });
     const recordingFailure: MissionFailure | undefined = finished.ok
       ? undefined
       : { kind: "exception", message: `recording rejected: ${finished.reason}` };
@@ -261,8 +284,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     return {
       outcome: finished.ok ? outcome : "crashed",
       stop: finished.ok ? stop : "crashed",
-      defects: [...defects.values()].map(freeze),
-      hangs,
+      defects: [...defects.values()].map((d) => freeze(d, later)),
+      hangs: [...hangs.values()],
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
       transcript: transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
@@ -281,17 +304,18 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     reason?: string;
     hang: HangSignal | null;
   }> => {
-    const p = await perceive(params.page, perceiveOpts);
+    const p = await perceive(sessions.page, perceiveOpts);
     timings.push(p.timing);
-    await heap.sample(params.page, transcript.nextStep);
+    await heap.sample(sessions.page, transcript.nextStep);
     return p.rendered
       ? { snapshot: p.snapshot, timing: p.timing, rendered: true, hang: p.hang }
       : { snapshot: p.snapshot, timing: p.timing, rendered: false, reason: p.reason, hang: p.hang };
   };
 
   /**
-   * A hang ends the hunt (the page is stuck): it is recorded in the transcript, its steps are
-   * replayed in fresh contexts to reproduce it, and it becomes a finding with k/N.
+   * A hang is recorded in the transcript, its steps are replayed in fresh contexts to reproduce it,
+   * and it becomes a finding with k/N. The same hang again (by fingerprint) is one more occurrence —
+   * never reproduced twice.
    */
   const recordHang = async (signal: HangSignal, snapshot: Snapshot, timing: PageTiming): Promise<void> => {
     let h = signal;
@@ -306,7 +330,17 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       snapshot,
       timing,
     });
-    const heapNow = await sampleHeap(params.page, 1_000);
+    const step = transcript.nextStep - 1;
+    const known = hangs.get(hangFingerprint(h));
+    if (known !== undefined) {
+      hangs.set(known.fingerprint, {
+        ...known,
+        occurrences: known.occurrences + 1,
+        occurrenceSteps: [...known.occurrenceSteps, step],
+      });
+      return;
+    }
+    const heapNow = await sampleHeap(sessions.page, 1_000);
     if (heapNow !== null) h = { ...h, heapBytes: heapNow.usedBytes };
     const recordingStepIndex = Math.max(0, recorder.stepCount - 1);
     const partial = recorder.tryFinish({ intent: "adversarial" });
@@ -321,14 +355,41 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
             perceive: perceiveOpts,
           });
-    hangs.push(hangFinding(h, transcript.entries(), recordingStepIndex, reproduction));
+    const finding = hangFinding(h, transcript.entries(), recordingStepIndex, reproduction);
+    const segment = segments.indexOf(recorder);
+    hangs.set(
+      finding.fingerprint,
+      segment > 0 && partial.ok ? { ...finding, repro: { ...finding.repro, recording: partial.recording } } : finding,
+    );
+  };
+
+  /**
+   * After a hang: reset to a known state — a fresh page when the mission can open one (a hung page
+   * may not even navigate), else the same page — re-navigate to the start URL in a NEW Recording
+   * segment, and keep hunting. False when the mission cannot continue (an unresponsive page with no
+   * way to open a fresh one, or a start page that itself hangs).
+   */
+  const resetAfterHang = async (h: HangSignal): Promise<{ snapshot: Snapshot; timing: PageTiming } | null> => {
+    if (!(await sessions.reset(h))) return null;
+    await monitorFor(sessions.page).instrument();
+    recorder = new RunRecorder(site, undefined, secrets);
+    segments.push(recorder);
+    await Navigate.to(params.seedUrl).performAs(sessions.actor);
+    recorder.navigate(params.seedUrl, now());
+    const back = await perceiveNow();
+    recorder.observed(back.snapshot.url, now(), back.timing);
+    if (back.hang !== null) {
+      await recordHang(back.hang, back.snapshot, back.timing);
+      return null;
+    }
+    return { snapshot: back.snapshot, timing: back.timing };
   };
 
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
   const verdict = (): MissionOutcome =>
     combineOutcomes([
       defects.size > 0 ? "defects-found" : "clean",
-      ...hangs.map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+      ...[...hangs.values()].map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
     ]);
 
   /**
@@ -336,11 +397,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
    * Returns the transcript reason and the step's findings, or null when nothing broke.
    */
   const adjudicate = async (): Promise<{ reason: string; findings: StepFinding[] } | null> => {
-    const invariantResult = params.userInvariant ? await params.userInvariant(params.page) : { ok: true };
+    const invariantResult = params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
     // A same-tick console/response event gets one loop tick to land before draining.
-    await params.page.waitForTimeout(10);
+    await sessions.page.waitForTimeout(10);
     const hardSignals = collector.drain();
-    const url = redactUrl(params.page.url());
+    const url = redactUrl(sessions.page.url());
     const route = normalizeRoute(url);
     const findings: StepFinding[] = [];
 
@@ -398,6 +459,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       defects.set(f.fingerprint, {
         ...f,
         related: new Set(f.related),
+        epoch: segments.indexOf(recorder),
         firstSeenStep: step,
         occurrenceSteps: [step],
         // The repro is the ordered steps; their timing stays in the run transcript (not copied per defect).
@@ -415,8 +477,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
-    await monitorFor(params.page).instrument();
-    await Navigate.to(params.seedUrl).performAs(params.actor);
+    await monitorFor(sessions.page).instrument();
+    await Navigate.to(params.seedUrl).performAs(sessions.actor);
     recorder.navigate(params.seedUrl, now());
     const started = now();
 
@@ -508,7 +570,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             ? snap.controls.find((c) => c.index === decision.targetIndex) ?? null
             : null;
         const at = now();
-        const result = await act(params.actor, { op: decision.op, control, value: decision.fillText ?? null });
+        const result = await act(sessions.actor, { op: decision.op, control, value: decision.fillText ?? null });
         actions += 1;
         acted = true;
         actOk = result.ok;
@@ -559,7 +621,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           const answers = await params.judgment.systemOne({
             state: buildJudgmentState({
               goal: "try to break it",
-              url: params.page.url(),
+              url: sessions.page.url(),
               controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
               history: [],
             }),
@@ -594,12 +656,21 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         lastRecordedTarget = null;
         if (next.hang !== null) {
           await recordHang(next.hang, next.snapshot, next.timing);
-          stop = "hang";
-          break;
+          // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
+          // budget. The hung route is not followed again (visit-route remembers it).
+          const fresh = await resetAfterHang(next.hang);
+          if (fresh === null) {
+            stop = "hang";
+            break;
+          }
+          snap = fresh.snapshot;
+          snapTiming = fresh.timing;
+          lastDecision = undefined;
+          continue;
         }
         if (!isAuthorizedExploreTarget(snap.url, params.allowlist)) {
           // Guardrail #1: never act off an authorized origin — go back to the seed and hunt on.
-          await Navigate.to(params.seedUrl).performAs(params.actor);
+          await Navigate.to(params.seedUrl).performAs(sessions.actor);
           recorder.navigate(params.seedUrl, now());
           const back = await perceiveNow();
           snap = back.snapshot;
@@ -617,5 +688,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     return finish(verdict(), stop);
   } catch (e) {
     return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));
+  } finally {
+    await sessions.closeOwned();
   }
 }

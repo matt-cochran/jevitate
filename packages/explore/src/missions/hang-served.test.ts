@@ -6,6 +6,7 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runAdversarialMission } from "./adversarial.js";
 import { runGoalBasedMission } from "./goal-based.js";
+import { runInductionMission } from "./induction.js";
 import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
 import { verifyFix, type VerifySession } from "../verify-fix.js";
@@ -53,6 +54,20 @@ beforeAll(async () => {
         res.writeHead(200, { "content-type": "text/html" }).end(
           html(`<h1>Report</h1><p id="s">Loading…</p><script>fetch("/api/flaky").then(() => { document.getElementById("s").innerHTML = '<button type="button">Refresh</button>'; });</script>`),
         );
+        return;
+      case "/hub":
+        // One route that hangs (twice, under two names) and one route that 500s.
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<h1>Hub</h1><a href="/stuck">Stuck report</a><a href="/stuck?again=1">Frozen dashboard</a><a href="/broken">Broken page</a>`),
+        );
+        return;
+      case "/broken":
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<h1>Broken</h1><a href="/hub">Hub</a><script>fetch("/api/boom");</script>`),
+        );
+        return;
+      case "/api/boom":
+        res.writeHead(500, { "content-type": "application/json" }).end("{}");
         return;
       case "/busy":
         res.writeHead(200, { "content-type": "text/html" }).end(
@@ -229,6 +244,95 @@ describe("hangs are detected, classified and REPRODUCED in fresh contexts", () =
       expect(result.hang?.reproduction).toMatchObject({ attempts: 2, reproduced: 2, status: "reproduced" });
       // The repro replays up to the action that undid itself (navigate, click, click).
       expect(result.hang?.repro.recordingStepIndex).toBe(2);
+    },
+    180_000,
+  );
+});
+
+describe("the adversarial mission KEEPS HUNTING after a hang", () => {
+  it(
+    "one hanging route and one 500 route yield BOTH findings in one run; the repeated hang is deduped",
+    async () => {
+      state.neverRespond = true;
+      const result = await withSession(
+        "hang-keep-hunting-",
+        async (session) => {
+          const actor = CastActor.named("hunter").whoCan(new BrowseTheWeb(session, [origin]));
+          return runAdversarialMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+            generation: new FakeGenerationGateway(),
+            seedUrl: `${origin}/hub`,
+            allowlist: [origin],
+            strategies: ["visit-route"],
+            bounds: { maxDecisions: 3 },
+            openFreshSession: freshSession,
+            hangReplays: 1,
+            ...FAST,
+          });
+        },
+        origin,
+      );
+
+      // Both kinds of finding, in one run; a hang is not the end of the hunt.
+      expect(result.hangs).toHaveLength(1);
+      expect(result.hangs[0]).toMatchObject({ hangKind: "request-pending", occurrences: 2 });
+      expect(result.hangs[0]?.reproduction).toMatchObject({ attempts: 1, reproduced: 1, status: "reproduced" });
+      const boom = result.defects.find((d) => d.title === "HTTP 500 from /api/boom");
+      expect(boom).toBeDefined();
+      expect(result.outcome).toBe("hang"); // the most severe finding; the defect is still reported
+      expect(result.stop).toBe("step-budget");
+
+      // The defect was found AFTER a reset: its repro is its own segment's Recording, which replays
+      // from the start URL (never through the hang) — and verify-fix confirms it still reproduces.
+      expect(boom?.repro.recording).toBeDefined();
+      const check = await verifyFix({
+        recording: boom?.repro.recording ?? result.recording,
+        recordingStepIndex: boom?.repro.recordingStepIndex ?? 0,
+        fingerprint: boom?.fingerprint ?? "",
+        defectKind: boom?.kind ?? "",
+        openSession: freshSession,
+        perceive: FAST,
+      });
+      expect(check.verdict).toBe("still-reproduces");
+    },
+    180_000,
+  );
+});
+
+describe("coverage exploration KEEPS EXPLORING after a hang", () => {
+  it(
+    "the induction mission records the hang (deduped, reproduced) and still reaches the other route",
+    async () => {
+      state.neverRespond = true;
+      const result = await withSession(
+        "hang-coverage-",
+        async (session) => {
+          const actor = CastActor.named("coverage").whoCan(new BrowseTheWeb(session, [origin]));
+          return runInductionMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+            seedUrl: `${origin}/hub`,
+            allowlist: [origin],
+            maxDepth: 1,
+            openFreshSession: freshSession,
+            hangReplays: 1,
+            renderWaitMs: FAST.renderWaitMs,
+          });
+        },
+        origin,
+      );
+      expect(result.outcome).toBe("exhausted");
+      expect(result.hangs).toHaveLength(1);
+      expect(result.hangs[0]).toMatchObject({ hangKind: "request-pending", occurrences: 2 });
+      expect(result.hangs[0]?.reproduction).toMatchObject({ reproduced: 1, status: "reproduced" });
+      // Its repro starts at the seed and replays the click that led to the hang.
+      expect(result.hangs[0]?.repro.recording?.pages[0]?.steps[0]?.step.kind).toBe("navigate");
+      // The frontier went on after the hang: the broken page (after both hangs in link order) was reached.
+      expect(result.coverage.transitionsExercised).toBe(3);
+      expect(result.transcript.some((e) => e.target === 'link "Broken page"')).toBe(true);
     },
     180_000,
   );

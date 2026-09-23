@@ -65,6 +65,8 @@ interface PersistedFinding {
   readonly repro: { readonly recordingStepIndex: number };
   /** For a hang finding: its signal (what the replay must no longer show). */
   readonly hang?: HangSignal;
+  /** The finding's own Recording (found after a reset / on a coverage path), when it has one. */
+  readonly recording?: Recording;
 }
 
 const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
@@ -81,7 +83,7 @@ function asHangSignal(v: unknown): HangSignal | null {
 }
 
 interface PersistedMission {
-  readonly recording: Recording;
+  readonly recording: Recording | null;
   readonly target: { readonly seedUrl: string; readonly allowlist: string[]; readonly storageStatePath?: string };
   readonly findings: PersistedFinding[];
 }
@@ -96,7 +98,10 @@ function asFinding(v: unknown): PersistedFinding | null {
   if (!isRecord(repro) || typeof repro.recordingStepIndex !== "number") return null;
   const hang = v.kind === "hang" ? asHangSignal(v.signal) : null;
   if (v.kind === "hang" && hang === null) return null;
+  const own = repro.recording === undefined ? undefined : RecordingSchema.safeParse(repro.recording);
+  if (own !== undefined && !own.success) return null; // a finding whose repro cannot be trusted is skipped
   return {
+    ...(own?.success === true ? { recording: own.data } : {}),
     fingerprint: v.fingerprint,
     kind: v.kind,
     repro: { recordingStepIndex: repro.recordingStepIndex },
@@ -114,7 +119,8 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   if (!isRecord(target) || typeof target.seedUrl !== "string" || !Array.isArray(target.allowlist)) {
     throw new VerifyFixInputError("the mission result has no replay target (seedUrl/allowlist)");
   }
-  const recording = RecordingSchema.parse(result.recording);
+  // A run's own Recording (a coverage run has none; its findings carry their path).
+  const recording = result.recording === null || result.recording === undefined ? null : RecordingSchema.parse(result.recording);
   const findings: PersistedFinding[] = [];
   for (const list of [result.defects, result.hangs]) {
     if (!Array.isArray(list)) continue;
@@ -162,9 +168,11 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
     ...(target.hangs === undefined ? {} : { hangConfig: target.hangs }),
   };
+  const recording = finding.recording ?? mission.recording;
+  if (recording === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
   const result = await verifyFix({
     perceive: perceiveOpts,
-    recording: mission.recording,
+    recording,
     recordingStepIndex: finding.repro.recordingStepIndex,
     fingerprint: finding.fingerprint,
     defectKind: finding.kind,
