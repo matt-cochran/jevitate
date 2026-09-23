@@ -38,17 +38,23 @@ export interface PooledContext {
 export type PressureThresholds = Readonly<Record<CpuMetric | MemMetric, number>>;
 
 /**
- * Defaults, one per signal meaning (see `CpuMetric` / `MemMetric`):
- *  - psi-cpu-some-avg10 > 80%: most of the last 10s something waited for CPU.
- *  - loadavg1-per-core > 200%: run queue twice the core count (Linux fallback, macOS).
- *  - cpu-busy-delta > 95%: Windows cores essentially saturated.
+ * Defaults, one per signal meaning (see `CpuMetric` / `MemMetric`). Only signals that measure a
+ * genuine STALL block admission by default; the rest are recorded in every admission sample but
+ * are advisory (limit = Infinity) unless a caller sets an explicit threshold:
+ *  - psi-cpu-some-avg10 > 80%: most of the last 10s something waited for CPU (a real stall measure).
  *  - psi-memory-full-avg10 > 5%: ALL tasks stalled on memory 5% of the time — thrashing.
  *  - vm-pressure-level > 50: macOS at CRITICAL (warn=50 still admits).
+ *  - loadavg1-per-core: ADVISORY. Load average counts runnable tasks, not stalls; a healthy busy
+ *    runner routinely sits at ~2x cores (GitHub macOS runners read ~194% while working normally —
+ *    a 200% limit starved the pool for >2 minutes there). Set a threshold explicitly to enforce it.
+ *  - cpu-busy-delta: ADVISORY for the same reason (Windows cores at 100% busy is not a stall).
+ * Memory exhaustion — what actually crashes/deadlocks browsers — is always enforced via the
+ * memory metric above and the free-memory floor.
  */
 export const DEFAULT_PRESSURE_THRESHOLDS: PressureThresholds = Object.freeze({
   "psi-cpu-some-avg10": 80,
-  "loadavg1-per-core": 200,
-  "cpu-busy-delta": 95,
+  "loadavg1-per-core": Number.POSITIVE_INFINITY,
+  "cpu-busy-delta": Number.POSITIVE_INFINITY,
   "psi-memory-full-avg10": 5,
   "vm-pressure-level": 50,
 });
