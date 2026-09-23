@@ -5,8 +5,9 @@ import type {
   ChoiceQuestion,
   ChoiceAnswer,
 } from "@jevitate/ai-core";
+import { assertNoSecretInPayload } from "@jevitate/ai-core";
 import type { Control, Snapshot } from "./snapshot.js";
-import { buildJudgmentState } from "./redact.js";
+import { buildJudgmentState, redactText } from "./redact.js";
 
 /**
  * decide: one `JudgmentPort.systemOne` round-trip with TWO heads —
@@ -98,8 +99,59 @@ export interface DecideInput {
   readonly uploadAvailable?: boolean;
 }
 
+/** Text-entry `<input>` types: typing is their interaction. Anything else (checkbox, radio, range, color…) is clicked. */
+const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
+  "", "text", "email", "search", "tel", "url", "password", "number", "date", "datetime-local", "month", "time", "week",
+]);
+
+/**
+ * The single interaction a control affords, by its kind — the model chooses WHAT to act on and this
+ * derives HOW, so an incoherent pair (e.g. "upload" + a button) is inexpressible. File inputs upload,
+ * text fields type, native selects select, everything else is clicked.
+ */
+export function affordedOp(c: Control): "click" | "type" | "select" | "upload" {
+  if (c.tag === "input" && c.inputType === "file") return "upload";
+  if (c.tag === "select") return "select";
+  if (c.tag === "textarea") return "type";
+  if (c.tag === "input" && TEXT_INPUT_TYPES.has(c.inputType ?? "")) return "type";
+  if (c.role === "textbox" || c.role === "searchbox" || c.role === "spinbutton") return "type";
+  return "click";
+}
+
+/** Target-free actions, always offered, with what each means. */
+const NON_TARGET_ACTIONS: ReadonlyArray<{ op: Op; description: string }> = [
+  { op: "wait", description: "wait for the page to finish updating" },
+  { op: "scroll_down", description: "scroll down to reveal more of the page" },
+  { op: "scroll_up", description: "scroll up" },
+  { op: "done", description: "the goal is achieved on the current page" },
+  { op: "blocked", description: "the goal cannot be advanced from here" },
+];
+
+function describeAction(op: "click" | "type" | "select" | "upload", summary: string): string {
+  switch (op) {
+    case "upload":
+      return `upload the mission's file into ${summary}`;
+    case "type":
+      return `type into ${summary}`;
+    case "select":
+      return `choose an option in ${summary}`;
+    case "click":
+      return `click ${summary}`;
+    default: {
+      const exhaustive: never = op;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * One judgment per step over the COMPLETE actions available on this page (the candidate-action
+ * technique browser agents such as browser-use / Stagehand use), instead of independent op and
+ * target heads that could disagree. Candidate ids are `<op>:<controlIndex>` or a bare target-free op.
+ */
 export async function decide(judge: JudgmentPort, input: DecideInput): Promise<Decision> {
   const { snapshot } = input;
+  const secrets = input.secrets ?? [];
   const controlLines = snapshot.controls.map((c) => `[${c.index}] ${c.summary}`);
   const uploadAvailable = input.uploadAvailable === true;
 
@@ -110,31 +162,50 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
       ? [PROMPT_INJECTION_GUARD, UPLOAD_OP_GUIDE, ...controlLines]
       : [PROMPT_INJECTION_GUARD, ...controlLines],
     history: input.history,
-    secrets: input.secrets,
+    secrets,
   });
 
-  const ops = uploadAvailable ? OPS : OPS.filter((o) => o !== "upload");
-  const opQuestion: ChoiceQuestion<Op> = { kind: "choice", options: ops };
-  const questions: Record<string, Question> = { op: opQuestion };
-
-  const targetOptions = snapshot.controls.map((c) => String(c.index));
-  if (targetOptions.length > 0) {
-    const targetQuestion: ChoiceQuestion<string> = { kind: "choice", options: targetOptions };
-    questions.target = targetQuestion;
+  const candidates = new Map<string, { op: Op; control: Control | null }>();
+  const descriptions: Record<string, string> = {};
+  for (const c of snapshot.controls) {
+    const op = affordedOp(c);
+    if (op === "upload" && !uploadAvailable) continue; // an upload that could only fail closed is never offered
+    const id = `${op}:${c.index}`;
+    candidates.set(id, { op, control: c });
+    // Page text is untrusted and may contain secrets: redacted like the state.
+    descriptions[id] = redactText(describeAction(op, c.summary), secrets);
+  }
+  for (const a of NON_TARGET_ACTIONS) {
+    candidates.set(a.op, { op: a.op, control: null });
+    descriptions[a.op] = a.description;
   }
 
+  const actionQuestion: ChoiceQuestion<string> = {
+    kind: "choice",
+    options: [...candidates.keys()],
+    descriptions,
+    instructions:
+      "Which single action best advances the goal from the current page? Use the history: do not repeat an " +
+      "action that already succeeded, and when a dialog or form step is in progress, complete it.",
+  };
+  const questions: Record<string, Question> = { action: actionQuestion };
+
+  // The question carries page-derived text: prove no registered secret survived, exactly as
+  // buildJudgmentState does for the state (fail-closed choke point).
+  assertNoSecretInPayload(questions, secrets);
   const answers = await judge.systemOne({ state, questions });
-  const opAns = answers.op as ChoiceAnswer<Op>;
-  const op = opAns.value;
-
-  let control: Control | null = null;
-  let targetMissing = false;
-  if (OPS_NEEDING_TARGET.has(op)) {
-    const targetAns = answers.target as ChoiceAnswer<string> | undefined;
-    const idx = targetAns ? Number(targetAns.value) : NaN;
-    control = Number.isInteger(idx) ? snapshot.controls.find((c) => c.index === idx) ?? null : null;
-    targetMissing = control === null;
+  const answer = answers.action as ChoiceAnswer<string> | undefined;
+  const chosen = answer ? candidates.get(answer.value) : undefined;
+  if (answer === undefined || chosen === undefined) {
+    // The judgment port validates choices against the offered options; reaching here means an
+    // unusable answer — fail closed as a target-requiring op with no target.
+    return { op: "click", control: null, confidence: answer?.confidence ?? 0, targetMissing: true, state };
   }
-
-  return { op, control, confidence: opAns.confidence, targetMissing, state };
+  return {
+    op: chosen.op,
+    control: chosen.control,
+    confidence: answer.confidence,
+    targetMissing: OPS_NEEDING_TARGET.has(chosen.op) && chosen.control === null,
+    state,
+  };
 }

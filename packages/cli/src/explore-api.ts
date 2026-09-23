@@ -22,6 +22,7 @@ import {
   type MisuseStrategy,
   type CapabilityScope,
   type FeatureRunResult,
+  type TranscriptEntry,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { resolveDataDir } from "./data-dir.js";
@@ -75,6 +76,13 @@ export interface RunExplorationResult {
   readonly decisions: number;
   readonly actions: number;
   readonly recordingPath: string;
+  /**
+   * The per-decision trail (op, target, confidence, whether the action succeeded and why
+   * not, URL, page signature) — so a stalled or failed run is explainable. Written next to
+   * the Recording as `<recording>.transcript.json`. Built from already-redacted state.
+   */
+  readonly transcriptPath: string;
+  readonly transcript: readonly TranscriptEntry[];
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -114,6 +122,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
     const recordingPath = join(outDir, `explore-${iso.replace(/[:.]/g, "-")}.json`);
     await writeFile(recordingPath, `${JSON.stringify(mission.recording, null, 2)}\n`, "utf8");
+    const transcriptPath = recordingPath.replace(/\.json$/, ".transcript.json");
+    await writeFile(transcriptPath, `${JSON.stringify(mission.transcript, null, 2)}\n`, "utf8");
 
     return {
       outcome: mission.outcome,
@@ -123,6 +133,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       decisions: mission.run.decisions,
       actions: mission.run.actions,
       recordingPath,
+      transcriptPath,
+      transcript: mission.transcript,
     };
   } finally {
     await session.close();

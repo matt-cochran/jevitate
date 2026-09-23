@@ -109,11 +109,24 @@ function readControlFacts(node: Node): ControlFacts {
 
   const style = window.getComputedStyle(el as HTMLElement);
   const rect = (el as HTMLElement).getBoundingClientRect();
-  const visible =
+  const rendered =
     style.visibility !== "hidden" &&
     style.display !== "none" &&
     rect.width > 0 &&
     rect.height > 0;
+  // Occlusion (the technique browser agents such as browser-use use): an on-screen control that is
+  // NOT the topmost element at its own centre is covered — e.g. page chrome behind a modal overlay
+  // that lacks role=dialog/aria-modal. A user cannot click it, so it is not offered. Off-screen
+  // controls cannot be probed with elementFromPoint and stay eligible (scroll ops reach them).
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const onScreen = cx >= 0 && cy >= 0 && cx < window.innerWidth && cy < window.innerHeight;
+  let occluded = false;
+  if (rendered && onScreen) {
+    const top = document.elementFromPoint(cx, cy);
+    occluded = top !== null && top !== el && !el.contains(top) && !top.contains(el);
+  }
+  const visible = rendered && !occluded;
 
   const roleAttr = norm(el.getAttribute("role")).split(" ")[0] ?? "";
   const roleByTag: Record<string, string> = {

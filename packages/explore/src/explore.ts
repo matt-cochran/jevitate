@@ -66,6 +66,11 @@ export interface ExploreConfig {
   readonly fixture?: string;
 }
 
+/** How long the loop waits for a rendered page (≥1 interactive control) before deciding. */
+const RENDER_WAIT_MS = 15_000;
+/** Re-snapshot interval while waiting for the page to render. */
+const RENDER_POLL_MS = 250;
+
 export interface TranscriptEntry {
   readonly step: number;
   readonly op: Op;
@@ -75,6 +80,8 @@ export interface TranscriptEntry {
   readonly reason?: string;
   readonly url: string;
   readonly signature: string;
+  /** Interactive controls perceived on the page when this decision was made. */
+  readonly controlCount: number;
 }
 
 export interface ExploreRun {
@@ -109,6 +116,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
   let stop: StopReason = "exhausted";
   let lastActedOp: string | null = null;
+  let fixtureAttached = false;
   let step = 0;
 
   for (;;) {
@@ -117,7 +125,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       break;
     }
 
-    const snap = await snapshot(page, { maxCandidates: bounds.maxCandidates });
+    // Never ask the model to decide on a page that has not rendered yet (an SPA right after
+    // navigation or a transition can perceive ZERO controls — the model then proposes an op
+    // with no valid target and the run dies on a render race). Condition-based and bounded.
+    let snap = await snapshot(page, { maxCandidates: bounds.maxCandidates });
+    const renderDeadline = now() + RENDER_WAIT_MS;
+    while (snap.controls.length === 0 && now() < renderDeadline) {
+      await page.waitForTimeout(RENDER_POLL_MS);
+      snap = await snapshot(page, { maxCandidates: bounds.maxCandidates });
+    }
     // Re-observe the PREVIOUS action's effect: patch its postcondition + open
     // the next page segment if the URL changed (record-before-reobserve).
     recorder.observed(snap.url, now());
@@ -132,6 +148,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // result never gates the loop, bounds, or stop decision.
     await cfg.onSnapshot?.(snap);
 
+    if (snap.controls.length === 0) {
+      step += 1;
+      transcript.push({
+        step,
+        op: "wait",
+        target: null,
+        confidence: 0,
+        actOk: false,
+        reason: `page rendered no interactive controls within ${RENDER_WAIT_MS}ms (fail-closed)`,
+        url: redactText(redactUrl(snap.url), cfg.secrets ?? []),
+        signature: snap.signature,
+        controlCount: 0,
+      });
+      stop = "blocked";
+      break;
+    }
+
     // #2 — no-progress: the last executed op left the page unchanged N times.
     if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
       stop = "no-progress";
@@ -144,7 +177,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       history,
       missionContext: cfg.missionContext,
       secrets: cfg.secrets,
-      uploadAvailable: fixture !== null,
+      // One fixture ⇒ one upload: once attached, `upload` leaves the op menu (the model had kept
+      // re-choosing it after a successful attach instead of proceeding).
+      uploadAvailable: fixture !== null && !fixtureAttached,
     });
     tracker.countDecision();
     step += 1;
@@ -159,6 +194,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         reason,
         url: redactText(redactUrl(snap.url), cfg.secrets ?? []),
         signature: snap.signature,
+        controlCount: snap.controls.length,
       });
     };
 
@@ -276,6 +312,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         recorder.upload(control!.descriptor, recordedFile, at);
         tracker.countAction();
         history.push(`uploaded the fixture into ${control!.name}`);
+        fixtureAttached = true;
       } else {
         history.push(`upload failed: ${r.reason ?? "?"}`);
       }

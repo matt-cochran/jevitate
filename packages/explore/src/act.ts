@@ -75,6 +75,19 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
   if (count !== 1) return `target no longer unique (count=${count})`;
   if (!(await locator.isVisible())) return "target not visible";
   if (!(await locator.isEnabled())) return "target not enabled";
+  // Occlusion: a visible, enabled element can still be covered (a modal overlay, a sticky bar).
+  // Clicking it would wait out Playwright's actionability timeout and then throw — so refuse it
+  // up front, naming what covers it, exactly as a user could not click it either.
+  const cover = await locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const top = document.elementFromPoint(x, y);
+    if (top === null || top === el || el.contains(top)) return null;
+    const id = top.getAttribute("data-testid");
+    return id ? `[data-testid=${id}]` : `<${top.tagName.toLowerCase()}${top.id ? `#${top.id}` : ""}>`;
+  });
+  if (cover !== null) return `target obscured by ${cover}`;
   return null;
 }
 
@@ -105,6 +118,21 @@ async function fileInputGate(actor: Actor, control: Control): Promise<string | n
   return null;
 }
 
+/**
+ * Runs one page-mutating action. A browser/automation error (an element detached mid-action, a
+ * navigation race, an actionability timeout) is reported as a failed act — data the loop records
+ * and the model sees in its history — never an exception that kills the whole run.
+ */
+async function attempt(action: () => Promise<void>): Promise<ActResult> {
+  try {
+    await action();
+    return { ok: true, mutated: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, mutated: false, reason: `action failed: ${message.split("\n")[0]}` };
+  }
+}
+
 export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
   const page = actor.ability(BrowseTheWebToken).session.page;
 
@@ -113,8 +141,8 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (args.control === null) return { ok: false, mutated: false, reason: "click needs a target" };
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
-      await Click.on(targetFor(args.control.descriptor)).performAs(actor);
-      return { ok: true, mutated: true };
+      const descriptor = args.control.descriptor;
+      return attempt(() => Click.on(targetFor(descriptor)).performAs(actor));
     }
     case "type": {
       if (args.control === null) return { ok: false, mutated: false, reason: "type needs a target" };
@@ -123,8 +151,9 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       }
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
-      await Enter.theText(args.value).into(targetFor(args.control.descriptor)).performAs(actor);
-      return { ok: true, mutated: true };
+      const text = args.value;
+      const descriptor = args.control.descriptor;
+      return attempt(() => Enter.theText(text).into(targetFor(descriptor)).performAs(actor));
     }
     case "select": {
       if (args.control === null) return { ok: false, mutated: false, reason: "select needs a target" };
@@ -133,8 +162,11 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       }
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
-      await descriptorToLocator(page, args.control.descriptor).selectOption(args.value);
-      return { ok: true, mutated: true };
+      const option = args.value;
+      const descriptor = args.control.descriptor;
+      return attempt(async () => {
+        await descriptorToLocator(page, descriptor).selectOption(option);
+      });
     }
     case "upload": {
       if (args.control === null) return { ok: false, mutated: false, reason: "upload needs a target" };
@@ -143,8 +175,9 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       }
       const bad = await fileInputGate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
-      await descriptorToLocator(page, args.control.descriptor).setInputFiles(args.fixture);
-      return { ok: true, mutated: true };
+      const file = args.fixture;
+      const descriptor = args.control.descriptor;
+      return attempt(() => descriptorToLocator(page, descriptor).setInputFiles(file));
     }
     case "scroll_up":
     case "scroll_down": {
