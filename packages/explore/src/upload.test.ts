@@ -14,8 +14,8 @@ import {
   FixtureNotFoundError,
   resolveMissionFixture,
   snapshot,
+  UPLOAD_OP_GUIDE,
   type Control,
-  type Op,
 } from "./index.js";
 import { ScriptedJudge, withSession } from "./testkit.js";
 
@@ -274,6 +274,9 @@ describe("explore loop — upload is recorded and replays deterministically", ()
       expect(run.stop).toBe("done");
       expect(run.actions).toBe(1);
       expect(judge.actionOptions[0]?.some((o) => o.startsWith("upload:"))).toBe(true);
+      // One fixture ⇒ one upload: once attached, no upload action (nor its guide) is offered again.
+      expect(judge.actionOptions[1]?.some((o) => o.startsWith("upload"))).toBe(false);
+      expect(judge.states[1]?.controls).not.toContain(UPLOAD_OP_GUIDE);
       const steps: Step[] = run.recording.pages.flatMap((p) => p.steps.map((s) => s.step));
       const upload = steps.find((s) => s.kind === "upload");
       expect(upload).toMatchObject({ kind: "upload", file: { redacted: false, value: fixture } });

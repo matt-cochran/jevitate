@@ -84,7 +84,8 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
     const y = r.top + r.height / 2;
     const top = document.elementFromPoint(x, y);
     if (top === null || top === el || el.contains(top)) return null;
-    const id = top.getAttribute("data-testid");
+    // Name the cover by its nearest test id (the overlay itself, not whichever child sits on top).
+    const id = top.closest("[data-testid]")?.getAttribute("data-testid");
     return id ? `[data-testid=${id}]` : `<${top.tagName.toLowerCase()}${top.id ? `#${top.id}` : ""}>`;
   });
   if (cover !== null) return `target obscured by ${cover}`;

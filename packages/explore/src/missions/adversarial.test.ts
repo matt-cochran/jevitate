@@ -73,6 +73,10 @@ describe("runAdversarialMission — hard defect", () => {
         expect(result.defect.triage.summary).toContain("console error");
         expect(result.defect.recording).toBeDefined();
       }
+      // The shared transcript explains the stop: the strategy's step, ending in the defect.
+      expect(result.transcript).toHaveLength(1);
+      expect(result.transcript[0]).toMatchObject({ chosenBy: "strategy", strategy: "ordering-violation", confidence: null });
+      expect(result.transcript[0]?.reason).toMatch(/^defect: .*adversarial-synthetic-error/);
     },
     120_000,
   );
