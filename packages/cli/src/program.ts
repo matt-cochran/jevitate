@@ -39,6 +39,7 @@ import {
   type OpenRouterCall,
   type JevClientCall,
 } from "@jevitate/ai-core";
+import { loadLocalCredentials } from "./credentials-file.js";
 import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
@@ -419,7 +420,7 @@ export function buildProgram(deps: CliDeps): Command {
           // SECURITY: reuses the existing, already-guardrailed credential
           // collection. The report holds only key NAMES (required/collected),
           // never a value — nothing here reads, echoes, logs, or returns a key.
-          const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? {});
+          const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
           const io = deps.ai?.secureIO ?? realSecureIO();
           data.keys = await collectAllMissingKeys(store, io);
         }
@@ -1967,7 +1968,7 @@ export function buildProgram(deps: CliDeps): Command {
         // outbound payload passes the never-to-model guard, and the facade's
         // preflight returns a typed `setup_required` when the key is absent —
         // so no `--real/--fake` flag is needed for the non-interactive server.
-        const aiStore = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? {});
+        const aiStore = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
         const generationGateway =
           deps.ai?.gateway ??
           new OpenRouterGenerationGateway({
@@ -2110,7 +2111,7 @@ async function buildExploreGateways(
   if (deps.explore?.judge && deps.explore?.gen) {
     return { judge: deps.explore.judge, gen: deps.explore.gen };
   }
-  const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? {});
+  const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
   if (opts.real) {
     requireKeys("generation", store); // fail-closed
     requireKeys("judgment", store); // fail-closed
