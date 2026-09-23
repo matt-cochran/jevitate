@@ -1,5 +1,7 @@
-import { chromium, type BrowserContext } from "playwright";
+import { chromium, type BrowserContext, type BrowserContextOptions, type Page } from "playwright";
 import type { BrowserPort, BrowserSession, OpenOptions } from "./browser-port.js";
+import { BrowserPool, type BrowserPoolOptions, type ContextLease } from "./browser-pool.js";
+import { createResourceSignals } from "./select-resource-signals.js";
 
 /**
  * Chromium switches applied on Linux regardless of caller args. They are the
@@ -69,29 +71,129 @@ export function explainLaunchFailure(err: unknown, opts: Pick<OpenOptions, "exec
   );
 }
 
+/** The pool type the Playwright port runs on. */
+export type PlaywrightBrowserPool = BrowserPool<BrowserContext, BrowserContextOptions>;
+
+/**
+ * Parses an optional positive-integer env override; a set-but-invalid value
+ * throws (a typo must not silently mean "default").
+ */
+function envPositiveInt(env: NodeJS.ProcessEnv, name: string): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new RangeError(`${name} must be a positive integer, got ${JSON.stringify(raw)}`);
+  return n;
+}
+
+/**
+ * Pool options from the environment:
+ *  - `JEVITATE_BROWSER_MAX_CONTEXTS`: concurrent context cap (default derived from cores/memory).
+ *  - `JEVITATE_ADMISSION_TIMEOUT_MS`: bounded admission wait (default 5 min).
+ */
+export function browserPoolOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): Omit<BrowserPoolOptions, "signals"> {
+  const maxContexts = envPositiveInt(env, "JEVITATE_BROWSER_MAX_CONTEXTS");
+  const admissionTimeoutMs = envPositiveInt(env, "JEVITATE_ADMISSION_TIMEOUT_MS");
+  return {
+    ...(maxContexts !== undefined ? { maxContexts } : {}),
+    ...(admissionTimeoutMs !== undefined ? { admissionTimeoutMs } : {}),
+  };
+}
+
+let shared: PlaywrightBrowserPool | undefined;
+
+/**
+ * The process-wide pool: ONE browser process per launch configuration per
+ * jevitate process, created lazily with this platform's resource signals.
+ */
+export function sharedBrowserPool(): PlaywrightBrowserPool {
+  shared ??= new BrowserPool<BrowserContext, BrowserContextOptions>({
+    signals: createResourceSignals(),
+    ...browserPoolOptionsFromEnv(),
+  });
+  return shared;
+}
+
+/** Closes the shared pool's browsers now (e.g. at CLI exit) instead of waiting for the idle timer. */
+export async function closeSharedBrowserPool(): Promise<void> {
+  const pool = shared;
+  shared = undefined;
+  if (pool !== undefined) await pool.close();
+}
+
+type Launch = typeof chromium.launch;
 type LaunchPersistentContext = typeof chromium.launchPersistentContext;
 
 export interface PlaywrightBrowserPortDeps {
-  /** Testing seam — defaults to Playwright's `chromium.launchPersistentContext`. */
+  /** Testing seam — defaults to Playwright's `chromium.launch` (the pooled path). */
+  readonly launch?: Launch;
+  /** Testing seam — defaults to `chromium.launchPersistentContext` (only for `persistentProfile`). */
   readonly launchPersistentContext?: LaunchPersistentContext;
   /** Testing seam — defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform;
+  /** Defaults to the process-wide `sharedBrowserPool()`. */
+  readonly pool?: PlaywrightBrowserPool;
 }
 
+/**
+ * `BrowserPort` over Playwright Chromium. By default every `open()` is a fresh,
+ * isolated context on the pooled browser (admission-controlled); auth carries
+ * across sessions only through explicit Playwright `storageState` files.
+ * `persistentProfile` is the explicit opt-in for a real on-disk Chromium
+ * profile (its own browser process, outside the pool).
+ */
 export class PlaywrightBrowserPort implements BrowserPort {
-  readonly #launch: LaunchPersistentContext;
+  readonly #launch: Launch;
+  readonly #launchPersistent: LaunchPersistentContext;
   readonly #platform: NodeJS.Platform;
+  readonly #pool: PlaywrightBrowserPool | undefined;
 
   constructor(deps: PlaywrightBrowserPortDeps = {}) {
-    this.#launch = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, options));
+    this.#launch = deps.launch ?? ((options) => chromium.launch(options));
+    this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, options));
     this.#platform = deps.platform ?? process.platform;
+    this.#pool = deps.pool;
   }
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
     // TODO(M3): enforce allowedOrigins via route interception; currently unenforced.
+    if (opts.persistentProfile !== undefined) return this.#openPersistent(opts, opts.persistentProfile);
+    const launchOptions = {
+      headless: opts.headless,
+      args: resolveLaunchArgs(opts.args, this.#platform),
+      ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
+      ...(opts.channel !== undefined ? { channel: opts.channel } : {}),
+    };
+    const launchKey = JSON.stringify(launchOptions);
+    const pool = this.#pool ?? sharedBrowserPool();
+    const lease = await pool.acquire(
+      launchKey,
+      async () => {
+        try {
+          return await this.#launch(launchOptions);
+        } catch (err) {
+          throw explainLaunchFailure(err, opts);
+        }
+      },
+      { baseURL: opts.baseUrl, ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}) },
+    );
+    let page: Page;
+    try {
+      page = await lease.context.newPage();
+    } catch (err) {
+      await lease.release().catch(() => undefined);
+      throw err;
+    }
+    return pooledSession(lease, page);
+  }
+
+  async #openPersistent(opts: OpenOptions, dir: string): Promise<BrowserSession> {
+    if (opts.storageState !== undefined) {
+      throw new Error("storageState cannot be combined with persistentProfile: a persistent profile already carries its own state");
+    }
     let context: BrowserContext;
     try {
-      context = await this.#launch(opts.profileDir, {
+      context = await this.#launchPersistent(dir, {
         headless: opts.headless,
         baseURL: opts.baseUrl,
         args: resolveLaunchArgs(opts.args, this.#platform),
@@ -104,15 +206,46 @@ export class PlaywrightBrowserPort implements BrowserPort {
     const page = context.pages()[0] ?? (await context.newPage());
     return {
       page,
+      admission: undefined,
       async startTracing() {
         await context.tracing.start({ screenshots: true, snapshots: true });
       },
       async stopTracingToFile(file: string) {
         await context.tracing.stop({ path: file });
       },
+      async saveStorageState(file: string) {
+        await context.storageState({ path: file });
+      },
       async close() {
         await context.close();
       },
     };
   }
+}
+
+function pooledSession(lease: ContextLease<BrowserContext>, page: Page): BrowserSession {
+  const context = lease.context;
+  /** After a browser crash every session operation surfaces the crash, not a vague "target closed". */
+  const alive = (): void => {
+    if (lease.crash !== undefined) throw lease.crash;
+  };
+  return {
+    page,
+    admission: lease.admission,
+    async startTracing() {
+      alive();
+      await context.tracing.start({ screenshots: true, snapshots: true });
+    },
+    async stopTracingToFile(file: string) {
+      alive();
+      await context.tracing.stop({ path: file });
+    },
+    async saveStorageState(file: string) {
+      alive();
+      await context.storageState({ path: file });
+    },
+    async close() {
+      await lease.release();
+    },
+  };
 }

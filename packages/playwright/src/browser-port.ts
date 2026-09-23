@@ -1,9 +1,14 @@
 import type { Page } from "playwright";
+import type { AdmissionRecord } from "./browser-pool.js";
 
 export interface BrowserSession {
   readonly page: Page;
+  /** What admission control waited for and sampled; undefined for an unpooled `persistentProfile` session. */
+  readonly admission: AdmissionRecord | undefined;
   startTracing(): Promise<void>;
   stopTracingToFile(file: string): Promise<void>;
+  /** Writes the context's cookies + origin storage as a Playwright `storageState` JSON file. */
+  saveStorageState(file: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -24,8 +29,19 @@ export interface BrowserLaunchOptions {
   args?: readonly string[];
 }
 
+/**
+ * One session. By default it is a fresh, isolated context on the pooled browser;
+ * nothing survives it unless the caller saves `storageState`.
+ *
+ *  - `storageState`: seed the context from a Playwright storageState JSON file
+ *    (auth persistence across sessions). The file must exist.
+ *  - `persistentProfile`: explicit opt-in to a real on-disk Chromium profile
+ *    (`launchPersistentContext`) — e.g. headed use of a real profile. Runs its
+ *    own browser process outside the pool; cannot combine with `storageState`.
+ */
 export interface OpenOptions extends BrowserLaunchOptions {
-  profileDir: string;
+  storageState?: string;
+  persistentProfile?: string;
   headless: boolean;
   /** TODO(M3): inert until route-level enforcement lands — not yet a navigation guard. */
   allowedOrigins: string[];
