@@ -48,7 +48,7 @@ test(
 );
 
 test(
-  "auth.login authenticates and session.status reflects it via the persisted profile",
+  "auth.login authenticates and session.status reflects it via the persisted storageState",
   async () => {
     const r = runner();
     const login = await r.run({ ...base(), actionId: "auth.login", version: "1.0.0", input: { username: "jane" }, runId: "run-login" });

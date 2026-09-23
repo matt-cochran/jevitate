@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BrowserCrashedError, BrowserPool } from "./browser-pool.js";
-import { PlaywrightBrowserPort, type PlaywrightBrowserPool } from "./playwright-browser-port.js";
+import { BrowserCrashedError } from "./browser-pool.js";
+import { PlaywrightBrowserPort, createBrowserPool, type PlaywrightBrowserPool } from "./playwright-browser-port.js";
 import { createResourceSignals } from "./select-resource-signals.js";
 
 /**
@@ -15,7 +15,7 @@ import { createResourceSignals } from "./select-resource-signals.js";
 
 const pools: PlaywrightBrowserPool[] = [];
 function realPool(): PlaywrightBrowserPool {
-  const pool = new BrowserPool({ signals: createResourceSignals(), maxContexts: 2 });
+  const pool = createBrowserPool({ signals: createResourceSignals(), maxContexts: 2 });
   pools.push(pool);
   return pool;
 }

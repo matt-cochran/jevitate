@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 import type { chromium } from "playwright";
-import { BrowserPool } from "./browser-pool.js";
 import {
   BrowserNotInstalledError,
+  browserPoolOptionsFromEnv,
+  createBrowserPool,
   type PlaywrightBrowserPool,
   DEFAULT_LINUX_CHROMIUM_ARGS,
   PlaywrightBrowserPort,
@@ -25,7 +26,7 @@ function capturingLauncher(): { launch: typeof chromium.launch; calls: LaunchOpt
 
 /** A pool whose admission always sees an idle host, so tests never depend on this machine's load. */
 const calmPool = (): PlaywrightBrowserPool =>
-  new BrowserPool({
+  createBrowserPool({
     maxContexts: 2,
     signals: { sample: async () => ({ memAvailableBytes: 8 * 1024 ** 3, source: "fixture:calm" }) },
   });
@@ -165,5 +166,23 @@ describe("explainLaunchFailure", () => {
     const e = explainLaunchFailure(missing, { channel: "chrome" });
     if (!(e instanceof BrowserNotInstalledError)) throw new Error("expected BrowserNotInstalledError");
     expect(e.message).toContain("npx playwright install chrome");
+  });
+});
+
+describe("browserPoolOptionsFromEnv", () => {
+  test("unset → no overrides (cap derived from the host, 5 min admission timeout)", () => {
+    expect(browserPoolOptionsFromEnv({})).toEqual({});
+  });
+
+  test("valid values are applied", () => {
+    expect(browserPoolOptionsFromEnv({ JEVITATE_BROWSER_MAX_CONTEXTS: "3", JEVITATE_ADMISSION_TIMEOUT_MS: "60000" })).toEqual({
+      maxContexts: 3,
+      admissionTimeoutMs: 60000,
+    });
+  });
+
+  test("a set-but-invalid value fails fast instead of silently meaning 'default'", () => {
+    expect(() => browserPoolOptionsFromEnv({ JEVITATE_BROWSER_MAX_CONTEXTS: "two" })).toThrow(/JEVITATE_BROWSER_MAX_CONTEXTS/);
+    expect(() => browserPoolOptionsFromEnv({ JEVITATE_ADMISSION_TIMEOUT_MS: "0" })).toThrow(RangeError);
   });
 });
