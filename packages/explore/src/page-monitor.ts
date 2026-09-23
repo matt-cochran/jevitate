@@ -55,6 +55,8 @@ export interface InflightRequest {
 
 export interface CompletedRequest extends InflightRequest {
   readonly status: number | null;
+  /** The response's `content-type` (null when there was no response). */
+  readonly contentType: string | null;
   readonly durationMs: number;
   readonly failed: boolean;
   readonly endedAt: number;
@@ -122,6 +124,7 @@ export class PageMonitor {
   readonly #completed: CompletedRequest[] = [];
   readonly #wakers = new Set<Wake>();
   readonly #statuses = new WeakMap<Request, number>();
+  readonly #contentTypes = new WeakMap<Request, string>();
   readonly #now: () => number;
   #lastNetworkActivity: number;
   /** Long-lived requests that are not in-flight work, and why. */
@@ -164,7 +167,8 @@ export class PageMonitor {
       if (started !== undefined) {
         const status = failed ? null : (this.#statuses.get(r) ?? null);
         const endedAt = this.#now();
-        this.#completed.push({ ...started, status, failed, endedAt, durationMs: Math.max(0, endedAt - started.startedAt) });
+        const contentType = this.#contentTypes.get(r) ?? null;
+        this.#completed.push({ ...started, status, contentType, failed, endedAt, durationMs: Math.max(0, endedAt - started.startedAt) });
       }
       if (!ignored) this.#touch();
     };
@@ -174,6 +178,7 @@ export class PageMonitor {
       this.#statuses.set(res.request(), res.status());
       // SSE over fetch/XHR never "finishes": it is a long-lived connection, not pending work.
       const type = res.headers()["content-type"] ?? "";
+      if (type !== "") this.#contentTypes.set(res.request(), type);
       if (type.includes("text/event-stream")) {
         this.#background.set(res.request(), "stream");
         this.#touch(); // wake a settle wait that was counting it as pending

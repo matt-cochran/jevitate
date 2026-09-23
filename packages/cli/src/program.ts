@@ -1312,6 +1312,12 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)")
     .option(
+      "--api-prefix <path>",
+      "a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--ignore-no-progress <pattern>",
       "a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)",
       (v, prev: string[]) => [...prev, v],
@@ -1325,6 +1331,7 @@ export function buildProgram(deps: CliDeps): Command {
         issueRepo?: string;
         hangReplays?: string;
         settleIgnore: string[];
+        apiPrefix: string[];
         longPollMs?: string;
         ignoreNoProgress: string[];
         jevitateRepo?: string;
@@ -1378,6 +1385,7 @@ export function buildProgram(deps: CliDeps): Command {
           target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(o.url).origin, {
             settleIgnore: o.settleIgnore,
             ignoreNoProgress: o.ignoreNoProgress,
+            apiPrefixes: o.apiPrefix,
             ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
           });
         } catch (err) {

@@ -12,7 +12,7 @@ import {
   type HangSignal,
 } from "./hang.js";
 import { contentHash } from "@jevitate/domain";
-import { textMatcher, type HangConfig, type SettleConfig } from "./settle-config.js";
+import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
 
 /**
@@ -51,6 +51,8 @@ export interface PerceiveOptions {
   readonly settleConfig?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
   readonly hangConfig?: HangConfig;
+  /** The target's timing configuration (API path prefixes). */
+  readonly timingConfig?: TimingConfig;
 }
 
 /** Default bound on the main-thread responsiveness probe (ms). */
@@ -188,6 +190,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     actionAt: win.actionAt,
     settle,
     settleEndedAt,
+    ...(opts.timingConfig?.apiPrefixes === undefined ? {} : { apiPrefixes: opts.timingConfig.apiPrefixes }),
   });
   monitor.closeWindow(settleEndedAt, docId);
   const snap = await snapshot(page, snapOpts);

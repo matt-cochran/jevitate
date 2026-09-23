@@ -23,8 +23,13 @@ describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
     expect(resolveTargetConfig(file, "http://localhost:3000", { settleIgnore: ["/hub/*"], longPollMs: 2000 })).toEqual({
       settle: { ignoreRequests: ["/api/poll*", "/hub/*"], longPollMs: 2000 },
       hangs: { ignoreNoProgress: ["click Refresh*"] },
+      timing: {},
     });
-    expect(resolveTargetConfig(file, "http://other.test")).toEqual({ settle: {}, hangs: {} });
+    expect(resolveTargetConfig(file, "http://other.test", { apiPrefixes: ["/graphql"] })).toEqual({
+      settle: {},
+      hangs: {},
+      timing: { apiPrefixes: ["/graphql"] },
+    });
   });
 
   it("a missing file is no config; a malformed one fails closed", async () => {

@@ -27,9 +27,48 @@ export interface NavigationTiming {
   readonly loadMs: number | null;
 }
 
+/**
+ * What a request is, for timing: the app's `api` (XHR/fetch returning data, or a configured API
+ * prefix), a `document` (a page load), an `asset` (script/style/font/image/media — including a dev
+ * server's modules such as Vite's `/src/…`, `/@vite/…`, `/node_modules/…`), or `other`.
+ */
+export type RequestKind = "api" | "document" | "asset" | "other";
+
+const ASSET_RESOURCE_TYPES = new Set(["script", "stylesheet", "font", "image", "media", "manifest", "texttrack"]);
+const DEV_MODULE_PATH = /^\/(?:src|@vite|@fs|@id|@react-refresh|node_modules)\//;
+const ASSET_EXTENSION = /\.(?:m?[jt]sx?|css|scss|map|woff2?|ttf|otf|eot|png|jpe?g|gif|svg|webp|avif|ico|mp4|webm|mp3|wav)$/i;
+const DATA_CONTENT_TYPE = /\b(?:json|xml|protobuf|grpc|graphql|csv|x-www-form-urlencoded|octet-stream|text\/plain|event-stream)\b/i;
+const ASSET_CONTENT_TYPE = /\b(?:javascript|ecmascript|css|font|image\/|video\/|audio\/|wasm)\b/i;
+
+/** Classifies one request (pure). */
+export function classifyRequest(
+  r: { readonly url: string; readonly resourceType: string; readonly contentType?: string | null },
+  apiPrefixes: readonly string[] = [],
+): RequestKind {
+  let path = r.url;
+  try {
+    path = new URL(r.url).pathname;
+  } catch {
+    // not absolute
+  }
+  if (apiPrefixes.some((p) => path.startsWith(p))) return "api";
+  if (r.resourceType === "document") return "document";
+  if (ASSET_RESOURCE_TYPES.has(r.resourceType)) return "asset";
+  if (DEV_MODULE_PATH.test(path) || ASSET_EXTENSION.test(path)) return "asset";
+  const type = r.contentType ?? "";
+  if (r.resourceType === "xhr" || r.resourceType === "fetch" || r.resourceType === "eventsource") {
+    if (ASSET_CONTENT_TYPE.test(type)) return "asset";
+    // A data response — or no body type at all (a 204, a pending call) — from script is the API.
+    return type === "" || DATA_CONTENT_TYPE.test(type) || !/html/i.test(type) ? "api" : "other";
+  }
+  return "other";
+}
+
 export interface RequestTiming {
   /** `METHOD /normalized/path` — the endpoint pattern (query dropped, ids collapsed). */
   readonly endpoint: string;
+  /** api / document / asset / other (see `classifyRequest`). */
+  readonly kind: RequestKind;
   /** The redacted URL (sensitive query values masked). */
   readonly url: string;
   readonly status: number | null;
@@ -69,10 +108,11 @@ export function endpointOf(method: string, url: string): string {
   return `${method.toUpperCase()} ${normalizeRoute(redactUrl(url))}`;
 }
 
-function toRequestTiming(r: CompletedRequest | InflightRequest, now: number): RequestTiming {
+function toRequestTiming(r: CompletedRequest | InflightRequest, now: number, apiPrefixes: readonly string[]): RequestTiming {
   const done = "durationMs" in r;
   return {
     endpoint: endpointOf(r.method, r.url),
+    kind: classifyRequest({ url: r.url, resourceType: r.resourceType, contentType: done ? r.contentType : null }, apiPrefixes),
     url: redactUrl(r.url),
     status: done ? r.status : null,
     durationMs: done ? r.durationMs : Math.max(0, now - r.startedAt),
@@ -114,13 +154,15 @@ export async function measurePageTiming(
     readonly actionAt: number | null;
     readonly settle: SettleResult;
     readonly settleEndedAt: number;
+    readonly apiPrefixes?: readonly string[];
   },
 ): Promise<{ timing: PageTiming; docId: string | null }> {
+  const apiPrefixes = window.apiPrefixes ?? [];
   const side = await page.evaluate(readPageTiming).catch((): PageSideTiming => ({ docId: null, nav: null, lcp: null }));
   const now = window.settleEndedAt;
   const all = [
-    ...window.completed.map((r) => toRequestTiming(r, now)),
-    ...window.pending.map((r) => toRequestTiming(r, now)),
+    ...window.completed.map((r) => toRequestTiming(r, now, apiPrefixes)),
+    ...window.pending.map((r) => toRequestTiming(r, now, apiPrefixes)),
   ];
   const slowest = [...all].sort((a, b) => b.durationMs - a.durationMs).slice(0, SLOWEST);
   const newDocument = side.docId !== null && side.docId !== window.lastDocId;
@@ -152,7 +194,7 @@ export function unreadablePageTiming(
   pending: readonly InflightRequest[],
   now: number,
 ): PageTiming {
-  const all = [...completed.map((r) => toRequestTiming(r, now)), ...pending.map((r) => toRequestTiming(r, now))];
+  const all = [...completed.map((r) => toRequestTiming(r, now, [])), ...pending.map((r) => toRequestTiming(r, now, []))];
   return {
     route: normalizeRoute(redactUrl(url)),
     kind: "idle",
@@ -184,6 +226,8 @@ export interface PageTimingStat extends TimingStat {
 export interface EndpointTimingStat extends TimingStat {
   /** `METHOD /normalized/path`. */
   readonly endpoint: string;
+  /** What the endpoint serves (api / document / asset / other). */
+  readonly kind: RequestKind;
   /** Distinct statuses seen (null = still pending / failed). */
   readonly statuses: Array<number | null>;
 }
@@ -194,9 +238,13 @@ export interface EndpointTimingStat extends TimingStat {
  */
 export interface TimingSummary {
   readonly pages: Readonly<Record<string, PageTimingStat>>;
+  /** EVERY endpoint pattern seen, whatever its kind (the full data). */
   readonly endpoints: Readonly<Record<string, EndpointTimingStat>>;
   readonly slowestPages: PageTimingStat[];
+  /** The slowest API endpoints only — never drowned out by assets or a dev server's modules. */
   readonly slowestEndpoints: EndpointTimingStat[];
+  /** The slowest assets (scripts, styles, fonts, images, dev-server modules), separately. */
+  readonly slowestAssets: EndpointTimingStat[];
 }
 
 /** Nearest-rank median of a non-empty list. */
@@ -221,7 +269,7 @@ function pageDuration(t: PageTiming): { kind: "navigation" | "transition"; ms: n
 
 export function summarizeTimings(timings: readonly (PageTiming | undefined)[], topN = 5): TimingSummary {
   const pageValues = new Map<string, { route: string; kind: "navigation" | "transition"; values: number[] }>();
-  const endpointValues = new Map<string, { values: number[]; statuses: Set<number | null> }>();
+  const endpointValues = new Map<string, { values: number[]; statuses: Set<number | null>; kind: RequestKind }>();
   for (const t of timings) {
     if (t === undefined) continue;
     const d = pageDuration(t);
@@ -232,7 +280,9 @@ export function summarizeTimings(timings: readonly (PageTiming | undefined)[], t
       pageValues.set(key, cur);
     }
     for (const r of t.requests.samples) {
-      const cur = endpointValues.get(r.endpoint) ?? { values: [], statuses: new Set<number | null>() };
+      const cur = endpointValues.get(r.endpoint) ?? { values: [], statuses: new Set<number | null>(), kind: r.kind };
+      // A pattern seen as the API even once is the API (a data call can precede its content type).
+      if (r.kind === "api") cur.kind = "api";
       cur.values.push(r.durationMs);
       cur.statuses.add(r.status);
       endpointValues.set(r.endpoint, cur);
@@ -242,13 +292,14 @@ export function summarizeTimings(timings: readonly (PageTiming | undefined)[], t
   for (const [key, v] of pageValues) pages[key] = { key, route: v.route, kind: v.kind, ...stat(v.values) };
   const endpoints: Record<string, EndpointTimingStat> = {};
   for (const [endpoint, v] of endpointValues) {
-    endpoints[endpoint] = { endpoint, ...stat(v.values), statuses: [...v.statuses] };
+    endpoints[endpoint] = { endpoint, kind: v.kind, ...stat(v.values), statuses: [...v.statuses] };
   }
   const byMax = <T extends TimingStat>(xs: T[]): T[] => xs.sort((a, b) => b.maxMs - a.maxMs || b.p50Ms - a.p50Ms).slice(0, topN);
   return {
     pages,
     endpoints,
     slowestPages: byMax(Object.values(pages)),
-    slowestEndpoints: byMax(Object.values(endpoints)),
+    slowestEndpoints: byMax(Object.values(endpoints).filter((e) => e.kind === "api")),
+    slowestAssets: byMax(Object.values(endpoints).filter((e) => e.kind === "asset")),
   };
 }

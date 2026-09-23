@@ -206,6 +206,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
@@ -491,6 +492,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       // A hang is reproduced in fresh contexts, and the frontier keeps being explored after it.
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
@@ -629,6 +631,7 @@ export async function runAdversarialCliMission(
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       page: session.page,

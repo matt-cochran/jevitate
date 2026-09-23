@@ -175,7 +175,14 @@ requests (count, and the slowest ones with their redacted, normalized endpoint,
 status and duration), and LCP where the browser exposes it. Each run's result
 carries a `timing` summary keyed by normalized route (`navigation /contacts/:id`)
 and endpoint pattern (`GET /api/contacts/:id`), with p50 and max, plus the
-slowest pages and endpoints. These are measurements, not verdicts: a slow page
+slowest pages. Requests are classified as `api`, `document` or `asset`:
+- `api` is XHR or fetch that returns data (JSON or other non-HTML), or any path
+  under a configured `timing.apiPrefixes` / `--api-prefix`.
+- `asset` covers scripts, styles, fonts, images and media, including a dev
+  server's modules such as Vite's `/src/…`, `/@vite/…` and `/node_modules/…`.
+
+`slowestEndpoints` ranks the API only, and `slowestAssets` ranks the assets. The
+full per-endpoint data keeps both. These are measurements, not verdicts: a slow page
 is never a defect by itself.
 
 ### Replay finds the recorded element exactly

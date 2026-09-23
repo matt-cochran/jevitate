@@ -13,7 +13,7 @@ import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing
 import { hangFingerprint, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
 import { hostProbe, type HostPressure, type HostProbe } from "../host-pressure.js";
-import type { HangConfig, SettleConfig } from "../settle-config.js";
+import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
 import { NOT_REPLAYED, hangFinding, hangOutcome, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import { act } from "../act.js";
@@ -182,6 +182,8 @@ export interface AdversarialMissionParams {
   readonly requestBoundMs?: number;
   /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
+  /** The target's timing configuration (API path prefixes). */
+  readonly timingConfig?: TimingConfig;
   /** The target's settle configuration (background requests, long-poll threshold). */
   readonly settle?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
@@ -269,6 +271,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     ...(params.requestBoundMs === undefined ? {} : { requestBoundMs: params.requestBoundMs }),
     ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
     ...(params.hangs === undefined ? {} : { hangConfig: params.hangs }),
+    ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
   };
 
   const finish = (

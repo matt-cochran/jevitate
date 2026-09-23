@@ -26,7 +26,7 @@ beforeAll(async () => {
       return;
     }
     if (path.startsWith("/asset/")) {
-      res.writeHead(200, { "content-type": "text/plain" }).end("x");
+      res.writeHead(200, { "content-type": "image/png" }).end("x");
       return;
     }
     if (path === "/api/fast") {
@@ -91,6 +91,10 @@ describe("page timing — the slow endpoint is found and measured (owner ruling 
       // Ranked among the slowest endpoints (the 150 assets are ONE pattern, so they take one slot
       // however long a loaded host makes them queue).
       expect(result.timing.slowestEndpoints.map((e) => e.endpoint)).toContain("GET /api/slow/:id");
+      // API endpoints and assets are ranked apart: the 150 images are assets, never "endpoints".
+      expect(result.timing.slowestEndpoints.every((e) => e.kind === "api")).toBe(true);
+      expect(result.timing.slowestAssets.map((e) => e.endpoint)).toEqual(["GET /asset/:id"]);
+      expect(result.timing.endpoints["GET /api/slow/:id"]?.kind).toBe("api");
       expect(result.timing.endpoints["GET /api/fast"]?.maxMs).toBeLessThan(SLOW_MS);
 
       // The seed load is a navigation: Navigation Timing is in the first transcript step…

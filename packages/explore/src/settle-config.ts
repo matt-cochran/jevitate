@@ -54,3 +54,12 @@ export function textMatcher(patterns: readonly string[] | undefined): (text: str
   const compiled = (patterns ?? []).map(globToRegExp);
   return (text: string): boolean => compiled.some((re) => re.test(text));
 }
+
+/**
+ * Per-target timing configuration: `apiPrefixes` are path prefixes whose requests are always the
+ * app's API (e.g. `/api/`, `/graphql`), whatever their content type — the timing summary ranks API
+ * endpoints separately from documents and static/dev-server assets.
+ */
+export interface TimingConfig {
+  readonly apiPrefixes?: readonly string[];
+}

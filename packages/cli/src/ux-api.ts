@@ -295,6 +295,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       onTranscriptEntry: journal.onTranscriptEntry,

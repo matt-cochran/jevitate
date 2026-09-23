@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { HangConfig, SettleConfig } from "@jevitate/explore";
+import type { HangConfig, SettleConfig, TimingConfig } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
@@ -8,7 +8,8 @@ import { resolveDataDir } from "./data-dir.js";
  * ```json
  * { "https://app.example.test": {
  *     "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000 },
- *     "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] } } }
+ *     "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] },
+ *     "timing": { "apiPrefixes": ["/api/", "/graphql"] } } }
  * ```
  *
  * `settle.ignoreRequests` — requests the target marks as background (never in-flight work);
@@ -21,6 +22,7 @@ import { resolveDataDir } from "./data-dir.js";
 export interface TargetConfig {
   readonly settle?: SettleConfig;
   readonly hangs?: HangConfig;
+  readonly timing?: TimingConfig;
 }
 
 export class TargetConfigError extends Error {
@@ -37,7 +39,7 @@ function strings(v: unknown, where: string): string[] {
 function parseTarget(v: unknown, where: string): TargetConfig {
   if (v === null || typeof v !== "object" || Array.isArray(v)) throw new TargetConfigError(`${where} must be an object`);
   const o = v as Record<string, unknown>;
-  const out: { settle?: SettleConfig; hangs?: HangConfig } = {};
+  const out: { settle?: SettleConfig; hangs?: HangConfig; timing?: TimingConfig } = {};
   if (o.settle !== undefined) {
     if (o.settle === null || typeof o.settle !== "object") throw new TargetConfigError(`${where}.settle must be an object`);
     const s = o.settle as Record<string, unknown>;
@@ -55,6 +57,11 @@ function parseTarget(v: unknown, where: string): TargetConfig {
     if (o.hangs === null || typeof o.hangs !== "object") throw new TargetConfigError(`${where}.hangs must be an object`);
     const h = o.hangs as Record<string, unknown>;
     out.hangs = h.ignoreNoProgress === undefined ? {} : { ignoreNoProgress: strings(h.ignoreNoProgress, `${where}.hangs.ignoreNoProgress`) };
+  }
+  if (o.timing !== undefined) {
+    if (o.timing === null || typeof o.timing !== "object") throw new TargetConfigError(`${where}.timing must be an object`);
+    const t = o.timing as Record<string, unknown>;
+    out.timing = t.apiPrefixes === undefined ? {} : { apiPrefixes: strings(t.apiPrefixes, `${where}.timing.apiPrefixes`) };
   }
   return out;
 }
@@ -86,6 +93,7 @@ export interface TargetFlags {
   readonly settleIgnore?: readonly string[];
   readonly longPollMs?: number;
   readonly ignoreNoProgress?: readonly string[];
+  readonly apiPrefixes?: readonly string[];
 }
 
 /** The config for one origin: the file's entry, with flag patterns ADDED and flag numbers winning. */
@@ -98,7 +106,9 @@ export function resolveTargetConfig(
   const ignoreRequests = [...(base.settle?.ignoreRequests ?? []), ...(flags.settleIgnore ?? [])];
   const longPollMs = flags.longPollMs ?? base.settle?.longPollMs;
   const ignoreNoProgress = [...(base.hangs?.ignoreNoProgress ?? []), ...(flags.ignoreNoProgress ?? [])];
+  const apiPrefixes = [...(base.timing?.apiPrefixes ?? []), ...(flags.apiPrefixes ?? [])];
   return {
+    timing: apiPrefixes.length === 0 ? {} : { apiPrefixes },
     settle: { ...(ignoreRequests.length === 0 ? {} : { ignoreRequests }), ...(longPollMs === undefined ? {} : { longPollMs }) },
     hangs: ignoreNoProgress.length === 0 ? {} : { ignoreNoProgress },
   };

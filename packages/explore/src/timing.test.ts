@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { endpointOf, p50, summarizeTimings, type PageTiming, type RequestTiming } from "./timing.js";
+import { classifyRequest, endpointOf, p50, summarizeTimings, type PageTiming, type RequestKind, type RequestTiming } from "./timing.js";
 
-const req = (endpoint: string, durationMs: number, status: number | null = 200): RequestTiming => ({
+const req = (endpoint: string, durationMs: number, status: number | null = 200, kind: RequestKind = "api"): RequestTiming => ({
   endpoint,
+  kind,
   url: `http://x.test${endpoint.split(" ")[1] ?? ""}`,
   status,
   durationMs,
@@ -75,6 +76,7 @@ describe("timing aggregation — p50, max, top N, normalization (owner ruling 6)
     );
     expect(s.endpoints["GET /api/slow/:id"]).toEqual({
       endpoint: "GET /api/slow/:id",
+      kind: "api",
       samples: 2,
       p50Ms: 700,
       maxMs: 900,
@@ -85,6 +87,45 @@ describe("timing aggregation — p50, max, top N, normalization (owner ruling 6)
   });
 
   it("an empty run summarizes to empty maps", () => {
-    expect(summarizeTimings([])).toEqual({ pages: {}, endpoints: {}, slowestPages: [], slowestEndpoints: [] });
+    expect(summarizeTimings([])).toEqual({ pages: {}, endpoints: {}, slowestPages: [], slowestEndpoints: [], slowestAssets: [] });
+  });
+});
+
+describe("request classification — the API is ranked apart from assets and dev modules (round 2d)", () => {
+  it.each<[string, Parameters<typeof classifyRequest>[0], RequestKind]>([
+    ["a JSON fetch", { url: "http://a.test/api/v1/contacts", resourceType: "fetch", contentType: "application/json; charset=utf-8" }, "api"],
+    ["an XHR with no body type (204)", { url: "http://a.test/api/ping", resourceType: "xhr", contentType: null }, "api"],
+    ["a page load", { url: "http://a.test/contacts", resourceType: "document", contentType: "text/html" }, "document"],
+    ["a script", { url: "http://a.test/assets/app.js", resourceType: "script", contentType: "text/javascript" }, "asset"],
+    ["a Vite dev module", { url: "http://localhost:3000/src/pages/Home.tsx", resourceType: "script", contentType: "text/javascript" }, "asset"],
+    ["a Vite client module fetched by script", { url: "http://localhost:3000/@vite/client", resourceType: "fetch", contentType: null }, "asset"],
+    ["a node_modules dep", { url: "http://localhost:3000/node_modules/.vite/deps/react.js?v=1", resourceType: "script", contentType: null }, "asset"],
+    ["a stylesheet", { url: "http://a.test/app.css", resourceType: "stylesheet", contentType: "text/css" }, "asset"],
+    ["an image fetched by script", { url: "http://a.test/logo", resourceType: "fetch", contentType: "image/png" }, "asset"],
+  ])("%s → %s", (_n, r, want) => {
+    expect(classifyRequest(r)).toBe(want);
+  });
+
+  it("a configured API prefix wins over the heuristics", () => {
+    expect(classifyRequest({ url: "http://a.test/graphql", resourceType: "other", contentType: "text/html" }, ["/graphql"])).toBe("api");
+  });
+
+  it("slowestEndpoints ranks API endpoints only; slowestAssets ranks assets; the full data keeps both", () => {
+    const s = summarizeTimings([
+      nav("/", 100, 50, [
+        req("GET /src/pages/Home.tsx", 7_000, 200, "asset"),
+        req("GET /@vite/client", 4_000, 200, "asset"),
+        req("GET /api/v1/tool/billing/payment-methods", 640, 500, "api"),
+        req("GET /api/v1/account/balance", 890, 200, "api"),
+        req("GET /", 30, 200, "document"),
+      ]),
+    ]);
+    expect(s.slowestEndpoints.map((e) => e.endpoint)).toEqual([
+      "GET /api/v1/account/balance",
+      "GET /api/v1/tool/billing/payment-methods",
+    ]);
+    expect(s.slowestAssets.map((e) => e.endpoint)).toEqual(["GET /src/pages/Home.tsx", "GET /@vite/client"]);
+    expect(Object.keys(s.endpoints)).toHaveLength(5);
+    expect(s.endpoints["GET /"]?.kind).toBe("document");
   });
 });

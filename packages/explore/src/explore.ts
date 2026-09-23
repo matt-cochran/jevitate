@@ -20,7 +20,7 @@ import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.
 import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
 import { HANG_PROBE_MS } from "./perceive.js";
-import { textMatcher, type HangConfig, type SettleConfig } from "./settle-config.js";
+import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
@@ -99,6 +99,8 @@ export interface ExploreConfig {
   readonly hangs?: HangConfig;
   /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
+  /** The target's timing configuration (API path prefixes). */
+  readonly timingConfig?: TimingConfig;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   readonly onTranscriptEntry?: TranscriptListener;
   /** Incremental-flush seam: the partial Recording after every recorded step. */
@@ -183,6 +185,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
     ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
     ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
+    ...(cfg.timingConfig === undefined ? {} : { timingConfig: cfg.timingConfig }),
   };
   const ignoreNoProgress = textMatcher(cfg.hangs?.ignoreNoProgress);
   const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;

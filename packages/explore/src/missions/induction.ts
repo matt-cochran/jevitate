@@ -21,7 +21,7 @@ import {
   type TranscriptListener,
 } from "../index.js";
 import type { MissionFailure } from "@jevitate/domain";
-import type { SettleConfig } from "../settle-config.js";
+import type { SettleConfig, TimingConfig } from "../settle-config.js";
 import type { HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import { MissionSessions } from "../mission-session.js";
@@ -109,6 +109,8 @@ export interface InductionMissionParams {
   readonly openFreshSession?: () => Promise<VerifySession>;
   /** Fresh-context replays that confirm a hang. Default 2. */
   readonly hangReplays?: number;
+  /** The target's timing configuration (API path prefixes). */
+  readonly timingConfig?: TimingConfig;
 }
 
 /**
@@ -207,6 +209,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       maxCandidates: bounds.maxCandidates,
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
       ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+      ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
     });
     lastTiming = p.timing;
     seenHang.last = p.hang;
