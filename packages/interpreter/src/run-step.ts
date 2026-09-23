@@ -2,7 +2,18 @@ import { access } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
-import { BrowseTheWebToken, Click, Enter, Navigate } from "@jevitate/screenplay";
+import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
+import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+
+/**
+ * The recorded target resolved to exactly ONE element (anchor, else exact rung + nth), as a
+ * Screenplay Target — or a typed `ReplayTargetError`. Never a guess.
+ */
+async function strictTarget(actor: Actor, d: TargetDescriptor, opts: ResolveTargetOptions): Promise<Target> {
+  const page = actor.ability(BrowseTheWebToken).session.page;
+  const locator = await resolveTarget(page, d, opts);
+  return Target.named(descriptorToTarget(d).description).locatedBy(() => locator);
+}
 import { checkAssertion, pollUntil, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
@@ -77,6 +88,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
+  targetOpts: ResolveTargetOptions = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   switch (step.kind) {
@@ -88,7 +100,7 @@ export async function runStep(
       return { kind: "done" };
     }
     case "click": {
-      await Click.on(descriptorToTarget(step.target)).performAs(actor);
+      await Click.on(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "click");
       }
@@ -96,7 +108,7 @@ export async function runStep(
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
-      await Enter.theText(text).into(descriptorToTarget(step.target)).performAs(actor);
+      await Enter.theText(text).into(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "fill");
       }
@@ -115,7 +127,7 @@ export async function runStep(
     }
     case "extract": {
       const page = actor.ability(BrowseTheWebToken).session.page;
-      const locator = descriptorToTarget(step.target).resolve(page);
+      const locator = await resolveTarget(page, step.target, targetOpts);
       const value = step.attr ? await locator.getAttribute(step.attr) : await locator.innerText();
       if (value === null) {
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
@@ -129,7 +141,7 @@ export async function runStep(
     case "select": {
       const value = resolveValue(step.value, vars);
       const page = actor.ability(BrowseTheWebToken).session.page;
-      await descriptorToTarget(step.target).resolve(page).selectOption(value);
+      await (await resolveTarget(page, step.target, targetOpts)).selectOption(value);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "select");
       }
@@ -146,7 +158,7 @@ export async function runStep(
         throw new Error(`fixture not found: ${file}`, { cause: err });
       }
       const page = actor.ability(BrowseTheWebToken).session.page;
-      await descriptorToTarget(step.target).resolve(page).setInputFiles(file);
+      await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "upload");
       }

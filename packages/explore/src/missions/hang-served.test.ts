@@ -58,7 +58,7 @@ beforeAll(async () => {
       case "/hub":
         // One route that hangs (twice, under two names) and one route that 500s.
         res.writeHead(200, { "content-type": "text/html" }).end(
-          html(`<h1>Hub</h1><a href="/stuck">Stuck report</a><a href="/stuck?again=1">Frozen dashboard</a><a href="/broken">Broken page</a>`),
+          html(`<h1>Hub</h1><a href="/stuck">Stuck report</a><a href="/stuck?again=1">Stuck report again</a><a href="/broken">Broken page</a>`),
         );
         return;
       case "/broken":
@@ -330,7 +330,10 @@ describe("coverage exploration KEEPS EXPLORING after a hang", () => {
       expect(result.outcome).toBe("exhausted");
       expect(result.hangs).toHaveLength(1);
       expect(result.hangs[0]).toMatchObject({ hangKind: "request-pending", occurrences: 2 });
-      expect(result.hangs[0]?.reproduction).toMatchObject({ reproduced: 1, status: "reproduced" });
+      expect(result.hangs[0]?.reproduction, JSON.stringify(result.hangs[0]?.reproduction.runs)).toMatchObject({
+        reproduced: 1,
+        status: "reproduced",
+      });
       // Its repro starts at the seed and replays the click that led to the hang.
       expect(result.hangs[0]?.repro.recording?.pages[0]?.steps[0]?.step.kind).toBe("navigate");
       // The frontier went on after the hang: the broken page (after both hangs in link order) was reached.

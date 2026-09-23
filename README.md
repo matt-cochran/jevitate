@@ -174,6 +174,25 @@ and endpoint pattern (`GET /api/contacts/:id`), with p50 and max, plus the
 slowest pages and endpoints. These are measurements, not verdicts: a slow page
 is never a defect by itself.
 
+### Replay finds the recorded element exactly
+
+A replay (a Journey, `verify-fix`, a hang reproduction) never clicks a guess:
+
+- It uses a stable anchor captured at record time when there is one: a test id,
+  or a non-generated, document-unique `id` or `name` attribute. It stores
+  identifiers only, never a field's value.
+- Otherwise it matches the recorded role and accessible name, label or text
+  **exactly**, never by substring or prefix, so "Stuck report" is never
+  "Stuck report again". Among elements with the same name, it uses the recorded
+  index. If the number of such elements changed since recording, the step fails
+  instead of clicking whatever element now sits at that index.
+- A target that is missing, or that cannot be told apart from others, fails the
+  step with a typed `replay-target-not-found` or `ambiguous` result.
+  `verify-fix` reports that as `inconclusive`, never as `fixed`.
+
+Older recordings without anchors or recorded counts still replay, by exact
+name plus index.
+
 ### Crashes and issue drafts
 
 Every crash records the steps up to it, the error and stack, the page/browser

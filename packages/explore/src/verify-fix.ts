@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
-import { RecordingInterpreter } from "@jevitate/interpreter";
+import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interpreter";
 import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
 import type { HangSignal } from "./hang.js";
@@ -57,6 +57,8 @@ export interface VerifyFixParams {
   readonly perceive?: PerceiveOptions;
   /** Stall window for a stalled-state `ui-no-progress` hang (ms). */
   readonly stallMs?: number;
+  /** How long a recorded target may take to appear on replay (ms). Default: the interpreter's. */
+  readonly targetTimeoutMs?: number;
 }
 
 export type VerifyFixVerdict = "fixed" | "still-reproduces" | "inconclusive";
@@ -67,7 +69,15 @@ export interface VerifyFixResult {
   /** Distinct signal fingerprints the replay produced (evidence for the verdict). */
   readonly observedFingerprints: string[];
   /** How far the replay got: `completed`, or the step it failed at and why. */
-  readonly replay: { readonly outcome: "completed" } | { readonly outcome: "failed"; readonly at: number; readonly error: string };
+  readonly replay:
+    | { readonly outcome: "completed" }
+    | {
+        readonly outcome: "failed";
+        readonly at: number;
+        readonly error: string;
+        /** A replay-TARGET failure: the recorded element is missing or ambiguous (never guessed). */
+        readonly reason?: ReplayTargetFailure;
+      };
   readonly reason: string;
 }
 
@@ -132,7 +142,9 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     await monitorFor(session.page).instrument();
     // The defect's step is replayed to OBSERVE what the app does next — its own postcondition is not
     // the verdict (a fixed app may legitimately behave differently after it); the signal check is.
-    const result = await new RecordingInterpreter().runToCheckpoint(
+    const result = await new RecordingInterpreter(
+      params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs },
+    ).runToCheckpoint(
       session.actor,
       observeAfterStep(params.recording, params.recordingStepIndex),
       params.recordingStepIndex,
@@ -147,9 +159,25 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
       result.outcome === "completed"
         ? { outcome: "completed" }
         : result.outcome === "failed"
-          ? { outcome: "failed", at: result.at, error: result.error.split("\n")[0] ?? result.error }
+          ? {
+              outcome: "failed",
+              at: result.at,
+              error: result.error.split("\n")[0] ?? result.error,
+              ...(result.reason === undefined ? {} : { reason: result.reason }),
+            }
           : { outcome: "failed", at: result.at, error: "replay paused for a human hand-back" };
 
+    // The replay could not find (or tell apart) a recorded element: it did not reproduce the
+    // recorded path, so nothing it saw — or did not see — is evidence. Always inconclusive.
+    if (replay.outcome === "failed" && replay.reason !== undefined) {
+      return {
+        ...base,
+        verdict: "inconclusive",
+        observedFingerprints: observed,
+        replay,
+        reason: `replay stopped at step ${replay.at}: ${replay.reason} — the recorded path was not reproduced, so this proves nothing`,
+      };
+    }
     if (observed.includes(params.fingerprint)) {
       return { ...base, verdict: "still-reproduces", observedFingerprints: observed, replay, reason: "the defect's fingerprint fired again on replay" };
     }

@@ -69,7 +69,7 @@ describe("applyDiff replay-level proof", () => {
       pressSequentially: vi.fn(async () => {}),
       innerText: vi.fn(async () => ""),
       isVisible: vi.fn(async () => true),
-      count: vi.fn(async () => 0),
+      count: vi.fn(async () => 1), // the recorded target resolves uniquely
       waitFor: vi.fn(async () => {}),
     };
     const page = {

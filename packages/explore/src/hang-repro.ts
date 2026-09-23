@@ -92,7 +92,10 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       if (timer !== undefined) clearTimeout(timer);
     });
     if (outcome.kind === "done" && outcome.r.outcome !== "completed") {
-      const why = outcome.r.outcome === "failed" ? `failed at step ${outcome.r.at}: ${outcome.r.error.split("\n")[0]}` : "paused for a hand-back";
+      const why =
+        outcome.r.outcome === "failed"
+          ? `failed at step ${outcome.r.at}${outcome.r.reason === undefined ? "" : ` (${outcome.r.reason})`}: ${outcome.r.error.split("\n")[0]}`
+          : "paused for a hand-back";
       return { reproduced: false, kind: null, replay: "failed", detail: `replay ${why}` };
     }
     const replay: HangAttempt["replay"] = outcome.kind === "hung" ? "hung" : "completed";

@@ -26,6 +26,19 @@ export interface TargetDescriptor {
    * itself carry `ordinal`/`container`.
    */
   container?: TargetDescriptor;
+  /**
+   * How many elements matched the rung when `ordinal` was recorded. At replay a different count
+   * means the page changed around the target: the step fails as `ambiguous` instead of clicking
+   * whichever element now sits at that index. Absent on older recordings (then `ordinal` alone).
+   */
+  candidates?: number;
+  /**
+   * A stable attribute anchor captured at record time (a document-unique, non-generated `id` or
+   * `name` attribute that resolved to the very element acted on). Replay prefers it; when it no
+   * longer resolves to exactly one element, replay falls back to the rung (exact name + nth).
+   * Identifiers only — never a field's value.
+   */
+  anchor?: { id?: string; name?: string };
 }
 
 export type RedactedValue =
@@ -158,6 +171,8 @@ const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
     css: z.string().optional(),
     frameUrl: z.string().optional(),
     ordinal: z.number().int().nonnegative().optional(),
+    candidates: z.number().int().positive().optional(),
+    anchor: z.object({ id: z.string().optional(), name: z.string().optional() }).strict().optional(),
     container: z.lazy(() => TargetDescriptorSchema).optional(),
   })
   .strict()

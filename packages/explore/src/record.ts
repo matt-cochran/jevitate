@@ -74,6 +74,13 @@ function redactDescriptor(d: TargetDescriptor, secrets: readonly string[]): Targ
   if (d.css !== undefined) out.css = r(d.css);
   if (d.frameUrl !== undefined) out.frameUrl = r(redactUrl(d.frameUrl));
   if (d.ordinal !== undefined) out.ordinal = d.ordinal;
+  if (d.candidates !== undefined) out.candidates = d.candidates;
+  if (d.anchor !== undefined) {
+    out.anchor = {
+      ...(d.anchor.id === undefined ? {} : { id: r(d.anchor.id) }),
+      ...(d.anchor.name === undefined ? {} : { name: r(d.anchor.name) }),
+    };
+  }
   if (d.container !== undefined) out.container = redactDescriptor(d.container, secrets);
   return out;
 }

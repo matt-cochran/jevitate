@@ -84,7 +84,8 @@ test(
       const handle = await handleFor(page, "#u");
       const computed = await computeDescriptor(page, handle);
 
-      expect(computed.descriptor).toEqual({ label: "Username" });
+      // The element's stable id is captured as its replay anchor.
+      expect(computed.descriptor).toEqual({ label: "Username", anchor: { id: "u" } });
       expect(computed.stability).toBe("medium");
       // A css rung still validated underneath it, kept for self-healing.
       expect(computed.alternates.some((a) => typeof a.css === "string")).toBe(true);
@@ -134,15 +135,15 @@ test(
       // falling all the way down to a generated-looking css nth-of-type
       // path. Stability is capped one notch, since the underlying rung is
       // no longer unique by itself.
-      expect(a.descriptor).toEqual({ role: "button", name: "Ok", ordinal: 0 });
-      expect(b.descriptor).toEqual({ role: "button", name: "Ok", ordinal: 1 });
+      expect(a.descriptor).toEqual({ role: "button", name: "Ok", ordinal: 0, candidates: 2 });
+      expect(b.descriptor).toEqual({ role: "button", name: "Ok", ordinal: 1, candidates: 2 });
       expect(a.stability).toBe("medium");
       expect(b.stability).toBe("medium");
 
       // The demoted text+ordinal rung and the plain (already-unique) css
       // rung both still validate and are kept as alternates.
-      expect(a.alternates).toContainEqual({ text: "Ok", ordinal: 0 });
-      expect(b.alternates).toContainEqual({ text: "Ok", ordinal: 1 });
+      expect(a.alternates).toContainEqual({ text: "Ok", ordinal: 0, candidates: 2 });
+      expect(b.alternates).toContainEqual({ text: "Ok", ordinal: 1, candidates: 2 });
       expect(a.alternates.some((alt) => typeof alt.css === "string")).toBe(true);
       expect(b.alternates.some((alt) => typeof alt.css === "string")).toBe(true);
 
@@ -340,7 +341,8 @@ test(
         // The whole descriptor pipeline stays clean too, and still works: the
         // password field is identified by its label.
         const pw = await computeDescriptor(page, await handleFor(page, "#pw"));
-        expect(pw.descriptor).toEqual({ label: "Password" });
+        // An identifier (the id) — never the value — anchors it.
+        expect(pw.descriptor).toEqual({ label: "Password", anchor: { id: "pw" } });
         expect(JSON.stringify(pw)).not.toContain(secret);
       },
     );

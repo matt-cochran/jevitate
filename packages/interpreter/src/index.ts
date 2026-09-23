@@ -6,3 +6,12 @@ export { RecordingInterpreter } from "./interpreter.js";
 export type { InterpretResult } from "./interpret-result.js";
 export { BufferingSink } from "./sink.js";
 export type { RecordingSink, ToRecordingOptions } from "./sink.js";
+export {
+  resolveTarget,
+  rungLocator,
+  anchorLocator,
+  descriptorLocator,
+  ReplayTargetError,
+  type ReplayTargetFailure,
+  type ResolveTargetOptions,
+} from "./resolve-target.js";
