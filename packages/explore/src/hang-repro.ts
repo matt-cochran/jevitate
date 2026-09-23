@@ -6,14 +6,20 @@ import { observeAfterStep } from "./record.js";
 import { hangFingerprint, type HangKind, type HangSignal } from "./hang.js";
 import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
+import type { MissionOutcome } from "@jevitate/domain";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
  * replayed in a FRESH browser context N times (default 2), through the existing Recording
- * interpreter, and the page is examined with the same hang rule. `reproduced k/N`:
+ * interpreter, and the page is examined with the same hang rule. `reproduced k/N`, where only an
+ * attempt that actually RAN counts as evidence either way:
  *
- *  - k = N ⇒ `reproduced` — a confirmed hang finding;
- *  - k < N ⇒ `intermittent` — reported with the evidence of every attempt; never dropped, never clean.
+ *  - k ≥ 1 ⇒ `reproduced` — a confirmed hang finding;
+ *  - k = 0 and at least one attempt ran fully ⇒ `intermittent` — seen once, not again;
+ *  - no attempt ran (the fresh session could not open, the replay itself failed before reaching the
+ *    step) ⇒ `inconclusive` — a replay that never ran is NOT a non-reproduction.
+ *
+ * Every attempt's evidence is kept; the finding is never dropped and never reported clean.
  *
  * For `ui-no-progress` found as a stalled state (no busy indicator), "the same hang" means the
  * replay lands on the SAME stalled page state and it stays there for the stall window.
@@ -29,15 +35,39 @@ export interface HangAttempt {
   readonly kind: HangKind | null;
   /** How the replay itself went. */
   readonly replay: "completed" | "failed" | "hung";
+  /**
+   * Did the attempt actually RUN — replay the recorded steps up to the hang and examine the page?
+   * False when the session could not open or the replay failed before the step: no evidence.
+   */
+  readonly ran: boolean;
   readonly detail: string;
 }
 
+export type ReproductionStatus = "reproduced" | "intermittent" | "inconclusive";
+
 export interface HangReproduction {
   readonly attempts: number;
+  /** Attempts that actually ran (the rest could not execute and prove nothing). */
+  readonly ran: number;
   readonly reproduced: number;
-  readonly status: "reproduced" | "intermittent";
+  readonly status: ReproductionStatus;
   readonly runs: HangAttempt[];
 }
+
+/** The status rule (pure): any reproduction confirms; a run that ran clean is intermittent; else inconclusive. */
+export function reproductionStatus(runs: readonly Pick<HangAttempt, "reproduced" | "ran">[]): ReproductionStatus {
+  if (runs.some((r) => r.reproduced)) return "reproduced";
+  if (runs.some((r) => r.ran)) return "intermittent";
+  return "inconclusive";
+}
+
+/** A reproduction's status as a mission outcome. */
+export function hangOutcome(status: ReproductionStatus): MissionOutcome {
+  return status === "reproduced" ? "hang" : status;
+}
+
+/** No replay could be attempted at all (no way to open a fresh session): nothing ran. */
+export const NOT_REPLAYED: HangReproduction = { attempts: 0, ran: 0, reproduced: 0, status: "inconclusive", runs: [] };
 
 export interface ReproduceHangParams {
   readonly recording: Recording;
@@ -69,7 +99,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
   try {
     session = await p.openSession();
   } catch (e) {
-    return { reproduced: false, kind: null, replay: "failed", detail: `could not open a fresh session: ${firstLine(e)}` };
+    return { reproduced: false, kind: null, replay: "failed", ran: false, detail: `could not open a fresh session: ${firstLine(e)}` };
   }
   try {
     await monitorFor(session.page).instrument();
@@ -96,7 +126,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
         outcome.r.outcome === "failed"
           ? `failed at step ${outcome.r.at}${outcome.r.reason === undefined ? "" : ` (${outcome.r.reason})`}: ${outcome.r.error.split("\n")[0]}`
           : "paused for a hand-back";
-      return { reproduced: false, kind: null, replay: "failed", detail: `replay ${why}` };
+      return { reproduced: false, kind: null, replay: "failed", ran: false, detail: `replay ${why}` };
     }
     const replay: HangAttempt["replay"] = outcome.kind === "hung" ? "hung" : "completed";
 
@@ -106,7 +136,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       // A stalled state: the replay must land on the SAME state and stay there.
       const stalled = p.hang.lastState.signature;
       if (seen.snapshot.signature !== stalled) {
-        return { reproduced: false, kind, replay, detail: "replay reached a different page state (progress was made)" };
+        return { reproduced: false, kind, replay, ran: true, detail: "replay reached a different page state (progress was made)" };
       }
       await (p.sleep ?? realSleep)(p.stallMs ?? DEFAULT_STALL_MS);
       const again = await perceive(session.page, p.perceive ?? {});
@@ -115,6 +145,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
         reproduced: stuck,
         kind: stuck ? "ui-no-progress" : null,
         replay,
+        ran: true,
         detail: stuck ? "the replay landed on the same stalled state and stayed there" : "the page moved on after the stall window",
       };
     }
@@ -123,10 +154,11 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       reproduced,
       kind,
       replay,
+      ran: true,
       detail: reproduced ? (seen.hang?.detail ?? p.hang.detail) : kind === null ? "the page settled — no hang" : `a different hang (${kind})`,
     };
   } catch (e) {
-    return { reproduced: false, kind: null, replay: "failed", detail: `replay failed: ${firstLine(e)}` };
+    return { reproduced: false, kind: null, replay: "failed", ran: false, detail: `replay failed: ${firstLine(e)}` };
   } finally {
     await session.close().catch(() => undefined);
   }
@@ -137,8 +169,13 @@ export async function reproduceHang(p: ReproduceHangParams): Promise<HangReprodu
   if (!Number.isInteger(attempts) || attempts < 1) throw new Error(`reproduceHang: attempts must be >= 1, got ${attempts}`);
   const runs: HangAttempt[] = [];
   for (let i = 0; i < attempts; i++) runs.push(await replayAndDetectHang(p));
-  const reproduced = runs.filter((r) => r.reproduced).length;
-  return { attempts, reproduced, status: reproduced === attempts ? "reproduced" : "intermittent", runs };
+  return {
+    attempts,
+    ran: runs.filter((r) => r.ran).length,
+    reproduced: runs.filter((r) => r.reproduced).length,
+    status: reproductionStatus(runs),
+    runs,
+  };
 }
 
 /** A hang the mission found, with how to reproduce it and how often it did. */
@@ -217,7 +254,7 @@ export async function recordCoverageHang(p: {
   const index = Math.max(0, p.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1);
   const reproduction: HangReproduction =
     p.openSession === undefined
-      ? { attempts: 0, reproduced: 0, status: "intermittent", runs: [] }
+      ? NOT_REPLAYED
       : await reproduceHang({
           recording: p.recording,
           recordingStepIndex: index,

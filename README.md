@@ -105,8 +105,12 @@ action while the page is still alive (a busy indicator that never ends, or an
 action that silently puts the page back in an earlier state). The evidence is
 recorded: pending requests, the last page state, timings and the JS heap. The
 steps that led to the hang are then replayed in fresh browser contexts
-(`--hang-replays`, default 2). If every replay hangs, it is a confirmed `hang`;
-otherwise it is `intermittent`, with the evidence from each attempt. The
+(`--hang-replays`, default 2). If any replay hangs again, it is a confirmed
+`hang`. If none did but at least one replay ran all the way, it is
+`intermittent`. If no replay could run at all (the fresh session could not
+open, or the replay failed before it reached the step), it is `inconclusive`:
+a replay that never ran is not evidence that the hang went away. The evidence
+from every attempt is kept. The
 exploring missions (adversarial, coverage and feature) then keep hunting: they
 reset to a known state (a fresh page at the start URL), skip the hung route, and
 go on within budget. A repeated hang counts as another occurrence of the same

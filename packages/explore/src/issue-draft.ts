@@ -176,7 +176,7 @@ export function draftForHang(hang: HangFinding, ctx: DraftContext): IssueDraft {
   const r = hang.reproduction;
   const summary = [
     `jevitate observed a **hang** (\`${hang.hangKind}\`) on \`${hang.route}\`: ${hang.signal.detail}.`,
-    `Reproduced **${r.reproduced}/${r.attempts}** in fresh browser contexts (${r.status}). Fingerprint \`${hang.fingerprint}\`.`,
+    `Reproduced **${r.reproduced}/${r.attempts}** in fresh browser contexts (${r.status}; ${r.ran} of the replays ran — a replay that could not run is no evidence either way). Fingerprint \`${hang.fingerprint}\`.`,
   ].join("\n\n");
   const repro = [
     "## Steps to reproduce",

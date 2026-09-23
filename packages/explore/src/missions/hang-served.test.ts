@@ -184,7 +184,8 @@ describe("hangs are detected, classified and REPRODUCED in fresh contexts", () =
       const result = await hunt("/flaky");
       expect(result.outcome).toBe("intermittent");
       expect(result.hangs[0]?.hangKind).toBe("request-pending");
-      expect(result.hangs[0]?.reproduction).toMatchObject({ attempts: 2, reproduced: 0, status: "intermittent" });
+      // Both replays RAN fully and settled: that is a genuine non-reproduction.
+      expect(result.hangs[0]?.reproduction).toMatchObject({ attempts: 2, ran: 2, reproduced: 0, status: "intermittent" });
       expect(result.hangs[0]?.reproduction.runs.map((r) => r.detail)).toEqual([
         "the page settled — no hang",
         "the page settled — no hang",

@@ -13,7 +13,7 @@ import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing
 import { hangFingerprint, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
 import type { HangConfig, SettleConfig } from "../settle-config.js";
-import { hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
+import { NOT_REPLAYED, hangFinding, hangOutcome, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import { act } from "../act.js";
 import { buildJudgmentState } from "../redact.js";
@@ -346,7 +346,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const partial = recorder.tryFinish({ intent: "adversarial" });
     const reproduction: HangReproduction =
       params.openFreshSession === undefined || !partial.ok
-        ? { attempts: 0, reproduced: 0, status: "intermittent", runs: [] }
+        ? NOT_REPLAYED
         : await reproduceHang({
             recording: partial.recording,
             recordingStepIndex,
@@ -389,7 +389,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const verdict = (): MissionOutcome =>
     combineOutcomes([
       defects.size > 0 ? "defects-found" : "clean",
-      ...[...hangs.values()].map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+      ...[...hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
     ]);
 
   /**

@@ -110,7 +110,8 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     if (attempt.reproduced) {
       return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}` };
     }
-    if (attempt.replay === "failed") {
+    if (!attempt.ran) {
+      // The attempt never ran (no session, or the replay failed before the step): no evidence.
       return { ...base, verdict: "inconclusive", observedFingerprints: [], replay, reason: `${attempt.detail}; absence of the hang proves nothing` };
     }
     return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})` };

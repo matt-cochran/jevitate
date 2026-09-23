@@ -38,6 +38,7 @@ import {
   draftForCrash,
   draftForDefect,
   draftForHang,
+  hangOutcome,
   summarizeTimings,
   type DraftContext,
   type HangFinding,
@@ -512,7 +513,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     journal.writeTranscript(result.transcript);
     const missionOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean",
-      ...result.hangs.map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+      ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
 
     const exitCode = missionExitCode(missionOutcome);
@@ -743,7 +744,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     });
     const missionOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed" ? "crashed" : "clean",
-      ...result.hangs.map((h): MissionOutcome => (h.reproduction.status === "reproduced" ? "hang" : "intermittent")),
+      ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
     return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
   } finally {

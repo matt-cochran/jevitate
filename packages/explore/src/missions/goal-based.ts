@@ -1,7 +1,7 @@
 import type { Assertion, Recording } from "@jevitate/recording";
 import { checkAssertion } from "@jevitate/interpreter";
 import { explore, type ExploreConfig, type ExploreRun, type TranscriptEntry } from "../explore.js";
-import { hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
+import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 
 /**
@@ -69,7 +69,7 @@ export async function runGoalBasedMission(
     const h = run.hang;
     const reproduction: HangReproduction =
       cfg.openFreshSession === undefined
-        ? { attempts: 0, reproduced: 0, status: "intermittent", runs: [] }
+        ? NOT_REPLAYED
         : await reproduceHang({
             recording: run.recording,
             recordingStepIndex: h.recordingStepIndex,
@@ -87,7 +87,8 @@ export async function runGoalBasedMission(
           });
     const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
     return {
-      outcome: reproduction.status === "reproduced" ? "hang" : "intermittent",
+      // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
+      outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
       assertionPassed: false,
       run,
       recording: run.recording,
