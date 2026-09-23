@@ -78,3 +78,27 @@ describe("isUnboundedHeapGrowth / looksLikeRendererOom", () => {
     expect(looksLikeRendererOom(true, [{ step: 1, usedBytes: 100, limitBytes: 1000 }])).toBe(false);
   });
 });
+
+describe("attributeCrash — host resource pressure (round 2d)", () => {
+  const PRESSURE = "memory pressure full avg10=7.25% > 5% (source=wsl2:psi)";
+  it("a main-thread-unresponsive hang on a pressured host is uncertain, not the app's", () => {
+    const r = attributeCrash({ ...base, hang: true, hangKind: "main-thread-unresponsive", hostUnderPressure: PRESSURE }, [ROOT]);
+    expect(r.attribution).toBe("uncertain");
+    expect(r.reasons[0]).toBe(`host under resource pressure (${PRESSURE})`);
+  });
+
+  it("a navigation timeout on a pressured host is uncertain", () => {
+    const r = attributeCrash({ ...base, stack: OWN_STACK, hang: true, navigationTimeout: true, hostUnderPressure: PRESSURE }, [ROOT]);
+    expect(r.attribution).toBe("uncertain");
+  });
+
+  it("without pressure the same evidence stays the app's; with pressure other hang kinds and hard crashes stay the app's", () => {
+    expect(attributeCrash({ ...base, hang: true, hangKind: "main-thread-unresponsive" }, [ROOT]).attribution).toBe("system-under-test");
+    expect(attributeCrash({ ...base, hang: true, hangKind: "request-pending", hostUnderPressure: PRESSURE }, [ROOT]).attribution).toBe(
+      "system-under-test",
+    );
+    expect(
+      attributeCrash({ ...base, pageCrashed: true, navigationTimeout: true, hostUnderPressure: PRESSURE }, [ROOT]).attribution,
+    ).toBe("system-under-test");
+  });
+});

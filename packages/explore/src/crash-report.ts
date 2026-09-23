@@ -9,6 +9,7 @@ import {
   type MissionFailure,
 } from "@jevitate/domain";
 import type { CrashSignals } from "./mission-failure.js";
+import type { HostPressure } from "./host-pressure.js";
 
 /**
  * Crash evidence for owner ruling 3: every crash records the error + stack, the page/browser
@@ -82,6 +83,8 @@ export interface CrashReport {
   readonly failure: MissionFailure;
   readonly evidence: CrashEvidence;
   readonly attribution: AttributionResult;
+  /** The host's resource pressure sampled when the crash was detected. */
+  readonly host?: HostPressure;
 }
 
 /**
@@ -99,15 +102,30 @@ export function buildCrashReport(
   failure: MissionFailure,
   signals: CrashSignals,
   heapSamples: readonly HeapSample[],
-  opts: { readonly hang?: boolean; readonly ownCodeRoots?: readonly string[] } = {},
+  opts: {
+    readonly hang?: boolean;
+    readonly hangKind?: string;
+    readonly ownCodeRoots?: readonly string[];
+    /** The host's resource pressure at detection time (see `hostProbe`). */
+    readonly host?: HostPressure;
+  } = {},
 ): CrashReport {
+  const navigationTimeout = isNavigationTimeout(failure);
   const evidence: CrashEvidence = {
     ...(failure.stack === undefined ? {} : { stack: failure.stack }),
     pageCrashed: signals.pageCrashed,
     browserDisconnected: signals.browserDisconnected,
     rendererOom: looksLikeRendererOom(signals.pageCrashed, heapSamples),
     heapSamples: [...heapSamples],
-    hang: opts.hang ?? isNavigationTimeout(failure),
+    hang: opts.hang ?? navigationTimeout,
+    ...(opts.hangKind === undefined ? {} : { hangKind: opts.hangKind }),
+    ...(navigationTimeout ? { navigationTimeout: true } : {}),
+    ...(opts.host?.overThreshold ? { hostUnderPressure: opts.host.overThreshold } : {}),
   };
-  return { failure, evidence, attribution: attributeCrash(evidence, opts.ownCodeRoots ?? jevitateCodeRoots()) };
+  return {
+    failure,
+    evidence,
+    attribution: attributeCrash(evidence, opts.ownCodeRoots ?? jevitateCodeRoots()),
+    ...(opts.host === undefined ? {} : { host: opts.host }),
+  };
 }

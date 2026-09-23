@@ -12,6 +12,7 @@ import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { hangFingerprint, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
+import { hostProbe, type HostPressure, type HostProbe } from "../host-pressure.js";
 import type { HangConfig, SettleConfig } from "../settle-config.js";
 import { NOT_REPLAYED, hangFinding, hangOutcome, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
@@ -179,6 +180,8 @@ export interface AdversarialMissionParams {
   readonly hangProbeMs?: number;
   /** A request pending longer than this (ms) is a hang. Default: half the render ceiling. */
   readonly requestBoundMs?: number;
+  /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
+  readonly hostProbe?: HostProbe;
   /** The target's settle configuration (background requests, long-poll threshold). */
   readonly settle?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
@@ -247,6 +250,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     crashWatch = new CrashWatch(page);
   });
   const heap = new HeapLog();
+  const probeHost = params.hostProbe ?? hostProbe();
+  let crashHost: HostPressure | undefined;
   const secrets = params.secrets ?? [];
   // One Recording per segment: segment 0 from the seed; a new one after each reset (its findings
   // replay from that segment's start, never through the hang that ended the previous one).
@@ -292,7 +297,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       heap: heap.samples(),
       timing: summarizeTimings(timings),
       ...(outcome === "crashed" && finalFailure !== undefined
-        ? { crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples()) }
+        ? {
+            crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
+              ...(crashHost === undefined ? {} : { host: crashHost }),
+            }),
+          }
         : {}),
     };
   };
@@ -342,6 +351,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     }
     const heapNow = await sampleHeap(sessions.page, 1_000);
     if (heapNow !== null) h = { ...h, heapBytes: heapNow.usedBytes };
+    h = { ...h, host: await probeHost() };
     const recordingStepIndex = Math.max(0, recorder.stepCount - 1);
     const partial = recorder.tryFinish({ intent: "adversarial" });
     const reproduction: HangReproduction =
@@ -713,6 +723,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     await drainLate(Math.max(1, transcript.nextStep - 1));
     return finish(verdict(), stop);
   } catch (e) {
+    crashHost = await probeHost();
     return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));
   } finally {
     await sessions.closeOwned();

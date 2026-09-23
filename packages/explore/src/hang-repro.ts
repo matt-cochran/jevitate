@@ -7,6 +7,7 @@ import { hangFingerprint, type HangKind, type HangSignal } from "./hang.js";
 import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
 import type { MissionOutcome } from "@jevitate/domain";
+import { hostProbe, type HostProbe } from "./host-pressure.js";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
@@ -243,6 +244,8 @@ export async function recordCoverageHang(p: {
   readonly openSession?: () => Promise<VerifySession>;
   readonly attempts?: number;
   readonly perceive?: PerceiveOptions;
+  /** Samples the host's resource pressure for the evidence. Default: this platform's signals. */
+  readonly hostProbe?: HostProbe;
 }): Promise<void> {
   const fingerprint = hangFingerprint(p.hang);
   const known = p.found.get(fingerprint);
@@ -252,17 +255,18 @@ export async function recordCoverageHang(p: {
     return;
   }
   const index = Math.max(0, p.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1);
+  const hang: HangSignal = { ...p.hang, host: await (p.hostProbe ?? hostProbe())() };
   const reproduction: HangReproduction =
     p.openSession === undefined
       ? NOT_REPLAYED
       : await reproduceHang({
           recording: p.recording,
           recordingStepIndex: index,
-          hang: p.hang,
+          hang,
           openSession: p.openSession,
           ...(p.attempts === undefined ? {} : { attempts: p.attempts }),
           ...(p.perceive === undefined ? {} : { perceive: p.perceive }),
         });
-  const finding = hangFinding(p.hang, p.steps, index, reproduction);
+  const finding = hangFinding(hang, p.steps, index, reproduction);
   p.found.set(fingerprint, { ...finding, repro: { ...finding.repro, recording: p.recording } });
 }

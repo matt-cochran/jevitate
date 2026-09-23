@@ -7,6 +7,11 @@
  *  - `jevitate`          — an exception whose stack has a frame inside jevitate's own code, and NO
  *    page or browser crash signal: the engine broke on a healthy page.
  *  - `uncertain`         — anything else (no own frame, no crash signal). Filed to BOTH sides.
+ *
+ * One exception to "a hang is the app's": when the HOST was over a resource threshold at detection
+ * time, a main-thread-unresponsive hang or a navigation timeout is `uncertain` — a starved host
+ * makes any page slow, so that evidence no longer points at the app. (A renderer crash, an OOM or
+ * unbounded heap growth still does.)
  */
 
 export type Attribution = "jevitate" | "system-under-test" | "uncertain";
@@ -29,6 +34,12 @@ export interface CrashEvidence {
   readonly heapSamples: readonly HeapSample[];
   /** The app under test hung (never settled / unresponsive / request stuck / no progress). */
   readonly hang: boolean;
+  /** The hang's kind, when it was a hang (`main-thread-unresponsive`, `request-pending`, …). */
+  readonly hangKind?: string;
+  /** The failure was a navigation that timed out (the page did not load within its bound). */
+  readonly navigationTimeout?: boolean;
+  /** The host resource threshold that was exceeded at detection time, described; absent when within. */
+  readonly hostUnderPressure?: string;
 }
 
 export interface AttributionResult {
@@ -105,6 +116,23 @@ export function attributeCrash(
   ownCodeRoots: readonly string[],
   heapRule: HeapGrowthRule = DEFAULT_HEAP_GROWTH_RULE,
 ): AttributionResult {
+  const hardAppSignal =
+    evidence.pageCrashed ||
+    evidence.browserDisconnected ||
+    evidence.rendererOom ||
+    isUnboundedHeapGrowth(evidence.heapSamples, heapRule);
+  const pressureSensitive = evidence.hangKind === "main-thread-unresponsive" || evidence.navigationTimeout === true;
+  if (evidence.hostUnderPressure !== undefined && pressureSensitive && !hardAppSignal) {
+    return {
+      attribution: "uncertain",
+      reasons: [
+        `host under resource pressure (${evidence.hostUnderPressure})`,
+        evidence.navigationTimeout === true
+          ? "a navigation timeout on a starved host does not show the app is at fault"
+          : "an unresponsive main thread on a starved host does not show the app is at fault",
+      ],
+    };
+  }
   const sut: string[] = [];
   if (evidence.pageCrashed) sut.push("the page (renderer) crashed");
   if (evidence.browserDisconnected) sut.push("the browser disconnected");

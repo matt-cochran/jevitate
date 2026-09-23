@@ -4,6 +4,7 @@ import { contentHash } from "@jevitate/domain";
 import { normalizeRoute } from "./adversarial/defect-fingerprint.js";
 import { endpointOf } from "./timing.js";
 import type { InflightRequest, SettleResult } from "./page-monitor.js";
+import type { HostPressure } from "./host-pressure.js";
 
 /**
  * Hangs (owner ruling 7) — an unresponsive app under test is its own first-class finding, never
@@ -39,6 +40,8 @@ export interface HangSignal {
   readonly lastState: { readonly signature: string; readonly controls: string[] };
   /** The page's used JS heap (bytes), when it could be read. */
   readonly heapBytes?: number;
+  /** The host's resource pressure sampled when the hang was detected. */
+  readonly host?: HostPressure;
 }
 
 /** Stable identity of a hang: kind + route (+ the stuck endpoint for a pending request). */

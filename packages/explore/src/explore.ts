@@ -18,6 +18,7 @@ import { perceive } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
 import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
+import { hostProbe, type HostProbe } from "./host-pressure.js";
 import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
@@ -96,6 +97,8 @@ export interface ExploreConfig {
   readonly settle?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
   readonly hangs?: HangConfig;
+  /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
+  readonly hostProbe?: HostProbe;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   readonly onTranscriptEntry?: TranscriptListener;
   /** Incremental-flush seam: the partial Recording after every recorded step. */
@@ -146,6 +149,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   const crashWatch = new CrashWatch(page);
   const heap = new HeapLog();
+  const probeHost = cfg.hostProbe ?? hostProbe();
   const now = (): number => Date.now();
 
   const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
@@ -237,8 +241,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           timing: perception.timing,
         });
         const heapNow = await sampleHeap(page, 1_000);
+        const withHost: HangSignal = { ...perception.hang, host: await probeHost() };
         hang = {
-          signal: heapNow === null ? perception.hang : { ...perception.hang, heapBytes: heapNow.usedBytes },
+          signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
           recordingStepIndex: Math.max(0, recorder.stepCount - 1),
         };
         stop = "hang";
@@ -318,8 +323,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               timing: again.timing,
             });
             const heapNow = await sampleHeap(page, 1_000);
+            const withHost: HangSignal = { ...stuck, host: await probeHost() };
             hang = {
-              signal: heapNow === null ? stuck : { ...stuck, heapBytes: heapNow.usedBytes },
+              signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
               recordingStepIndex: stuck.kind === "ui-no-progress" ? m.recordIndex : Math.max(0, recorder.stepCount - 1),
             };
             stop = "hang";
@@ -507,7 +513,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     timing: summarizeTimings(timings),
     ...(hang === undefined ? {} : { hang }),
     ...(stop === "crashed" && failure !== undefined
-      ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples()) }
+      ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }
       : {}),
   };
 }

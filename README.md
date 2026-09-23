@@ -203,7 +203,12 @@ Every crash records the steps up to it, the error and stack, the page/browser
 crash signals and the page's JS heap per step. It is attributed from that
 evidence: to jevitate (an own-code stack frame and no page/browser crash signal),
 to the system under test (page or browser crash, renderer OOM, unbounded heap
-growth, a hang), or as uncertain (filed to both). Each defect and crash gets a
+growth, a hang), or as uncertain (filed to both). The host's own resource
+pressure is sampled at detection time (the same sample admission control takes:
+PSI, cgroup and meminfo on Linux/WSL, a portable fallback elsewhere) and is part
+of the evidence. If the host was over a threshold, an unresponsive main thread
+or a navigation timeout is attributed as uncertain ("host under resource
+pressure"), not to the app. Each defect and crash gets a
 ready-to-file, redacted Markdown draft in `<recording>.issues/<fingerprint>.md`.
 
 Filing is off by default. It needs `--file-issues` (or `"enabled": true`) and a

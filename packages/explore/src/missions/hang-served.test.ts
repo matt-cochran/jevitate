@@ -344,3 +344,38 @@ describe("coverage exploration KEEPS EXPLORING after a hang", () => {
     180_000,
   );
 });
+
+describe("hang evidence carries the host's resource pressure", () => {
+  it(
+    "a busy-looping page found while the (injected) host sampler reports pressure is recorded with it",
+    async () => {
+      const result = await withSession(
+        "hang-host-",
+        async (session) => {
+          const actor = CastActor.named("hang").whoCan(new BrowseTheWeb(session, [origin]));
+          return runAdversarialMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+            generation: new FakeGenerationGateway(),
+            seedUrl: `${origin}/busy`,
+            allowlist: [origin],
+            strategies: ["nav-during-pending"],
+            bounds: { maxDecisions: 1 },
+            hostProbe: async () => ({ sample: null, overThreshold: "memory pressure full avg10=9% > 5% (source=test)" }),
+            ...FAST,
+          });
+        },
+        origin,
+      );
+      const h = result.hangs[0];
+      // Which kind the busy loop is caught as depends on when the probe lands (before/inside it).
+      expect(["main-thread-unresponsive", "never-settled"]).toContain(h?.hangKind);
+      expect(h?.signal.host?.overThreshold).toBe("memory pressure full avg10=9% > 5% (source=test)");
+      // No way to replay here: nothing ran, so the reproduction is inconclusive (never a non-reproduction).
+      expect(h?.reproduction).toMatchObject({ attempts: 0, ran: 0, status: "inconclusive" });
+      expect(result.outcome).toBe("inconclusive");
+    },
+    120_000,
+  );
+});

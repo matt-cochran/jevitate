@@ -4,6 +4,7 @@ import type { TranscriptEntry } from "./transcript.js";
 import type { AdversarialDefect } from "./missions/adversarial.js";
 import type { CrashReport } from "./crash-report.js";
 import type { HangFinding } from "./hang-repro.js";
+import type { HostPressure } from "./host-pressure.js";
 import { attributeCrash } from "@jevitate/domain";
 import { jevitateCodeRoots } from "./crash-report.js";
 
@@ -43,6 +44,15 @@ export function currentEnvironment(target: string, extra: { browser?: string; je
     ...(extra.browser === undefined ? {} : { browser: extra.browser }),
     ...(extra.jevitateVersion === undefined ? {} : { jevitateVersion: extra.jevitateVersion }),
   };
+}
+
+/** The host-pressure evidence line (the sample admission control takes). */
+function hostLine(host: HostPressure | undefined): string {
+  if (host === undefined) return "- Host pressure: not sampled";
+  if (host.sample === null) return `- Host pressure: could not be sampled (${host.error ?? "unknown"})`;
+  return host.overThreshold !== null
+    ? `- Host pressure: **host under resource pressure** — ${host.overThreshold}`
+    : `- Host pressure: within thresholds (${host.sample.source})`;
 }
 
 function stepLine(e: TranscriptEntry): string {
@@ -149,6 +159,7 @@ export function draftForCrash(crash: CrashReport, steps: readonly TranscriptEntr
     `- Browser disconnected: ${crash.evidence.browserDisconnected}`,
     `- Renderer out of memory: ${crash.evidence.rendererOom}`,
     `- Hang: ${crash.evidence.hang}`,
+    hostLine(crash.host),
     heap.length === 0
       ? "- JS heap: not readable"
       : `- JS heap by step: ${heap.map((h) => `${h.step}: ${(h.usedBytes / 1_048_576).toFixed(1)} MB`).join(", ")}`,
@@ -169,8 +180,17 @@ export function draftForCrash(crash: CrashReport, steps: readonly TranscriptEntr
  * system under test's behaviour (the rule's `hang` signal), so it routes there.
  */
 export function draftForHang(hang: HangFinding, ctx: DraftContext): IssueDraft {
+  const host = hang.signal.host;
   const attribution = attributeCrash(
-    { pageCrashed: false, browserDisconnected: false, rendererOom: false, heapSamples: [], hang: true },
+    {
+      pageCrashed: false,
+      browserDisconnected: false,
+      rendererOom: false,
+      heapSamples: [],
+      hang: true,
+      hangKind: hang.hangKind,
+      ...(host?.overThreshold ? { hostUnderPressure: host.overThreshold } : {}),
+    },
     jevitateCodeRoots(),
   );
   const r = hang.reproduction;
@@ -193,6 +213,8 @@ export function draftForHang(hang: HangFinding, ctx: DraftContext): IssueDraft {
       hang.signal.lastState.controls.length === 0 ? "" : ` (${hang.signal.lastState.controls.slice(0, 12).join("; ")})`
     }`,
     ...(hang.signal.heapBytes === undefined ? [] : [`- JS heap: ${(hang.signal.heapBytes / 1_048_576).toFixed(1)} MB`]),
+    hostLine(host),
+    ...(attribution.attribution === "uncertain" ? [`- Attribution: uncertain — ${attribution.reasons.join("; ")}`] : []),
     "",
     "### Replays",
     ...r.runs.map((run, i) => `${i + 1}. ${run.reproduced ? "reproduced" : "did not reproduce"} (replay ${run.replay}): ${run.detail}`),
