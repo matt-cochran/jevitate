@@ -439,6 +439,29 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   };
 
   /**
+   * Signals that land AFTER a step was adjudicated — while the next page loads and settles (a 500
+   * fired by the page the action opened) — belong to that step: drained and folded into it, so a
+   * late signal is never lost (not even after the last step, or before a reset).
+   */
+  const drainLate = async (step: number): Promise<void> => {
+    const late = collector.drain();
+    const group = groupStepSignals(late);
+    if (group === null) return;
+    const url = redactUrl(sessions.page.url());
+    await fold(step, [
+      {
+        fingerprint: group.fingerprint,
+        related: group.related,
+        kind: group.primary.kind,
+        title: defectTitle(group.primary),
+        route: normalizeRoute(url),
+        url,
+        signals: late,
+      },
+    ]);
+  };
+
+  /**
    * Folds one step's findings into the deduped defect set — called AFTER the step is in the
    * transcript, so a new defect's repro includes the step that surfaced it. A known fingerprint
    * (or one seen in a known defect's cascade) only counts an occurrence.
@@ -644,6 +667,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 
       if (acted) {
         const next = await perceiveNow();
+        await drainLate(step);
         snap = next.snapshot;
         snapTiming = next.timing;
         const target = lastRecordedTarget;
@@ -685,6 +709,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
     }
 
+    // Anything that arrived after the last adjudication still counts.
+    await drainLate(Math.max(1, transcript.nextStep - 1));
     return finish(verdict(), stop);
   } catch (e) {
     return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));

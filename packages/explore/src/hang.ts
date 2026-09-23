@@ -83,7 +83,12 @@ export async function probeResponsive(page: Page, boundMs: number): Promise<bool
   const bound = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), Math.max(1, boundMs));
   });
-  const probe = page.evaluate(() => true);
+  // An evaluate that REJECTS on a live page (the execution context was replaced by a navigation in
+  // progress) means the renderer answered: not unresponsive. Only a gone page's error is rethrown.
+  const probe = page.evaluate(() => true).catch((e: unknown) => {
+    if (page.isClosed()) throw e;
+    return true;
+  });
   probe.catch(() => undefined); // observed below; never an unhandled rejection after a timeout
   try {
     return await Promise.race([probe, bound]);
