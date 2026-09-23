@@ -59,6 +59,7 @@ import {
   UnknownMissionTargetError,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
+import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
@@ -1425,6 +1426,8 @@ export function buildProgram(deps: CliDeps): Command {
               "boundary-input",
               "contradictory-actions",
               "nav-during-pending",
+              // Keep hunting on other routes after (and between) defects.
+              "visit-route",
             ],
             judgment: advJudge,
             generation: advGen,
@@ -1602,6 +1605,41 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // `verify-fix`: replays a finding's reproduction in a FRESH browser and reports whether its
+  // fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive.
+  withBrowserLaunchFlags(
+    program
+      .command("verify-fix")
+      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent"),
+  )
+    .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
+    .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
+    .option("--storage-state <file>", "override the storageState the mission ran with")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<{ result: string; fingerprint: string; storageState?: string; json?: boolean } & BrowserLaunchFlags>();
+      try {
+        const report = await runVerifyFix({
+          resultPath: o.result,
+          fingerprint: o.fingerprint,
+          ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          browserPortFactory: deps.explore?.browserPortFactory,
+          browser: browserLaunchFromFlags(o),
+        });
+        emitJson(program, ok(report));
+        process.exitCode = report.exitCode;
+      } catch (err) {
+        if (err instanceof VerifyFixInputError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnauthorizedExploreTargetError) {
+          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
+        }
+        process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
       }
     });
 

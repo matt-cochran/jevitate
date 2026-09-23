@@ -22,8 +22,9 @@ import { redactUrl } from "@jevitate/ai-core";
  */
 
 export type DefectSignal =
-  | { kind: "console-error"; detail: string }
-  | { kind: "page-error"; detail: string }
+  /** `pageUrl`: the (redacted) page the signal fired on — the route part of its fingerprint. */
+  | { kind: "console-error"; detail: string; pageUrl?: string }
+  | { kind: "page-error"; detail: string; pageUrl?: string }
   | { kind: "http-5xx"; detail: string; url: string; status: number }
   | { kind: "failed-request"; detail: string; url: string };
 
@@ -62,10 +63,10 @@ export class PageSignalCollector {
       // §9: the HTTP signal is 5xx-only). Real console errors, page errors and
       // 5xx are untouched and still gate.
       if (isNon5xxResourceConsoleError(text)) return;
-      this.buffer.push({ kind: "console-error", detail: redactUrl(text) });
+      this.buffer.push({ kind: "console-error", detail: redactUrl(text), pageUrl: redactUrl(page.url()) });
     });
     page.on("pageerror", (err) => {
-      this.buffer.push({ kind: "page-error", detail: redactUrl(err.message) });
+      this.buffer.push({ kind: "page-error", detail: redactUrl(err.message), pageUrl: redactUrl(page.url()) });
     });
     page.on("response", (response) => {
       const status = response.status();

@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -420,7 +420,16 @@ export interface RunAdversarialCliMissionOptions {
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
+/** Where a mission ran — enough for `verify-fix` to replay one of its defects in a fresh session. */
+export interface MissionTarget {
+  readonly seedUrl: string;
+  readonly allowlist: string[];
+  /** Absolute path of the storageState file the run started from (never its contents). */
+  readonly storageStatePath?: string;
+}
+
 export type AdversarialCliMissionResult = AdversarialOutcome & {
+  readonly target: MissionTarget;
   readonly recordingPath: string;
   /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath: string;
@@ -476,6 +485,13 @@ export async function runAdversarialCliMission(
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       exitCode,
+      // What `verify-fix` needs to replay a defect later: where, which origins, which session file
+      // (the storageState PATH only — its cookies never enter an artifact).
+      target: {
+        seedUrl: opts.seedUrl,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {

@@ -33,6 +33,7 @@ describe("runAdversarialMission — clean run", () => {
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["ordering-violation", "repeat-rapid", "boundary-input"],
       });
       expect(result.outcome).toBe("clean");
@@ -61,6 +62,7 @@ describe("runAdversarialMission — hard defect", () => {
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["ordering-violation"],
         userInvariant: async (page) => {
           await page.evaluate(() => console.error("adversarial-synthetic-error"));
@@ -72,10 +74,15 @@ describe("runAdversarialMission — hard defect", () => {
       expect(result.defects[0]?.signals.some((s) => s.kind === "console-error")).toBe(true);
       expect(result.defects[0]?.triage).toMatchObject({ status: "available", summary: "console error observed" });
       expect(result.recording.pages.length).toBeGreaterThan(0);
-      // The shared transcript explains the stop: the strategy's step, ending in the defect.
-      expect(result.transcript).toHaveLength(1);
-      expect(result.transcript[0]).toMatchObject({ chosenBy: "strategy", strategy: "ordering-violation", confidence: null });
-      expect(result.transcript[0]?.reason).toMatch(/^defect: .*adversarial-synthetic-error/);
+      // The shared transcript explains every step: the seed load (the invariant already fires
+      // there), then the strategy step — the run did NOT stop at the first defect, and the
+      // repeat is the same fingerprint, so it is one defect with two occurrences.
+      expect(result.transcript).toHaveLength(2);
+      expect(result.transcript[0]).toMatchObject({ strategy: "seed-load" });
+      expect(result.transcript[1]).toMatchObject({ chosenBy: "strategy", strategy: "ordering-violation", confidence: null });
+      expect(result.transcript[1]?.reason).toMatch(/^defect: .*adversarial-synthetic-error/);
+      expect(result.defects).toHaveLength(1);
+      expect(result.defects[0]).toMatchObject({ firstSeenStep: 1, occurrences: 2, occurrenceSteps: [1, 2] });
     },
     120_000,
   );
@@ -94,6 +101,7 @@ describe("runAdversarialMission — hard defect", () => {
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["ordering-violation"],
         // A 5xx sub-resource load: the response listener sees the 500 and gates
         // it as a hard `http-5xx` signal — even though the console-error path is
@@ -130,6 +138,7 @@ describe("runAdversarialMission — a legit 4xx during misuse is NOT a defect (#
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["ordering-violation"],
         userInvariant: async (page) => {
           await page.evaluate(async () => {
@@ -157,6 +166,7 @@ describe("runAdversarialMission — model verdict is advisory only (guardrail #4
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["ordering-violation", "repeat-rapid"],
       });
       // No console error, no 5xx, no failed request, no broken invariant was
@@ -182,6 +192,7 @@ describe("runAdversarialMission — model verdict is advisory only (guardrail #4
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["boundary-input"],
       });
       expect(result.outcome).toBe("clean");
@@ -207,6 +218,7 @@ describe("runAdversarialMission — the outcome is a typed result, never a throw
         generation,
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["ordering-violation"],
         userInvariant: async (page) => {
           await page.evaluate(() => console.error("triage-helper-down"));
@@ -240,6 +252,7 @@ describe("runAdversarialMission — the outcome is a typed result, never a throw
         generation: new FakeGenerationGateway(),
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
         strategies: ["boundary-input", "boundary-input"],
         onTranscriptEntry: (e) => entries.push(e.step),
         userInvariant: async () => {

@@ -22,6 +22,8 @@ export * from "./missions/induction.js";
 export * from "./adversarial/input-strategy.js";
 export * from "./adversarial/defect-oracle.js";
 export * from "./adversarial/misuse.js";
+export * from "./adversarial/defect-fingerprint.js";
+export * from "./verify-fix.js";
 export * from "./missions/adversarial.js";
 
 // Ticket #2 — feature-testing mission (capability-scoped path discovery).

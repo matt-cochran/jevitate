@@ -83,6 +83,18 @@ clean.
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result.
 
+The adversarial mission keeps hunting after a defect until its step, action or
+time budget runs out. Defects are deduplicated by a stable fingerprint, and each
+one carries its reproduction: the transcript steps that led to it and the
+Recording step to replay up to. To check a fix, replay the defect:
+
+```bash
+jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp>
+# exit 0 fixed (signal absent) · 1 still reproduces · 2 inconclusive (replay could not reach the step)
+```
+
+The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`

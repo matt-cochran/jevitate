@@ -38,6 +38,7 @@ import { safeRunPolicy } from "@jevitate/domain";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { runVerifyFix, type VerifyFixReport } from "./verify-fix-api.js";
 
 /**
  * The MCP stdio server behind `jevitate mcp`. It exposes ONLY the tools in
@@ -128,6 +129,11 @@ export interface McpApiDeps {
    * `<id>.result.json` files `get_mission_result` reads. A missing dir is a config refusal.
    */
   recordingsDir?: string;
+  /**
+   * Test seam. Defaults to `runVerifyFix` over `<recordingsDir>/<id>.result.json`: replays the
+   * finding's repro in a fresh browser (authorized against the mission's own allowlist).
+   */
+  verifyFix?: (args: { resultPath: string; fingerprint: string }) => Promise<VerifyFixReport>;
 }
 
 const ALLOWED = new Set<string>(ALLOWED_TOOLS);
@@ -303,7 +309,40 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     return status.isError ? errorResult(body) : jsonResult(body);
   };
 
+  // verify_fix: replays a persisted finding by (result id, fingerprint) — never a caller-supplied
+  // recording or path (invariant #5 analogue). Passes only if the defect signal is absent; an
+  // unreachable replay is `inconclusive` and returned as an error result, never as "fixed".
+  const verifyFixImpl = deps.verifyFix ?? ((a: { resultPath: string; fingerprint: string }) => runVerifyFix(a));
+  const verifyFixTool = async (args: Record<string, unknown>): Promise<McpToolResult> => {
+    if (!deps.recordingsDir) {
+      return errorResult({ error: "not_configured", message: "verify_fix requires recordingsDir" });
+    }
+    if (!isMissionResultId(args.id) || typeof args.fingerprint !== "string" || !/^[0-9a-f]{16}$/.test(args.fingerprint)) {
+      return errorResult({ error: "invalid_args", message: "verify_fix requires a mission result 'id' and a 16-hex 'fingerprint'" });
+    }
+    try {
+      const report = await verifyFixImpl({
+        resultPath: join(deps.recordingsDir, `${args.id}.result.json`),
+        fingerprint: args.fingerprint,
+      });
+      const body = { id: args.id, status: report.verdict, ...report };
+      return report.verdict === "inconclusive" ? errorResult(body) : jsonResult(body);
+    } catch (err) {
+      return errorResult({ error: "verify_fix_refused", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   const wired: Record<string, Omit<McpTool, "name">> = {
+    verify_fix: {
+      description:
+        "Replay a finding's reproduction (by mission result id + fingerprint) in a fresh browser. status: fixed (signal absent) | still-reproduces | inconclusive (replay could not reach the step — never a pass).",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, fingerprint: { type: "string" } },
+        required: ["id", "fingerprint"],
+      },
+      handler: verifyFixTool,
+    },
     get_mission_result: {
       description:
         "Read a finished mission's TYPED result by id (e.g. adversarial-2026-09-23T00-00-00-000Z): status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass.",

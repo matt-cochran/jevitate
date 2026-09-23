@@ -200,6 +200,7 @@ describe("shared decision transcript — every model-deciding strategy writes on
           seedUrl: `${site.url}/login`,
           allowlist: [site.url],
           strategies: ["ordering-violation", "boundary-input"],
+          bounds: { maxDecisions: 2 },
           judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.2 } }),
           generation: new FakeGenerationGateway(),
           outDir,
@@ -215,11 +216,11 @@ describe("shared decision transcript — every model-deciding strategy writes on
         expect(persisted).toMatchObject({ missionOutcome: "clean", exitCode: 0 });
         const transcript = await readTranscript(result.transcriptPath);
         expect(transcript).toEqual(result.transcript);
-        expect(transcript.map((e) => e.strategy)).toEqual(["ordering-violation", "boundary-input"]);
+        expect(transcript.map((e) => e.strategy)).toEqual(["seed-load", "ordering-violation", "boundary-input"]);
         expect(transcript.every((e) => e.chosenBy === "strategy")).toBe(true);
         // boundary-input targets the Username field through the shared affordance mapping.
-        expect(transcript[1]?.op).toBe("type");
-        expect(transcript[0]?.judgments?.looksBroken).toEqual({ value: false, probability: 0.2 });
+        expect(transcript[2]?.op).toBe("type");
+        expect(transcript[1]?.judgments?.looksBroken).toEqual({ value: false, probability: 0.2 });
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }

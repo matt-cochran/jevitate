@@ -1,0 +1,160 @@
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { RecordingSchema, type Recording } from "@jevitate/recording";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
+import {
+  assertAuthorizedExploreTarget,
+  verifyFix,
+  type VerifyFixResult,
+  type VerifyFixVerdict,
+} from "@jevitate/explore";
+
+/**
+ * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
+ * finished mission's persisted typed result (`<stem>.result.json`), finds the defect by
+ * fingerprint, and replays its reproduction in a FRESH browser session (`@jevitate/explore`'s
+ * `verifyFix`, which reuses the Recording interpreter). The replay is authorized against the
+ * mission's own allowlist before any browser opens.
+ *
+ * Exit codes: 0 fixed · 1 still reproduces · 2 inconclusive (the replay could not reach the
+ * defect's step, or the input was unusable) — a broken check never reads as "fixed".
+ */
+
+export const VERIFY_FIX_EXIT_CODES: Readonly<Record<VerifyFixVerdict, number>> = {
+  fixed: 0,
+  "still-reproduces": 1,
+  inconclusive: 2,
+};
+
+export interface RunVerifyFixOptions {
+  /** Path of the mission's `<stem>.result.json`. */
+  readonly resultPath: string;
+  /** The defect (or hang) fingerprint to verify. */
+  readonly fingerprint: string;
+  /** Overrides the storageState recorded with the mission (CLI `--storage-state`). */
+  readonly storageState?: string;
+  readonly browserPortFactory?: () => BrowserPort;
+  readonly browser?: BrowserLaunchOptions;
+  /** Settle ceiling after the replay (ms). */
+  readonly settleCeilingMs?: number;
+}
+
+export interface VerifyFixReport extends VerifyFixResult {
+  readonly exitCode: number;
+  readonly title?: string;
+}
+
+export class VerifyFixInputError extends Error {
+  readonly code = "E_VERIFY_FIX_INPUT" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "VerifyFixInputError";
+  }
+}
+
+interface PersistedFinding {
+  readonly fingerprint: string;
+  readonly related?: readonly string[];
+  readonly kind: string;
+  readonly title?: string;
+  readonly repro: { readonly recordingStepIndex: number };
+}
+
+interface PersistedMission {
+  readonly recording: Recording;
+  readonly target: { readonly seedUrl: string; readonly allowlist: string[]; readonly storageStatePath?: string };
+  readonly findings: PersistedFinding[];
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function asFinding(v: unknown): PersistedFinding | null {
+  if (!isRecord(v) || typeof v.fingerprint !== "string" || typeof v.kind !== "string") return null;
+  const repro = v.repro;
+  if (!isRecord(repro) || typeof repro.recordingStepIndex !== "number") return null;
+  return {
+    fingerprint: v.fingerprint,
+    kind: v.kind,
+    repro: { recordingStepIndex: repro.recordingStepIndex },
+    ...(Array.isArray(v.related) ? { related: v.related.filter((r): r is string => typeof r === "string") } : {}),
+    ...(typeof v.title === "string" ? { title: v.title } : {}),
+  };
+}
+
+/** Parses a persisted mission result, failing closed on anything it cannot trust. */
+export function parsePersistedMission(raw: unknown): PersistedMission {
+  if (!isRecord(raw) || !isRecord(raw.result)) throw new VerifyFixInputError("not a mission result file");
+  const result = raw.result;
+  const target = result.target;
+  if (!isRecord(target) || typeof target.seedUrl !== "string" || !Array.isArray(target.allowlist)) {
+    throw new VerifyFixInputError("the mission result has no replay target (seedUrl/allowlist)");
+  }
+  const recording = RecordingSchema.parse(result.recording);
+  const findings: PersistedFinding[] = [];
+  for (const list of [result.defects, result.hangs]) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const f = asFinding(item);
+      if (f !== null) findings.push(f);
+    }
+  }
+  return {
+    recording,
+    target: {
+      seedUrl: target.seedUrl,
+      allowlist: target.allowlist.filter((a): a is string => typeof a === "string"),
+      ...(typeof target.storageStatePath === "string" ? { storageStatePath: target.storageStatePath } : {}),
+    },
+    findings,
+  };
+}
+
+export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFixReport> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(opts.resultPath, "utf8"));
+  } catch (e) {
+    throw new VerifyFixInputError(`cannot read mission result ${opts.resultPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const mission = parsePersistedMission(raw);
+  const finding = mission.findings.find(
+    (f) => f.fingerprint === opts.fingerprint || (f.related ?? []).includes(opts.fingerprint),
+  );
+  if (finding === undefined) {
+    throw new VerifyFixInputError(`no finding with fingerprint ${opts.fingerprint} in ${opts.resultPath}`);
+  }
+  // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
+  const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
+  const storageState = opts.storageState ?? mission.target.storageStatePath;
+  if (storageState !== undefined && !existsSync(storageState)) {
+    throw new VerifyFixInputError(`storage state not found: ${storageState}`);
+  }
+
+  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  const result = await verifyFix({
+    recording: mission.recording,
+    recordingStepIndex: finding.repro.recordingStepIndex,
+    fingerprint: finding.fingerprint,
+    defectKind: finding.kind,
+    ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
+    openSession: async () => {
+      const session = await portFactory().open({
+        headless: true,
+        allowedOrigins: [...mission.target.allowlist],
+        baseUrl: origin,
+        ...opts.browser,
+        ...(storageState !== undefined ? { storageState } : {}),
+      });
+      const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
+      return { page: session.page, actor, close: () => session.close() };
+    },
+  });
+  return {
+    ...result,
+    exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
+    ...(finding.title === undefined ? {} : { title: finding.title }),
+  };
+}

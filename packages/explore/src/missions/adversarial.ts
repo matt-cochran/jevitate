@@ -4,7 +4,7 @@ import { Navigate } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
-import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
+import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
@@ -20,54 +20,98 @@ import {
 import { CrashWatch, describeFailure, tryTriage, type Triage } from "../mission-failure.js";
 import { RunRecorder, emptyRecording } from "../record.js";
 import { PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
+import {
+  defectTitle,
+  groupStepSignals,
+  invariantFingerprint,
+  messageClass,
+  normalizeRoute,
+} from "../adversarial/defect-fingerprint.js";
 import { pickMisuseAction, type MisuseDecision, type MisuseStrategy } from "../adversarial/misuse.js";
 
 /**
- * runAdversarialMission — a bounded "try to break it" run.
+ * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
  *
- * The mission applies bounded misuse strategies (ordering violations,
+ * The mission cycles bounded misuse strategies (ordering violations,
  * repeated/rapid actions, navigation during pending async, boundary/invalid
- * inputs chosen by field semantics, contradictory actions) and, after EVERY
- * step, asks a TRUSTED HARD-SIGNAL oracle (`PageSignalCollector`) whether the
- * app broke — a console error, an HTTP 5xx, a failed request, an unhandled page
+ * inputs chosen by field semantics, contradictory actions, following links to
+ * other routes) until its step, action or time budget runs out, and after EVERY
+ * step asks a TRUSTED HARD-SIGNAL oracle (`PageSignalCollector`) whether the app
+ * broke — a console error, an HTTP 5xx, a failed request, an unhandled page
  * exception — plus an optional user-declared invariant.
  *
- * GUARDRAIL #4 (the mission's defining property): the stop-on-defect decision
- * comes EXCLUSIVELY from that independent oracle or the user invariant. Jev's
- * `Noul` "does this look broken?" is a SOFT augment only — it is consulted for
- * the transcript/triage context and then discarded; it can never, alone,
- * conclude a defect or gate the stop. A "looks broken" Noul with no hard signal
- * MUST NOT surface as a defect (proved in adversarial.test.ts Task 7).
+ * A defect is the mission's SUCCESS case, so it is data: finding one does not
+ * stop the run. Each defect is keyed by a stable fingerprint (signal kind +
+ * normalized route/endpoint + status/message class — see
+ * `defect-fingerprint.ts`); a later occurrence of the same fingerprint only
+ * counts an occurrence. Every defect carries its reproduction: the ordered
+ * transcript steps that led to it and the flat index of the Recording step to
+ * replay up to (`RecordingInterpreter.runToCheckpoint`), which `verifyFix`
+ * replays to decide "fixed" vs "still reproduces".
  *
- * On a defect the mission stops, keeps the run `Recording` as the exact repro,
- * and hands a REDACTED failure summary + URL (never raw form state — guardrail
- * #3) to the generation gateway for a triage narrative. The narrative is a
- * HELPER: when it cannot be generated the defect is still recorded with its raw
- * evidence and the triage is marked `unavailable` with the reason.
+ * GUARDRAIL #4 (the mission's defining property): a defect comes EXCLUSIVELY
+ * from that independent oracle or the user invariant. Jev's `Noul` "does this
+ * look broken?" is a SOFT augment only — recorded in the transcript and
+ * discarded; it can never, alone, conclude a defect. A "looks broken" Noul with
+ * no hard signal MUST NOT surface as a defect (proved in adversarial.test.ts).
+ *
+ * The triage narrative gets a REDACTED failure summary + URL only (never raw
+ * form state — guardrail #3). It is a HELPER: when it cannot be generated the
+ * defect is still recorded with its raw evidence and the triage is marked
+ * `unavailable` with the reason.
  *
  * The outcome is always a typed result, never a throw: an engine failure
  * (browser/page crash, unexpected exception) returns `crashed` with the partial
- * transcript and Recording; a seed page that never renders returns
- * `inconclusive`. Neither can ever read as `clean`.
- *
- * Perception is the shared `perceive()` step (render wait + occlusion), so a
- * misuse strategy never picks from a blank, still-rendering frame or a control
- * hidden behind an overlay; every outcome carries the shared decision
- * transcript (the strategy's action, whether it landed, and Jev's advisory
- * `looksBroken` judgment — recorded, never gating).
+ * transcript, Recording and every defect found so far; a seed page that never
+ * renders returns `inconclusive`. Neither can ever read as `clean`.
  */
 
+/** How to reproduce a defect: the steps that led to it and where to replay the Recording to. */
+export interface DefectRepro {
+  /** The ordered transcript steps up to and including the one that surfaced the defect. */
+  readonly steps: TranscriptEntry[];
+  /** Flat index (pages→steps) of the last Recording step to replay; `runToCheckpoint` target. */
+  readonly recordingStepIndex: number;
+}
+
 export interface AdversarialDefect {
-  readonly signals: DefectSignal[];
+  /** Stable identity (16 hex): same bug, same fingerprint — across steps and across runs. */
+  readonly fingerprint: string;
+  /** Every signal fingerprint seen with it (the cascade one broken call fires). */
+  readonly related: string[];
+  readonly kind: DefectSignal["kind"] | "invariant";
+  readonly title: string;
+  /** Normalized route (path pattern) of the page it was first seen on. */
+  readonly route: string;
+  /** The (redacted) page URL it was first seen on. */
   readonly url: string;
+  /** The raw hard-signal evidence of its first occurrence. */
+  readonly signals: DefectSignal[];
+  /** The invariant's reason, for an `invariant` defect. */
+  readonly invariantReason?: string;
+  readonly firstSeenStep: number;
+  readonly occurrences: number;
+  readonly occurrenceSteps: number[];
+  readonly repro: DefectRepro;
   readonly triage: Triage;
 }
+
+/** Why the hunt ended (the mission's budget, or nothing left to try). */
+export type AdversarialStop =
+  | "step-budget"
+  | "action-budget"
+  | "time-budget"
+  | "strategies-exhausted"
+  | "not-rendered"
+  | "crashed";
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
   readonly outcome: Extract<MissionOutcome, "clean" | "defects-found" | "inconclusive" | "crashed">;
+  readonly stop: AdversarialStop;
+  /** Distinct defects (deduped by fingerprint), in first-seen order. */
   readonly defects: AdversarialDefect[];
-  /** The run's Recording (partial when the run crashed) — the exact repro path. */
+  /** The run's Recording (partial when the run crashed) — every defect's repro path. */
   readonly recording: Recording;
   readonly transcript: TranscriptEntry[];
   /** Why the run ended `crashed`/`inconclusive`. */
@@ -81,8 +125,12 @@ export interface AdversarialMissionParams {
   readonly generation: GenerationPort;
   readonly seedUrl: string;
   readonly allowlist: readonly string[];
+  /** The strategies, cycled in order until a budget runs out. */
   readonly strategies: readonly MisuseStrategy[];
+  /** `maxDecisions` caps strategy steps, `maxActions` caps executed actions. */
   readonly bounds?: Partial<Bounds>;
+  /** Wall-clock budget for the hunt (ms). Default 10 minutes. */
+  readonly timeBudgetMs?: number;
   /** An independent, user-declared invariant. `ok:false` is a HARD defect. */
   readonly userInvariant?: (page: Page) => Promise<{ ok: boolean; reason?: string }>;
   /** Recording.site label. Defaults to the seed origin. */
@@ -93,6 +141,48 @@ export interface AdversarialMissionParams {
   readonly onTranscriptEntry?: TranscriptListener;
   /** Incremental-flush seam: the partial Recording after every recorded step. */
   readonly onRecording?: (recording: Recording) => void;
+  /** Clock seam (ms). Default `Date.now`. */
+  readonly now?: () => number;
+}
+
+export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
+
+/** A defect as seen on ONE step, before it is folded into the deduped set. */
+interface StepFinding {
+  readonly fingerprint: string;
+  readonly related: readonly string[];
+  readonly kind: AdversarialDefect["kind"];
+  readonly title: string;
+  readonly route: string;
+  readonly url: string;
+  readonly signals: DefectSignal[];
+  readonly invariantReason?: string;
+}
+
+interface MutableDefect extends Omit<StepFinding, "related"> {
+  readonly related: Set<string>;
+  readonly firstSeenStep: number;
+  readonly occurrenceSteps: number[];
+  readonly repro: DefectRepro;
+  readonly triage: Triage;
+}
+
+function freeze(d: MutableDefect): AdversarialDefect {
+  return {
+    fingerprint: d.fingerprint,
+    related: [...d.related],
+    kind: d.kind,
+    title: d.title,
+    route: d.route,
+    url: d.url,
+    signals: d.signals,
+    ...(d.invariantReason === undefined ? {} : { invariantReason: d.invariantReason }),
+    firstSeenStep: d.firstSeenStep,
+    occurrences: d.occurrenceSteps.length,
+    occurrenceSteps: [...d.occurrenceSteps],
+    repro: d.repro,
+    triage: d.triage,
+  };
 }
 
 export async function runAdversarialMission(params: AdversarialMissionParams): Promise<AdversarialOutcome> {
@@ -100,17 +190,20 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const origin = assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
   const bounds = resolveBounds(params.bounds);
   const site = params.site ?? origin;
+  const now = params.now ?? Date.now;
+  const timeBudgetMs = params.timeBudgetMs ?? DEFAULT_ADVERSARIAL_TIME_BUDGET_MS;
+  if (params.strategies.length === 0) throw new Error("runAdversarialMission: at least one strategy is required");
 
   // Attach the hard-signal listeners BEFORE navigating, so no signal is missed.
   const collector = new PageSignalCollector(params.page);
   const crashWatch = new CrashWatch(params.page);
   const recorder = new RunRecorder(site, undefined, [], params.onRecording);
   const transcript = new TranscriptLog([], params.onTranscriptEntry);
-  const defects: AdversarialDefect[] = [];
-  const now = (): number => Date.now();
+  const defects = new Map<string, MutableDefect>();
 
   const finish = (
     outcome: AdversarialOutcome["outcome"],
+    stop: AdversarialStop,
     failure?: MissionFailure,
   ): AdversarialOutcome => {
     const finished = recorder.tryFinish({ intent: "adversarial" });
@@ -120,24 +213,101 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const finalFailure = failure ?? recordingFailure;
     return {
       outcome: finished.ok ? outcome : "crashed",
-      defects,
+      stop: finished.ok ? stop : "crashed",
+      defects: [...defects.values()].map(freeze),
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
       transcript: transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
     };
   };
 
-  try {
-    const perceiveNow = async (): Promise<{ snapshot: Snapshot; rendered: boolean; reason?: string }> => {
-      const p = await perceive(params.page, {
-        maxCandidates: bounds.maxCandidates,
-        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
-      });
-      return p.rendered ? { snapshot: p.snapshot, rendered: true } : { snapshot: p.snapshot, rendered: false, reason: p.reason };
-    };
+  const perceiveNow = async (): Promise<{ snapshot: Snapshot; rendered: boolean; reason?: string }> => {
+    const p = await perceive(params.page, {
+      maxCandidates: bounds.maxCandidates,
+      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+    });
+    return p.rendered ? { snapshot: p.snapshot, rendered: true } : { snapshot: p.snapshot, rendered: false, reason: p.reason };
+  };
 
+  /**
+   * The independent oracle for one step: drains the hard signals and checks the user invariant.
+   * Returns the transcript reason and the step's findings, or null when nothing broke.
+   */
+  const adjudicate = async (): Promise<{ reason: string; findings: StepFinding[] } | null> => {
+    const invariantResult = params.userInvariant ? await params.userInvariant(params.page) : { ok: true };
+    // A same-tick console/response event gets one loop tick to land before draining.
+    await params.page.waitForTimeout(10);
+    const hardSignals = collector.drain();
+    const url = redactUrl(params.page.url());
+    const route = normalizeRoute(url);
+    const findings: StepFinding[] = [];
+
+    const group = groupStepSignals(hardSignals);
+    if (group !== null) {
+      findings.push({
+        fingerprint: group.fingerprint,
+        related: group.related,
+        kind: group.primary.kind,
+        title: defectTitle(group.primary),
+        route,
+        url,
+        signals: hardSignals,
+      });
+    }
+    if (!invariantResult.ok) {
+      const reason = invariantResult.reason ?? "user invariant failed";
+      const fingerprint = invariantFingerprint(url, reason);
+      findings.push({
+        fingerprint,
+        related: [fingerprint],
+        kind: "invariant",
+        title: `Invariant violated on ${route}: ${messageClass(reason).slice(0, 80)}`,
+        route,
+        url,
+        signals: [],
+        invariantReason: reason,
+      });
+    }
+    if (findings.length === 0) return null;
+    const reasons = [...hardSignals.map((s) => s.detail), invariantResult.ok ? undefined : invariantResult.reason]
+      .filter((r): r is string => Boolean(r))
+      .join("; ");
+    return { reason: `defect: ${reasons}`, findings };
+  };
+
+  /**
+   * Folds one step's findings into the deduped defect set — called AFTER the step is in the
+   * transcript, so a new defect's repro includes the step that surfaced it. A known fingerprint
+   * (or one seen in a known defect's cascade) only counts an occurrence.
+   */
+  const fold = async (step: number, findings: readonly StepFinding[]): Promise<void> => {
+    for (const f of findings) {
+      const known = [...defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
+      if (known !== undefined) {
+        if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);
+        for (const r of f.related) known.related.add(r);
+        continue;
+      }
+      // Guardrail #3: the generation call receives only the redacted hard-signal details (never
+      // raw form state) + the URL. A triage failure is data (`unavailable`), never a lost defect.
+      const summary =
+        f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.signals.map((s) => s.detail).join("; ");
+      const triage = await tryTriage(params.generation, { failureSummary: summary, url: f.url });
+      defects.set(f.fingerprint, {
+        ...f,
+        related: new Set(f.related),
+        firstSeenStep: step,
+        occurrenceSteps: [step],
+        repro: { steps: transcript.entries(), recordingStepIndex: Math.max(0, recorder.stepCount - 1) },
+        triage,
+      });
+    }
+  };
+
+  try {
     await Navigate.to(params.seedUrl).performAs(params.actor);
     recorder.navigate(params.seedUrl, now());
+    const started = now();
 
     const seed = await perceiveNow();
     if (!seed.rendered) {
@@ -147,21 +317,62 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         control: null,
         confidence: null,
         chosenBy: "strategy",
+        strategy: "seed-load",
         actOk: false,
         reason: `${seed.reason ?? "page did not render"} (inconclusive)`,
         snapshot: seed.snapshot,
       });
-      return finish("inconclusive", { kind: "exception", message: seed.reason ?? "seed page did not render" });
+      return finish("inconclusive", "not-rendered", {
+        kind: "exception",
+        message: seed.reason ?? "seed page did not render",
+      });
     }
     let snap = seed.snapshot;
+
+    // Step 1 is the seed load itself: an AMBIENT defect (a 5xx fired while the page loads, before
+    // any misuse) is attributed to loading the page, and its repro is just the navigation.
+    {
+      const verdict = await adjudicate();
+      const step = transcript.nextStep;
+      transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "seed-load",
+        actOk: true,
+        reason: verdict === null ? "seed page loaded" : verdict.reason,
+        snapshot: snap,
+      });
+      if (verdict !== null) await fold(step, verdict.findings);
+    }
+
     let lastDecision: MisuseDecision | undefined;
     let actions = 0;
+    let strategySteps = 0;
+    let idleStreak = 0;
+    const visitedLinks = new Set<string>();
+    let stop: AdversarialStop;
 
-    for (const strategy of params.strategies) {
-      if (actions >= bounds.maxActions) break;
+    for (;;) {
+      if (strategySteps >= bounds.maxDecisions) {
+        stop = "step-budget";
+        break;
+      }
+      if (actions >= bounds.maxActions) {
+        stop = "action-budget";
+        break;
+      }
+      if (now() - started >= timeBudgetMs) {
+        stop = "time-budget";
+        break;
+      }
+      const strategy = params.strategies[strategySteps % params.strategies.length];
+      if (strategy === undefined) throw new Error("adversarial: strategy index out of range");
+      strategySteps += 1;
 
       const decidedOn = snap;
-      const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random });
+      const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random, visitedLinks });
       let acted = false;
       let control: Control | null = null;
       let actOk = false;
@@ -182,8 +393,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           else if (decision.op === "type") recorder.fill(control.descriptor, decision.fillText ?? "", at);
           else if (decision.op === "select") recorder.select(control.descriptor, decision.fillText ?? "", at);
         }
+        if (strategy === "visit-route" && control !== null) visitedLinks.add(control.name);
         lastDecision = decision;
       }
+      idleStreak = decision ? 0 : idleStreak + 1;
+
+      const step = transcript.nextStep;
       const recordStep = (extra: { reason?: string; judgments?: Record<string, TranscriptJudgment> }): void => {
         const reason = extra.reason ?? actReason;
         transcript.record({
@@ -199,68 +414,64 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         });
       };
 
-      // Independent oracle — runs EVERY iteration, even when a strategy chose no
-      // action: the user invariant is an independent probe of live page state,
-      // and hard signals may have accrued. A user invariant may synthesize or
-      // observe a hard signal; give a same-tick console/response event one loop
-      // tick to land before draining.
-      const invariantResult = params.userInvariant ? await params.userInvariant(params.page) : { ok: true };
-      await params.page.waitForTimeout(10);
-      const hardSignals = collector.drain();
-
-      if (hardSignals.length > 0 || !invariantResult.ok) {
-        const reasons = [...hardSignals.map((s) => s.detail), invariantResult.reason]
-          .filter((r): r is string => Boolean(r))
-          .join("; ");
-        recordStep({ reason: `defect: ${reasons}` });
-        // Guardrail #3: the generation call receives only a redacted failure
-        // summary (hard-signal details — never raw form state) + the URL. A
-        // triage failure is data (`unavailable`), never a lost defect.
-        const url = redactUrl(params.page.url());
-        const triage = await tryTriage(params.generation, { failureSummary: reasons, url });
-        defects.push({ signals: hardSignals, url, triage });
-        return finish("defects-found");
-      }
-
-      // SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and
-      // recorded in the transcript — it is never read into the stop decision above.
-      // Wiring this answer into the defect condition would be the single most
-      // dangerous regression this mission can suffer (see Task 7). The state is
-      // redacted and carries the prompt-injection guard like every other prompt.
-      // It is advisory, so an unavailable judgment is recorded and the run goes on.
-      let judgments: Record<string, TranscriptJudgment> | undefined;
-      let judgmentNote: string | undefined;
-      try {
-        const answers = await params.judgment.systemOne({
-          state: buildJudgmentState({
-            goal: "try to break it",
-            url: params.page.url(),
-            controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
-            history: [],
-          }),
-          questions: { looksBroken: { kind: "noul" } },
-        });
-        const looksBroken = answers.looksBroken;
-        if (looksBroken?.kind === "noul") {
-          judgments = { looksBroken: { value: looksBroken.value, probability: looksBroken.probability } };
+      // Independent oracle — runs EVERY step, even when a strategy chose no action: the user
+      // invariant is an independent probe of live page state, and hard signals may have accrued.
+      const verdict = await adjudicate();
+      if (verdict !== null) {
+        recordStep({ reason: verdict.reason });
+        await fold(step, verdict.findings);
+      } else {
+        // SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
+        // transcript — it is never read into the defect decision above. Wiring this answer into
+        // the defect condition would be the single most dangerous regression this mission can
+        // suffer. The state is redacted and carries the prompt-injection guard like every other
+        // prompt. It is advisory, so an unavailable judgment is recorded and the run goes on.
+        let judgments: Record<string, TranscriptJudgment> | undefined;
+        let judgmentNote: string | undefined;
+        try {
+          const answers = await params.judgment.systemOne({
+            state: buildJudgmentState({
+              goal: "try to break it",
+              url: params.page.url(),
+              controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
+              history: [],
+            }),
+            questions: { looksBroken: { kind: "noul" } },
+          });
+          const looksBroken = answers.looksBroken;
+          if (looksBroken?.kind === "noul") {
+            judgments = { looksBroken: { value: looksBroken.value, probability: looksBroken.probability } };
+          }
+        } catch (e) {
+          judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
         }
-      } catch (e) {
-        judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
+        recordStep({
+          ...(judgments === undefined ? {} : { judgments }),
+          ...(judgmentNote === undefined
+            ? {}
+            : { reason: actReason === undefined ? judgmentNote : `${actReason}; ${judgmentNote}` }),
+        });
       }
-      recordStep({
-        ...(judgments === undefined ? {} : { judgments }),
-        ...(judgmentNote === undefined ? {} : { reason: actReason === undefined ? judgmentNote : `${actReason}; ${judgmentNote}` }),
-      });
 
       if (acted) {
-        const next = await perceiveNow();
-        snap = next.snapshot;
+        snap = (await perceiveNow()).snapshot;
         recorder.observed(snap.url, now());
+        if (!isAuthorizedExploreTarget(snap.url, params.allowlist)) {
+          // Guardrail #1: never act off an authorized origin — go back to the seed and hunt on.
+          await Navigate.to(params.seedUrl).performAs(params.actor);
+          recorder.navigate(params.seedUrl, now());
+          snap = (await perceiveNow()).snapshot;
+        }
+      }
+      if (idleStreak >= params.strategies.length) {
+        // A whole cycle of strategies found nothing to do on this page: there is nothing left.
+        stop = "strategies-exhausted";
+        break;
       }
     }
 
-    return finish("clean");
+    return finish(defects.size > 0 ? "defects-found" : "clean", stop);
   } catch (e) {
-    return finish("crashed", describeFailure(e, crashWatch.signals()));
+    return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));
   }
 }
