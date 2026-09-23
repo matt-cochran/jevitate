@@ -11,8 +11,7 @@ import { join } from "node:path";
  * hundreds of MB into `os.tmpdir()`. This teardown removes ONLY our own
  * prefixes, and ONLY dirs that appeared DURING this run (snapshotted at setup),
  * so a concurrent run's dirs are never touched. It is a safety net; production
- * CLI paths clean their own profile dirs in a `finally` — see explore-api.ts /
- * journey-api.ts / load-api.ts / program.ts.
+ * CLI sessions are pooled browser contexts with no on-disk profile at all.
  */
 const PREFIXES = ["jevitate-"] as const;
 
