@@ -20,7 +20,10 @@ test("realSecureIO is exported so jevitate init can reuse the same masked-prompt
 function newProgram(aiDeps?: CliDeps["ai"]) {
   const profiles = new ProfileManager("/unused-in-these-tests");
   const lines: string[] = [];
-  const program = buildProgram({ profiles, ai: aiDeps });
+  // Hermetic by default: the real store falls back to ~/.jevitate/credentials.json, so a test that
+  // does not inject `localConfig` would read whatever keys the developer's machine has saved.
+  const ai = aiDeps ? { localConfig: {}, ...aiDeps } : { localConfig: {} };
+  const program = buildProgram({ profiles, ai });
   program.configureOutput({ writeOut: (s) => lines.push(s) });
   program.exitOverride();
   return { program, lines };
