@@ -100,6 +100,11 @@ export function browserPoolOptionsFromEnv(env: NodeJS.ProcessEnv = process.env):
   };
 }
 
+/** A Playwright-typed pool (for callers that need their own, e.g. a dedicated cap or fixture signals). */
+export function createBrowserPool(options: BrowserPoolOptions): PlaywrightBrowserPool {
+  return new BrowserPool<BrowserContext, BrowserContextOptions>(options);
+}
+
 let shared: PlaywrightBrowserPool | undefined;
 
 /**
@@ -107,7 +112,7 @@ let shared: PlaywrightBrowserPool | undefined;
  * jevitate process, created lazily with this platform's resource signals.
  */
 export function sharedBrowserPool(): PlaywrightBrowserPool {
-  shared ??= new BrowserPool<BrowserContext, BrowserContextOptions>({
+  shared ??= createBrowserPool({
     signals: createResourceSignals(),
     ...browserPoolOptionsFromEnv(),
   });
