@@ -141,7 +141,7 @@ describe("PlaywrightBrowserPort.open persistentProfile (explicit opt-in)", () =>
   });
 
   test("storageState + persistentProfile is rejected (ambiguous state source)", async () => {
-    const port = new PlaywrightBrowserPort({ platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launch: capturingLauncher().launch, platform: "linux", pool: calmPool() });
     await expect(port.open({ ...base, persistentProfile: "/tmp/p", storageState: "/tmp/s.json" })).rejects.toThrow(
       /storageState cannot be combined with persistentProfile/,
     );
