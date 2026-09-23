@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
-import { redactText, retryTransient, type CredentialStore, type RetryDeps } from "@jevitate/ai-core";
+import {
+  BACKOFF_SCHEDULE_MS,
+  isTransientError,
+  jittered,
+  redactText,
+  retryTransient,
+  type CredentialStore,
+  type RetryDeps,
+} from "@jevitate/ai-core";
 import type { IssueFilerPort, IssueRef, NewIssue } from "@jevitate/domain";
 
 /**
@@ -60,6 +68,8 @@ export class GitHubFilingError extends Error {
 }
 
 const ISSUE_NUMBER = /\/issues\/(\d+)/;
+/** The dedup marker every jevitate draft body carries (see `fingerprintMarker`). */
+const FINGERPRINT_MARKER = /<!-- jevitate-fingerprint: [0-9a-f]+ -->/;
 
 function parseIssueUrl(url: string): IssueRef {
   const m = ISSUE_NUMBER.exec(url);
@@ -105,13 +115,24 @@ export class GitHubIssueFiler implements IssueFilerPort {
 
   async #gh(args: readonly string[], stdin?: string): Promise<string> {
     const r = await this.#exec("gh", args, stdin);
-    if (r.code !== 0) throw new GitHubFilingError(this.#scrub(`gh ${args[0] ?? ""} ${args[1] ?? ""} failed: ${r.stderr.trim()}`));
+    if (r.code !== 0) {
+      // gh reports API failures as "HTTP 502: Bad Gateway (…)": keep the status so the transient
+      // classification is the same as for the REST transport.
+      const status = /\bHTTP (\d{3})\b/.exec(r.stderr)?.[1];
+      throw new GitHubFilingError(
+        this.#scrub(`gh ${args[0] ?? ""} ${args[1] ?? ""} failed: ${r.stderr.trim()}`),
+        status === undefined ? undefined : Number(status),
+      );
+    }
     return r.stdout;
   }
 
-  /** One REST call, retried with backoff on transient failures (429/5xx/network); typed failure after. */
-  async #rest(method: string, path: string, body?: unknown): Promise<unknown> {
-    const r = await retryTransient(() => this.#restOnce(method, path, body), this.#retry);
+  /**
+   * An IDEMPOTENT REST call (a read), retried with backoff on transient failures (429/5xx/network);
+   * typed failure after. Writes never go through here — see `create` / `comment`.
+   */
+  async #rest(method: "GET", path: string): Promise<unknown> {
+    const r = await retryTransient(() => this.#restOnce(method, path), this.#retry);
     if (r.ok) return r.value;
     const e = r.error;
     throw e instanceof GitHubFilingError
@@ -170,24 +191,54 @@ export class GitHubIssueFiler implements IssueFilerPort {
     return null;
   }
 
-  async create(repo: string, issue: NewIssue): Promise<IssueRef> {
+  /** One create attempt, on whichever transport is in use. */
+  async #createOnce(repo: string, issue: NewIssue): Promise<IssueRef> {
     if ((await this.mode()) === "gh") {
       const out = await this.#gh(["issue", "create", "--repo", repo, "--title", issue.title, "--body-file", "-"], issue.body);
       return parseIssueUrl(out.trim());
     }
-    const res = await this.#rest("POST", `/repos/${repo}/issues`, { title: issue.title, body: issue.body });
+    const res = await this.#restOnce("POST", `/repos/${repo}/issues`, { title: issue.title, body: issue.body });
     if (!isRecord(res) || typeof res.number !== "number" || typeof res.html_url !== "string") {
       throw new GitHubFilingError("GitHub API returned no issue");
     }
     return { number: res.number, url: res.html_url };
   }
 
+  /**
+   * Creating an issue is NOT idempotent, so it is never blindly retried: a "failed" create (a 502,
+   * a dropped connection) may well have persisted. After a transient failure the fingerprint
+   * search runs again — if the issue now exists it IS the one this call created and is returned;
+   * only if it is still absent is the create tried again, on the backoff schedule. A body without a
+   * fingerprint marker cannot be checked, so it gets exactly one attempt. Same for both transports.
+   */
+  async create(repo: string, issue: NewIssue): Promise<IssueRef> {
+    const marker = FINGERPRINT_MARKER.exec(issue.body)?.[0];
+    const schedule = this.#retry.schedule ?? BACKOFF_SCHEDULE_MS;
+    const sleep = this.#retry.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const random = this.#retry.random ?? Math.random;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#createOnce(repo, issue);
+      } catch (e) {
+        const delay = schedule[attempt];
+        if (marker === undefined || delay === undefined || !isTransientError(e)) throw e;
+        const landed = await this.findOpenByMarker(repo, marker);
+        if (landed !== null) return landed;
+        await sleep(jittered(delay, random));
+      }
+    }
+  }
+
+  /**
+   * An occurrence comment is not idempotent either: it gets exactly one attempt (a duplicate
+   * comment is worse than a missing one — the draft on disk keeps the occurrence either way).
+   */
   async comment(repo: string, number: number, body: string): Promise<IssueRef> {
     if ((await this.mode()) === "gh") {
       const out = await this.#gh(["issue", "comment", String(number), "--repo", repo, "--body-file", "-"], body);
       return { number, url: out.trim() };
     }
-    const res = await this.#rest("POST", `/repos/${repo}/issues/${number}/comments`, { body });
+    const res = await this.#restOnce("POST", `/repos/${repo}/issues/${number}/comments`, { body });
     return { number, url: isRecord(res) && typeof res.html_url === "string" ? res.html_url : "" };
   }
 }
