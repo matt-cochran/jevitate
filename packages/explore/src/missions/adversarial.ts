@@ -9,6 +9,7 @@ import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
 import { monitorFor } from "../page-monitor.js";
+import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { act } from "../act.js";
 import { buildJudgmentState } from "../redact.js";
 import { PROMPT_INJECTION_GUARD } from "../decide.js";
@@ -123,6 +124,8 @@ export interface AdversarialOutcome {
   readonly heap: HeapSample[];
   /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
   readonly crash?: CrashReport;
+  /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
+  readonly timing: TimingSummary;
 }
 
 export interface AdversarialMissionParams {
@@ -230,19 +233,22 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       transcript: transcript.entries(),
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
       heap: heap.samples(),
+      timing: summarizeTimings(transcript.entries().map((e) => e.timing)),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? { crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples()) }
         : {}),
     };
   };
 
-  const perceiveNow = async (): Promise<{ snapshot: Snapshot; rendered: boolean; reason?: string }> => {
+  const perceiveNow = async (): Promise<{ snapshot: Snapshot; timing: PageTiming; rendered: boolean; reason?: string }> => {
     const p = await perceive(params.page, {
       maxCandidates: bounds.maxCandidates,
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
     });
     await heap.sample(params.page, transcript.nextStep);
-    return p.rendered ? { snapshot: p.snapshot, rendered: true } : { snapshot: p.snapshot, rendered: false, reason: p.reason };
+    return p.rendered
+      ? { snapshot: p.snapshot, timing: p.timing, rendered: true }
+      : { snapshot: p.snapshot, timing: p.timing, rendered: false, reason: p.reason };
   };
 
   /**
@@ -314,7 +320,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         related: new Set(f.related),
         firstSeenStep: step,
         occurrenceSteps: [step],
-        repro: { steps: transcript.entries(), recordingStepIndex: Math.max(0, recorder.stepCount - 1) },
+        // The repro is the ordered steps; their timing stays in the run transcript (not copied per defect).
+        repro: {
+          steps: transcript.entries().map((e): TranscriptEntry => {
+            const { timing: _timing, ...step } = e;
+            return step;
+          }),
+          recordingStepIndex: Math.max(0, recorder.stepCount - 1),
+        },
         triage,
       });
     }
@@ -339,6 +352,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         actOk: false,
         reason: `${seed.reason ?? "page did not render"} (inconclusive)`,
         snapshot: seed.snapshot,
+        timing: seed.timing,
       });
       return finish("inconclusive", "not-rendered", {
         kind: "exception",
@@ -346,6 +360,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       });
     }
     let snap = seed.snapshot;
+    let snapTiming = seed.timing;
+    recorder.observed(snap.url, now(), snapTiming);
 
     // Step 1 is the seed load itself: an AMBIENT defect (a 5xx fired while the page loads, before
     // any misuse) is attributed to loading the page, and its repro is just the navigation.
@@ -361,6 +377,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         actOk: true,
         reason: verdict === null ? "seed page loaded" : verdict.reason,
         snapshot: snap,
+        timing: snapTiming,
       });
       if (verdict !== null) await fold(step, verdict.findings);
     }
@@ -390,6 +407,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       strategySteps += 1;
 
       const decidedOn = snap;
+      const decidedOnTiming = snapTiming;
       const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random, visitedLinks });
       let acted = false;
       let control: Control | null = null;
@@ -428,6 +446,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           actOk,
           ...(reason === undefined ? {} : { reason }),
           snapshot: decidedOn,
+          timing: decidedOnTiming,
           ...(extra.judgments === undefined ? {} : { judgments: extra.judgments }),
         });
       };
@@ -472,13 +491,18 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
 
       if (acted) {
-        snap = (await perceiveNow()).snapshot;
-        recorder.observed(snap.url, now());
+        const next = await perceiveNow();
+        snap = next.snapshot;
+        snapTiming = next.timing;
+        recorder.observed(snap.url, now(), snapTiming);
         if (!isAuthorizedExploreTarget(snap.url, params.allowlist)) {
           // Guardrail #1: never act off an authorized origin — go back to the seed and hunt on.
           await Navigate.to(params.seedUrl).performAs(params.actor);
           recorder.navigate(params.seedUrl, now());
-          snap = (await perceiveNow()).snapshot;
+          const back = await perceiveNow();
+          snap = back.snapshot;
+          snapTiming = back.timing;
+          recorder.observed(snap.url, now(), snapTiming);
         }
       }
       if (idleStreak >= params.strategies.length) {

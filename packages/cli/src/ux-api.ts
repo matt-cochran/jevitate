@@ -21,6 +21,7 @@ import {
   type Snapshot,
   type Control as ExploreControl,
   type Bounds,
+  type TimingSummary,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
@@ -253,6 +254,8 @@ export interface RunUsabilityMissionResult {
   readonly failure?: MissionFailure;
   /** Why the analysis could not be produced (the run's evidence is still kept). */
   readonly analysisUnavailable?: string;
+  /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
+  readonly timing: TimingSummary;
 }
 
 /**
@@ -327,6 +330,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const runOutcome: MissionOutcome =
       run.stop === "crashed" ? "crashed" : run.stop === "inconclusive" ? "inconclusive" : "clean";
     const base = {
+      timing: run.timing,
       stop: run.stop,
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,

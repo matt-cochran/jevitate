@@ -1,6 +1,18 @@
 import type { Op } from "./actions.js";
 import type { Control, Snapshot } from "./snapshot.js";
 import { redactText, redactUrl } from "./redact.js";
+import type { PageTiming, RequestTiming } from "./timing.js";
+
+function redactTiming(t: PageTiming, secrets: readonly string[]): PageTiming {
+  if (secrets.length === 0) return t;
+  const r = (v: string): string => redactText(v, secrets);
+  const req = (q: RequestTiming): RequestTiming => ({ ...q, endpoint: r(q.endpoint), url: r(q.url) });
+  return {
+    ...t,
+    route: r(t.route),
+    requests: { ...t.requests, slowest: t.requests.slowest.map(req), samples: t.requests.samples.map(req) },
+  };
+}
 
 /**
  * The decision transcript — ONE shape and ONE builder shared by every mission that acts on a
@@ -39,6 +51,11 @@ export interface TranscriptEntry {
   readonly controlCount: number;
   /** Advisory model judgments made at this step, by question name (e.g. `looksBroken`). */
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
+  /**
+   * How the page reached the state this step was decided on — navigation/transition timing and its
+   * network (owner ruling 6). A measurement, never a verdict.
+   */
+  readonly timing?: PageTiming;
 }
 
 export interface TranscriptStep {
@@ -52,6 +69,8 @@ export interface TranscriptStep {
   /** The snapshot the step was decided on. */
   readonly snapshot: Snapshot;
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
+  /** The timing of the perception that produced `snapshot`. */
+  readonly timing?: PageTiming;
 }
 
 /**
@@ -86,6 +105,7 @@ export class TranscriptLog {
       signature: step.snapshot.signature,
       controlCount: step.snapshot.controls.length,
       ...(step.judgments === undefined ? {} : { judgments: step.judgments }),
+      ...(step.timing === undefined ? {} : { timing: redactTiming(step.timing, this.#secrets) }),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);

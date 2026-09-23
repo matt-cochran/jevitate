@@ -26,7 +26,14 @@ import {
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import type { FilingConfig, IssueDraft, IssueFilerPort, MissionFailure, MissionOutcome } from "@jevitate/domain";
-import { currentEnvironment, draftForCrash, draftForDefect, type DraftContext } from "@jevitate/explore";
+import {
+  currentEnvironment,
+  draftForCrash,
+  draftForDefect,
+  summarizeTimings,
+  type DraftContext,
+  type TimingSummary,
+} from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { readCliVersion } from "./version.js";
 import { resolveDataDir } from "./data-dir.js";
@@ -130,6 +137,8 @@ export interface RunExplorationResult {
   readonly failure?: MissionFailure;
   /** Issue drafts (a crash) written next to the Recording, and what filing did with them. */
   readonly issues: FindingsIssues;
+  /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
+  readonly timing: TimingSummary;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -187,6 +196,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
     return {
       issues,
+      timing: mission.run.timing,
       outcome: mission.outcome,
       assertionPassed: mission.assertionPassed,
       stop: mission.run.stop,
@@ -376,6 +386,8 @@ export interface RunCoverageMissionResult {
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
   readonly failure?: MissionFailure;
+  /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
+  readonly timing: TimingSummary;
   /** The persisted typed result (`coverage-<stamp>.result.json`). */
   readonly resultPath: string;
   readonly recordingPaths: string[];
@@ -427,6 +439,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
+      timing: summarizeTimings(result.transcript.map((e) => e.timing)),
       coverage: result.coverage,
       outcome: result.outcome,
       missionOutcome,

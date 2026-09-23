@@ -60,10 +60,31 @@ export type Step =
   | { kind: "assert"; label?: string; check: Assertion }
   | { kind: "handback"; label?: string; prompt: string; resume: Assertion; timeoutMs?: number };
 
+/**
+ * How the page reached the state after a step — a MEASUREMENT recorded alongside the step (never a
+ * postcondition, never replayed): navigation timing for a new document, action-to-settled time for
+ * an in-place transition, and the page's network in that window (URLs redacted + normalized).
+ */
+export interface PageTimingRecord {
+  route: string;
+  kind: "navigation" | "transition" | "idle";
+  navigation?: { ttfbMs: number; domContentLoadedMs: number; loadMs: number | null };
+  settleMs?: number;
+  settled: boolean;
+  requests: {
+    count: number;
+    pending: number;
+    slowest: Array<{ endpoint: string; url: string; status: number | null; durationMs: number }>;
+  };
+  lcpMs?: number;
+}
+
 export interface StepTiming {
   atMs: number;
   durationMs: number;
   gapBeforeMs: number;
+  /** The page timing observed after this step (optional; measurement only). */
+  page?: PageTimingRecord;
 }
 
 export interface RecordedStep {
@@ -304,11 +325,37 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+const PageTimingRecordSchema = z
+  .object({
+    route: z.string(),
+    kind: z.enum(["navigation", "transition", "idle"]),
+    navigation: z
+      .object({ ttfbMs: z.number(), domContentLoadedMs: z.number(), loadMs: z.number().nullable() })
+      .strict()
+      .optional(),
+    settleMs: z.number().optional(),
+    settled: z.boolean(),
+    requests: z
+      .object({
+        count: z.number(),
+        pending: z.number(),
+        slowest: z.array(
+          z
+            .object({ endpoint: z.string(), url: z.string(), status: z.number().nullable(), durationMs: z.number() })
+            .strict(),
+        ),
+      })
+      .strict(),
+    lcpMs: z.number().optional(),
+  })
+  .strict();
+
 const StepTimingSchema = z
   .object({
     atMs: z.number(),
     durationMs: z.number(),
     gapBeforeMs: z.number(),
+    page: PageTimingRecordSchema.optional(),
   })
   .strict();
 

@@ -95,6 +95,18 @@ jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.j
 
 The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
 
+### Page timing
+
+Every transcript step (and the Recording step before it) records how the page
+reached its state: Navigation Timing (TTFB, DOMContentLoaded, load) for a new
+document, action-to-settled time for an in-place transition, the page's
+requests (count, and the slowest ones with their redacted, normalized endpoint,
+status and duration), and LCP where the browser exposes it. Each run's result
+carries a `timing` summary keyed by normalized route (`navigation /contacts/:id`)
+and endpoint pattern (`GET /api/contacts/:id`), with p50 and max, plus the
+slowest pages and endpoints. These are measurements, not verdicts: a slow page
+is never a defect by itself.
+
 ### Crashes and issue drafts
 
 Every crash records the steps up to it, the error and stack, the page/browser

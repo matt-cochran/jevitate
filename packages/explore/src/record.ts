@@ -6,10 +6,12 @@ import {
   type Recording,
   type Step,
   type StepTiming,
+  type PageTimingRecord,
   type TargetDescriptor,
   type ValueOrVar,
 } from "@jevitate/recording";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
+import type { PageTiming } from "./timing.js";
 
 /**
  * record: accumulate executed steps into a schema-valid, deterministically
@@ -123,6 +125,23 @@ export class RunRecorder {
     return redactDescriptor(d, this.#secrets);
   }
 
+  #pageTiming(t: PageTiming): PageTimingRecord {
+    const r = (v: string): string => redactText(v, this.#secrets);
+    return {
+      route: r(t.route),
+      kind: t.kind,
+      ...(t.navigation === undefined ? {} : { navigation: { ...t.navigation } }),
+      ...(t.settleMs === undefined ? {} : { settleMs: t.settleMs }),
+      settled: t.settled,
+      requests: {
+        count: t.requests.count,
+        pending: t.requests.pending,
+        slowest: t.requests.slowest.map((q) => ({ endpoint: r(q.endpoint), url: r(q.url), status: q.status, durationMs: q.durationMs })),
+      },
+      ...(t.lcpMs === undefined ? {} : { lcpMs: t.lcpMs }),
+    };
+  }
+
   #timing(atMs: number, durationMs = 0): StepTiming {
     if (this.#t0 === null) this.#t0 = atMs;
     const timing: StepTiming = {
@@ -220,7 +239,12 @@ export class RunRecorder {
    * the last recorded step caused the navigation: rewrite its postcondition to
    * `urlIncludes` and queue the next segment (materialized on the next step).
    */
-  observed(url: string, _atMs: number): void {
+  observed(url: string, _atMs: number, timing?: PageTiming): void {
+    // The first observation after a step carries how the page got there (a measurement, never a
+    // postcondition): it is attached to that step's timing, redacted like everything else.
+    if (timing !== undefined && this.#lastStep !== null && this.#lastStep.timing !== undefined && this.#lastStep.timing.page === undefined) {
+      this.#lastStep.timing.page = this.#pageTiming(timing);
+    }
     const path = this.#path(url);
     if (this.#current !== null && path !== this.#current.url && this.#lastStep !== null) {
       setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });

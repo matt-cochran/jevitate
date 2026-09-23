@@ -23,6 +23,7 @@ import {
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
+import type { PageTiming } from "../timing.js";
 import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { reachFrontierState } from "../coverage/reach.js";
@@ -175,13 +176,15 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const site = new URL(params.seedUrl).origin;
   // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
   // still-rendering frame — including right after a reset-and-replay.
-  const takeSnapshot = async (): Promise<Snapshot> =>
-    (
-      await perceive(params.page, {
-        maxCandidates: bounds.maxCandidates,
-        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
-      })
-    ).snapshot;
+  let lastTiming: PageTiming | undefined;
+  const takeSnapshot = async (): Promise<Snapshot> => {
+    const p = await perceive(params.page, {
+      maxCandidates: bounds.maxCandidates,
+      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+    });
+    lastTiming = p.timing;
+    return p.snapshot;
+  };
   const transcript = new TranscriptLog([], params.onTranscriptEntry);
   const crashWatch = new CrashWatch(params.page);
   const visited = new Set<string>();
@@ -249,6 +252,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       });
       actions += 1;
       const decidedOn = snap;
+    const decidedOnTiming = lastTiming;
       if (!result.ok) {
         transcript.record({
           op: item.op,
@@ -259,6 +263,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
           actOk: false,
           ...(result.reason === undefined ? {} : { reason: result.reason }),
           snapshot: decidedOn,
+        ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
         });
         continue;
       }
@@ -297,6 +302,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
         strategy: "coverage-frontier",
         actOk: true,
         snapshot: decidedOn,
+        ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
         ...(judgmentNote === undefined ? {} : { reason: judgmentNote }),
         ...(isDefect?.kind === "noul"
           ? { judgments: { isDefect: { value: isDefect.value, probability: isDefect.probability } } }

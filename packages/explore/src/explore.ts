@@ -16,6 +16,7 @@ import {
 import type { Snapshot } from "./snapshot.js";
 import { perceive } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
+import { summarizeTimings, type TimingSummary } from "./timing.js";
 import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
@@ -97,6 +98,8 @@ export interface ExploreRun {
   readonly heap: HeapSample[];
   /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
   readonly crash?: CrashReport;
+  /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
+  readonly timing: TimingSummary;
 }
 
 function firstLine(e: unknown): string {
@@ -151,7 +154,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       await heap.sample(page, transcript.nextStep);
       // Re-observe the PREVIOUS action's effect: patch its postcondition + open
       // the next page segment if the URL changed (record-before-reobserve).
-      recorder.observed(snap.url, now());
+      recorder.observed(snap.url, now(), perception.timing);
 
       // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
       if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
@@ -172,6 +175,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           actOk: false,
           reason: `${perception.reason} (fail-closed)`,
           snapshot: snap,
+          timing: perception.timing,
         });
         stop = "blocked";
         break;
@@ -207,6 +211,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           actOk: false,
           reason: failure.message,
           snapshot: snap,
+          timing: perception.timing,
         });
         stop = "inconclusive";
         break;
@@ -222,6 +227,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           actOk,
           ...(reason === undefined ? {} : { reason }),
           snapshot: snap,
+          timing: perception.timing,
         });
       };
 
@@ -351,6 +357,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     actions: tracker.actions,
     ...(failure === undefined ? {} : { failure }),
     heap: heap.samples(),
+    timing: summarizeTimings(transcript.entries().map((e) => e.timing)),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples()) }
       : {}),

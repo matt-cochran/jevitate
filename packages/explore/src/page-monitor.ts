@@ -33,6 +33,7 @@ export interface CompletedRequest extends InflightRequest {
   readonly status: number | null;
   readonly durationMs: number;
   readonly failed: boolean;
+  readonly endedAt: number;
 }
 
 export interface SettleResult {
@@ -111,7 +112,8 @@ export class PageMonitor {
       this.#inflight.delete(r);
       if (started !== undefined) {
         const status = failed ? null : (this.#statuses.get(r) ?? null);
-        this.#completed.push({ ...started, status, failed, durationMs: Math.max(0, this.#now() - started.startedAt) });
+        const endedAt = this.#now();
+        this.#completed.push({ ...started, status, failed, endedAt, durationMs: Math.max(0, endedAt - started.startedAt) });
       }
       this.#touch();
     };
@@ -146,9 +148,37 @@ export class PageMonitor {
     return [...this.#inflight.values()].filter((r) => !STREAM_TYPES.has(r.resourceType));
   }
 
-  /** Requests completed since `sinceMs` (wall clock). */
+  /** Requests that ended since `sinceMs` (wall clock). */
   completedSince(sinceMs: number): CompletedRequest[] {
-    return this.#completed.filter((r) => r.startedAt >= sinceMs);
+    return this.#completed.filter((r) => r.endedAt >= sinceMs);
+  }
+
+  // ---- the timing window: from one perception to the next (owner ruling 6) ----
+  #windowStart: number | null = null;
+  #actionAt: number | null = null;
+  #lastDocId: string | null = null;
+
+  /** Called by `act()` when it dispatches a page-changing action: the start of a transition. */
+  markAction(): void {
+    this.#actionAt = this.#now();
+  }
+
+  /** The open timing window (since the previous perception, or since the monitor started). */
+  window(): { start: number; actionAt: number | null; lastDocId: string | null } {
+    const start = this.#windowStart ?? 0;
+    return { start, actionAt: this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null, lastDocId: this.#lastDocId };
+  }
+
+  /** Closes the window at `at` (the perception just read the page) and forgets older requests. */
+  closeWindow(at: number, docId: string | null): void {
+    this.#windowStart = at;
+    this.#actionAt = null;
+    if (docId !== null) this.#lastDocId = docId;
+    const keepFrom = at;
+    for (let i = this.#completed.length - 1; i >= 0; i--) {
+      const r = this.#completed[i];
+      if (r !== undefined && r.endedAt < keepFrom) this.#completed.splice(i, 1);
+    }
   }
 
   /** Waits up to `ms`, returning early on any network activity. */

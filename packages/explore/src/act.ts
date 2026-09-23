@@ -5,6 +5,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { occluderOf } from "./occlusion.js";
+import { monitorFor } from "./page-monitor.js";
 
 /**
  * act: execute one decided op against the live page, GATED.
@@ -129,6 +130,12 @@ async function attempt(action: () => Promise<void>): Promise<ActResult> {
 
 export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
   const page = actor.ability(BrowseTheWebToken).session.page;
+  // A page-changing action that passed its gate starts a transition: the next perception measures
+  // action-to-settled with the shared settle rule.
+  const dispatch = (action: () => Promise<void>): Promise<ActResult> => {
+    monitorFor(page).markAction();
+    return attempt(action);
+  };
 
   switch (args.op) {
     case "click": {
@@ -136,7 +143,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const descriptor = args.control.descriptor;
-      return attempt(() => Click.on(targetFor(descriptor)).performAs(actor));
+      return dispatch(() => Click.on(targetFor(descriptor)).performAs(actor));
     }
     case "type": {
       if (args.control === null) return { ok: false, mutated: false, reason: "type needs a target" };
@@ -147,7 +154,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const text = args.value;
       const descriptor = args.control.descriptor;
-      return attempt(() => Enter.theText(text).into(targetFor(descriptor)).performAs(actor));
+      return dispatch(() => Enter.theText(text).into(targetFor(descriptor)).performAs(actor));
     }
     case "select": {
       if (args.control === null) return { ok: false, mutated: false, reason: "select needs a target" };
@@ -158,7 +165,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const option = args.value;
       const descriptor = args.control.descriptor;
-      return attempt(async () => {
+      return dispatch(async () => {
         await descriptorToLocator(page, descriptor).selectOption(option);
       });
     }
@@ -171,7 +178,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const file = args.fixture;
       const descriptor = args.control.descriptor;
-      return attempt(() => descriptorToLocator(page, descriptor).setInputFiles(file));
+      return dispatch(() => descriptorToLocator(page, descriptor).setInputFiles(file));
     }
     case "scroll_up":
     case "scroll_down": {

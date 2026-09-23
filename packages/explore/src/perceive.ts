@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { snapshot, type Snapshot } from "./snapshot.js";
 import { monitorFor, SETTLE_QUIET_MS, type SettleResult } from "./page-monitor.js";
+import { measurePageTiming, type PageTiming } from "./timing.js";
 
 /**
  * perceive: the ONE "look at a rendered page" step every mission loop uses (goal/usability
@@ -32,9 +33,16 @@ export interface PerceiveOptions {
   readonly quietMs?: number;
 }
 
+interface PerceptionBase {
+  readonly snapshot: Snapshot;
+  readonly settle: SettleResult;
+  /** How the page got here: navigation/transition timing and its network (owner ruling 6). */
+  readonly timing: PageTiming;
+}
+
 export type Perception =
-  | { readonly rendered: true; readonly snapshot: Snapshot; readonly settle: SettleResult }
-  | { readonly rendered: false; readonly snapshot: Snapshot; readonly reason: string; readonly settle: SettleResult };
+  | (PerceptionBase & { readonly rendered: true })
+  | (PerceptionBase & { readonly rendered: false; readonly reason: string });
 
 /** The interactive-control selector the render predicate waits for (kept in step with snapshot). */
 const RENDERED_CONTROL = [
@@ -90,13 +98,25 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
     settledP.then((settle) => ({ kind: "settled" as const, settle })),
   ]);
   const settle = first.kind === "settled" ? first.settle : await settledP;
+  const settleEndedAt = Date.now();
+  const win = monitor.window();
+  const { timing, docId } = await measurePageTiming(page, {
+    completed: monitor.completedSince(win.start),
+    pending: settle.pending,
+    lastDocId: win.lastDocId,
+    actionAt: win.actionAt,
+    settle,
+    settleEndedAt,
+  });
+  monitor.closeWindow(settleEndedAt, docId);
   const snap = await snapshot(page, snapOpts);
 
-  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle };
+  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing };
   return {
     rendered: false,
     snapshot: snap,
     settle,
+    timing,
     reason: settle.settled
       ? "page settled with no interactive controls"
       : `page rendered no interactive controls within ${ceiling}ms`,
