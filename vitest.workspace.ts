@@ -14,8 +14,8 @@ const browser = browserSuites(repoRoot);
  *  - `unit`: every test file that does NOT launch a real browser, at vitest's
  *    default file parallelism.
  *  - `browser`: files that launch real Chromium (see test/browser-suites.ts).
- *    Each file runs on ONE pooled browser (many contexts) and at most two such
- *    files run at once, so a loaded machine is not handed N Chromiums at the
+ *    Each file runs on ONE pooled browser (many contexts, closed when the file
+ *    ends) and at most two such files run at once, so a loaded machine is not handed N Chromiums at the
  *    same moment; the admission-controlled pool paces contexts on top of that.
  *    Timeouts are browser-sized rather than vitest's 5s unit default.
  *
@@ -37,8 +37,11 @@ export default defineWorkspace([
       ...base.test,
       name: "browser",
       include: browser,
-      pool: "forks",
-      poolOptions: { forks: { maxForks: 2, minForks: 1 } },
+      // vitest 2 sizes each pool TYPE from the ROOT config only (per-project
+      // maxForks is ignored), so the browser project gets its own pool type:
+      // threads, capped at 2 in vitest.config.ts; `unit` keeps forks.
+      pool: "threads",
+      setupFiles: ["./test/browser-setup.ts"],
       testTimeout: 30_000,
       hookTimeout: 60_000,
     },
