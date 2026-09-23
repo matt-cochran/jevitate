@@ -110,8 +110,11 @@ async function freshSession(): Promise<VerifySession> {
   return { page: session.page, actor, close: () => session.close() };
 }
 
-/** Small bounds so the ceiling is reached quickly in a test. */
-const FAST = { renderWaitMs: 1_500, requestBoundMs: 1_000, hangProbeMs: 1_000 };
+/**
+ * Bounds for the test: short enough that a real hang's ceiling passes quickly, generous enough that
+ * a healthy page on a loaded host always settles well inside them (no load-dependent verdicts).
+ */
+const FAST = { renderWaitMs: 4_000, requestBoundMs: 3_000, hangProbeMs: 2_000 };
 
 function hunt(path: string) {
   return withSession(
@@ -202,7 +205,7 @@ describe("hangs are detected, classified and REPRODUCED in fresh contexts", () =
           const p = await perceive(session.page, FAST);
           expect(p.hang?.kind).toBe("main-thread-unresponsive");
           expect(p.rendered).toBe(false);
-          expect(p.hang?.detail).toBe("the page's main thread did not answer a trivial probe within 1000ms");
+          expect(p.hang?.detail).toBe("the page's main thread did not answer a trivial probe within 2000ms");
         },
         origin,
       );

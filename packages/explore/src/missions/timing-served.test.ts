@@ -12,7 +12,9 @@ import { withSession } from "../testkit.js";
  * Recording. Measurements only: the slow endpoint is NOT a defect.
  */
 
-const SLOW_MS = 900;
+// Far slower than anything a loaded host can make the 150 small asset requests (which queue on
+// Chromium's 6-connections-per-host limit), so "the slowest endpoint" never depends on host load.
+const SLOW_MS = 3_000;
 let server: Server;
 let origin: string;
 
