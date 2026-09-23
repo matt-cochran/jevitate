@@ -27,7 +27,15 @@ const base = { headless: true, allowedOrigins: [], baseUrl: "about:blank" };
 
 /** Browser-process (not renderer) argvs carrying `marker`; Linux /proc only. */
 async function browserArgvsWith(marker: string): Promise<string[]> {
-  const found: string[] = [];
+  return (await browserProcsWith(marker)).map((p) => p.argv);
+}
+
+async function browserPidsWith(marker: string): Promise<number[]> {
+  return (await browserProcsWith(marker)).map((p) => p.pid);
+}
+
+async function browserProcsWith(marker: string): Promise<{ pid: number; argv: string }[]> {
+  const found: { pid: number; argv: string }[] = [];
   for (const pid of await readdir("/proc")) {
     if (!/^\d+$/.test(pid)) continue;
     let argv: string;
@@ -36,7 +44,7 @@ async function browserArgvsWith(marker: string): Promise<string[]> {
     } catch {
       continue; // process exited mid-scan
     }
-    if (argv.includes(marker) && !argv.includes("--type=")) found.push(argv);
+    if (argv.includes(marker) && !argv.includes("--type=")) found.push({ pid: Number(pid), argv });
   }
   return found;
 }
@@ -95,15 +103,23 @@ describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
 
   test("browser crash fails the live session loudly and the next session relaunches", async () => {
     const port = new PlaywrightBrowserPort({ pool: realPool() });
-    const session = await port.open(base);
+    const marker = `--jevitate-test-marker=${randomUUID()}`;
+    const session = await port.open({ ...base, args: [marker] });
     const browserBefore = session.page.context().browser();
-    const cdp = await session.page.context().newCDPSession(session.page);
-    // Browser.crash kills the browser process itself — a real crash on every OS.
-    // The command can never be answered (the process is gone): it is not awaited,
-    // and its eventual rejection is observed, not left unhandled.
-    const crashCommand = cdp.send("Browser.crash");
-    crashCommand.catch(() => undefined);
-    await expect.poll(() => browserBefore?.isConnected(), { timeout: 20_000 }).toBe(false);
+    if (browserBefore === null) throw new Error("pooled session has no Browser");
+    if (process.platform === "linux") {
+      // A real crash: SIGKILL the browser process (found by its unique argv marker).
+      const pids = await browserPidsWith(marker);
+      expect(pids).toHaveLength(1);
+      process.kill(pids[0]!, "SIGKILL");
+    } else {
+      // Elsewhere there is no /proc to find the PID: the browser is shut down over
+      // CDP behind the pool's back — from the pool's view an unexpected disconnect.
+      // (CDP `Browser.crash` is not honored by headless Chromium, so it can't be used.)
+      const cdp = await browserBefore.newBrowserCDPSession();
+      await cdp.send("Browser.close");
+    }
+    await expect.poll(() => browserBefore.isConnected(), { timeout: 20_000 }).toBe(false);
     await expect(session.close()).rejects.toBeInstanceOf(BrowserCrashedError);
     const next = await port.open(base);
     try {
