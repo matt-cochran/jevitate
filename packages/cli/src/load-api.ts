@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
@@ -75,10 +72,8 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     iterationsPerActor: opts.iterationsPerActor,
     seed: opts.seed,
     runnerFactory: async (actorIndex): Promise<LoadActorRunner> => {
-      const profileDir = await mkdtemp(join(tmpdir(), `jevitate-load-actor-${actorIndex}-`));
       const port = browserPortFactory();
       const session = await port.open({
-        profileDir,
         headless: true,
         allowedOrigins: [journey.recording.site],
         baseUrl: journey.recording.site,
@@ -107,7 +102,6 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
             remainingIterations--;
             if (remainingIterations <= 0) {
               await session.close();
-              await rm(profileDir, { recursive: true, force: true });
             }
           }
         },

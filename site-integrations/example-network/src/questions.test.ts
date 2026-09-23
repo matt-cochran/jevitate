@@ -4,7 +4,7 @@ import { BrowseTheWeb } from "@jevitate/screenplay";
 import { AuthenticatedUser } from "./questions.js";
 
 function actorWithPage(page: any) {
-  const session = { page, startTracing: async () => {}, stopTracingToFile: async () => {}, close: async () => {} };
+  const session = { page, startTracing: async () => {}, stopTracingToFile: async () => {}, saveStorageState: async () => {}, admission: undefined, close: async () => {} };
   return CastActor.named("T").whoCan(new BrowseTheWeb(session, []));
 }
 

@@ -8,8 +8,7 @@
 // This is the ONLY place @jevitate/ux meets @jevitate/explore — the dep
 // direction stays ux ⟂ explore (both are consumed here, neither imports the
 // other). Findings are advisory; a UX finding never gates a run.
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
@@ -247,9 +246,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-usability-"));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
@@ -309,6 +306,5 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     return { report, reportPath, stop: run.stop, screensObserved: collected.length };
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }

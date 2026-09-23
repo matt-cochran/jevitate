@@ -1,7 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Page } from "playwright";
 import { startServer } from "@jevitate/example-site";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
@@ -11,15 +8,13 @@ import { runFeatureMission } from "./feature.js";
 import type { CapabilityScope } from "../feature/capability-scope.js";
 
 let site: { url: string; close(): Promise<void> };
-let profileDir: string;
 let session: BrowserSession;
 let actor: CastActor;
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "jevitate-feature-"));
   const browserPort = new PlaywrightBrowserPort();
-  session = await browserPort.open({ profileDir, headless: true, allowedOrigins: [site.url], baseUrl: site.url });
+  session = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url });
   actor = CastActor.named("feature-explorer").whoCan(new BrowseTheWeb(session, [site.url]));
   // Authenticate once so /inbox and /thread/:id are reachable (the persistent
   // profile keeps the session cookie across mission navigations).
@@ -32,7 +27,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await session?.close();
   await site?.close();
-  if (profileDir) await rm(profileDir, { recursive: true, force: true });
 });
 
 describe("runFeatureMission — single path", () => {

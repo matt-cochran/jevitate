@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
@@ -17,16 +17,15 @@ import { makeRng, seedFrom, Pacer, type SitePolicy, type TypingModel } from "@je
 import { EXAMPLE_NETWORK_ACTIONS } from "./actions.js";
 
 let site: { url: string; close(): Promise<void> };
-let profileDir: string;
+let stateDir: string;
 const clock = { nowIso: () => new Date().toISOString(), monotonicMs: () => Date.now() };
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "jevitate-paced-e2e-"));
+  stateDir = await mkdtemp(join(tmpdir(), "jevitate-paced-e2e-"));
 });
 afterAll(async () => {
   await site.close();
-  await rm(profileDir, { recursive: true, force: true });
 });
 
 function registry() {
@@ -37,7 +36,7 @@ function registry() {
 const base = (account: string) => ({
   site: "example-network",
   account,
-  profileDir,
+  storageStatePath: join(stateDir, `${account}.json`),
   baseUrl: site.url,
   headless: true,
   allowedOrigins: [site.url],

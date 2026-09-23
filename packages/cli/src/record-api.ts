@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { assertAuthorizedExploreTarget, normalizeAllowlist } from "@jevitate/explore";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
@@ -74,9 +73,7 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-record-"));
   const session = await port.open({
-    profileDir,
     headless: opts.headless ?? false,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
@@ -108,7 +105,6 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
     return { recording, recordingPath, steps, pages: recording.pages.length, finalUrl };
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 

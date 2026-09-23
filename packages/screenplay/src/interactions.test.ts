@@ -9,7 +9,7 @@ import { Pacer } from "@jevitate/domain";
 import type { InteractionPolicy } from "@jevitate/domain";
 
 function fakeSessionWithPage(page: any) {
-  return { page, startTracing: async () => {}, stopTracingToFile: async () => {}, close: async () => {} };
+  return { page, startTracing: async () => {}, stopTracingToFile: async () => {}, saveStorageState: async () => {}, admission: undefined, close: async () => {} };
 }
 
 test("Navigate/Enter/Click drive the page; TextOf reads locator text", async () => {

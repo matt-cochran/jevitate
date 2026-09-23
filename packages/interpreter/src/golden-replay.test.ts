@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -9,15 +6,12 @@ import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "./interpreter.js";
 
 let site: { url: string; close(): Promise<void> };
-let profileDir: string;
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "jevitate-golden-"));
 });
 afterAll(async () => {
   await site.close();
-  await rm(profileDir, { recursive: true, force: true });
 });
 
 test(
@@ -98,7 +92,6 @@ test(
 
     const port = new PlaywrightBrowserPort();
     const session = await port.open({
-      profileDir,
       headless: true,
       allowedOrigins: [site.url],
       baseUrl: site.url,

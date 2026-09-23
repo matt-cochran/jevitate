@@ -4,9 +4,6 @@
  * `@jevitate/example-site` (a devDependency) and is only ever imported from
  * `*.test.ts`. Vitest resolves it directly via the source alias.
  */
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
 
 const port = new PlaywrightBrowserPort();
@@ -21,9 +18,7 @@ export async function withSession<T>(
   body: (session: BrowserSession) => Promise<T>,
   baseUrl = "http://127.0.0.1:1/",
 ): Promise<T> {
-  const profileDir = await mkdtemp(join(tmpdir(), prefix));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [baseUrl],
     baseUrl,
@@ -32,7 +27,6 @@ export async function withSession<T>(
     return await body(session);
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 

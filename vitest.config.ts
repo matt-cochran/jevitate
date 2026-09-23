@@ -45,5 +45,8 @@ export default defineConfig({
     // Sweeps throwaway temp dirs the fixtures leak into os.tmpdir() at the end
     // of a run (a full run otherwise leaks ~0.5 GB). See test/global-temp-cleanup.ts.
     globalSetup: ["./test/global-temp-cleanup.ts"],
+    // Only the workspace's `browser` project runs on threads (see
+    // vitest.workspace.ts): at most two real-Chromium test files at once.
+    poolOptions: { threads: { maxThreads: 2, minThreads: 1 } },
   },
 });

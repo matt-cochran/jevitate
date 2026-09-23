@@ -92,9 +92,7 @@ describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
       const recording = RecordingSchema.parse(JSON.parse(raw));
 
       const port = new PlaywrightBrowserPort();
-      const profileDir = await mkdtemp(join(tmpdir(), "jevitate-explore-replay-"));
       const session: BrowserSession = await port.open({
-        profileDir,
         headless: true,
         allowedOrigins: [site.url],
         baseUrl: site.url,
@@ -106,7 +104,6 @@ describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
         expect(session.page.url()).toContain("/inbox");
       } finally {
         await session.close();
-        await rm(profileDir, { recursive: true, force: true });
         await rm(outDir, { recursive: true, force: true });
       }
     },

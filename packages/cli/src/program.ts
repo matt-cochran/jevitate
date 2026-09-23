@@ -1,6 +1,6 @@
-import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { tmpdir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
@@ -271,16 +271,12 @@ function resolveApprovedBy(deps: CliDeps): string {
  * reused after a run — so callers must close each one it hands back.
  */
 async function makeRealBrowserActor(site: string): Promise<{ actor: Actor; close: () => Promise<void> }> {
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-regression-"));
   const port = new PlaywrightBrowserPort();
-  const session = await port.open({ profileDir, headless: true, allowedOrigins: [site], baseUrl: site });
+  const session = await port.open({ headless: true, allowedOrigins: [site], baseUrl: site });
   const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
   return {
     actor,
-    close: async () => {
-      await session.close();
-      await rm(profileDir, { recursive: true, force: true });
-    },
+    close: () => session.close(),
   };
 }
 
@@ -1401,7 +1397,6 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
 
-        const profileDir = await mkdtemp(join(tmpdir(), "jevitate-adversarial-"));
         try {
           const result = await runAdversarialCliMission({
             seedUrl: o.url,
@@ -1415,7 +1410,6 @@ export function buildProgram(deps: CliDeps): Command {
             ],
             judgment: advJudge,
             generation: advGen,
-            profileDir,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
           });
@@ -1428,8 +1422,6 @@ export function buildProgram(deps: CliDeps): Command {
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
-        } finally {
-          await rm(profileDir, { recursive: true, force: true });
         }
         return;
       }
@@ -1506,14 +1498,12 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
         const featAllowlist = resolveExploreAllowlist(o.url, o.allow);
-        const profileDir = await mkdtemp(join(tmpdir(), "jevitate-feature-"));
         try {
           const result = await runFeatureCliMission({
             seedUrl: o.url,
             allowlist: featAllowlist,
             capability: o.feature,
             routeGlobs: o.route ?? [],
-            profileDir,
             browser,
           });
           emitJson(program, ok(result));
@@ -1523,8 +1513,6 @@ export function buildProgram(deps: CliDeps): Command {
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
-        } finally {
-          await rm(profileDir, { recursive: true, force: true });
         }
         return;
       }

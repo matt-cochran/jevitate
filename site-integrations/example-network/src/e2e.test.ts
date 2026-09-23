@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -11,16 +11,15 @@ import { startServer } from "@jevitate/example-site";
 import { EXAMPLE_NETWORK_ACTIONS } from "./actions.js";
 
 let site: { url: string; close(): Promise<void> };
-let profileDir: string;
+let stateDir: string;
 const clock = { nowIso: () => new Date().toISOString(), monotonicMs: () => Date.now() };
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "jevitate-e2e-"));
+  stateDir = await mkdtemp(join(tmpdir(), "jevitate-e2e-"));
 });
 afterAll(async () => {
   await site.close();
-  await rm(profileDir, { recursive: true, force: true });
 });
 
 function runner() {
@@ -31,7 +30,7 @@ function runner() {
 const base = () => ({
   site: "example-network",
   account: "primary",
-  profileDir,
+  storageStatePath: join(stateDir, "primary.json"),
   baseUrl: site.url,
   headless: true,
   allowedOrigins: [site.url],
@@ -49,7 +48,7 @@ test(
 );
 
 test(
-  "auth.login authenticates and session.status reflects it via the persisted profile",
+  "auth.login authenticates and session.status reflects it via the persisted storageState",
   async () => {
     const r = runner();
     const login = await r.run({ ...base(), actionId: "auth.login", version: "1.0.0", input: { username: "jane" }, runId: "run-login" });
@@ -120,10 +119,10 @@ test(
     const r = new ActionRunner(new PlaywrightBrowserPort(), reg);
 
     await expect(
-      r.run({ ...base(), actionId: "diag.boom", version: "1.0.0", input: {}, traceDir: profileDir, runId: "run-boom" }),
+      r.run({ ...base(), actionId: "diag.boom", version: "1.0.0", input: {}, traceDir: stateDir, runId: "run-boom" }),
     ).rejects.toThrow("boom");
 
-    const traceFile = join(profileDir, "trace-diag.boom.zip");
+    const traceFile = join(stateDir, "trace-diag.boom.zip");
     const stats = await stat(traceFile);
     expect(stats.isFile()).toBe(true);
   },
