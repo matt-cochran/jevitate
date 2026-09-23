@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { choice, noul, score } from "@typesafe-ai/sdk";
-import type { Question } from "@jevitate/ai-core";
+import type { Question } from "./judgment.js";
 import {
   JevResponseError,
   apiKeyFromAuthHeader,

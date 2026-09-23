@@ -9,4 +9,5 @@ export * from "./model-policy.js";
 export * from "./openrouter.js";
 export * from "./judgment.js";
 export * from "./jev.js";
+export * from "./jev-sdk-adapter.js";
 export * from "./preflight-surface.js";

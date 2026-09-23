@@ -30,6 +30,7 @@ import {
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
   JevJudgmentGateway,
+  realJevClientCall,
   type JudgmentPort,
   type GenerationPort,
   type Answer,
@@ -38,10 +39,8 @@ import {
   type CatalogModel,
   type ModelConstraints,
   type OpenRouterCall,
-  type JevClientCall,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { apiKeyFromAuthHeader, fromSdkAnswers, toSdkQuestions, type SdkQuestion } from "./jev-sdk-adapter.js";
 import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
@@ -1425,6 +1424,7 @@ export function buildProgram(deps: CliDeps): Command {
             generation: advGen,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
@@ -2146,11 +2146,34 @@ async function buildExploreGateways(
   );
 }
 
-/** A judge that always proposes `done` — used only by `--fake-ai` (smoke). */
-function fakeDoneJudge(): JudgmentPort {
+/**
+ * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It answers EVERY
+ * question it is asked (whatever the mission names it): a choice picks `done` when offered (else
+ * fails closed), a noul answers "no", a score answers 0.
+ */
+export function fakeDoneJudge(): JudgmentPort {
   return {
-    async systemOne(_args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
-      return { op: { kind: "choice", value: "done", confidence: 1 } };
+    async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
+      const out: Record<string, Answer> = {};
+      for (const [name, q] of Object.entries(args.questions)) {
+        switch (q.kind) {
+          case "choice":
+            if (!q.options.includes("done")) throw new Error(`fake judge: question '${name}' does not offer 'done'`);
+            out[name] = { kind: "choice", value: "done", confidence: 1 };
+            break;
+          case "noul":
+            out[name] = { kind: "noul", value: false, probability: 0 };
+            break;
+          case "score":
+            out[name] = { kind: "score", value: 0 };
+            break;
+          default: {
+            const exhaustive: never = q;
+            throw new Error(`fake judge: unsupported question ${JSON.stringify(exhaustive)}`);
+          }
+        }
+      }
+      return out;
     },
   };
 }
@@ -2164,39 +2187,6 @@ async function realOpenRouterCall(): Promise<OpenRouterCall> {
     const start = Date.now();
     const { object } = await generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body) });
     return { object, latencyMs: Date.now() - start };
-  };
-}
-
-/** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
-interface TypeSafeSdk {
-  TypeSafeClient: new (config: { apiKey: string }) => {
-    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown }>;
-  };
-}
-
-function isTypeSafeSdk(mod: unknown): mod is TypeSafeSdk {
-  return typeof mod === "object" && mod !== null && "TypeSafeClient" in mod && typeof mod.TypeSafeClient === "function";
-}
-
-/**
- * Real Jev seam (lazy). Uses a non-literal specifier so this package builds and
- * tests without `@typesafe-ai/sdk` installed. All translation between jevitate's
- * judgment questions/answers and the SDK's `systemOne` shapes lives in the pure,
- * unit-tested `jev-sdk-adapter.ts`; this only constructs the client and calls it.
- */
-async function realJevClientCall(): Promise<JevClientCall> {
-  const specifier = "@typesafe-ai/sdk";
-  const mod: unknown = await import(specifier).catch(() => {
-    throw new Error("live judgment requires @typesafe-ai/sdk — install it next to the jevitate CLI (npm i @typesafe-ai/sdk)");
-  });
-  if (!isTypeSafeSdk(mod)) {
-    throw new Error("@typesafe-ai/sdk does not export TypeSafeClient — unsupported SDK version (expected >= 0.6)");
-  }
-  const sdk = mod;
-  return async ({ state, questions, authHeader }) => {
-    const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader) });
-    const result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
-    return fromSdkAnswers(questions, result.answers);
   };
 }
 
