@@ -29,6 +29,7 @@ import {
   MissingCredentialError,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
+  openRouterProviderSettings,
   JevJudgmentGateway,
   realJevClientCall,
   type JudgmentPort,
@@ -2178,12 +2179,12 @@ export function fakeDoneJudge(): JudgmentPort {
   };
 }
 
-/** Real OpenRouter seam (lazy import; not unit-tested) — mirrors ai-cli.ts. */
+/** Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`. */
 async function realOpenRouterCall(): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   return async ({ model, schema, body, authHeader }) => {
-    const openrouter = createOpenRouter({ headers: { Authorization: authHeader } });
+    const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
     const { object } = await generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body) });
     return { object, latencyMs: Date.now() - start };

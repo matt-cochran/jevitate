@@ -7,6 +7,7 @@ import {
   collectMissingKeys,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
+  openRouterProviderSettings,
   GEN_TASKS,
   type CredentialKey,
   type Feature,
@@ -128,13 +129,14 @@ export function realSecureIO(): SecureKeyIO {
 }
 
 /** Lazily imports `ai` + `@openrouter/ai-sdk-provider` so the CLI builds and
- *  runs `--json`/fake paths without either package resolvable. The key is
- *  placed ONLY in the `Authorization` header, never in `body`/`prompt`. */
+ *  runs `--json`/fake paths without either package resolvable. The key goes
+ *  ONLY to the provider's `apiKey` (which it sends as the `Authorization`
+ *  header), never into `body`/`prompt`. */
 async function realOpenRouterCall(): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   return async ({ model, schema, body, authHeader }) => {
-    const openrouter = createOpenRouter({ headers: { Authorization: authHeader } });
+    const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
     const { object } = await generateObject({
       model: openrouter(model),
