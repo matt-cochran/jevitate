@@ -10,7 +10,7 @@ import type { Answer, Question } from "@jevitate/ai-core";
  * answer type, or a choice label that was not offered is never coerced into a guess.
  */
 
-export type SdkChoiceQuestion = { type: "choice"; instructions: string; criteria: Record<string, null> };
+export type SdkChoiceQuestion = { type: "choice"; instructions: string; criteria: Record<string, string | null> };
 export type SdkNoulQuestion = { type: "noul"; instructions: string };
 export type SdkScoreQuestion = { type: "score"; instructions: string; criteria: readonly [string, string] };
 export type SdkQuestion = SdkChoiceQuestion | SdkNoulQuestion | SdkScoreQuestion;
@@ -25,9 +25,9 @@ export function toSdkQuestions(questions: Record<string, Question>): Record<stri
   for (const [name, q] of Object.entries(questions)) {
     switch (q.kind) {
       case "choice": {
-        const criteria: Record<string, null> = {};
-        for (const option of q.options) criteria[option] = null;
-        out[name] = { type: "choice", instructions: name, criteria };
+        const criteria: Record<string, string | null> = {};
+        for (const option of q.options) criteria[option] = q.descriptions?.[option] ?? null;
+        out[name] = { type: "choice", instructions: q.instructions ?? name, criteria };
         break;
       }
       case "noul":
