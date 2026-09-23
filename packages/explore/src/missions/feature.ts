@@ -13,7 +13,7 @@ import {
 import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
-import { perceive } from "../perceive.js";
+import { perceive, COVERAGE_RENDER_WAIT_MS } from "../perceive.js";
 import { targetCandidates, type TargetOp } from "../actions.js";
 import { act } from "../act.js";
 import { toPath } from "../record.js";
@@ -134,7 +134,7 @@ export async function runFeatureMission(params: {
   bounds?: Partial<Bounds>;
   maxDepth?: number;
   maxPaths?: number;
-  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS`. */
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `COVERAGE_RENDER_WAIT_MS`. */
   renderWaitMs?: number;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
@@ -150,7 +150,7 @@ export async function runFeatureMission(params: {
     (
       await perceive(params.page, {
         maxCandidates: bounds.maxCandidates,
-        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+        renderWaitMs: params.renderWaitMs ?? COVERAGE_RENDER_WAIT_MS,
       })
     ).snapshot;
 

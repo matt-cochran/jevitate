@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
+import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { startServer } from "@jevitate/example-site";
-import { explore, type Op } from "./index.js";
-import { withSession } from "./testkit.js";
+import { explore } from "./index.js";
+import { ScriptedJudge, withSession } from "./testkit.js";
 
 let site: { url: string; close(): Promise<void> };
 beforeAll(async () => {
@@ -13,21 +13,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await site.close();
 });
-
-/** A JudgmentPort that plays a fixed sequence of op+target decisions. */
-class ScriptedJudge implements JudgmentPort {
-  #i = 0;
-  constructor(private readonly seq: ReadonlyArray<{ op: Op; target?: string }>) {}
-  async systemOne(args: { questions: Record<string, unknown> }): Promise<Record<string, Answer>> {
-    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)]!;
-    this.#i += 1;
-    const out: Record<string, Answer> = { op: { kind: "choice", value: cur.op, confidence: 0.9 } };
-    if (args.questions.target && cur.target !== undefined) {
-      out.target = { kind: "choice", value: cur.target, confidence: 0.9 };
-    }
-    return out;
-  }
-}
 
 describe("explore — bounded perceive->decide->act->record loop (Task 9)", () => {
   it(
@@ -102,13 +87,14 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
   );
 
   it(
-    "stops as no-progress when repeated actions never change the page",
+    "stops as no-progress when a repeated non-wait action never changes the page",
     async () => {
       const run = await withSession(
         "explore-noprogress-",
         async (session) => {
           const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
-          const judge = new ScriptedJudge([{ op: "click", target: "0" }]); // click the textbox forever
+          // Scroll a page too short to scroll, forever: the action runs but the page never moves.
+          const judge = new ScriptedJudge([{ op: "scroll_down" }]);
           return explore({
             actor,
             judge,

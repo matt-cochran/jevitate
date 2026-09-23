@@ -6,6 +6,7 @@ import type { GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import {
   assertAuthorizedExploreTarget,
   perceive,
+  COVERAGE_RENDER_WAIT_MS,
   targetCandidates,
   TranscriptLog,
   act,
@@ -77,7 +78,7 @@ export interface InductionMissionParams {
   readonly allowlist: readonly string[];
   readonly bounds?: Partial<Bounds>;
   readonly maxDepth?: number;
-  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS`. */
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `COVERAGE_RENDER_WAIT_MS`. */
   readonly renderWaitMs?: number;
 }
 
@@ -169,7 +170,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     (
       await perceive(params.page, {
         maxCandidates: bounds.maxCandidates,
-        ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+        renderWaitMs: params.renderWaitMs ?? COVERAGE_RENDER_WAIT_MS,
       })
     ).snapshot;
   const transcript = new TranscriptLog();

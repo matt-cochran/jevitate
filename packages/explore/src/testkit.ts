@@ -5,6 +5,8 @@
  * `*.test.ts`. Vitest resolves it directly via the source alias.
  */
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
+import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
+import type { Op } from "./actions.js";
 
 const port = new PlaywrightBrowserPort();
 
@@ -47,3 +49,46 @@ export const INBOX_FIXTURE_HTML = `<!doctype html><html><body>
   <ul><li><a href="/thread/1">First thread</a></li></ul>
   <button type="button">Compose</button>
 </body></html>`;
+
+/** One scripted decision: an op and, for a target op, the control index it acts on. */
+export interface ScriptedStep {
+  readonly op: Op;
+  readonly target?: string;
+  readonly confidence?: number;
+}
+
+/** The candidate-action id decide() offers for a scripted step: `<op>:<index>` or a bare op. */
+export function actionId(step: ScriptedStep): string {
+  return step.target !== undefined ? `${step.op}:${step.target}` : step.op;
+}
+
+/**
+ * A JudgmentPort that plays a fixed sequence of decisions in decide()'s candidate-action format
+ * (`{ action: choice("<op>:<index>" | "<op>") }`), repeating the last step once exhausted. Every
+ * call's arguments are kept for payload assertions.
+ */
+export class ScriptedJudge implements JudgmentPort {
+  #i = 0;
+  readonly calls: Array<{ state: JudgmentState; questions: Record<string, Question> }> = [];
+  constructor(private readonly seq: readonly ScriptedStep[]) {
+    if (seq.length === 0) throw new Error("ScriptedJudge needs at least one step");
+  }
+  /** The (redacted) state shown on each call. */
+  get states(): JudgmentState[] {
+    return this.calls.map((c) => c.state);
+  }
+  /** The candidate action ids offered on each call. */
+  get actionOptions(): Array<readonly string[]> {
+    return this.calls.map((c) => {
+      const q = c.questions.action;
+      return q?.kind === "choice" ? q.options : [];
+    });
+  }
+  async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
+    this.calls.push(args);
+    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)];
+    this.#i += 1;
+    if (cur === undefined) throw new Error("ScriptedJudge: no step");
+    return { action: { kind: "choice", value: actionId(cur), confidence: cur.confidence ?? 0.9 } };
+  }
+}

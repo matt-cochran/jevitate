@@ -17,8 +17,19 @@ import { snapshot, type Snapshot } from "./snapshot.js";
  * stops `blocked`; the coverage missions treat it as a leaf state with nothing to expand).
  */
 
-/** Default bound on the render wait (ms). */
+/**
+ * Default bound on the render wait (ms) for missions that must ACT on the page (goal/usability,
+ * adversarial): a zero-control page is a dead end for them, so waiting the full bound only ever
+ * delays a run that would otherwise fail on a render race.
+ */
 export const RENDER_WAIT_MS = 15_000;
+/**
+ * Default render-wait bound (ms) for the coverage missions (induction, feature). For them a
+ * control-free page is a legitimate LEAF state (a message view, a confirmation), visited again on
+ * every reset-and-replay — so the bound is short: long enough to outlast a client-side transition,
+ * short enough that genuine leaves do not stall the frontier.
+ */
+export const COVERAGE_RENDER_WAIT_MS = 2_000;
 /** Default re-snapshot interval while waiting for the page to render (ms). */
 export const RENDER_POLL_MS = 250;
 
