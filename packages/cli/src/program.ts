@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { userInfo } from "node:os";
@@ -1281,6 +1282,10 @@ export function buildProgram(deps: CliDeps): Command {
       "--fixture <path>",
       "local file the upload op attaches to a file input (goal and usability strategies); must exist",
     )
+    .option(
+      "--storage-state <file>",
+      "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
+    )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
@@ -1299,6 +1304,7 @@ export function buildProgram(deps: CliDeps): Command {
         allow: string[];
         secret: string[];
         fixture?: string;
+        storageState?: string;
         maxActions?: string;
         maxDecisions?: string;
         real?: boolean;
@@ -1314,6 +1320,10 @@ export function buildProgram(deps: CliDeps): Command {
       // silently ignoring a file the user expected to be uploaded.
       if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
+        return;
+      }
+      if (o.storageState !== undefined && !existsSync(o.storageState)) {
+        emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
 
@@ -1356,6 +1366,7 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1414,6 +1425,7 @@ export function buildProgram(deps: CliDeps): Command {
             generation: advGen,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
           // A discovered defect gates CI, mirroring how a failing test would.
@@ -1474,6 +1486,7 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
         } catch (err) {
@@ -1507,6 +1520,7 @@ export function buildProgram(deps: CliDeps): Command {
             capability: o.feature,
             routeGlobs: o.route ?? [],
             browser,
+            ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
         } catch (err) {
@@ -1562,6 +1576,7 @@ export function buildProgram(deps: CliDeps): Command {
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
+          ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
         });
         const envelope = ok(result);
         if (o.json) {
@@ -1598,6 +1613,10 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--id <id>", "journey id (used for the <id>.json filename in the store)")
     .option("--name <name>", "human-readable journey name")
     .option("--takes <n>", "corroborating takes incl. discovery (default 1)", "1")
+    .option(
+      "--storage-state <file>",
+      "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
+    )
     .option("--journeys-dir <dir>", "journeys store directory (default: ~/.jevitate/journeys)")
     .option(
       "--allow <origin>",
@@ -1625,7 +1644,12 @@ export function buildProgram(deps: CliDeps): Command {
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
+        storageState?: string;
       } & BrowserLaunchFlags>();
+      if (o.storageState !== undefined && !existsSync(o.storageState)) {
+        emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
+        return;
+      }
 
       if (!o.url || !o.goal || !o.success || !o.id || !o.name) {
         emitJson(program, fail("E_AUTHOR_ARGS", "--url, --goal, --success, --id and --name are all required"));
@@ -1671,6 +1695,7 @@ export function buildProgram(deps: CliDeps): Command {
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
+          ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
         });
         const envelope = ok(result);
         if (o.json) {

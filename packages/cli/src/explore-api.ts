@@ -57,6 +57,12 @@ export interface RunExplorationOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
+   * the deterministic authenticated pre-step. Contains live session cookies: it is
+   * handed only to the browser, never to a model or a Recording.
+   */
+  readonly storageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
 }
@@ -84,6 +90,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
 
   try {
@@ -142,6 +149,12 @@ export interface AuthorViaBrowserArgs {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
+   * the deterministic authenticated pre-step. Contains live session cookies: it is
+   * handed only to the browser, never to a model or a Recording.
+   */
+  readonly storageState?: string;
 }
 
 export interface RunAuthorJourneyOptions {
@@ -161,6 +174,12 @@ export interface RunAuthorJourneyOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
+   * the deterministic authenticated pre-step. Contains live session cookies: it is
+   * handed only to the browser, never to a model or a Recording.
+   */
+  readonly storageState?: string;
   /**
    * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
    * which drives a real Playwright-backed actor through `authorJourney`.
@@ -199,6 +218,7 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
     journeyName: opts.journeyName,
     browserPortFactory: opts.browserPortFactory,
     browser: opts.browser,
+      ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
 
   if (result.outcome === "authored") {
@@ -222,6 +242,7 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
     allowedOrigins: [...args.allowlist],
     baseUrl: args.origin,
     ...args.browser,
+    ...(args.storageState !== undefined ? { storageState: args.storageState } : {}),
   });
 
   try {
@@ -264,6 +285,12 @@ export interface RunCoverageMissionOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
+   * the deterministic authenticated pre-step. Contains live session cookies: it is
+   * handed only to the browser, never to a model or a Recording.
+   */
+  readonly storageState?: string;
   readonly nowIso?: () => string;
 }
 
@@ -284,6 +311,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
 
   try {
@@ -331,6 +359,12 @@ export interface RunAdversarialCliMissionOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
+   * the deterministic authenticated pre-step. Contains live session cookies: it is
+   * handed only to the browser, never to a model or a Recording.
+   */
+  readonly storageState?: string;
 }
 
 /**
@@ -351,6 +385,7 @@ export async function runAdversarialCliMission(
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
@@ -387,6 +422,12 @@ export interface RunFeatureCliMissionOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
+   * the deterministic authenticated pre-step. Contains live session cookies: it is
+   * handed only to the browser, never to a model or a Recording.
+   */
+  readonly storageState?: string;
 }
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureRunResult> {
@@ -400,6 +441,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
