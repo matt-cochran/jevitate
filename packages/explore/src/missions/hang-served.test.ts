@@ -54,7 +54,10 @@ beforeAll(async () => {
         return;
       case "/busy":
         res.writeHead(200, { "content-type": "text/html" }).end(
-          html(`<button type="button">Go</button><script>setTimeout(() => { for (;;) {} }, 150);</script>`),
+          // A main thread busy for 6s — long past the probe's bound, but bounded, so a test run's
+          // CPU is not burned for longer than it needs (the browser pool's admission control backs
+          // off under CPU pressure, which would stall other browser suites running alongside).
+          html(`<button type="button">Go</button><script>setTimeout(() => { const end = Date.now() + 6000; while (Date.now() < end) {} }, 150);</script>`),
         );
         return;
       case "/import":
