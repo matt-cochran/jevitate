@@ -157,6 +157,42 @@ describe("runAdversarialMission — a legit 4xx during misuse is NOT a defect (#
   );
 });
 
+describe("runAdversarialMission — a console error correlated with a captured 4xx is advisory (#88)", () => {
+  test(
+    "the app's OWN console.error logged right after a 403/404 is reported as an advisory signal, never a defect",
+    async () => {
+      const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+      const generation = new FakeGenerationGateway();
+      // Unlike #29's browser-generated resource-load echo, this is the APP'S OWN console.error call
+      // (an HTTP client logging a non-2xx it just received) — the exact pattern #88 reported false
+      // positives for. It must correlate to the 404 that preceded it and be reported advisory, not
+      // filed as a defect and not counted toward `defects-found`.
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment,
+        generation,
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        bounds: { maxDecisions: 4 },
+        strategies: ["exercise-controls", "double-submit", "ordering-violation"],
+        userInvariant: async (page) => {
+          await page.evaluate(async () => {
+            const r = await fetch("/adversarial/notfound");
+            console.error("ManageBillingToolApi.request failed: {message: Response returned an error code", r.status);
+          });
+          return { ok: true };
+        },
+      });
+      expect(result.outcome).toBe("clean");
+      expect(result.defects).toEqual([]);
+      expect(result.advisories.length).toBeGreaterThan(0);
+      expect(result.advisories[0]).toMatchObject({ kind: "console-error", status: 404 });
+    },
+    120_000,
+  );
+});
+
 describe("runAdversarialMission — a run that proved nothing is never clean (#64)", () => {
   test(
     "a run that never submitted the form and touched little of the page is inconclusive, with its coverage",

@@ -29,13 +29,15 @@ import { CrashWatch, describeFailure, tryTriage, type Triage } from "../mission-
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
-import { PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
+import { isAdvisoryConsoleError, PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
 import {
+  advisoryTitle,
   defectTitle,
   groupStepSignals,
   invariantFingerprint,
   messageClass,
   normalizeRoute,
+  signalFingerprint,
 } from "../adversarial/defect-fingerprint.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
@@ -121,6 +123,30 @@ export interface AdversarialDefect {
   readonly triage: Triage;
 }
 
+/**
+ * A console error correlated with a captured 4xx response (#88): reported for visibility, but
+ * NEVER a defect — a 4xx is a response the server returned by design (an authorization refusal, a
+ * validation error), so it is advisory, lower severity, and never counted toward `defects-found`.
+ * A 5xx-correlated (or uncorrelated) console error is unaffected and still files as a defect.
+ */
+export interface AdvisorySignal {
+  /** Stable identity (16 hex): same signal, same fingerprint — across steps and across runs. */
+  readonly fingerprint: string;
+  readonly kind: "console-error";
+  readonly title: string;
+  /** Normalized route (path pattern) of the page it was first seen on. */
+  readonly route: string;
+  /** The (redacted) page URL it was first seen on. */
+  readonly url: string;
+  /** The correlated response's status (always 4xx — the only case reported as advisory). */
+  readonly status: number;
+  /** The raw console-error detail. */
+  readonly detail: string;
+  readonly firstSeenStep: number;
+  readonly occurrences: number;
+  readonly occurrenceSteps: number[];
+}
+
 /** Why the hunt ended (the mission's budget, or nothing left to try). */
 export type AdversarialStop =
   | "step-budget"
@@ -139,6 +165,8 @@ export interface AdversarialOutcome {
   readonly stop: AdversarialStop;
   /** Distinct defects (deduped by fingerprint), in first-seen order. */
   readonly defects: AdversarialDefect[];
+  /** 4xx-correlated console errors (#88): reported, deduped by fingerprint, never counted as defects. */
+  readonly advisories: AdvisorySignal[];
   /** Hangs found (the run stops at a hang), each with its fresh-context reproduction k/N. */
   readonly hangs: HangFinding[];
   /** The run's Recording (partial when the run crashed) — every defect's repro path. */
@@ -264,6 +292,52 @@ interface MutableDefect extends Omit<StepFinding, "related"> {
   readonly triage: Triage;
 }
 
+/** An advisory (4xx-correlated console-error) signal as seen on ONE step, before it is deduped. */
+interface StepAdvisory {
+  readonly fingerprint: string;
+  readonly title: string;
+  readonly route: string;
+  readonly url: string;
+  readonly status: number;
+  readonly detail: string;
+}
+
+interface MutableAdvisory extends StepAdvisory {
+  readonly firstSeenStep: number;
+  readonly occurrenceSteps: number[];
+}
+
+function freezeAdvisory(a: MutableAdvisory): AdvisorySignal {
+  return {
+    fingerprint: a.fingerprint,
+    kind: "console-error",
+    title: a.title,
+    route: a.route,
+    url: a.url,
+    status: a.status,
+    detail: a.detail,
+    firstSeenStep: a.firstSeenStep,
+    occurrences: a.occurrenceSteps.length,
+    occurrenceSteps: [...a.occurrenceSteps],
+  };
+}
+
+/** Builds a step advisory from a console-error signal already confirmed advisory (4xx-correlated). */
+function stepAdvisory(
+  signal: Extract<DefectSignal, { kind: "console-error" }> & { correlatedStatus: number },
+  route: string,
+  url: string,
+): StepAdvisory {
+  return {
+    fingerprint: signalFingerprint(signal),
+    title: advisoryTitle(signal, signal.correlatedStatus),
+    route,
+    url,
+    status: signal.correlatedStatus,
+    detail: signal.detail,
+  };
+}
+
 function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): AdversarialDefect {
   const segment = d.epoch === 0 ? null : (segments[d.epoch] ?? null);
   return {
@@ -318,6 +392,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   let recorder = segments[0] as RunRecorder;
   const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
   const defects = new Map<string, MutableDefect>();
+  const advisories = new Map<string, MutableAdvisory>();
   const hangs = new Map<string, HangFinding>();
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
@@ -359,6 +434,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       outcome: finished.ok ? honest : "crashed",
       stop: finished.ok ? stop : "crashed",
       defects: [...defects.values()].map((d) => freeze(d, later)),
+      advisories: [...advisories.values()].map(freezeAdvisory),
       hangs: [...hangs.values()],
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
       transcript: transcript.entries(),
@@ -412,10 +488,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const step = transcript.nextStep - 1;
     const known = hangs.get(hangFingerprint(h));
     if (known !== undefined) {
+      // Already confirmed (or being confirmed): no replay budget spent again — just one more
+      // occurrence, and the route added when it is a new one ("also seen on <route>", #87).
       hangs.set(known.fingerprint, {
         ...known,
         occurrences: known.occurrences + 1,
         occurrenceSteps: [...known.occurrenceSteps, step],
+        routes: known.routes.includes(h.route) ? known.routes : [...known.routes, h.route],
       });
       return;
     }
@@ -491,7 +570,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
    * The independent oracle for one step: drains the hard signals and checks the user invariant.
    * Returns the transcript reason and the step's findings, or null when nothing broke.
    */
-  const adjudicate = async (): Promise<{ reason: string; findings: StepFinding[] } | null> => {
+  const adjudicate = async (): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     const invariantResult = params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
@@ -499,8 +578,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const url = redactUrl(sessions.page.url());
     const route = normalizeRoute(url);
     const findings: StepFinding[] = [];
+    // A console error correlated with a captured 4xx response is advisory, never a defect (#88) —
+    // excluded from the defect signal pool before grouping, reported separately instead.
+    const advisorySignals = hardSignals.filter(isAdvisoryConsoleError);
+    const stepAdvisories = advisorySignals.map((s) => stepAdvisory(s, route, url));
+    const forDefect = hardSignals.filter((s) => !isAdvisoryConsoleError(s));
 
-    const group = groupStepSignals(hardSignals);
+    const group = groupStepSignals(forDefect);
     if (group !== null) {
       findings.push({
         fingerprint: group.fingerprint,
@@ -509,7 +593,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         title: defectTitle(group.primary),
         route,
         url,
-        signals: hardSignals,
+        signals: forDefect,
       });
     }
     if (!invariantResult.ok) {
@@ -526,11 +610,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         invariantReason: reason,
       });
     }
-    if (findings.length === 0) return null;
+    if (findings.length === 0 && stepAdvisories.length === 0) return null;
     const reasons = [...hardSignals.map((s) => s.detail), invariantResult.ok ? undefined : invariantResult.reason]
       .filter((r): r is string => Boolean(r))
       .join("; ");
-    return { reason: `defect: ${reasons}`, findings };
+    const prefix = findings.length > 0 ? "defect" : "advisory";
+    return { reason: `${prefix}: ${reasons}`, findings, advisories: stepAdvisories };
   };
 
   /**
@@ -540,20 +625,46 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
    */
   const drainLate = async (step: number): Promise<void> => {
     const late = collector.drain();
-    const group = groupStepSignals(late);
-    if (group === null) return;
+    const advisorySignals = late.filter(isAdvisoryConsoleError);
+    const forDefect = late.filter((s) => !isAdvisoryConsoleError(s));
+    const group = groupStepSignals(forDefect);
+    if (group === null && advisorySignals.length === 0) return;
     const url = redactUrl(sessions.page.url());
-    await fold(step, [
-      {
-        fingerprint: group.fingerprint,
-        related: group.related,
-        kind: group.primary.kind,
-        title: defectTitle(group.primary),
-        route: normalizeRoute(url),
-        url,
-        signals: late,
-      },
-    ]);
+    const route = normalizeRoute(url);
+    if (group !== null) {
+      await fold(step, [
+        {
+          fingerprint: group.fingerprint,
+          related: group.related,
+          kind: group.primary.kind,
+          title: defectTitle(group.primary),
+          route,
+          url,
+          signals: forDefect,
+        },
+      ]);
+    }
+    if (advisorySignals.length > 0) {
+      foldAdvisories(
+        step,
+        advisorySignals.map((s) => stepAdvisory(s, route, url)),
+      );
+    }
+  };
+
+  /**
+   * Folds one step's advisory signals into the deduped advisory set (mirrors `fold`, but no repro
+   * or triage — an advisory is reported, never a defect, so nothing here needs to be reproduced).
+   */
+  const foldAdvisories = (step: number, list: readonly StepAdvisory[]): void => {
+    for (const a of list) {
+      const known = advisories.get(a.fingerprint);
+      if (known !== undefined) {
+        if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);
+        continue;
+      }
+      advisories.set(a.fingerprint, { ...a, firstSeenStep: step, occurrenceSteps: [step] });
+    }
   };
 
   /**
@@ -682,7 +793,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         timing: seed.timing,
       });
       snapTiming = undefined;
-      if (verdict !== null) await fold(step, verdict.findings);
+      if (verdict !== null) {
+        await fold(step, verdict.findings);
+        foldAdvisories(step, verdict.advisories);
+      }
     }
 
     let last: LastAction | null = null;
@@ -868,7 +982,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           ...(stepTiming === undefined ? {} : { timing: stepTiming }),
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
-        if (verdict !== null) await fold(step, verdict.findings);
+        if (verdict !== null) {
+          await fold(step, verdict.findings);
+          foldAdvisories(step, verdict.advisories);
+        }
         // A whole cycle of strategies found nothing to do on this page: there is nothing left.
         if (idleStreak >= params.strategies.length) stop = "strategies-exhausted";
         continue;
@@ -939,7 +1056,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           ...(full === undefined ? {} : { reason: full }),
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
-        if (verdict !== null) await fold(step, verdict.findings);
+        if (verdict !== null) {
+          await fold(step, verdict.findings);
+          foldAdvisories(step, verdict.advisories);
+        }
         const after = await observeAfter(step, s.control?.name ?? s.op);
         if (after.kind === "stop") {
           stop = after.stop;

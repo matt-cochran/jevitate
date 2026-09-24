@@ -134,6 +134,14 @@ export function groupStepSignals(signals: readonly DefectSignal[]): SignalGroup 
   return { primary, fingerprint: signalFingerprint(primary), related };
 }
 
+/**
+ * A short human title for an ADVISORY console-error (#88): a console error correlated with a
+ * captured 4xx response — reported for visibility, but never a defect title (never `defectTitle`).
+ */
+export function advisoryTitle(signal: Extract<DefectSignal, { kind: "console-error" }>, status: number): string {
+  return `Console error on ${normalizeRoute(signal.pageUrl ?? "")} (advisory — correlated with HTTP ${status}): ${messageClass(signal.detail).slice(0, 80)}`;
+}
+
 /** A short human title for a defect's primary signal. */
 export function defectTitle(signal: DefectSignal): string {
   switch (signal.kind) {

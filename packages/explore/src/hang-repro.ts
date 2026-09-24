@@ -186,6 +186,7 @@ export interface HangFinding {
   readonly kind: "hang";
   readonly hangKind: HangKind;
   readonly title: string;
+  /** The route it was FIRST seen on. */
   readonly route: string;
   readonly url: string;
   readonly signal: HangSignal;
@@ -193,6 +194,12 @@ export interface HangFinding {
   /** How many times this same hang (by fingerprint) was hit in the run, and at which steps. */
   readonly occurrences: number;
   readonly occurrenceSteps: number[];
+  /**
+   * Every DISTINCT route this same hang (by fingerprint) was seen on, first-seen order (#87): a
+   * global element (e.g. a shared layout widget) hanging on many routes is ONE finding that lists
+   * every route it was met on, never one finding per route.
+   */
+  readonly routes: string[];
   /**
    * `recording` is set when the hang was found after the mission RESET (a fresh page): the steps to
    * replay are then this segment's own Recording, not the run's first one.
@@ -219,6 +226,7 @@ export function hangFinding(
     firstSeenStep: steps.length,
     occurrences: 1,
     occurrenceSteps: [steps.length],
+    routes: [signal.route],
     // The repro is the ordered steps; their timing stays in the run transcript.
     repro: {
       steps: steps.map((e): TranscriptEntry => {
@@ -251,7 +259,14 @@ export async function recordCoverageHang(p: {
   const known = p.found.get(fingerprint);
   const step = p.steps.length;
   if (known !== undefined) {
-    p.found.set(fingerprint, { ...known, occurrences: known.occurrences + 1, occurrenceSteps: [...known.occurrenceSteps, step] });
+    // Already confirmed (or being confirmed): no replay budget spent again — just one more
+    // occurrence, and the route added when it is a new one ("also seen on <route>", #87).
+    p.found.set(fingerprint, {
+      ...known,
+      occurrences: known.occurrences + 1,
+      occurrenceSteps: [...known.occurrenceSteps, step],
+      routes: known.routes.includes(p.hang.route) ? known.routes : [...known.routes, p.hang.route],
+    });
     return;
   }
   const index = Math.max(0, p.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1);
