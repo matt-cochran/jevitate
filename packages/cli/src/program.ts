@@ -83,7 +83,8 @@ import {
   type QueuedMissionExecutor,
 } from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
-import { InvariantsFileError, loadInvariantFiles } from "./invariants-file.js";
+import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
+import { resolveJevUnitPrice } from "./usage-config.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -1504,7 +1505,9 @@ export function buildProgram(deps: CliDeps): Command {
         "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
         "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
         "<path-glob> must start with \"/\" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method.",
-        "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'",
+        "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'.",
+        "Omit it for a find-out goal (e.g. \"find out how many contacts... report the answer\"): the run must then end",
+        "with the model's own `report` op, and the grounded answer (#101) is the verdict — no page/network check needed.",
       ].join(" "),
       (v, prev: string[]) => [...prev, v],
       [] as string[],
@@ -1832,6 +1835,9 @@ export function buildProgram(deps: CliDeps): Command {
       }
       // App-declared invariants (#86): validated (schema, observables, probe origins) BEFORE any browser.
       let invariants: InvariantSpec | undefined;
+      // #135: authFrom.secret refs (env:VAR), resolved from the environment HERE — the one place this
+      // package reads process.env for invariants — never inside @jevitate/explore or @jevitate/recording.
+      let invariantAuthTokens: Map<string, string> | undefined;
       if (o.invariants.length > 0) {
         if (strategy === "usability" && o.feature === undefined) {
           emitJson(program, fail("E_EXPLORE_ARGS", "--invariants is not supported with --strategy usability"));
@@ -1839,7 +1845,9 @@ export function buildProgram(deps: CliDeps): Command {
         }
         if (o.url !== undefined) {
           try {
-            invariants = loadInvariantFiles(o.invariants, { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url });
+            const loaded = loadInvariantFiles(o.invariants, { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url });
+            invariants = loaded;
+            invariantAuthTokens = loaded === undefined ? undefined : resolveInvariantAuthTokens(loaded, process.env);
           } catch (err) {
             if (!(err instanceof InvariantsFileError)) throw err;
             emitJson(program, fail(err.code, err.message));
@@ -1847,7 +1855,10 @@ export function buildProgram(deps: CliDeps): Command {
           }
         }
       }
-      const withInvariants = invariants === undefined ? {} : { invariants };
+      const withInvariants = {
+        ...(invariants === undefined ? {} : { invariants }),
+        ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
+      };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
@@ -2147,8 +2158,10 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
 
-      if (!o.url || !o.goal || o.success.length === 0) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--url, --goal and --success are all required"));
+      // --success may be omitted for a find-out goal (#130d): the run is then verified by a grounded
+      // `report` answer (#101) instead of an independent page/network check.
+      if (!o.url || !o.goal) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--url and --goal are required"));
         return;
       }
       let successChecks: SuccessCheck[];
@@ -3111,7 +3124,8 @@ async function buildExploreGateways(
   // #100: ONE tracker per invocation, handed to whichever gateways are built below — real (counted
   // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
   // without a key). Injected gateways (tests) get an empty tracker: they have no real seam to count.
-  const usage = new UsageTracker();
+  // #136: a configured Jev unit price (env beats config; undefined = jevUsd stays unpriced, as before).
+  const usage = new UsageTracker(resolveJevUnitPrice(deps.explore?.env ?? process.env));
   if (deps.explore?.judge && deps.explore?.gen) {
     return { judge: deps.explore.judge, gen: deps.explore.gen, usage };
   }

@@ -143,6 +143,8 @@ export interface RunExplorationOptions {
   readonly conversation?: ConversationOptions;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /**
    * Mission fixtures (#140/#144), ALREADY set up by the caller: every hang replay re-runs
    * restore+setup first, the state is restored when the mission ends (the caller also restores on
@@ -281,8 +283,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
-  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well.
-  const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? [])];
+  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well. So is a
+  // declared probe's resolved auth token (#135) — redacted everywhere a run secret is, not only in
+  // the invariant monitor's own evidence.
+  const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
+  const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? []), ...authTokenValues];
   const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
   // The state the mission starts from — replays restore THIS fixture and rebind its recorded outputs.
   const fx = opts.fixtures;
@@ -344,6 +349,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       fixture,
       ...conversationConfig(opts.conversation),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
     });
 
     // The mission (and its hang replays) is done: restore now, so the persisted log includes it. The
@@ -609,6 +615,8 @@ export interface RunCoverageMissionOptions {
   readonly routeGlobs?: readonly string[];
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /**
    * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
    * the last action revealed is tried first (#115).
@@ -695,6 +703,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
@@ -835,6 +844,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly coverageThresholds?: Partial<CoverageThresholds>;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -920,6 +931,7 @@ export async function runAdversarialCliMission(
       onTranscriptEntry: journal.onTranscriptEntry,
       onRecording: journal.onRecording,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
     });
     journal.writeRecording(outcome.recording);
     journal.writeTranscript(outcome.transcript);
@@ -1007,6 +1019,8 @@ export interface RunFeatureCliMissionOptions {
   readonly saveStorageState?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /** The shared safety policy (#116: `--deny`, `--allow-destructive`, `--read-rpc`). */
   readonly safety?: SafetyConfig;
 }
@@ -1075,6 +1089,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
       ...(opts.safety === undefined ? {} : { safety: opts.safety }),
     });

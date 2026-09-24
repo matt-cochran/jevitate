@@ -237,6 +237,8 @@ export interface AdversarialMissionParams {
   readonly now?: () => number;
   /** Registered secret values: redacted out of the transcript and the Recording. */
   readonly secrets?: readonly string[];
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /**
    * Opens a FRESH browser session — used to reproduce a hang by replaying its steps. Without it a
    * hang cannot be confirmed and is reported `intermittent` (0 replays), never dropped.
@@ -417,6 +419,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           allowlist: params.allowlist,
           baseUrl: params.seedUrl,
           ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+          ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
         });
   declared?.attach(params.page);
   /** A `before` snapshot is armed for the action(s) the next adjudication judges. */

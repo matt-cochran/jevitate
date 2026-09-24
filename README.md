@@ -277,6 +277,23 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
 
+### Find-out goals (no `--success`)
+
+A goal that asks the run to find out / understand something (e.g. "find out how many
+contacts are overdue and report the count") has no page state to assert on, so
+`--success` can be omitted. The model ends such a run with a `report` op instead of
+`done`: it proposes an answer, and code grounds it — every claim must trace back to
+text the run actually observed on a page — before accepting it. An ungrounded report
+is rejected and the model keeps looking; the run is `succeeded` only once a report is
+accepted, and the accepted answer (with its grounding evidence) is returned as
+`answer`. Never Jev's self-report: the same independent-grounding rule the page/network
+checks get.
+
+```bash
+jevitate explore --url https://app.example.test/contacts \
+  --goal "find out how many contacts are overdue and report the count"
+```
+
 ### App-declared invariants
 
 An app team can declare its own hard rules in a JSON file that lives in its repo.
@@ -320,8 +337,18 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
   responses from an authorized origin are read.
 - `probe`: a `get` (or `head`) of an existing endpoint. It must be on an `--allow`
   origin, and it runs with the mission browser's own cookies. Redirects are not
-  followed, and nothing else is sent: no other method, headers or body. Without
-  `json`, the value is the HTTP status.
+  followed, and nothing else is sent: no other method, headers or body (except
+  `authFrom`'s `Authorization` header — see below). Without `json`, the value is the
+  HTTP status.
+  - `authFrom` (read-only probes, an authenticated API): `{ "localStorage": "<key>" }`
+    reads a token from the run's own page (`page.evaluate`); `{ "cookie": "<name>" }`
+    reads a named cookie from the browser context; `{ "secret": "env:VAR" }` resolves
+    from the environment (the same `env:VAR` shape `--secret-field` uses) — never read
+    from a file. All three become an `Authorization` header, prefixed by `scheme`
+    (default `"Bearer"`; `""` sends the raw value). The token is never logged, never
+    persisted, and is redacted from every value/evidence the same way a bound secret
+    is. When the token cannot be read, the probe is refused (unknown) — never sent
+    unauthenticated.
 
 `optional: true` makes a missing value `null`. Without it, a value that cannot be read
 makes the invariant **unknown**. An unknown invariant is not a violation and is not a

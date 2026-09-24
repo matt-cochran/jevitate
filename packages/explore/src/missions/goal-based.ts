@@ -90,6 +90,11 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly successWhen?: SuccessWhen;
   /** App-declared invariants (#86), evaluated around every action. A violation is `defects-found`. */
   readonly invariants?: InvariantSpec;
+  /**
+   * Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value, resolved
+   * by the CLI dispatch from the environment (this package never reads `process.env`).
+   */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -169,14 +174,17 @@ function quoteRead(s: string): string {
   return `"${flat.length > READ_TEXT_MAX_CHARS ? `${flat.slice(0, READ_TEXT_MAX_CHARS)}…` : flat}"`;
 }
 
-/** Every check the oracle must pass, in the order given. Throws (a setup error) when there is none. */
+/**
+ * Every check the oracle must pass, in the order given — possibly none (#130d): a find-out goal has
+ * no page state to assert on, and is verified instead by a grounded `report` answer (#101). Without
+ * a check AND without the goal ending via `report`, the run is simply incomplete (never a vacuous
+ * pass) — see `adjudicatedRun`.
+ */
 function successChecksOf(cfg: GoalBasedMissionConfig): SuccessCheck[] {
-  const checks: SuccessCheck[] = [
+  return [
     ...(cfg.successAssertion === undefined ? [] : [{ kind: "page" as const, assertion: cfg.successAssertion }]),
     ...(cfg.successChecks ?? []),
   ];
-  if (checks.length === 0) throw new Error("runGoalBasedMission: a success assertion or at least one success check is required");
-  return checks;
 }
 
 export async function runGoalBasedMission(
@@ -231,6 +239,7 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     allowlist: cfg.allowlist,
     baseUrl: cfg.startUrl,
     ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
+    ...(cfg.invariantAuthTokens === undefined ? {} : { authTokens: cfg.invariantAuthTokens }),
   });
   monitor.attach(page);
   const log = new InvariantDefectLog();
@@ -296,11 +305,18 @@ async function adjudicatedRun(
   let heldAtStep: number | null = null;
   let settledSteps = 0;
   const held = cfg.successWhen === "held" && pageChecks.length > 0;
+  // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
+  // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
+  // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
+  // "passes" over zero checks) sends `done` through the advisory goal-judgment path instead of a
+  // false independent pass.
+  const hasChecks = checks.length > 0;
   const runOnce = (): Promise<ExploreRun> =>
     explore({
       ...cfg,
-      missionContext:
-        "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
+      missionContext: hasChecks
+        ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
+        : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
       // `held`: after every settled step, a quick look at the page checks — remembered once they all
       // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
       ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
@@ -316,11 +332,15 @@ async function adjudicatedRun(
       // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
       // final verdict — reloading mid-run would throw away the state the run is still building.
       // Under `held`, a page check that already held (together, at a settled step) counts.
-      successCheck: () =>
-        evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
-          (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
-          () => false,
-        ),
+      ...(hasChecks
+        ? {
+            successCheck: () =>
+              evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
+                (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
+                () => false,
+              ),
+          }
+        : {}),
     });
 
   let run = await runOnce();
@@ -364,6 +384,24 @@ async function adjudicatedRun(
       finalUrl: run.finalUrl,
       reason: whyNot(run, []),
       ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+    };
+  }
+
+  // A find-out goal (#130d): no --success check was given, so there is nothing to evaluate against
+  // the live page. The verdict is the run's own grounded outcome instead — `report` grounding an
+  // answer (#101), or the advisory goal judgment grounding a `done`. Never a vacuous pass: a run that
+  // exhausted its budget or got blocked without either is simply not succeeded.
+  if (!hasChecks) {
+    const succeeded = run.outcome.status === "completed";
+    return {
+      outcome: succeeded ? "succeeded" : run.stop === "exhausted" ? "exhausted" : "blocked",
+      assertionPassed: succeeded,
+      checks: [],
+      run,
+      recording: run.recording,
+      transcript: run.transcript,
+      finalUrl: run.finalUrl,
+      ...(succeeded ? {} : { reason: whyNot(run, []) }),
     };
   }
 

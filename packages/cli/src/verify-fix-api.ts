@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
 import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording } from "@jevitate/recording";
-import { loadInvariantFiles } from "./invariants-file.js";
+import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { buildMissionFixtures, type FixtureFlags } from "./fixture-cli.js";
 import {
   FixtureSpecError,
@@ -252,6 +252,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   // A declared-invariant defect (#86) is re-checked with the same spec (or `--invariants`), its probes
   // authorized against the MISSION's own origins before any browser opens.
   let invariantSpec: InvariantSpec | undefined;
+  // #135: authFrom.secret refs (env:VAR), resolved from the environment HERE — the one place this
+  // package reads process.env for invariants — never inside @jevitate/explore or @jevitate/recording.
+  let invariantAuthTokens: Map<string, string> | undefined;
   try {
     const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl };
     invariantSpec =
@@ -260,13 +263,21 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         : mission.invariantSpec === undefined
           ? undefined
           : validateInvariantSpec(mission.invariantSpec, bounds);
+    invariantAuthTokens = invariantSpec === undefined ? undefined : resolveInvariantAuthTokens(invariantSpec, process.env);
   } catch (e) {
     throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
   }
-  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, opts.secrets ?? []);
+  const authTokenValues = [...(invariantAuthTokens?.values() ?? [])];
+  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues]);
   const declared =
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
-      ? { spec: invariantSpec, id: finding.invariantId, allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl }
+      ? {
+          spec: invariantSpec,
+          id: finding.invariantId,
+          allowlist: mission.target.allowlist,
+          baseUrl: mission.target.seedUrl,
+          ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { authTokens: invariantAuthTokens }),
+        }
       : undefined;
   const openSession = async () => {
     const session = await portFactory().open({

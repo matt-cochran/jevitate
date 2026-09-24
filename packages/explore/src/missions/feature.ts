@@ -240,6 +240,8 @@ export type FeatureMissionParams = {
   invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */
   secrets?: readonly string[];
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  invariantAuthTokens?: ReadonlyMap<string, string>;
   /** No-progress watchdog (#114): the run ends `stalled` when no step completes within this bound. Default 120s. */
   stallTimeoutMs?: number;
   /** Bound (ms) on one reset-and-replay back to a queued state. Default `DEFAULT_REACH_TIMEOUT_MS`. */
@@ -259,6 +261,7 @@ export async function runFeatureMission(params: FeatureMissionParams): Promise<F
             allowlist: params.allowlist,
             baseUrl: params.seedUrl,
             ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+            ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
           }),
           log: new InvariantDefectLog(),
         };

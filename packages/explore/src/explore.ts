@@ -421,14 +421,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     failClosed: null,
     target: null,
   };
-  /** The most concrete cause known now, in #84's priority order; null when there is none. */
+  /**
+   * The most concrete cause known now, in #84's priority order; null when there is none. An invalid
+   * field is named ONLY when the last action taken was a click that sent no request at all (#130a) —
+   * the shape of a form submit the browser's own validation silently blocked. A click that DID send a
+   * request (even to the wrong endpoint — a `--success` typo, say) clears the field as the blocker: an
+   * unrelated field's stale `:invalid` state elsewhere on the page never gets blamed for that. An
+   * error toast/alert is preferred over a field either way.
+   */
   const blockingCause = (): string | null => {
     if (blockers.failClosed !== null) return blockers.failClosed;
     if (blockers.target !== null) return blockers.target.text;
-    const field = status.invalid[0];
-    if (field !== undefined) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
     const alert = status.alerts[0];
     if (alert !== undefined) return `the page shows alert ${quote(alert)}`;
+    const field = status.invalid[0];
+    const lastClick = sideEffects.lastClick();
+    const blockedBySubmit = lastActedOp === "click" && lastClick !== null && !lastClick.requestSent;
+    if (field !== undefined && blockedBySubmit) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
     return null;
   };
   /**

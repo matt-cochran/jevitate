@@ -197,6 +197,8 @@ export interface InductionMissionParams {
   readonly invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */
   readonly secrets?: readonly string[];
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /**
    * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
    * that appeared most recently is tried first, following what each action revealed (#115).
@@ -320,6 +322,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
             allowlist: params.allowlist,
             baseUrl: params.seedUrl,
             ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+            ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
           }),
           log: new InvariantDefectLog(),
         };
