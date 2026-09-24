@@ -1,0 +1,31 @@
+{
+  "_source": "Preveti dogfood, P-12 (J7 simulate). Steps, labels and the first timings come from round 2 runs/u-J7-real (click \"Frame & simulate this bet →\" at 3.7s, \"Run the simulation →\" at 5.9s on /decisions/new, POST /:id after it); the continuation — 3s waits with no page change, a reload, \"Run the simulation →\" clicked again, blocked at ~178s — is the round-1 J7 re-run row (2026-09-23 report: no in-flight indicator, the sprint sat `running` ~15 min). Redacted: no ids, relative timestamps.",
+  "steps": [
+    { "step": 1, "op": "click", "target": "link \"Frame & simulate this bet →\"", "actOk": true, "url": "http://127.0.0.1:5192/decisions/demo-bet-1", "descriptor": { "testId": "pressure-test-existing-bet" } },
+    { "step": 2, "op": "click", "target": "button \"Run the simulation →\"", "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "descriptor": { "testId": "run-simulation" } },
+    { "step": 3, "op": "wait", "target": null, "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "reason": "waited 3.0s (the page did not change and nothing is pending — waiting again will not help)" },
+    { "step": 4, "op": "wait", "target": null, "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "reason": "waited 3.0s (the page did not change and nothing is pending — waiting again will not help)" },
+    { "step": 5, "op": "reload", "target": null, "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1" },
+    { "step": 6, "op": "click", "target": "button \"Run the simulation →\"", "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "descriptor": { "testId": "run-simulation" } },
+    { "step": 7, "op": "wait", "target": null, "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "reason": "waited 3.0s (the page did not change and nothing is pending — waiting again will not help)" },
+    { "step": 8, "op": "blocked", "target": null, "actOk": true, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "reason": "model blocked" }
+  ],
+  "requests": [
+    { "id": 0, "method": "GET", "endpoint": "GET /decisions/demo-bet-:id", "url": "http://127.0.0.1:5192/decisions/demo-bet-1", "resourceType": "document", "startedAt": 100, "endedAt": 719, "status": 200, "step": 0 },
+    { "id": 1, "method": "POST", "endpoint": "POST /simuli.billing.BillingService/GetBalance", "url": "http://127.0.0.1:18582/simuli.billing.BillingService/GetBalance", "resourceType": "fetch", "startedAt": 800, "endedAt": 835, "status": 200, "step": 0 },
+    { "id": 2, "method": "POST", "endpoint": "POST /simuli.decision.DecisionService/GetDecisionDetail", "url": "http://127.0.0.1:18582/simuli.decision.DecisionService/GetDecisionDetail", "resourceType": "fetch", "startedAt": 3800, "endedAt": 3860, "status": 200, "step": 1 },
+    { "id": 3, "method": "POST", "endpoint": "POST /:id", "url": "http://127.0.0.1:18582/«id»", "resourceType": "fetch", "startedAt": 6000, "endedAt": 6354, "status": 200, "step": 2 },
+    { "id": 4, "method": "POST", "endpoint": "POST /:id", "url": "http://127.0.0.1:18582/«id»", "resourceType": "fetch", "startedAt": 150000, "endedAt": 150170, "status": 200, "step": 6 }
+  ],
+  "screens": [
+    { "index": 0, "step": 1, "at": 1000, "url": "http://127.0.0.1:5192/decisions/demo-bet-1", "signature": "p12-bet", "visibleText": "Raise Pro to $149\nFrame & simulate this bet →", "busy": false },
+    { "index": 1, "step": 2, "at": 4500, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false },
+    { "index": 2, "step": 3, "at": 60000, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false },
+    { "index": 3, "step": 4, "at": 90000, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false },
+    { "index": 4, "step": 5, "at": 120000, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false },
+    { "index": 5, "step": 6, "at": 148000, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false },
+    { "index": 6, "step": 7, "at": 160000, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false },
+    { "index": 7, "step": 8, "at": 175000, "url": "http://127.0.0.1:5192/decisions/new?decision=demo-bet-1", "signature": "p12-frame", "visibleText": "Frame the bet\nBet size\n$10k–$100k\nRun the simulation →", "busy": false }
+  ],
+  "endedAt": 178000
+}

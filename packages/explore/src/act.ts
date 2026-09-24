@@ -2,7 +2,8 @@ import type { Dialog, ElementHandle, Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Target } from "@jevitate/screenplay";
 import { descriptorToLocator } from "@jevitate/recorder";
-import type { TargetDescriptor } from "@jevitate/recording";
+import { applyTextEdit } from "@jevitate/interpreter";
+import type { TargetDescriptor, TextEdit } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { occluderOf, srOnlyLabelOf } from "./occlusion.js";
@@ -43,6 +44,11 @@ export interface ActArgs {
    * nearest the field in the DOM), so a click is always on a control the snapshot described.
    */
   readonly candidates?: readonly Control[];
+  /**
+   * For `edit_text` (#148): the edit, already validated by code (a quote present in the target's
+   * text, no secret). Placed and typed by the SAME function Recording replay uses.
+   */
+  readonly edit?: TextEdit | null;
 }
 
 /** How a `send` submitted its message. */
@@ -59,6 +65,12 @@ export interface ActResult {
   readonly submittedVia?: SubmittedVia;
   /** What the action observed on the way (e.g. the page asked to confirm leaving with unsaved changes). */
   readonly note?: string;
+  /**
+   * For `scroll_up`/`scroll_down`: whether the scroll position (of the nearest scrollable container
+   * under the pointer, else the window) actually settled to a new value within the settle window
+   * (#109). Absent for every other op.
+   */
+  readonly moved?: boolean;
 }
 
 /** Bound (ms) on a reload reaching its new document. The page's settling is perception's job. */
@@ -112,6 +124,37 @@ const GATE_TIMEOUT_MS = 2_000;
 const CLICK_TIMEOUT_MS = 5_000;
 /** Pixels a scroll op moves. */
 const SCROLL_PX = 600;
+/**
+ * Bound (ms) on how long a scroll op waits for the scroll position to settle after the wheel event
+ * (#109). Playwright's `mouse.wheel` does not wait for the scroll it dispatches — reading the scroll
+ * position immediately after almost always sees the pre-scroll value, so the loop is told "the page
+ * did not move" even when it did. Polled, not a fixed sleep: most scrolls settle well under this.
+ */
+const SCROLL_SETTLE_MS = 600;
+/** Poll interval (ms) while waiting for a scroll to settle. */
+const SCROLL_POLL_MS = 50;
+
+/**
+ * BROWSER CODE — the scroll position a wheel dispatched at (x,y) would move: the nearest scrollable
+ * ancestor under the point (an `overflow:auto`/`scroll` container whose content overflows it, e.g. an
+ * inner main pane), else the window/document's own scroll position (#109). X and Y are combined into
+ * one number — callers only need to know WHETHER it moved, never which axis.
+ */
+export function scrollPositionAt(pt: { x: number; y: number }): number {
+  const scrollable = (e: Element): boolean => {
+    const s = window.getComputedStyle(e);
+    const y = /^(auto|scroll)$/.test(s.overflowY) && e.scrollHeight > e.clientHeight + 1;
+    const x = /^(auto|scroll)$/.test(s.overflowX) && e.scrollWidth > e.clientWidth + 1;
+    return x || y;
+  };
+  let el: Element | null = document.elementFromPoint(pt.x, pt.y);
+  while (el !== null && el !== document.documentElement && el !== document.body) {
+    if (scrollable(el)) return el.scrollTop + el.scrollLeft;
+    el = el.parentElement;
+  }
+  const root = document.scrollingElement ?? document.documentElement;
+  return root.scrollTop + root.scrollLeft;
+}
 
 function targetFor(d: TargetDescriptor): Target {
   return Target.named(describe(d)).locatedBy((page) => descriptorToLocator(page, d));
@@ -292,6 +335,32 @@ export function failureLine(message: string): string {
   return `${first} (${intercept.replace(/\s+from\s+<.*?>\s+subtree/, "").slice(0, 200)})`;
 }
 
+/**
+ * Parses the element that intercepted a click out of Playwright's own failure text
+ * ("<button aria-label=\"Close inspector\">…</button> intercepts pointer events") into a CSS
+ * selector that finds the SAME element again — by its identifying attributes only (id, data-testid,
+ * aria-label, name, role, class), never a bare tag name (that would match every `<div>` on the page).
+ * Used to deprioritise every control the same interceptor covers until the page state changes (#90),
+ * so a run does not keep re-choosing sibling targets under a backdrop that already refused one click.
+ * Returns null when the message names no interception, or the element carries nothing to key on.
+ */
+export function parseInterceptor(message: string): string | null {
+  const m = /<([a-zA-Z][\w-]*)\b([^>]*)>[\s\S]{0,300}?intercepts pointer events/.exec(message);
+  if (m === null) return null;
+  const tag = m[1]!.toLowerCase();
+  const attrText = m[2] ?? "";
+  const attrs: Array<[string, string]> = [];
+  const attrRe = /([a-zA-Z_:][-\w:.]*)\s*=\s*"([^"]*)"/g;
+  for (let a = attrRe.exec(attrText); a !== null; a = attrRe.exec(attrText)) attrs.push([a[1]!, a[2]!]);
+  const priority = ["data-testid", "id", "aria-label", "name", "role", "class"];
+  const chosen = priority
+    .map((key) => attrs.find(([k]) => k === key))
+    .filter((x): x is [string, string] => x !== undefined)
+    .slice(0, 2);
+  if (chosen.length === 0) return null;
+  return `${tag}${chosen.map(([k, v]) => `[${k}=${JSON.stringify(v)}]`).join("")}`;
+}
+
 /** BROWSER CODE — tree distance between two elements (through their lowest common ancestor). */
 function treeDistance(a: Element, b: Element): number {
   const up = (el: Element): Element[] => {
@@ -405,6 +474,18 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
         await descriptorToLocator(page, descriptor).selectOption(option, { timeout: SELECT_TIMEOUT_MS });
       });
     }
+    case "edit_text": {
+      if (args.control === null) return { ok: false, mutated: false, reason: "edit_text needs a target" };
+      if (args.edit === null || args.edit === undefined) {
+        return { ok: false, mutated: false, reason: "edit_text has no edit (fail-closed)" };
+      }
+      const bad = await gate(actor, args.control);
+      if (bad !== null) return { ok: false, mutated: false, reason: bad };
+      const edit = args.edit;
+      const descriptor = args.control.descriptor;
+      // A quote no longer in the element fails here (thrown → a failed act), never a whole retype.
+      return dispatch(() => applyTextEdit(page, descriptorToLocator(page, descriptor), edit));
+    }
     case "upload": {
       if (args.control === null) return { ok: false, mutated: false, reason: "upload needs a target" };
       if (args.fixture === null || args.fixture === undefined) {
@@ -419,8 +500,29 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
     case "scroll_up":
     case "scroll_down": {
       const dy = args.op === "scroll_down" ? SCROLL_PX : -SCROLL_PX;
+      const viewport = page.viewportSize();
+      const pt = { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
+      // The wheel scrolls whatever is under the pointer — put it over the viewport centre first
+      // (an inner overflow:auto pane there is what the wheel actually moves) rather than wherever
+      // the mouse last was.
+      const before: number | null = await page.evaluate(scrollPositionAt, pt).catch(() => null);
+      await page.mouse.move(pt.x, pt.y).catch(() => undefined);
       await page.mouse.wheel(0, dy);
-      return { ok: true, mutated: false };
+      // `mouse.wheel` does not wait for the scroll it dispatches (#109) — poll the same point's
+      // scroll position until it settles to a new value, or give up after SCROLL_SETTLE_MS.
+      let moved = false;
+      if (before !== null) {
+        const deadline = Date.now() + SCROLL_SETTLE_MS;
+        do {
+          const after: number = await page.evaluate(scrollPositionAt, pt).catch(() => before);
+          if (after !== before) {
+            moved = true;
+            break;
+          }
+          await page.waitForTimeout(SCROLL_POLL_MS);
+        } while (Date.now() < deadline);
+      }
+      return { ok: true, mutated: false, moved };
     }
     case "wait": {
       await page.waitForTimeout(WAIT_MS);

@@ -4,6 +4,8 @@ import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+import { applyTextEdit } from "./rich-text.js";
+import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
 
 /**
  * The recorded target resolved to exactly ONE element (anchor, else exact rung + nth), as a
@@ -14,7 +16,7 @@ async function strictTarget(actor: Actor, d: TargetDescriptor, opts: ResolveTarg
   const locator = await resolveTarget(page, d, opts);
   return Target.named(descriptorToTarget(d).description).locatedBy(() => locator);
 }
-import { checkAssertion, pollUntil, PostconditionFailed } from "./assertion.js";
+import { checkAssertion, pollUntil, textIncludesCI, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
 
@@ -172,6 +174,22 @@ export async function runStep(
       }
       return { kind: "done" };
     }
+    case "editText": {
+      // The same edit the run performed (#148): the recorded anchor is placed in the target's CURRENT
+      // text — a quote no longer there fails closed (throws), never replacing the whole element.
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      const value = step.value === undefined ? undefined : resolveValue(step.value, vars);
+      await applyTextEdit(page, await resolveTarget(page, step.target, targetOpts), {
+        anchor: step.anchor,
+        action: step.action,
+        ...(value === undefined ? {} : { value }),
+        ...(step.format === undefined ? {} : { format: step.format }),
+      });
+      if (!(await checkAssertion(actor, step.expect))) {
+        throw new PostconditionFailed(step.expect, "editText");
+      }
+      return { kind: "done" };
+    }
     case "forEach": {
       const page = actor.ability(BrowseTheWebToken).session.page;
       const target = descriptorToTarget(step.items);
@@ -312,6 +330,7 @@ async function evaluateAssertionInRowOnce(
   a: Assertion,
   rowLocator: Locator,
 ): Promise<boolean> {
+  if (isVisualAssertion(a)) return (await evaluateVisual(a, (d) => resolveInRoot(rowLocator, d))).held;
   switch (a.kind) {
     case "visible":
       return resolveInRoot(rowLocator, a.target).isVisible();
@@ -321,7 +340,7 @@ async function evaluateAssertionInRowOnce(
     }
     case "textIncludes": {
       const text = await resolveInRoot(rowLocator, a.target).innerText();
-      return text.includes(a.text);
+      return textIncludesCI(text, a.text);
     }
     case "count": {
       const n = await resolveInRoot(rowLocator, a.target).count();

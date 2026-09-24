@@ -2,6 +2,7 @@ import { chromium, type BrowserContext, type BrowserContextOptions, type Page } 
 import type { BrowserPort, BrowserSession, OpenOptions } from "./browser-port.js";
 import { BrowserPool, type BrowserPoolOptions, type ContextLease } from "./browser-pool.js";
 import { createResourceSignals } from "./select-resource-signals.js";
+import { emulationContextOptions, resolveEmulation } from "./emulation.js";
 
 /**
  * Chromium switches applied on Linux regardless of caller args. They are the
@@ -174,7 +175,9 @@ export class PlaywrightBrowserPort implements BrowserPort {
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
     // TODO(M3): enforce allowedOrigins via route interception; currently unenforced.
-    if (opts.persistentProfile !== undefined) return this.#openPersistent(opts, opts.persistentProfile);
+    // Refused BEFORE any browser opens: an unregistered --device name, or --viewport + --device together.
+    const emulation = resolveEmulation({ viewport: opts.viewport, device: opts.device });
+    if (opts.persistentProfile !== undefined) return this.#openPersistent(opts, opts.persistentProfile, emulation);
     const launchOptions = {
       headless: opts.headless,
       args: resolveLaunchArgs(opts.args, this.#platform),
@@ -192,7 +195,11 @@ export class PlaywrightBrowserPort implements BrowserPort {
           throw explainLaunchFailure(err, opts);
         }
       },
-      { baseURL: opts.baseUrl, ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}) },
+      {
+        baseURL: opts.baseUrl,
+        ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+        ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
+      },
     );
     let page: Page;
     try {
@@ -204,7 +211,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
     return pooledSession(lease, page);
   }
 
-  async #openPersistent(opts: OpenOptions, dir: string): Promise<BrowserSession> {
+  async #openPersistent(opts: OpenOptions, dir: string, emulation: ReturnType<typeof resolveEmulation>): Promise<BrowserSession> {
     if (opts.storageState !== undefined) {
       throw new Error("storageState cannot be combined with persistentProfile: a persistent profile already carries its own state");
     }
@@ -216,6 +223,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
         args: resolveLaunchArgs(opts.args, this.#platform),
         ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
         ...(opts.channel !== undefined ? { channel: opts.channel } : {}),
+        ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
       });
     } catch (err) {
       throw explainLaunchFailure(err, opts);

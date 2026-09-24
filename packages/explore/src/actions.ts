@@ -17,6 +17,11 @@ export type Op =
   | "send"
   | "select"
   | "upload"
+  /**
+   * An edit INSIDE a rich-text (`contenteditable`) control (#148): replace / insert at / format a
+   * quoted part of its text, keeping the rest — never a whole-element retype.
+   */
+  | "edit_text"
   | "scroll_up"
   | "scroll_down"
   | "wait"
@@ -36,6 +41,7 @@ export const OPS: readonly Op[] = [
   "send",
   "select",
   "upload",
+  "edit_text",
   "scroll_up",
   "scroll_down",
   "wait",
@@ -51,10 +57,10 @@ export const OPS: readonly Op[] = [
  * holding typed text the app never receives. It is never a control's `affordedOp`; the goal loop
  * offers it alongside `type` for message-shaped fields (see `sendable`).
  */
-export type TargetOp = "click" | "type" | "send" | "select" | "upload";
+export type TargetOp = "click" | "type" | "send" | "select" | "upload" | "edit_text";
 
 /** The ops that require a chosen control; every other op is target-free. */
-export const OPS_NEEDING_TARGET: ReadonlySet<Op> = new Set<Op>(["click", "type", "send", "select", "upload"]);
+export const OPS_NEEDING_TARGET: ReadonlySet<Op> = new Set<Op>(["click", "type", "send", "select", "upload", "edit_text"]);
 
 /** Text-entry `<input>` types: typing is their interaction. Anything else (checkbox, radio, range, color…) is clicked. */
 const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
@@ -145,6 +151,8 @@ export function describeAction(op: TargetOp, summary: string): string {
       return `type a message into ${summary} and submit it (Enter / its Send button)`;
     case "select":
       return `choose an option in ${summary}`;
+    case "edit_text":
+      return `edit part of the text inside ${summary} (replace, insert at, or format a quoted piece; the rest stays)`;
     case "click":
       return `click ${summary}`;
     default: {
@@ -198,5 +206,21 @@ export function sendCandidates(controls: readonly Control[]): Array<Extract<Cand
       op: "send" as const,
       control,
       description: describeAction("send", control.summary),
+    }));
+}
+
+/**
+ * The `edit_text` actions a page affords (#148): one per enabled rich-text (`contenteditable`)
+ * control. Offered next to the control's own action, so "change one word mid-paragraph" is a single
+ * choice — never a retype of the whole element.
+ */
+export function editCandidates(controls: readonly Control[]): Array<Extract<CandidateAction, { op: TargetOp }>> {
+  return controls
+    .filter((c) => c.richText === true && c.enabled)
+    .map((control) => ({
+      id: candidateId("edit_text", control),
+      op: "edit_text" as const,
+      control,
+      description: describeAction("edit_text", control.summary),
     }));
 }

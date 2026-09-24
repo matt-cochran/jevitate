@@ -20,21 +20,27 @@ describe("urlTemplate", () => {
     expect(urlTemplate("/login")).toBe("/login");
   });
 
-  it("templates a prefixed uuid, keeping the literal prefix (#95)", () => {
+  it("templates a prefixed uuid to the whole segment, never keeping the literal prefix (#95/#127)", () => {
     expect(urlTemplate("/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
-      "/decisions/candidate-:id",
+      "/decisions/:id",
     );
     expect(urlTemplate("/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345")).toBe(
-      "/decisions/candidate-:id",
+      "/decisions/:id",
     );
     expect(urlTemplate("/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
       urlTemplate("/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345"),
     );
   });
 
-  it("templates a prefixed numeric id, keeping the literal prefix (#95)", () => {
-    expect(urlTemplate("/items/item-42")).toBe("/items/item-:id");
-    expect(urlTemplate("/decisions/demo-bet-1")).toBe("/decisions/demo-bet-:id");
+  it("templates a prefixed numeric id to the whole segment, never keeping the literal prefix (#95/#127)", () => {
+    expect(urlTemplate("/items/item-42")).toBe("/items/:id");
+    expect(urlTemplate("/decisions/demo-bet-1")).toBe("/decisions/:id");
+  });
+
+  it("#127: a short trailing-digit slug and a uuid slug under the SAME prefix template identically", () => {
+    expect(urlTemplate("/decisions/demo-bet-1")).toBe(
+      urlTemplate("/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890"),
+    );
   });
 });
 

@@ -14,8 +14,10 @@ import {
   type SharedJourneyFile,
 } from "@jevitate/sources";
 import type { JourneyRunResult } from "@jevitate/runtime";
+import { safeRunPolicy } from "@jevitate/domain";
 import { addSource, trustJourney, type SourceApiDeps } from "./source-api.js";
-import { runSourceJourney, type RunResolvedJourney } from "./source-run-api.js";
+import { runSourceJourney, realResolvedJourneyRunner, type RunResolvedJourney } from "./source-run-api.js";
+import { JourneyRequiresAuthError } from "./journey-api.js";
 
 const ORIGIN = "https://shop.test";
 
@@ -80,9 +82,9 @@ async function makeStores() {
 /** A runner seam spy: records whether it ran and what it was handed, so the
  *  asserts-it-refuses tests can prove NO browser/run happened past a gate. */
 function makeRunnerSpy() {
-  const calls: { file: SharedJourneyFile; params: Record<string, string> }[] = [];
-  const runJourney: RunResolvedJourney = async (file, params) => {
-    calls.push({ file, params });
+  const calls: { file: SharedJourneyFile; params: Record<string, string>; storageState?: string; emulation?: Parameters<RunResolvedJourney>[4] }[] = [];
+  const runJourney: RunResolvedJourney = async (file, params, _policy, storageState, emulation) => {
+    calls.push({ file, params, storageState, emulation });
     return { outcome: "ok", output: { ran: file.metadata.id } } satisfies JourneyRunResult;
   };
   return { runJourney, calls };
@@ -105,6 +107,34 @@ describe("#26 runSourceJourney (run-gate wired)", () => {
     // The gate handed the runner the resolved SharedJourneyFile itself.
     expect(spy.calls[0].file.metadata.id).toBe("checkout");
     expect(spy.calls[0].file.declaredOrigins).toEqual([ORIGIN]);
+  });
+
+  test("#118: passes an optional storageState PATH through to the runner seam", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+    const spy = makeRunnerSpy();
+    const deps: SourceApiDeps & { runJourney: RunResolvedJourney } = {
+      sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney: spy.runJourney,
+    };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    await runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {}, storageState: "/tmp/state.json" });
+
+    expect(spy.calls[0].storageState).toBe("/tmp/state.json");
+  });
+
+  test("#149: passes --viewport/--device (opts.emulation) through to the runner seam", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+    const spy = makeRunnerSpy();
+    const deps: SourceApiDeps & { runJourney: RunResolvedJourney } = {
+      sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney: spy.runJourney,
+    };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    await runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {}, emulation: { device: "iPhone 13" } });
+
+    expect(spy.calls[0].emulation).toEqual({ device: "iPhone 13" });
   });
 
   test("SECURITY: refuses an UNREGISTERED source (UnknownSourceError) and NEVER runs", async () => {
@@ -186,5 +216,12 @@ describe("#26 runSourceJourney (run-gate wired)", () => {
       runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {} }),
     ).rejects.toBeInstanceOf(UndeclaredTouError);
     expect(spy.calls).toHaveLength(0);
+  });
+});
+
+describe("#118 realResolvedJourneyRunner: metadata.requiresAuth fails fast with no storageState", () => {
+  test("refuses BEFORE any browser launch when the file declares requiresAuth and no storageState is given", async () => {
+    const file: SharedJourneyFile = { ...sharedJourney("checkout"), metadata: { ...sharedJourney("checkout").metadata, requiresAuth: true } };
+    await expect(realResolvedJourneyRunner(file, {}, safeRunPolicy())).rejects.toBeInstanceOf(JourneyRequiresAuthError);
   });
 });

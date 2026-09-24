@@ -130,6 +130,26 @@ describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
       await next.close();
     }
   }, 60_000);
+
+  test("--viewport / --device (#149) set the context's actual viewport, scale, mobile and UA", async () => {
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const sized = await port.open({ ...base, viewport: { width: 375, height: 812 } });
+    try {
+      expect(sized.page.viewportSize()).toEqual({ width: 375, height: 812 });
+    } finally {
+      await sized.close();
+    }
+    const device = await port.open({ ...base, device: "iPhone 13" });
+    try {
+      expect(device.page.viewportSize()).toEqual({ width: 390, height: 664 });
+      const ua = await device.page.evaluate(() => navigator.userAgent);
+      expect(ua).toContain("iPhone");
+      const isMobile = await device.page.evaluate(() => (navigator as unknown as { maxTouchPoints: number }).maxTouchPoints > 0);
+      expect(isMobile).toBe(true);
+    } finally {
+      await device.close();
+    }
+  }, 60_000);
 });
 
 describe("persistentProfile opt-in (real Chromium)", () => {

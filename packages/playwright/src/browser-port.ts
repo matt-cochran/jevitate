@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { AdmissionRecord } from "./browser-pool.js";
+import type { ViewportSize } from "./emulation.js";
 
 export interface BrowserSession {
   readonly page: Page;
@@ -38,6 +39,11 @@ export interface BrowserLaunchOptions {
  *  - `persistentProfile`: explicit opt-in to a real on-disk Chromium profile
  *    (`launchPersistentContext`) — e.g. headed use of a real profile. Runs its
  *    own browser process outside the pool; cannot combine with `storageState`.
+ *  - `viewport` / `device` (#149): per-mission viewport/device emulation, mutually exclusive.
+ *    `device` is a name from Playwright's own `devices` registry (validated by
+ *    `resolveEmulation`/`UnknownDeviceError` — never an arbitrary UA string) and additionally sets
+ *    `deviceScaleFactor`/`isMobile`/`hasTouch`/`userAgent`. Both undefined ⇒ Playwright's default
+ *    viewport (documented in `jevitate explore --help`).
  */
 export interface OpenOptions extends BrowserLaunchOptions {
   storageState?: string;
@@ -46,6 +52,8 @@ export interface OpenOptions extends BrowserLaunchOptions {
   /** TODO(M3): inert until route-level enforcement lands — not yet a navigation guard. */
   allowedOrigins: string[];
   baseUrl: string;
+  viewport?: ViewportSize;
+  device?: string;
 }
 
 export interface BrowserPort {

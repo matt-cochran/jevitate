@@ -33,12 +33,15 @@ import type { HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure } from "../mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
+import { chromeClassifier } from "../coverage/chrome.js";
 import { reachFrontierState } from "../coverage/reach.js";
+import { ChromeTracker } from "../feature/relevance.js";
+import { StallWatchdog, StalledError } from "../stall-watchdog.js";
 import { isNavControl } from "../coverage/nav.js";
 import {
   assessCoverageSufficiency,
@@ -48,6 +51,11 @@ import {
 } from "../coverage/sufficiency.js";
 import { seedRedirectReason } from "../seed-redirect.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
+import { MissionSafety } from "../mission-safety.js";
+import type { SafetyConfig } from "../safety.js";
+import type { SideEffect } from "../side-effects.js";
+import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
+import { detectOverflow, shouldCheckOverflow, type OverflowFinding } from "../overflow.js";
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
@@ -81,6 +89,8 @@ export interface DefectRecord {
   readonly reason: string;
   /** A replayable repro path from the seed to the flagged state. */
   readonly recording: Recording;
+  /** Present for a horizontal-overflow hard signal (#149): the structured finding `reason` summarizes. */
+  readonly overflow?: OverflowFinding;
 }
 
 /** One transition whose result landed outside the mission's target scope (#89) — recorded, never
@@ -121,11 +131,13 @@ export interface InductionRunResult {
   /** `crashed`: the engine failed; everything discovered up to the failure is still returned. */
   /** `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session). */
   /** `scope-unreachable`: the seed redirected elsewhere (e.g. a lost `--storage-state` session
-   *  bounced to a login page) — the run never got to test what it was asked to (#82). */
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
+   *  bounced to a login page) — the run never got to test what it was asked to (#82) — or, mid-run,
+   *  the frontier could not return to the seed after a departure (#114). */
+  /** `stalled`: no step completed within the stall watchdog's bound (#114). */
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
-  /** Why the run crashed/could not reach its target — present for `crashed` and `scope-unreachable`. */
+  /** Why the run crashed/could not reach its target/stalled — present for `crashed`, `scope-unreachable` and `stalled`. */
   readonly failure?: MissionFailure;
   readonly coverage: CoverageReport;
   /** One replayable repro Recording per distinct state visited (discovery order). */
@@ -138,6 +150,11 @@ export interface InductionRunResult {
   readonly invariantDefects?: InvariantDefect[];
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
   readonly invariants?: InvariantReport[];
+  /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects?: SideEffect[];
+  readonly sideEffectsTruncated?: number;
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  readonly budget?: BudgetTrajectory[];
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
@@ -186,6 +203,34 @@ export interface InductionMissionParams {
   readonly invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */
   readonly secrets?: readonly string[];
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
+   * that appeared most recently is tried first, following what each action revealed (#115).
+   */
+  readonly strategy?: "coverage" | "exploratory";
+  /** No-progress watchdog (#114): the run ends `stalled` when no step completes within this bound. Default 120s. */
+  readonly stallTimeoutMs?: number;
+  /** Bound (ms) on one reset-and-replay back to a queued state. Default `DEFAULT_REACH_TIMEOUT_MS`. */
+  readonly reachTimeoutMs?: number;
+  /** The shared safety policy (#116): session-ending / destructive / paid / --deny'd controls are never clicked. */
+  readonly safety?: SafetyConfig;
+  /**
+   * Horizontal-overflow hard signal (#149): checked after every settled state (and on the seed
+   * page) and, when it fires, recorded as a `DefectRecord` — a hard defect, never a Jev judgment
+   * (guardrail #4). Runs by default only when the emulated viewport is narrower than 1024px, or
+   * always when `checkOverflow` is set (CLI `--check-overflow`).
+   */
+  readonly overflow?: {
+    readonly checkOverflow?: boolean;
+    readonly toleranceCss?: number;
+    /** `--ignore-overflow <selector>` (repeatable): intentional overflow, never a defect. */
+    readonly ignoreSelectors?: readonly string[];
+    /** The device name (`--device`), recorded on a finding for context. */
+    readonly device?: string;
+    readonly secrets?: readonly string[];
+  };
 }
 
 /**
@@ -265,7 +310,7 @@ function extendPath(
 
 /** A frontier path as a replayable Recording: the seed navigate, then the path's non-empty pages. */
 function withSeed(branch: Recording, seedUrl: string): Recording {
-  const seed = toPath(seedUrl);
+  const seed = seedPath(seedUrl);
   return {
     ...branch,
     pages: [
@@ -273,6 +318,17 @@ function withSeed(branch: Recording, seedUrl: string): Recording {
       ...branch.pages.filter((p) => p.steps.length > 0),
     ],
   };
+}
+
+/** The seed's path WITH its query (`/workspace?inquiry=…`) — `toPath` drops the query, and a seed that
+ *  needs it replays to a different page (#114). Sensitive query values stay masked. */
+export function seedPath(seedUrl: string): string {
+  try {
+    const u = new URL(seedUrl);
+    return redactUrl(`${u.pathname || "/"}${u.search}`);
+  } catch {
+    return toPath(seedUrl);
+  }
 }
 
 export async function runInductionMission(params: InductionMissionParams): Promise<InductionRunResult> {
@@ -287,14 +343,30 @@ export async function runInductionMission(params: InductionMissionParams): Promi
             allowlist: params.allowlist,
             baseUrl: params.seedUrl,
             ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+            ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
           }),
           log: new InvariantDefectLog(),
         };
-  const result = await runInductionFrontier(params, declared);
-  return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
+  const safety = new MissionSafety(params.safety);
+  // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule,
+  // the same #86/#135 read/auth/redaction machinery). A budget-only spec (no invariants) still works:
+  // `declared` above is non-null whenever `params.invariants` is given, whatever its `invariants` array.
+  const budgetDecls = params.invariants?.budget ?? [];
+  const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
+  const result = { ...(await runInductionFrontier(params, declared, safety, budget)), ...safety.result() };
+  return {
+    ...result,
+    ...(declared === null ? {} : { invariantDefects: declared.log.defects(), invariants: declared.monitor.report() }),
+    ...(budget === null ? {} : { budget: budget.trajectory() }),
+  };
 }
 
-async function runInductionFrontier(params: InductionMissionParams, declared: Declared | null): Promise<InductionRunResult> {
+async function runInductionFrontier(
+  params: InductionMissionParams,
+  declared: Declared | null,
+  safety: MissionSafety,
+  budget: BudgetMonitor | null,
+): Promise<InductionRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const site = new URL(params.seedUrl).origin;
@@ -319,7 +391,15 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
     timings.push(p.timing);
     return p.snapshot;
   };
-  const transcript = new TranscriptLog([], params.onTranscriptEntry);
+  // No-progress watchdog (#114): every recorded step kicks it; every await on the page is guarded by
+  // it, so a wait that never ends stops the run (`stalled`) instead of idling until it is killed.
+  const watchdog = new StallWatchdog(params.stallTimeoutMs);
+  const guard = <T>(work: Promise<T>): Promise<T> => watchdog.guard(work);
+  const transcript = new TranscriptLog([], (entry, all) => {
+    watchdog.kick("choosing the next frontier action");
+    params.onTranscriptEntry?.(entry, all);
+  });
+  const strategyLabel = params.strategy === "exploratory" ? "exploratory-frontier" : "coverage-frontier";
   let crashWatch = new CrashWatch(sessions.page);
   declared?.monitor.attach(sessions.page);
   sessions.onReset((page) => {
@@ -329,6 +409,29 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
   const visited = new Set<string>();
   const statePaths = new Map<string, Recording>();
   const defects: DefectRecord[] = [];
+  // Horizontal-overflow (#149): one defect per distinct fingerprint (route + element) — a wide table
+  // seen across many visited states is still ONE finding, never a defect per occurrence.
+  const seenOverflow = new Set<string>();
+  const checkOverflow = async (stateFp: string, url: string, recording: Recording): Promise<void> => {
+    const vp = sessions.page.viewportSize();
+    if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return;
+    const finding = await detectOverflow(sessions.page, {
+      viewport: vp ?? { width: 1280, height: 720 },
+      ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
+      ...(params.overflow?.toleranceCss === undefined ? {} : { toleranceCss: params.overflow.toleranceCss }),
+      ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
+      ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
+    });
+    if (finding === null || seenOverflow.has(finding.fingerprint)) return;
+    seenOverflow.add(finding.fingerprint);
+    defects.push({
+      stateFingerprint: stateFp,
+      url,
+      reason: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
+      recording,
+      overflow: finding,
+    });
+  };
   let transitionsExercised = 0;
   let actions = 0;
   let failedActions = 0;
@@ -341,6 +444,10 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
   // coverage — so the run stays prioritized on its target instead of wandering the whole app.
   const routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
   const inScope = scopePredicate(params.allowlist, routeGlobs);
+  // Global chrome (#115): controls repeated unchanged across pathnames, besides nav/header/footer
+  // landmarks and links out of scope, are tried only once the target's own controls are exhausted.
+  const chrome = new ChromeTracker();
+  const observe = (s: Snapshot): void => chrome.observe(pathOf(s.url), s.controls);
   const departures: CoverageScopeDeparture[] = [];
   const MAX_LISTED_DEPARTURES = 50;
   let outOfScopeTransitions = 0;
@@ -355,10 +462,43 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
     scope: { routeGlobs, outOfScopeTransitions, departures: departures.slice(0, MAX_LISTED_DEPARTURES) },
   });
 
+  const ended = (outcome: "scope-unreachable" | "stalled", failure: MissionFailure): InductionRunResult => ({
+    outcome,
+    failure,
+    coverage: report(false),
+    recordings: [...statePaths.values()],
+    transcript: transcript.entries(),
+    timing: summarizeTimings(timings),
+    hangs: [...hangs.values()],
+  });
+
   try {
-    await monitorFor(sessions.page).instrument();
-    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
-    let snap = await takeSnapshot();
+    watchdog.during("loading the seed");
+    await guard(monitorFor(sessions.page).instrument());
+    safety.attach(monitorFor(sessions.page));
+    // #128: real network evidence for the FIRST navigation — a refused connection can still
+    // surface as a bare navigation timeout.
+    let firstNavNetError: string | null = null;
+    const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
+      const text = req.failure()?.errorText;
+      if (text !== undefined) firstNavNetError = text;
+    };
+    sessions.page.on("requestfailed", onFirstNavRequestFailed);
+    try {
+      await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
+    } catch (e) {
+      const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+      return ended("scope-unreachable", {
+        kind: "target-unreachable",
+        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
+      });
+    } finally {
+      sessions.page.off("requestfailed", onFirstNavRequestFailed);
+    }
+    let snap = await guard(takeSnapshot());
 
     // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most
     // often) — the run cannot test what it was asked to, so it is never `clean` (#82).
@@ -387,11 +527,47 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
 
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
-    const frontier = new Frontier();
+    observe(snap);
+
+    // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
+    // An unreadable baseline fails closed by default (`onUnreadable: "stop"`): the run stops before
+    // it ever acts against a budget it cannot see.
+    if (budget !== null) {
+      const b = await guard(budget.baseline(sessions.page));
+      if (b.crossed) {
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "budget",
+          actOk: false,
+          reason: b.reason ?? "budget observable unreadable at run start",
+          snapshot: snap,
+        });
+        return {
+          outcome: "budget",
+          coverage: report(false),
+          recordings: [...statePaths.values()],
+          transcript: transcript.entries(),
+          timing: summarizeTimings(timings),
+          hangs: [...hangs.values()],
+        };
+      }
+    }
+
+    const frontier = new Frontier({
+      order: params.strategy === "exploratory" ? "novelty" : "breadth",
+      classify: chromeClassifier({ chrome, inScope }),
+    });
+    /** The last transition left the target scope — the next reset is a return after a departure. */
+    let departed = false;
 
     const seedRecording: Recording = { version: "1", site, pages: [] };
     statePaths.set(currentFingerprint, seedRecording);
     enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
+    // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
+    await guard(checkOverflow(currentFingerprint, snap.url, withSeed(seedRecording, params.seedUrl)));
 
     while (!frontier.isExhausted()) {
       // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
@@ -413,28 +589,73 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
       if (depth >= maxDepth) continue; // bounded exploration depth
 
       if (item.fromFingerprint !== currentFingerprint) {
-        const reached = await reachFrontierState({
-          actor: sessions.actor,
-          seedUrl: params.seedUrl,
-          item,
-          snapshotNow: takeSnapshot,
-        });
-        if (!reached.ok) continue; // stale frontier item — dropped, never guessed at
+        watchdog.during(departed ? "returning to the seed after a departure" : "resetting to a queued state");
+        const reached = await guard(
+          reachFrontierState({
+            actor: sessions.actor,
+            seedUrl: params.seedUrl,
+            item,
+            snapshotNow: takeSnapshot,
+            homeUrl: params.seedUrl,
+            currentUrl: () => sessions.page.url(),
+            ...(params.reachTimeoutMs === undefined ? {} : { timeoutMs: params.reachTimeoutMs }),
+          }),
+        );
+        if (!reached.ok) {
+          if (reached.reason === "stale") {
+            // Stale — dropped, never guessed at; so is every other item replaying the same path (#114).
+            frontier.dropState(item.fromFingerprint);
+            currentFingerprint = "";
+            continue;
+          }
+          // The seed is gone (a lost session) or stopped answering: no queued item is reachable —
+          // a typed stop, never an idle grind through every queued item's reset (#114).
+          return ended("scope-unreachable", {
+            kind: "target-unreachable",
+            message: `could not return to the seed${departed ? " after a departure" : ""} (${reached.detail ?? reached.reason})`,
+          });
+        }
         snap = reached.snapshot;
+        observe(snap);
         currentFingerprint = item.fromFingerprint;
+        departed = false;
       }
 
       const liveControl = resolveControl(snap, item.control);
       if (liveControl === null) continue; // control vanished between snapshots — dropped
 
+      // The shared safety policy (#116): never clicked, never retried (blacklisted), recorded once.
+      const unsafe = safety.gate(item.op, liveControl);
+      if (unsafe !== null) {
+        frontier.blacklist(controlIdentity(liveControl));
+        if (unsafe.first) {
+          transcript.record({
+            op: null,
+            control: liveControl,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "safety-policy",
+            origin: "engine",
+            actOk: false,
+            reason: unsafe.reason,
+            snapshot: snap,
+          });
+        }
+        continue;
+      }
       const actedOn = snap.url;
-      await declared?.monitor.before(sessions.actor);
-      const result = await act(sessions.actor, {
-        op: item.op,
-        control: liveControl,
-        value: item.op === "click" ? null : "",
-      });
+      watchdog.during(`acting on "${liveControl.name || item.op}"`);
+      if (declared !== null) await guard(declared.monitor.before(sessions.actor));
+      safety.mark(transcript.nextStep, item.op, liveControl);
+      const result = await guard(
+        act(sessions.actor, {
+          op: item.op,
+          control: liveControl,
+          value: item.op === "click" ? null : "",
+        }),
+      );
       actions += 1;
+      frontier.recordAttempt();
       const decidedOn = snap;
     // Each perception's timing is reported once (a failed act re-uses the same snapshot).
     const decidedOnTiming = lastTiming;
@@ -450,7 +671,7 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
           control: liveControl,
           confidence: null,
           chosenBy: "strategy",
-          strategy: "coverage-frontier",
+          strategy: strategyLabel,
           actOk: false,
           ...(result.reason === undefined ? {} : { reason: result.reason }),
           snapshot: decidedOn,
@@ -462,7 +683,8 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
       frontier.markExercised(controlIdentity(liveControl));
       if (!isNavControl(liveControl, decidedOn.url)) nonNavActionsExercised += 1;
 
-      snap = await takeSnapshot();
+      snap = await guard(takeSnapshot());
+      observe(snap);
       const newFingerprint = stateFingerprint(snap);
       const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
       transitionsExercised += 1;
@@ -470,9 +692,34 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
         // Declared invariants (#86): judged on the settled state the action produced; the finding
         // replays this path from the seed (the frontier's reach navigates there first).
         const path = withSeed(branch, params.seedUrl);
-        const checked = await declared.monitor.after(sessions.actor, { op: item.op, control: liveControl.name, url: actedOn });
+        const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: liveControl.name, url: actedOn }));
         for (const v of checked.violations) {
           declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
+        }
+      }
+
+      // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
+      if (budget !== null && seenHang.last === null) {
+        const b = await guard(budget.afterSettle(sessions.page, transitionsExercised));
+        if (b.crossed) {
+          transcript.record({
+            op: item.op,
+            control: liveControl,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "budget",
+            actOk: true,
+            reason: b.reason ?? "mission budget crossed",
+            snapshot: snap,
+          });
+          return {
+            outcome: "budget",
+            coverage: report(false),
+            recordings: [...statePaths.values()],
+            transcript: transcript.entries(),
+            timing: summarizeTimings(timings),
+            hangs: [...hangs.values()],
+          };
         }
       }
 
@@ -485,12 +732,13 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
           control: liveControl,
           confidence: null,
           chosenBy: "strategy",
-          strategy: "coverage-frontier",
+          strategy: strategyLabel,
           actOk: true,
           reason: `hang (${hang.kind}): ${hang.detail}`,
           snapshot: decidedOn,
           ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
         });
+        watchdog.suspend(); // the reproduction is bounded on its own (fresh contexts, bounded replays)
         await recordCoverageHang({
           hang,
           // The path starts at the seed (the frontier's reach navigates there first): prepend it.
@@ -505,7 +753,8 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
             ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
           },
         });
-        if (!(await sessions.reset(hang))) {
+        watchdog.kick("resetting after a hang");
+        if (!(await guard(sessions.reset(hang)))) {
           return {
             outcome: "hang",
             coverage: report(false),
@@ -515,7 +764,8 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
             hangs: [...hangs.values()],
           };
         }
-        await monitorFor(sessions.page).instrument();
+        await guard(monitorFor(sessions.page).instrument());
+        safety.attach(monitorFor(sessions.page));
         currentFingerprint = ""; // the next item is reached afresh from the seed
         continue;
       }
@@ -534,15 +784,19 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
           control: liveControl,
           confidence: null,
           chosenBy: "strategy",
-          strategy: "coverage-frontier",
+          strategy: strategyLabel,
           actOk: true,
           reason: `left the target scope (landed on ${landed}); not expanded`,
           snapshot: decidedOn,
           ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
         });
         currentFingerprint = newFingerprint;
+        departed = true;
         continue;
       }
+
+      // Horizontal-overflow hard signal (#149) — pure DOM geometry, never a Jev judgment.
+      await guard(checkOverflow(newFingerprint, snap.url, withSeed(branch, params.seedUrl)));
 
       // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
       // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
@@ -551,7 +805,7 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
       let isDefect: Answer | undefined;
       let judgmentNote: string | undefined;
       try {
-        const answers = await params.judgment.systemOne({
+        const answers = await guard(params.judgment.systemOne({
           state: buildJudgmentState({
             goal: "state coverage",
             url: snap.url,
@@ -559,9 +813,10 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
             history: [],
           }),
           questions: { isDefect: { kind: "noul" } },
-        });
+        }));
         isDefect = answers.isDefect;
       } catch (e) {
+        if (e instanceof StalledError) throw e;
         judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
       }
       const flagged = isDefect?.kind === "noul" && isDefect.value;
@@ -570,7 +825,7 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
         control: liveControl,
         confidence: null,
         chosenBy: "strategy",
-        strategy: "coverage-frontier",
+        strategy: strategyLabel,
         actOk: true,
         snapshot: decidedOn,
         ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
@@ -607,6 +862,8 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
       hangs: [...hangs.values()],
     };
   } catch (e) {
+    // The watchdog fired (#114): a typed `stalled` stop with everything found so far, never an idle run.
+    if (e instanceof StalledError) return ended("stalled", { kind: "stalled", message: e.reason });
     // Engine failure: a typed `crashed` result with every state path and transcript step so far.
     return {
       outcome: "crashed",
@@ -618,6 +875,15 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
       hangs: [...hangs.values()],
     };
   } finally {
+    watchdog.stop();
     await sessions.closeOwned();
+  }
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
   }
 }

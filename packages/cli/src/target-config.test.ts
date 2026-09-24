@@ -41,4 +41,37 @@ describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
     await writeFile(bad, JSON.stringify({ "http://a.test": { settle: { ignoreRequests: "x" } } }));
     expect(() => loadTargetsFile(bad)).toThrow(TargetConfigError);
   });
+
+  it("#142 follow-up: logSources/logDefect/allowLogCmd round-trip — the ONLY place an operator can declare a --log-source outside the CLI flag", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const p = join(dir, "targets.json");
+    await writeFile(
+      p,
+      JSON.stringify({
+        "http://localhost:3000": {
+          logSources: ["docker:app-1", "cmd:tail -f /var/log/app.log"],
+          logDefect: ["error", "/Not Authorized/i"],
+          allowLogCmd: true,
+        },
+      }),
+    );
+    const file = loadTargetsFile(p);
+    const resolved = resolveTargetConfig(file, "http://localhost:3000");
+    expect(resolved.logSources).toEqual(["docker:app-1", "cmd:tail -f /var/log/app.log"]);
+    expect(resolved.logDefect).toEqual(["error", "/Not Authorized/i"]);
+    expect(resolved.allowLogCmd).toBe(true);
+    // An origin with no entry gets none of these — never inherited/defaulted from elsewhere.
+    expect(resolveTargetConfig(file, "http://other.test").logSources).toBeUndefined();
+  });
+
+  it("#142 follow-up: a non-array logSources/logDefect, or a non-boolean allowLogCmd, fails closed", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const bad = join(dir, "bad.json");
+    await writeFile(bad, JSON.stringify({ "http://a.test": { logSources: "file:/x" } }));
+    expect(() => loadTargetsFile(bad)).toThrow(TargetConfigError);
+    await writeFile(bad, JSON.stringify({ "http://a.test": { logDefect: [1] } }));
+    expect(() => loadTargetsFile(bad)).toThrow(TargetConfigError);
+    await writeFile(bad, JSON.stringify({ "http://a.test": { allowLogCmd: "yes" } }));
+    expect(() => loadTargetsFile(bad)).toThrow(TargetConfigError);
+  });
 });

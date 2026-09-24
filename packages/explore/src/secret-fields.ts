@@ -1,3 +1,5 @@
+import type { Page } from "playwright";
+import { descriptorToLocator } from "@jevitate/recorder";
 import type { Control, Snapshot } from "./snapshot.js";
 import { decodeBase32, totp } from "./totp.js";
 
@@ -11,6 +13,9 @@ import { decodeBase32, totp } from "./totp.js";
  *    replaced by it, and the mission context says code types it;
  *  - when the loop chooses `type` on a matching control, code types the real value itself (a TOTP
  *    code is computed in-process at that moment from the seed);
+ *  - code also types an EMPTY bound field on its own (#111) — before a submit of the form it belongs
+ *    to, or once a validation message names it — since the model cannot see the value and was seen
+ *    never choosing `type` on a field it was told "code types";
  *  - the Recording records the fill `{ redacted: true }`, the transcript the placeholder;
  *  - the value (and a TOTP seed) is registered as a run secret, so every existing redaction seam
  *    — model payloads, transcript, Recording, issue drafts — scrubs it and proves the scrub.
@@ -137,7 +142,7 @@ export function maskSecretFields(snap: Snapshot, fields: readonly SecretField[] 
     if (f === null) return c;
     changed = true;
     const head = c.name !== "" ? `${c.role || c.tag} "${c.name}"` : c.role || c.tag;
-    return { ...c, summary: `${head} (bound: ${secretPlaceholder(f)} — typed by code)` };
+    return { ...c, summary: `${head} (bound: ${secretPlaceholder(f)} — choose \`type\` on it; code types the value)` };
   });
   return changed ? { ...snap, controls } : snap;
 }
@@ -146,5 +151,66 @@ export function maskSecretFields(snap: Snapshot, fields: readonly SecretField[] 
 export function secretFieldContext(fields: readonly SecretField[] | undefined): string | null {
   if (fields === undefined || fields.length === 0) return null;
   const list = fields.map((f) => `${f.descriptor} → ${secretPlaceholder(f)}`).join("; ");
-  return `secret fields are typed by code, never by you — choose \`type\` on the field and its value is filled in (${list})`;
+  return `secret fields hold a value only code knows: a bound field still needs a \`type\` step — choose \`type\` on it while it is empty and code types the value (${list})`;
+}
+
+/** What a validation status names: an invalid field (by name) or an alert's text. */
+export interface SecretFieldStatus {
+  readonly invalid: readonly { readonly name: string; readonly message: string }[];
+  readonly alerts: readonly string[];
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** True when `text` names the field `label` as a whole word ("Password is invalid"). */
+function namedIn(label: string, text: string): boolean {
+  const l = normLabel(label);
+  return l.length >= 3 && new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(l)}(?![\\p{L}\\p{N}])`, "iu").test(text);
+}
+
+/**
+ * The bound controls code should type on its own now (#111), before the chosen action runs: every
+ * bound control in the same form as a submit being clicked (`submitting`), and every bound control
+ * a validation message names (an invalid field of that name, or an alert naming it). The caller
+ * types only the ones still empty and visible (`secretFieldNeedsValue`). `exclude` (the control a
+ * `type` was chosen on) is left to the normal bound path.
+ */
+export function secretFieldsToFill(
+  controls: readonly Control[],
+  fields: readonly SecretField[] | undefined,
+  opts: { readonly submitting: Control | null; readonly status: SecretFieldStatus; readonly exclude?: Control | null },
+): Array<{ readonly control: Control; readonly field: SecretField; readonly why: "submit" | "invalid" }> {
+  if (fields === undefined || fields.length === 0) return [];
+  const out: Array<{ control: Control; field: SecretField; why: "submit" | "invalid" }> = [];
+  for (const c of controls) {
+    if (opts.exclude !== undefined && opts.exclude !== null && c.index === opts.exclude.index) continue;
+    const f = boundSecretField(c, fields);
+    if (f === null || !c.enabled) continue;
+    const sub = opts.submitting;
+    if (sub !== null && (sub.form ?? null) === (c.form ?? null)) {
+      out.push({ control: c, field: f, why: "submit" });
+      continue;
+    }
+    const names = [c.name, c.descriptor.label ?? ""].filter((n) => n.trim() !== "");
+    const named =
+      opts.status.invalid.some((i) => names.some((n) => normLabel(i.name) === normLabel(n))) ||
+      opts.status.alerts.some((a) => names.some((n) => namedIn(n, a)));
+    if (named) out.push({ control: c, field: f, why: "invalid" });
+  }
+  return out;
+}
+
+/**
+ * True when a bound control on the page is visible, editable and EMPTY (#111) — the only state in
+ * which code types it on its own. The value read is only compared with "" — never returned or logged.
+ */
+export async function secretFieldNeedsValue(page: Page, c: Control): Promise<boolean> {
+  const locator = descriptorToLocator(page, c.descriptor);
+  try {
+    if ((await locator.count()) !== 1) return false;
+    if (!(await locator.isVisible()) || !(await locator.isEditable({ timeout: 1_000 }))) return false;
+    return (await locator.inputValue({ timeout: 1_000 })) === "";
+  } catch {
+    return false;
+  }
 }

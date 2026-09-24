@@ -1,5 +1,5 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion } from "@jevitate/interpreter";
+import { checkAssertion, installFlashRecorder, readAssertionEvidence, readAssertionText } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import { reloadPage } from "../act.js";
@@ -10,18 +10,21 @@ import {
   type SuccessCheck,
   type SuccessCheckResult,
 } from "../success-checks.js";
-import { explore, type ExploreConfig, type ExploreRun, type TranscriptEntry } from "../explore.js";
+import { redactText } from "../redact.js";
+import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantDefectLog,
   InvariantMonitor,
+  type ObserverSessions,
   recordingStepCount,
   type InvariantAction,
   type InvariantDefect,
   type InvariantReport,
 } from "../declared-invariants.js";
+import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -56,6 +59,11 @@ import {
  *  - `defects-found` — an app-declared invariant (#86) was violated around an action. A hard
  *                   defect: it overrides `succeeded`/`exhausted`/`blocked` (the goal may well have
  *                   been reached — the app still broke a rule getting there).
+ *  - `inconclusive` (with `run.stop === "budget"`) — a declared mission spend budget (#150) was
+ *                   crossed (or a paid action was refused before crossing it): the run stopped
+ *                   cleanly, before its next action. Never `succeeded`, never `crashed` — a budget
+ *                   stop is deliberate, not the engine breaking, but the run's own work is unproven
+ *                   past that point. Reported with the observed trajectory (`budget`).
  *
  * Declared invariants are observed through the loop's existing hooks (no change to the loop): each
  * settled snapshot evaluates the action taken since the previous one and re-arms the next "before".
@@ -89,6 +97,19 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly successWhen?: SuccessWhen;
   /** App-declared invariants (#86), evaluated around every action. A violation is `defects-found`. */
   readonly invariants?: InvariantSpec;
+  /**
+   * Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value, resolved
+   * by the CLI dispatch from the environment (this package never reads `process.env`).
+   */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * #147: the observer actors' own sessions (fresh contexts, never driven by the model) that the
+   * spec's cross-actor invariants check from. A cross-actor invariant left undecided (nothing
+   * captured, the observer's session lost) keeps a passing run from being `succeeded`.
+   */
+  readonly observers?: ObserverSessions;
+  /** #147: the primary actor's name (the owner in a cross-actor finding). */
+  readonly primaryActor?: string;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -120,6 +141,12 @@ export interface GoalBasedResult {
   /** The hang finding (with its reproduction k/N), for a `hang`/`intermittent` outcome. */
   readonly hang?: HangFinding;
   /**
+   * #126: a hang met on the SEED load (before any action) that did NOT reproduce (0/N). It never
+   * ends the mission — it is kept here as evidence and the run retried the goal once more, whatever
+   * that retry's own `outcome` turned out to be.
+   */
+  readonly intermittentHangs?: HangFinding[];
+  /**
    * Why the mission did not succeed, in one line — set for EVERY outcome but `succeeded`
    * (`blocked`/`exhausted` included, which carry no engine `failure`): how the loop ended and
    * which success check did not hold.
@@ -129,6 +156,8 @@ export interface GoalBasedResult {
   readonly invariantDefects?: InvariantDefect[];
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
   readonly invariants?: InvariantReport[];
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  readonly budget?: BudgetTrajectory[];
 }
 
 /** Does this result belong to a page check (the kind `held` can remember)? Matched by description. */
@@ -154,14 +183,25 @@ function whyNot(run: ExploreRun, results: readonly SuccessCheckResult[]): string
 
 const DEFAULT_ORACLE_SETTLE_MS = 10_000;
 
-/** Every check the oracle must pass, in the order given. Throws (a setup error) when there is none. */
+/** Bound on the text quoted into a failed check's detail (#113): enough to see the mismatch, never a page dump. */
+const READ_TEXT_MAX_CHARS = 200;
+
+function quoteRead(s: string): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return `"${flat.length > READ_TEXT_MAX_CHARS ? `${flat.slice(0, READ_TEXT_MAX_CHARS)}…` : flat}"`;
+}
+
+/**
+ * Every check the oracle must pass, in the order given — possibly none (#130d): a find-out goal has
+ * no page state to assert on, and is verified instead by a grounded `report` answer (#101). Without
+ * a check AND without the goal ending via `report`, the run is simply incomplete (never a vacuous
+ * pass) — see `adjudicatedRun`.
+ */
 function successChecksOf(cfg: GoalBasedMissionConfig): SuccessCheck[] {
-  const checks: SuccessCheck[] = [
+  return [
     ...(cfg.successAssertion === undefined ? [] : [{ kind: "page" as const, assertion: cfg.successAssertion }]),
     ...(cfg.successChecks ?? []),
   ];
-  if (checks.length === 0) throw new Error("runGoalBasedMission: a success assertion or at least one success check is required");
-  return checks;
 }
 
 export async function runGoalBasedMission(
@@ -175,6 +215,11 @@ export async function runGoalBasedMission(
     throw new Error(`runGoalBasedMission: successWhen must be "held" or "final", got ${JSON.stringify(cfg.successWhen)}`);
   }
   const capture = needsNetwork ? monitorFor(page).startCapture() : null;
+  // A transient-state check (#148 `flashed`) needs the flash recorder BEFORE the triggering action:
+  // installed now, for every document the run loads.
+  if (checks.some((c) => (c.kind === "page" || c.kind === "reloadThen") && c.assertion.kind === "flashed")) {
+    await installFlashRecorder(page);
+  }
   try {
     return await adjudicated(cfg, checks, page, capture);
   } finally {
@@ -202,6 +247,8 @@ async function adjudicated(
 interface DeclaredHooks {
   readonly onTranscriptEntry: NonNullable<ExploreConfig["onTranscriptEntry"]>;
   readonly onRecording: NonNullable<ExploreConfig["onRecording"]>;
+  readonly onBeforeAction: ExploreConfig["onBeforeAction"];
+  readonly onSettled: ExploreConfig["onSettled"];
   readonly settled: () => Promise<void>;
   readonly finish: (run: ExploreRun) => Promise<void>;
   readonly fold: (result: GoalBasedResult) => GoalBasedResult;
@@ -216,10 +263,14 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     allowlist: cfg.allowlist,
     baseUrl: cfg.startUrl,
     ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
+    ...(cfg.invariantAuthTokens === undefined ? {} : { authTokens: cfg.invariantAuthTokens }),
+    ...(cfg.observers === undefined ? {} : { observers: cfg.observers }),
+    ...(cfg.primaryActor === undefined ? {} : { primaryActor: cfg.primaryActor }),
   });
   monitor.attach(page);
   const log = new InvariantDefectLog();
   let steps = 0;
+  let budgetSettledSteps = 0;
   let pending: InvariantAction | null = null;
   const settled = async (): Promise<void> => {
     const action = pending;
@@ -227,6 +278,10 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     const r = await monitor.after(cfg.actor, action, { rearm: true });
     for (const v of r.violations) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
   };
+  // #150 — the SAME monitor reads a budget's declared observables: same #86/#135 read/auth/redaction
+  // machinery, one probe schedule (never a duplicate read of the same observable per step).
+  const budgetDecls = cfg.invariants.budget ?? [];
+  const budget = budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, monitor);
   return {
     onTranscriptEntry: (entry, all) => {
       cfg.onTranscriptEntry?.(entry, all);
@@ -243,25 +298,64 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
       cfg.onRecording?.(recording);
       steps = recordingStepCount(recording);
     },
+    onBeforeAction:
+      budget === null
+        ? undefined
+        : async (info) => {
+            const g = await budget.guard(page, info);
+            return g.refuse ? { refuse: true, reason: g.reason ?? "budget guard refused the action" } : { refuse: false };
+          },
+    onSettled:
+      budget === null
+        ? undefined
+        : async () => {
+            budgetSettledSteps += 1;
+            // The FIRST settled snapshot (before any action) is the budget's baseline (mirrors how
+            // `settled()` above re-arms the invariants' own "before" on its first, action-less call).
+            if (budgetSettledSteps === 1) {
+              const b = await budget.baseline(page);
+              return b.crossed ? { stop: true, reason: b.reason ?? "budget observable unreadable at run start" } : { stop: false };
+            }
+            const r = await budget.afterSettle(page, budgetSettledSteps);
+            return r.crossed ? { stop: true, reason: r.reason ?? "mission budget crossed" } : { stop: false };
+          },
     settled,
     finish: async (run) => {
       // Never on a broken or hung page: an unresponsive page proves nothing either way.
-      if (pending === null || run.stop === "crashed" || run.stop === "hang") return;
-      await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
-      await settled().catch(() => undefined);
+      if (run.stop === "crashed" || run.stop === "hang") return;
+      if (pending !== null) {
+        await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
+        await settled().catch(() => undefined);
+      }
+      // #147: a resource the LAST action created is still checked from the observers.
+      const cross = await monitor.settleCrossActor(cfg.actor).catch(() => null);
+      for (const v of cross?.violations ?? []) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
     },
     fold: (result) => {
       const invariantDefects = log.defects();
       const invariants = monitor.report();
-      if (invariantDefects.length === 0) return { ...result, invariantDefects, invariants };
+      const withBudget: GoalBasedResult = budget === null ? result : { ...result, budget: budget.trajectory() };
+      // #147 fail closed: a cross-actor invariant that never decided cannot let the run read as clean.
+      const undecided = monitor.undecidedCrossActor();
+      if (invariantDefects.length === 0 && undecided.length > 0 && withBudget.outcome === "succeeded") {
+        const why = `cross-actor invariant(s) undecided: ${undecided.map((u) => `${u.id} (${u.reason})`).join("; ")}`;
+        return { ...withBudget, outcome: "inconclusive", reason: why, invariantDefects, invariants };
+      }
+      if (invariantDefects.length === 0) return { ...withBudget, invariantDefects, invariants };
       // A violated invariant is a hard defect: it overrides a pass or a plain miss — never a broken
-      // run or a hang, whose own verdict is more severe (the defects are still reported).
-      const hard = result.outcome === "succeeded" || result.outcome === "exhausted" || result.outcome === "blocked";
+      // run or a hang, whose own verdict is more severe (the defects are still reported). A budget
+      // stop is a clean, deliberate stop (not the run breaking): #150 — defects found before it still
+      // win, reported with `stop: "budget"`.
+      const hard =
+        withBudget.outcome === "succeeded" ||
+        withBudget.outcome === "exhausted" ||
+        withBudget.outcome === "blocked" ||
+        withBudget.run.stop === "budget";
       const why = invariantDefects.map((d) => d.invariant.reason).join("; ");
       return {
-        ...result,
-        outcome: hard ? "defects-found" : result.outcome,
-        reason: result.reason === undefined ? why : `${why}; ${result.reason}`,
+        ...withBudget,
+        outcome: hard ? "defects-found" : withBudget.outcome,
+        reason: withBudget.reason === undefined ? why : `${why}; ${withBudget.reason}`,
         invariantDefects,
         invariants,
       };
@@ -281,68 +375,78 @@ async function adjudicatedRun(
   let heldAtStep: number | null = null;
   let settledSteps = 0;
   const held = cfg.successWhen === "held" && pageChecks.length > 0;
-  const run = await explore({
-    ...cfg,
-    missionContext:
-      "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
-    // `held`: after every settled step, a quick look at the page checks — remembered once they all
-    // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
-    ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
-    onSnapshot: async (snap) => {
-      await cfg.onSnapshot?.(snap);
-      await declared?.settled().catch(() => undefined);
-      settledSteps += 1;
-      if (!held || heldAtStep !== null) return;
-      const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
-      if (ok) heldAtStep = settledSteps;
-    },
-    // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
-    // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
-    // final verdict — reloading mid-run would throw away the state the run is still building.
-    // Under `held`, a page check that already held (together, at a settled step) counts.
-    successCheck: () =>
-      evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
-        (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
-        () => false,
-      ),
-  });
+  // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
+  // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
+  // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
+  // "passes" over zero checks) sends `done` through the advisory goal-judgment path instead of a
+  // false independent pass.
+  const hasChecks = checks.length > 0;
+  const runOnce = (): Promise<ExploreRun> =>
+    explore({
+      ...cfg,
+      missionContext: hasChecks
+        ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
+        : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
+      // `held`: after every settled step, a quick look at the page checks — remembered once they all
+      // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
+      ...(declared === null
+        ? {}
+        : {
+            onTranscriptEntry: declared.onTranscriptEntry,
+            onRecording: declared.onRecording,
+            ...(declared.onBeforeAction === undefined ? {} : { onBeforeAction: declared.onBeforeAction }),
+            ...(declared.onSettled === undefined ? {} : { onSettled: declared.onSettled }),
+          }),
+      onSnapshot: async (snap) => {
+        await cfg.onSnapshot?.(snap);
+        await declared?.settled().catch(() => undefined);
+        settledSteps += 1;
+        if (!held || heldAtStep !== null) return;
+        const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
+        if (ok) heldAtStep = settledSteps;
+      },
+      // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
+      // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
+      // final verdict — reloading mid-run would throw away the state the run is still building.
+      // Under `held`, a page check that already held (together, at a settled step) counts.
+      ...(hasChecks
+        ? {
+            successCheck: () =>
+              evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
+                (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
+                () => false,
+              ),
+          }
+        : {}),
+    });
+
+  let run = await runOnce();
+  /**
+   * #126: a hang met on the SEED load (before any action — `recordingStepIndex === 0`) that does
+   * NOT reproduce is not proof the app is stuck; it can be a single slow request on a loaded host.
+   * It must not end the mission. It is recorded as an intermittent finding and the goal is tried
+   * once more from a fresh navigate of the seed. A hang that DOES reproduce (or that could not be
+   * replayed at all) ends the run exactly as before.
+   */
+  const intermittentHangs: HangFinding[] = [];
+  if (run.stop === "hang" && run.hang !== undefined && run.hang.recordingStepIndex === 0 && cfg.openFreshSession !== undefined) {
+    const h = run.hang;
+    const reproduction = await reproduceSeedHang(cfg, run, h);
+    if (reproduction.status === "intermittent") {
+      intermittentHangs.push(hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction));
+      run = await runOnce();
+    } else {
+      return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
+    }
+  }
 
   await declared?.finish(run);
 
   // A hang is a first-class finding: reproduce it in fresh contexts, then report k/N.
   if (run.stop === "hang" && run.hang !== undefined) {
     const h = run.hang;
-    const reproduction: HangReproduction =
-      cfg.openFreshSession === undefined
-        ? NOT_REPLAYED
-        : await reproduceHang({
-            recording: run.recording,
-            recordingStepIndex: h.recordingStepIndex,
-            hang: h.signal,
-            openSession: cfg.openFreshSession,
-            ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
-            perceive: {
-              ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
-              ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
-              ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
-              ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
-              ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
-            },
-            ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
-          });
-    const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
-    return {
-      // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
-      outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
-      assertionPassed: false,
-      checks: [],
-      run,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      hang: finding,
-      reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
-    };
+    const reproduction = await reproduceSeedHang(cfg, run, h);
+    return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
   }
 
   // A broken run proves nothing: its assertion is never evaluated into a pass.
@@ -356,6 +460,42 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: whyNot(run, []),
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+    };
+  }
+
+  // #150 — a declared mission spend budget was crossed (or a paid action refused before crossing
+  // it): the run stopped cleanly, before its next action. Never `succeeded`, never `crashed` — maps
+  // to `inconclusive` (its own work past the stop is unproven), kept apart from `run.stop`.
+  if (run.stop === "budget") {
+    return {
+      outcome: "inconclusive",
+      assertionPassed: false,
+      checks: [],
+      run,
+      recording: run.recording,
+      transcript: run.transcript,
+      finalUrl: run.finalUrl,
+      reason: whyNot(run, []),
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+    };
+  }
+
+  // A find-out goal (#130d): no --success check was given, so there is nothing to evaluate against
+  // the live page. The verdict is the run's own grounded outcome instead — `report` grounding an
+  // answer (#101), or the advisory goal judgment grounding a `done`. Never a vacuous pass: a run that
+  // exhausted its budget or got blocked without either is simply not succeeded.
+  if (!hasChecks) {
+    const succeeded = run.outcome.status === "completed";
+    return {
+      outcome: succeeded ? "succeeded" : run.stop === "exhausted" ? "exhausted" : "blocked",
+      assertionPassed: succeeded,
+      checks: [],
+      run,
+      recording: run.recording,
+      transcript: run.transcript,
+      finalUrl: run.finalUrl,
+      ...(succeeded ? {} : { reason: whyNot(run, []) }),
     };
   }
 
@@ -380,6 +520,7 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: `success oracle failed: ${message}`,
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
   }
 
@@ -400,15 +541,69 @@ async function adjudicatedRun(
       ? "exhausted"
       : "blocked";
 
+  // `runOutcome` and `outcome` must never disagree (#113): the in-run `done` grounding (the
+  // `successCheck` given to `explore` above) evaluates every check EXCEPT `reloadThen` — a mid-run
+  // reload would throw away state the run is still building — so a run can end `completed` there and
+  // this, the final, full evaluation (including `reloadThen`) can still fail. The final verdict
+  // overrides: a mission that did not succeed never carries a `completed` runOutcome.
+  const runOutcome: RunOutcome =
+    !assertionPassed && run.outcome.status === "completed"
+      ? { status: "incomplete", reason: whyNot(run, results) }
+      : run.outcome;
+  const finalRun: ExploreRun = runOutcome === run.outcome ? run : { ...run, outcome: runOutcome };
+
   return {
     outcome,
     assertionPassed,
     checks: results,
-    run,
+    run: finalRun,
     recording: run.recording,
     transcript: run.transcript,
     finalUrl: run.finalUrl,
     ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
+    ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+  };
+}
+
+/** Reproduce a hang the loop stopped on, in fresh contexts (owner ruling 7). */
+async function reproduceSeedHang(
+  cfg: GoalBasedMissionConfig,
+  run: ExploreRun,
+  h: NonNullable<ExploreRun["hang"]>,
+): Promise<HangReproduction> {
+  return cfg.openFreshSession === undefined
+    ? NOT_REPLAYED
+    : await reproduceHang({
+        recording: run.recording,
+        recordingStepIndex: h.recordingStepIndex,
+        hang: h.signal,
+        openSession: cfg.openFreshSession,
+        ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
+        perceive: {
+          ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
+          ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
+          ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+          ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
+          ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
+        },
+        ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
+      });
+}
+
+/** The mission-ending result for a hang whose reproduction is already known. */
+function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reproduction: HangReproduction): GoalBasedResult {
+  const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
+  return {
+    // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
+    outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
+    assertionPassed: false,
+    checks: [],
+    run,
+    recording: run.recording,
+    transcript: run.transcript,
+    finalUrl: run.finalUrl,
+    hang: finding,
+    reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
   };
 }
 
@@ -433,7 +628,21 @@ async function evaluateChecks(
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
-    return { check: describeCheck(check), passed, detail: passed ? `held ${when}` : `did not hold ${when}` };
+    // A visual-state check (#148) always says what it observed — the ratio, the computed values, the
+    // flash timing — pass or fail (bounded, redacted: it is page-derived).
+    const evidence = await readAssertionEvidence(actor, assertion).catch(() => null);
+    if (evidence !== null) {
+      const seen = redactText(evidence, cfg.secrets ?? []).slice(0, READ_TEXT_MAX_CHARS);
+      return { check: describeCheck(check), passed, detail: `${passed ? "held" : "did not hold"} ${when} (${seen})` };
+    }
+    if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
+    // #113 — a `textIncludes` mismatch is otherwise invisible ("did not hold" alone doesn't say
+    // whether the text is wrong or just differently cased). What was actually read, bounded and
+    // redacted (page text is untrusted, and may carry a secret) — never a full-page dump.
+    const read = await readAssertionText(actor, assertion);
+    const detail =
+      read === null ? `did not hold ${when}` : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;
+    return { check: describeCheck(check), passed, detail };
   };
 
   for (const [i, c] of checks.entries()) {

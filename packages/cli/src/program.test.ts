@@ -368,6 +368,34 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
   expect(process.exitCode).toBe(1);
 });
 
+test("#124: recording diff gives a clear error (not a zod dump) when handed a raw Recording instead of a take file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+
+  const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+  const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+  // A raw Recording — what `explore`/`explore-author-journey`/a usability run emit — handed
+  // directly to `recording diff` instead of a `{recording, values}` take file.
+  await writeFile(takeAPath, JSON.stringify(takeA.recording));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "diff", takeAPath, takeBPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
+  expect(parsed.error.message).toContain("looks like a Recording");
+  expect(parsed.error.message).toContain("jevitate record");
+  // NOT a zod dump: no "Unrecognized keys" issue-array text.
+  expect(parsed.error.message).not.toMatch(/Unrecognized keys/);
+  expect(process.exitCode).toBe(1);
+});
+
 test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is malformed (wrong shape)", async () => {
   const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
@@ -759,4 +787,114 @@ test("init --dry-run --skip-keys --json plans MCP registration without writing a
   expect(parsed.ok).toBe(true);
   expect(parsed.data.mcp.every((r: { action: string }) => r.action === "create")).toBe(true);
   expect(existsSync(join(cwd, ".mcp.json"))).toBe(false);
+});
+
+// === viewport/device emulation (#149) — CLI validation refuses before any browser opens ===
+
+test("explore --device 'Nokia 9000' is refused before any browser opens, listing close matches", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --viewport 375x812 --device \"iPhone 13\" together is refused (mutually exclusive)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["explore", "--url", "http://127.0.0.1:1/", "--viewport", "375x812", "--device", "iPhone 13", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message.toLowerCase()).toContain("mutually exclusive");
+});
+
+test("verify-fix --device 'Nokia 9000' is refused before any replay", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["verify-fix", "--result", "/nonexistent.result.json", "--fingerprint", "deadbeef", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_VERIFY_FIX_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --strategy usability --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["explore", "--strategy", "usability", "--url", "http://127.0.0.1:1/", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("journey run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["journey", "run", "some-id", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_JOURNEY_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("load run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["load", "run", "some-id", "--authorized-origin", "http://127.0.0.1:1", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_LOAD_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("source run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["source", "run", "some-source", "some-id", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_SOURCE_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --help documents the default viewport and --viewport/--device (#149)", () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const explore = program.commands.find((c) => c.name() === "explore")!;
+  let help = "";
+  explore.configureOutput({ writeOut: (s) => (help += s) });
+  explore.outputHelp();
+  expect(help).toContain("--viewport");
+  expect(help).toContain("--device");
+  expect(help).toMatch(/default viewport|1280x720/i);
 });

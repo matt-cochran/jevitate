@@ -308,6 +308,17 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
   });
 
+  it("a find-out goal (#130d) does not require --success and reaches gateway setup", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--url", "http://127.0.0.1:3000/login", "--goal", "find out how many contacts are overdue and report the count", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    // Got PAST the goal-args validation (no E_EXPLORE_ARGS) to gateway setup.
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+
   it("explore --strategy coverage does not require --goal/--success and reaches gateway setup", async () => {
     const { program, lines } = newProgram();
     await program.parseAsync(

@@ -77,7 +77,11 @@ export type MissionFailureKind =
   /** The run could not reach (or stay on) the page it was asked to test — e.g. the start URL redirects elsewhere. */
   | "target-unreachable"
   /** The run found nothing but exercised too little of its target for that to mean `clean`. */
-  | "insufficient-coverage";
+  | "insufficient-coverage"
+  /** The operator's configuration failed before the app was exercised — e.g. a fixture setup (#140/#144). Never a SUT finding. */
+  | "configuration"
+  /** No step completed within the mission's stall watchdog: it ended rather than idle (#114). */
+  | "stalled";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;

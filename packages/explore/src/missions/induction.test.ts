@@ -72,9 +72,9 @@ describe("runInductionMission — branching", () => {
       routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
-    // inbox + thread-:id = 2 distinct states. `/thread/t-1` and `/thread/t-2` are PREFIXED ids
-    // (a literal "t-" prefix + a numeric suffix): #95 templates the suffix, so both collapse to
-    // the same `/thread/t-:id` state — the mission still exercises BOTH links (both transitions
+    // inbox + :id = 2 distinct states. `/thread/t-1` and `/thread/t-2` are PREFIXED ids (a literal
+    // "t-" prefix + a numeric suffix): #95/#127 templates the WHOLE segment, so both collapse to
+    // the same `/thread/:id` state — the mission still exercises BOTH links (both transitions
     // land), it just correctly recognizes the second as an already-visited state, not a new one.
     expect(result.coverage.statesVisited).toBe(2);
     expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
@@ -161,6 +161,32 @@ describe("runInductionMission — a lost --storage-state session (#82)", () => {
   }, 30_000);
 });
 
+describe("runInductionMission — the seed itself cannot be loaded (#128)", () => {
+  test("a net::ERR_UNSAFE_PORT on the first navigation ends scope-unreachable/inconclusive with target-unreachable, never crashed", async () => {
+    const browserPort = new PlaywrightBrowserPort();
+    const url = "http://127.0.0.1:1/";
+    const badSession = await browserPort.open({ headless: true, allowedOrigins: [url], baseUrl: url });
+    try {
+      const badActor = CastActor.named("unreachable-tester").whoCan(new BrowseTheWeb(badSession, [url]));
+      const result = await runInductionMission({
+        page: badSession.page,
+        actor: badActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: url,
+        allowlist: [url],
+      });
+      expect(result.outcome).toBe("scope-unreachable");
+      expect(result.failure?.kind).toBe("target-unreachable");
+      expect(result.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
+      expect(result.coverage.statesVisited).toBe(0);
+      expect(result.recordings).toEqual([]);
+    } finally {
+      await badSession.close();
+    }
+  }, 30_000);
+});
+
 describe("runInductionMission — scope containment (#89, reusing #64's scope model)", () => {
   test("a coverage run started at area-a explores area-a's own states, records area-b as a departure, and never expands it", async () => {
     const result = await runInductionMission({
@@ -227,5 +253,53 @@ describe("runInductionMission — bounds", () => {
     });
     expect(result.outcome).toBe("cap");
     expect(result.coverage.frontierExhausted).toBe(false);
+  }, 30_000);
+});
+
+describe("runInductionMission — horizontal-overflow hard signal (#149)", () => {
+  async function runAt(seedPath: string, viewport: { width: number; height: number }, checkOverflow = false) {
+    const browserPort = new PlaywrightBrowserPort();
+    const narrowSession = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url, viewport });
+    try {
+      const narrowActor = CastActor.named("responsive-tester").whoCan(new BrowseTheWeb(narrowSession, [site.url]));
+      return await runInductionMission({
+        page: narrowSession.page,
+        actor: narrowActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}${seedPath}`,
+        allowlist: [site.url],
+        overflow: { checkOverflow },
+      });
+    } finally {
+      await narrowSession.close();
+    }
+  }
+
+  test("--viewport 375x812 on /responsive/overflow gives a horizontal-overflow defect attributed to [data-testid=wide]", async () => {
+    const result = await runAt("/responsive/overflow", { width: 375, height: 812 });
+    expect(result.outcome).toBe("exhausted");
+    const overflowDefects = result.coverage.defects.filter((d) => d.overflow !== undefined);
+    expect(overflowDefects).toHaveLength(1);
+    const finding = overflowDefects[0]!.overflow!;
+    expect(finding.kind).toBe("horizontal-overflow");
+    expect(finding.element.descriptor).toBe("[data-testid=wide]");
+    expect(finding.overflowPx).toBeGreaterThanOrEqual(200);
+    expect(finding.overflowPx).toBeLessThanOrEqual(250);
+  }, 30_000);
+
+  test("/responsive/ok is clean at 375px (no overflow defect)", async () => {
+    const result = await runAt("/responsive/ok", { width: 375, height: 812 });
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+
+  test("/responsive/contained is clean at 375px (overflow is inside a scroll container, never page-level)", async () => {
+    const result = await runAt("/responsive/contained", { width: 375, height: 812 });
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+
+  test("/responsive/overflow is clean at 1280px (the same page fits at a desktop width)", async () => {
+    const result = await runAt("/responsive/overflow", { width: 1280, height: 800 }, true);
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
   }, 30_000);
 });

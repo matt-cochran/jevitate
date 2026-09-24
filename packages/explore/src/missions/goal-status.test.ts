@@ -42,6 +42,16 @@ const PAGES: Record<string, string> = {
     <form onsubmit="event.preventDefault(); document.getElementById('echo').textContent = 'welcome'">
       <input name="e" type="text" pattern="[^ ]+@[^ ]+" aria-label="Email" /><button>Sign up</button></form>
     <p data-testid="echo"></p></body></html>`,
+  // #130a: an UNRELATED field (Phone) sits natively invalid the whole time — never touched by the
+  // run — while Save (Last name's own control) sends a real request. The invalid Phone must never be
+  // blamed for a success check that expected a different method (#130b's near-miss hint fires here).
+  "/mixed": `<!doctype html><html><body><h1>Profile</h1>
+    <input value="12x" pattern="[0-9]{10}" aria-label="Phone" />
+    <label>Last name <input aria-label="Last name" /></label>
+    <button type="button" id="save">Save</button>
+    <script>
+      document.getElementById('save').addEventListener('click', () => { fetch('/api/save', { method: 'POST' }); });
+    </script></body></html>`,
 };
 
 let server: Server;
@@ -49,6 +59,10 @@ let origin: string;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/api/save") {
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
     const body = PAGES[(req.url ?? "").split("?")[0] ?? ""];
     if (body === undefined) {
       res.writeHead(404).end();
@@ -189,6 +203,26 @@ describe("goal loop — status text, quiet waits, held success, concrete reasons
       expect(result.reason).toMatch(
         /^the model reported the goal cannot be advanced from this page — last blocker: field "Email" is invalid — ".+"/,
       );
+    },
+    120_000,
+  );
+
+  it(
+    "#130a/#130b: an unrelated invalid field is never blamed when the last submit DID send a request — the network check's near-miss hint carries the reason instead",
+    async () => {
+      // Controls: [0] Phone (natively invalid the whole time, never touched), [1] Last name, [2] Save.
+      const { result } = await run(
+        "/mixed",
+        [{ op: "type", target: "1" }, { op: "click", target: "2" }, { op: "wait" }],
+        [{ kind: "requestMade", method: "PUT", pathGlob: "/api/save" }],
+      );
+      expect(result.outcome).not.toBe("succeeded");
+      // Never blamed on the unrelated Phone field: the save DID send a request (just the wrong method).
+      expect(result.run.blockingCause).toBeUndefined();
+      expect(result.reason).not.toContain("Phone");
+      expect(result.reason).not.toContain("last blocker");
+      // The near-miss hint (#130b) names what actually happened instead.
+      expect(result.reason).toContain("saw POST /api/save → 200 (1×)");
     },
     120_000,
   );
