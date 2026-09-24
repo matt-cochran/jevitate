@@ -152,6 +152,30 @@ describe("detectDuplicateWrites", () => {
     expect(f!.confidence).toBeLessThan(0.6);
     expect(f!.observation).toContain("edited");
   });
+
+  it("is silent for gRPC-web/Connect reads sent as POST (#110), and honours --read-rpc patterns", () => {
+    const rpc = (id: number, step: number, method: string, contentType = "application/grpc-web+proto") =>
+      req(id, step, step * 1_000 + id, step * 1_000 + id + 50, {
+        method: "POST",
+        endpoint: `POST /simuli.decision.DecisionService/${method}`,
+        url: `http://api.test/simuli.decision.DecisionService/${method}`,
+        contentType,
+      });
+    // One click that re-rendered and fetched GetDecisionDetail four times; the same card opened twice.
+    const reads = capture({
+      steps: [click(1, "Raise Pro to $149"), click(2, "Raise Pro to $149")],
+      requests: [rpc(0, 1, "GetDecisionDetail"), rpc(1, 1, "GetDecisionDetail"), rpc(2, 1, "GetDecisionDetail"), rpc(3, 2, "ListDecisions", "application/connect+json")],
+    });
+    expect(detectDuplicateWrites(reads)).toHaveLength(0);
+    // An RPC write is still one.
+    const writes = capture({ steps: [click(1, "Launch")], requests: [rpc(0, 1, "CreateSimulation"), rpc(1, 1, "CreateSimulation")] });
+    expect(detectDuplicateWrites(writes)).toHaveLength(1);
+    // An operator-declared read method is not.
+    const quotes = capture({ steps: [click(1, "Quote")], requests: [rpc(0, 1, "EstimateQuote"), rpc(1, 1, "EstimateQuote")] });
+    expect(detectDuplicateWrites(quotes)).toHaveLength(1);
+    expect(detectDuplicateWrites(quotes, { readRequests: ["Estimate*"] })).toHaveLength(0);
+    expect(detectSignals(quotes, { readRequests: ["Estimate*"] }).filter((f) => f.rubricItemId === "signal-duplicate-write")).toHaveLength(0);
+  });
 });
 
 describe("detectInternalIds", () => {

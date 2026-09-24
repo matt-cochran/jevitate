@@ -20,7 +20,7 @@
 // (they are ungraded, like the objective a11y tier, so the quality policy does not apply).
 //
 // Inputs arrive ALREADY REDACTED (the capture layer redacts urls/text before they reach here).
-import type { TargetDescriptor } from "@jevitate/recording";
+import { writeClassifier, type TargetDescriptor } from "@jevitate/recording";
 import { clamp01, round2 } from "./confidence.js";
 import { routeOf } from "./route.js";
 import type { AnalysisOutcome, EvidenceRef, UxFinding } from "./types.js";
@@ -43,6 +43,8 @@ export interface SignalRequest {
   readonly failed?: boolean;
   /** The step whose action it followed (`0` = before the first decision). */
   readonly step: number;
+  /** The REQUEST's content type, when it sent one (tells a gRPC-web/Connect read, #110). */
+  readonly contentType?: string;
 }
 
 /** One screen the run observed (the state a step was decided on). */
@@ -88,6 +90,8 @@ export interface SignalOptions {
   readonly hungFactor?: number;
   /** …and never below this floor (ms). Default 15 000. */
   readonly hungFloorMs?: number;
+  /** Extra read-request patterns for the write classifier (`--read-rpc`, #110). */
+  readonly readRequests?: readonly string[];
 }
 
 export type SignalKind = "hung-request" | "duplicate-write" | "internal-id" | "inert-control";
@@ -196,7 +200,6 @@ export function makeSignalFinding(input: SignalFindingInput): UxFinding {
 // ---------- helpers ----------
 
 const API_TYPES = new Set(["fetch", "xhr"]);
-const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** On-screen words that tell the user work is in progress. */
 const BUSY_TEXT = /\b(loading|processing|running|in progress|please wait|pending|queued|working on|simulating|generating|saving|submitting|uploading)\b|…|\.\.\.|\b\d{1,3}\s?%/i;
 
@@ -291,8 +294,14 @@ export function detectHungRequests(capture: RunSignalCapture, opts: SignalOption
   return out;
 }
 
-/** The same control clicked twice on the same page, and the same write request succeeded both times. */
-export function detectDuplicateWrites(capture: RunSignalCapture): UxFinding[] {
+/**
+ * The same control clicked twice on the same page, and the same write request succeeded both times.
+ * A write is classified by the shared classifier (#110): a gRPC-web/Connect read (`POST
+ * /pkg.Svc/GetX`, a re-render double-fetch) is idempotent and never a duplicate write.
+ */
+export function detectDuplicateWrites(capture: RunSignalCapture, opts: SignalOptions = {}): UxFinding[] {
+  const classify = writeClassifier(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests });
+  const isWrite = (r: SignalRequest): boolean => classify({ method: r.method, path: r.url, contentType: r.contentType ?? null });
   const clicks = capture.steps.filter((s) => s.op === "click" && s.actOk);
   const byControl = new Map<string, SignalStep[]>();
   for (const s of clicks) {
@@ -303,7 +312,7 @@ export function detectDuplicateWrites(capture: RunSignalCapture): UxFinding[] {
   for (const steps of byControl.values()) {
     if (steps.length < 2) continue;
     const stepNos = new Set(steps.map((s) => s.step));
-    const writes = capture.requests.filter((r) => stepNos.has(r.step) && WRITE_METHODS.has(r.method.toUpperCase()) && okStatus(r));
+    const writes = capture.requests.filter((r) => stepNos.has(r.step) && isWrite(r) && okStatus(r));
     const byEndpoint = new Map<string, SignalRequest[]>();
     for (const r of writes) byEndpoint.set(r.endpoint, [...(byEndpoint.get(r.endpoint) ?? []), r]);
     for (const [endpoint, reqs] of byEndpoint) {
@@ -344,7 +353,7 @@ export function detectDuplicateWrites(capture: RunSignalCapture): UxFinding[] {
 
   // One click that fired the same write more than once: the app itself double-submits.
   for (const click of clicks) {
-    const writes = capture.requests.filter((r) => r.step === click.step && WRITE_METHODS.has(r.method.toUpperCase()) && okStatus(r));
+    const writes = capture.requests.filter((r) => r.step === click.step && isWrite(r) && okStatus(r));
     const byEndpoint = new Map<string, SignalRequest[]>();
     for (const r of writes) byEndpoint.set(r.endpoint, [...(byEndpoint.get(r.endpoint) ?? []), r]);
     for (const [endpoint, reqs] of byEndpoint) {
@@ -386,7 +395,7 @@ export function detectDuplicateWrites(capture: RunSignalCapture): UxFinding[] {
     const earlier = clicks.filter((c) => c.step < refusal.step && c.url === refusal.url && controlKey(c) === controlKey(refusal));
     const first = earlier[earlier.length - 1];
     if (first === undefined) continue;
-    const reqs = capture.requests.filter((r) => r.step === first.step && WRITE_METHODS.has(r.method.toUpperCase()) && okStatus(r));
+    const reqs = capture.requests.filter((r) => r.step === first.step && isWrite(r) && okStatus(r));
     if (reqs.length === 0) continue;
     reported.add(target);
     const method = reqs[0]!.method.toUpperCase();
@@ -521,7 +530,7 @@ export function detectInertControls(capture: RunSignalCapture): UxFinding[] {
 
 /** Every signal oracle over one run's capture. */
 export function detectSignals(capture: RunSignalCapture, opts: SignalOptions = {}): UxFinding[] {
-  return [...detectHungRequests(capture, opts), ...detectDuplicateWrites(capture), ...detectInternalIds(capture), ...detectInertControls(capture)];
+  return [...detectHungRequests(capture, opts), ...detectDuplicateWrites(capture, opts), ...detectInternalIds(capture), ...detectInertControls(capture)];
 }
 
 /**

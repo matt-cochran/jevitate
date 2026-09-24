@@ -114,6 +114,17 @@ interface LiveRequest {
   status: number | null;
   failed?: boolean;
   step: number;
+  contentType?: string;
+}
+
+/** A request's own `content-type` header (#110: tells a gRPC-web/Connect read from a write). */
+function requestContentType(r: Request): string | undefined {
+  try {
+    const v = r.headers()["content-type"];
+    return typeof v === "string" && v !== "" ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export class UsabilityCapture {
@@ -155,6 +166,8 @@ export class UsabilityCapture {
       status: null,
       step: this.#step,
     };
+    const contentType = requestContentType(r);
+    if (contentType !== undefined) rec.contentType = contentType;
     this.#requests.push(rec);
     this.#live.set(r, rec);
   };

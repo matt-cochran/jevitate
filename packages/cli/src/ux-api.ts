@@ -25,6 +25,7 @@ import {
   type RunAnswer,
   type RunOutcome,
   type SecretField,
+  type SideEffect,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import {
@@ -423,6 +424,9 @@ export interface RunUsabilityMissionResult {
   readonly screenshotDir: string;
   /** Every per-step screenshot written, in order. */
   readonly screenshots: readonly string[];
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: readonly SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /**
    * The typed verdict. UX findings are advisory, so a completed review is `clean`; a run whose
    * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced.
@@ -499,6 +503,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       onTranscriptEntry: (entry, all) => {
         capture.noteEntry(entry, all);
         journal.onTranscriptEntry(entry, capture.withScreenshots(all));
@@ -542,7 +547,12 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const screens = typedValues.length > 0 ? collected.map((ev) => ({ ...ev, typedValues })) : collected;
     // #96: findings from the run's own measurements (hung request, duplicate write, internal id,
     // inert control) — independent code, no model — reported alongside the rubric's.
-    const signalFindings = detectSignals(await capture.signalCapture(run.transcript, typedValues), opts.signals);
+    // A gRPC-web/Connect read is never a duplicate write (#110); `--read-rpc` marks more reads.
+    const readRequests = opts.target?.safety?.readRequests;
+    const signalFindings = detectSignals(
+      await capture.signalCapture(run.transcript, typedValues),
+      readRequests === undefined ? opts.signals : { ...opts.signals, readRequests },
+    );
     const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
     const outcome = await analyzer.analyze({
       screens,
@@ -563,6 +573,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       recordingPath: journal.recordingPath,
       screenshotDir,
       screenshots: capture.screenshots(),
+      sideEffects: run.sideEffects,
+      ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),

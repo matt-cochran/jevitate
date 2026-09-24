@@ -4,7 +4,7 @@ import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCo
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Assertion, InvariantSpec, Recording, TargetDescriptor } from "@jevitate/recording";
-import type { InvariantDefect, InvariantReport } from "@jevitate/explore";
+import type { InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -212,6 +212,9 @@ function browserVersionOf(page: { context(): { browser(): { version(): string } 
 
 export interface RunExplorationResult {
   readonly outcome: GoalBasedOutcome;
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /**
    * Did the loop complete its goal (`completed`, verified by the success assertion), or why not
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
@@ -299,6 +302,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
@@ -369,6 +373,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording: mission.recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      sideEffects: mission.run.sideEffects,
+      ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
       engine,
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
@@ -589,6 +595,9 @@ export interface RunCoverageMissionResult {
   readonly recordingPaths: string[];
   /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
+  /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
@@ -638,6 +647,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
     });
 
     const recordingPaths: string[] = [];
@@ -680,6 +690,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(failure === undefined ? {} : { failure }),
       recordingPaths,
       transcriptPath: journal.transcriptPath,
+      sideEffects: result.sideEffects ?? [],
+      ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
@@ -806,6 +818,7 @@ export async function runAdversarialCliMission(
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       page: session.page,
       actor,
       judgment: opts.judgment,
@@ -909,6 +922,8 @@ export interface RunFeatureCliMissionOptions {
   readonly saveStorageState?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** The shared safety policy (#116: `--deny`, `--allow-destructive`, `--read-rpc`). */
+  readonly safety?: SafetyConfig;
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
@@ -971,6 +986,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.safety === undefined ? {} : { safety: opts.safety }),
     });
 
     const recordingPaths: string[] = [];

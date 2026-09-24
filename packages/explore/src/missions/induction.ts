@@ -48,6 +48,9 @@ import {
 } from "../coverage/sufficiency.js";
 import { seedRedirectReason } from "../seed-redirect.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
+import { MissionSafety } from "../mission-safety.js";
+import type { SafetyConfig } from "../safety.js";
+import type { SideEffect } from "../side-effects.js";
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
@@ -138,6 +141,9 @@ export interface InductionRunResult {
   readonly invariantDefects?: InvariantDefect[];
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
   readonly invariants?: InvariantReport[];
+  /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects?: SideEffect[];
+  readonly sideEffectsTruncated?: number;
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
@@ -186,6 +192,8 @@ export interface InductionMissionParams {
   readonly invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */
   readonly secrets?: readonly string[];
+  /** The shared safety policy (#116): session-ending / destructive / paid / --deny'd controls are never clicked. */
+  readonly safety?: SafetyConfig;
 }
 
 /**
@@ -290,11 +298,16 @@ export async function runInductionMission(params: InductionMissionParams): Promi
           }),
           log: new InvariantDefectLog(),
         };
-  const result = await runInductionFrontier(params, declared);
+  const safety = new MissionSafety(params.safety);
+  const result = { ...(await runInductionFrontier(params, declared, safety)), ...safety.result() };
   return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
 }
 
-async function runInductionFrontier(params: InductionMissionParams, declared: Declared | null): Promise<InductionRunResult> {
+async function runInductionFrontier(
+  params: InductionMissionParams,
+  declared: Declared | null,
+  safety: MissionSafety,
+): Promise<InductionRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const site = new URL(params.seedUrl).origin;
@@ -357,6 +370,7 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
 
   try {
     await monitorFor(sessions.page).instrument();
+    safety.attach(monitorFor(sessions.page));
     await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await takeSnapshot();
 
@@ -427,8 +441,27 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
       const liveControl = resolveControl(snap, item.control);
       if (liveControl === null) continue; // control vanished between snapshots — dropped
 
+      // The shared safety policy (#116): never clicked, never retried (blacklisted), recorded once.
+      const unsafe = safety.gate(item.op, liveControl);
+      if (unsafe !== null) {
+        frontier.blacklist(controlIdentity(liveControl));
+        if (unsafe.first) {
+          transcript.record({
+            op: null,
+            control: liveControl,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "safety-policy",
+            actOk: false,
+            reason: unsafe.reason,
+            snapshot: snap,
+          });
+        }
+        continue;
+      }
       const actedOn = snap.url;
       await declared?.monitor.before(sessions.actor);
+      safety.mark(transcript.nextStep, item.op, liveControl);
       const result = await act(sessions.actor, {
         op: item.op,
         control: liveControl,
@@ -516,6 +549,7 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
           };
         }
         await monitorFor(sessions.page).instrument();
+        safety.attach(monitorFor(sessions.page));
         currentFingerprint = ""; // the next item is reached afresh from the seed
         continue;
       }
