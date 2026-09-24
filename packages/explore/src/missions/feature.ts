@@ -19,6 +19,9 @@ import { act } from "../act.js";
 import { toPath } from "../record.js";
 import { stateFingerprint, actionKey, type FrontierOp } from "../feature/fingerprint.js";
 import { Frontier } from "../feature/frontier.js";
+import { chromeClassifier } from "../coverage/chrome.js";
+import { StallWatchdog, StalledError } from "../stall-watchdog.js";
+import { seedPath } from "./induction.js";
 import { reachFrontierState } from "../feature/reach.js";
 import { isInScope, type CapabilityScope } from "../feature/capability-scope.js";
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
@@ -96,12 +99,14 @@ export interface FeatureRunResult {
    * `crashed`: the engine failed; the paths discovered up to the failure are still returned.
    * `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session).
    * `scope-unreachable`: the seed redirected elsewhere (e.g. a lost `--storage-state` session
-   * bounced to a login page) — the run never got to test the capability it was asked to (#82).
+   * bounced to a login page) — the run never got to test the capability it was asked to (#82) — or,
+   * mid-run, the frontier could not return to the seed after a departure (#114).
+   * `stalled`: no step completed within the stall watchdog's bound (#114).
    */
-  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang" | "scope-unreachable";
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang" | "scope-unreachable" | "stalled";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   hangs: HangFinding[];
-  /** Why the run crashed — present only for `crashed`. */
+  /** Why the run crashed, could not reach its target, or stalled. */
   failure?: MissionFailure;
   coverage: FeatureCoverage;
   recordings: Recording[];
@@ -162,7 +167,9 @@ function pathnameOf(url: string): string {
 }
 
 function seedRecording(seedUrl: string, site: string): Recording {
-  const path = toPath(seedUrl);
+  // WITH the seed's query (#114): `/workspace?inquiry=…` without it is a different page, so every
+  // reset would land elsewhere and every queued item would go stale.
+  const path = seedPath(seedUrl);
   return {
     version: "1.0.0",
     site,
@@ -227,6 +234,10 @@ export type FeatureMissionParams = {
   invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */
   secrets?: readonly string[];
+  /** No-progress watchdog (#114): the run ends `stalled` when no step completes within this bound. Default 120s. */
+  stallTimeoutMs?: number;
+  /** Bound (ms) on one reset-and-replay back to a queued state. Default `DEFAULT_REACH_TIMEOUT_MS`. */
+  reachTimeoutMs?: number;
 };
 
 export async function runFeatureMission(params: FeatureMissionParams): Promise<FeatureRunResult> {
@@ -288,7 +299,13 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
   // chrome tracker accumulates cross-page control repetition as it's observed.
   const words = featureWords(params.scope.name);
   const chrome = new ChromeTracker();
-  const transcript = new TranscriptLog([], params.onTranscriptEntry);
+  // No-progress watchdog (#114): every recorded step kicks it; every await on the page is guarded.
+  const watchdog = new StallWatchdog(params.stallTimeoutMs);
+  const guard = <T>(work: Promise<T>): Promise<T> => watchdog.guard(work);
+  const transcript = new TranscriptLog([], (entry, all) => {
+    watchdog.kick("choosing the next frontier action");
+    params.onTranscriptEntry?.(entry, all);
+  });
 
   const endRun = (outcome: FeatureRunResult["outcome"], failure?: MissionFailure): FeatureRunResult => ({
     outcome,
@@ -306,9 +323,10 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
   });
 
   try {
-    await monitorFor(sessions.page).instrument();
-    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
-    let snap = await snapshotNow();
+    watchdog.during("loading the seed");
+    await guard(monitorFor(sessions.page).instrument());
+    await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
+    let snap = await guard(snapshotNow());
 
     // The seed redirected elsewhere — most often a lost/expired `--storage-state` session bounced
     // to a login page (#82): the run cannot exercise the capability it was asked to.
@@ -317,7 +335,11 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
     chrome.observe(pathnameOf(snap.url), snap.controls);
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
-    const frontier = new Frontier();
+    // Chrome last (#115): nav/header/footer landmarks, controls repeated across pathnames and links out
+    // of scope are tried only once the capability's own controls are exhausted, each destination once.
+    const frontier = new Frontier({ classify: chromeClassifier({ chrome, inScope: (url) => isInScope(url, params.scope) }) });
+    /** The last transition left the scope — the next reset is a return after a departure. */
+    let departed = false;
 
     const seedRec = seedRecording(params.seedUrl, site);
     leaves.set(currentFingerprint, seedRec);
@@ -341,8 +363,31 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
       if (item.control.href != null && !isInScope(item.control.href, params.scope) && boundaryEdgeSet.has(item.control.href)) continue;
 
       if (item.fromFingerprint !== currentFingerprint) {
-        const reached = await reachFrontierState({ actor: sessions.actor, item, snapshotNow });
-        if (!reached.ok) continue;
+        watchdog.during(departed ? "returning to the seed after a departure" : "resetting to a queued state");
+        const reached = await guard(
+          reachFrontierState({
+            actor: sessions.actor,
+            item,
+            snapshotNow,
+            homeUrl: params.seedUrl,
+            currentUrl: () => sessions.page.url(),
+            ...(params.reachTimeoutMs === undefined ? {} : { timeoutMs: params.reachTimeoutMs }),
+          }),
+        );
+        if (!reached.ok) {
+          if (reached.reason === "stale") {
+            // Stale — dropped, and so is every other item replaying the same path (#114).
+            frontier.dropState(item.fromFingerprint);
+            currentFingerprint = "";
+            continue;
+          }
+          // The seed is gone (a lost session) or stopped answering: a typed stop, never an idle grind (#114).
+          return endRun("scope-unreachable", {
+            kind: "target-unreachable",
+            message: `could not return to the seed${departed ? " after a departure" : ""} (${reached.detail ?? reached.reason})`,
+          });
+        }
+        departed = false;
         snap = reached.snapshot;
         chrome.observe(pathnameOf(snap.url), snap.controls);
         currentFingerprint = item.fromFingerprint;
@@ -358,9 +403,11 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
       const itemScore = relevanceScore(item.control, words, chrome);
       const itemWasChrome = chrome.isChrome(item.control);
       const rankReason = `relevance=${itemScore} chrome=${itemWasChrome}`;
-      await declared?.monitor.before(sessions.actor);
-      const result = await act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null });
+      watchdog.during(`acting on "${item.control.name || item.op}"`);
+      if (declared !== null) await guard(declared.monitor.before(sessions.actor));
+      const result = await guard(act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null }));
       actions += 1;
+      frontier.recordAttempt();
       if (!result.ok) {
         transcript.record({
           op: item.op,
@@ -375,7 +422,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
         continue;
       }
 
-      snap = await snapshotNow();
+      snap = await guard(snapshotNow());
       chrome.observe(pathnameOf(snap.url), snap.controls);
       const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
       const newFingerprint = stateFingerprint(snap);
@@ -386,7 +433,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
         // Declared invariants (#86): judged on the settled state the action produced; the finding
         // replays this very path (the seed navigate is its first step).
         const path = { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) };
-        const checked = await declared.monitor.after(sessions.actor, { op: item.op, control: item.control.name, url: beforeUrl });
+        const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: item.control.name, url: beforeUrl }));
         for (const v of checked.violations) {
           declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
         }
@@ -406,6 +453,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
           reason: `${rankReason}; hang (${hang.kind}): ${hang.detail}`,
           snapshot: decidedOn,
         });
+        watchdog.suspend(); // the reproduction is bounded on its own (fresh contexts, bounded replays)
         await recordCoverageHang({
           hang,
           recording: { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) },
@@ -419,8 +467,9 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
             ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
           },
         });
-        if (!(await sessions.reset(hang))) return endRun("hang");
-        await monitorFor(sessions.page).instrument();
+        watchdog.kick("resetting after a hang");
+        if (!(await guard(sessions.reset(hang)))) return endRun("hang");
+        await guard(monitorFor(sessions.page).instrument());
         currentFingerprint = ""; // the next item is reached afresh from the seed
         continue;
       }
@@ -443,6 +492,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
         boundaryEdgeSet.add(snap.url);
         leaves.set(newFingerprint, branch);
         currentFingerprint = newFingerprint;
+        departed = true;
         continue;
       }
 
@@ -461,9 +511,12 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
 
     return endRun("exhausted");
   } catch (e) {
+    // The watchdog fired (#114): a typed `stalled` stop with every path found so far, never an idle run.
+    if (e instanceof StalledError) return endRun("stalled", { kind: "stalled", message: e.reason });
     // Engine failure: a typed `crashed` result carrying every path discovered so far.
     return endRun("crashed", describeFailure(e, crashWatch.signals()));
   } finally {
+    watchdog.stop();
     await sessions.closeOwned();
   }
 }

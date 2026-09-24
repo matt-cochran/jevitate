@@ -164,13 +164,15 @@ above, so it needs no separate exit-code mapping):
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |
 
-**Coverage mission (`--strategy coverage`) — its own `outcome`**, before it's folded into
-`missionOutcome`:
+**Coverage and exploratory missions (`--strategy coverage` / `exploratory`) — their own
+`outcome`**, before it's folded into `missionOutcome`:
 
 | `outcome` | Meaning |
 |---|---|
 | `exhausted` | the state frontier was fully explored |
 | `cap` | the action budget ran out before the frontier was exhausted |
+| `scope-unreachable` | the start URL redirected elsewhere, or the run could not return to it after a departure (e.g. the session was lost after "Sign out") — `inconclusive` |
+| `stalled` | no step completed within `--stall-timeout` seconds (default 120) — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
 
@@ -181,8 +183,19 @@ above, so it needs no separate exit-code mapping):
 | `exhausted` | the state frontier was fully explored |
 | `cap` | the action budget ran out |
 | `path-cap` | the max-discovered-paths budget ran out |
+| `scope-unreachable` | as above — `inconclusive` |
+| `stalled` | as above — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+
+**Coverage vs exploratory.** Both expand the same state frontier. `coverage` sweeps it
+breadth-first: every control of a state, in page order, before the controls a click revealed.
+`exploratory` seeks novelty: it tries the control that appeared most recently first (a panel
+that just opened, a page just reached), so it follows the UI deeper before it sweeps siblings.
+In all three frontier missions (coverage, exploratory, `--feature`), global chrome — controls
+inside `<nav>` or a page-level `<header>`/`<footer>`, or repeated unchanged across pages — is
+tried only after the target's own controls, each destination at most once per run. Chrome that
+leaves the target scope never takes more than 20% of the run's actions.
 
 ### Success checks (goal mission)
 

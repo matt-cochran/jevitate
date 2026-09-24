@@ -72,6 +72,12 @@ export interface Control {
   readonly max?: string | null;
   /** The raw `step` attribute, or null. */
   readonly step?: string | null;
+  /**
+   * The page-chrome landmark the control sits in — `navigation` (`<nav>`), `banner` (a page-level
+   * `<header>`) or `contentinfo` (a page-level `<footer>`) — or null. Frontier missions try such
+   * controls only after the page's own content (#115).
+   */
+  readonly landmark?: "navigation" | "banner" | "contentinfo" | null;
 }
 
 export interface Snapshot {
@@ -142,6 +148,8 @@ interface ControlFacts {
   readonly max: string | null;
   /** The raw `step` attribute, or null. */
   readonly step: string | null;
+  /** The enclosing chrome landmark (`navigation` / `banner` / `contentinfo`), or null. */
+  readonly landmark: "navigation" | "banner" | "contentinfo" | null;
 }
 
 /**
@@ -283,6 +291,25 @@ function readControlFacts(node: Node): ControlFacts {
   const min = tag === "input" ? el.getAttribute("min") : null;
   const max = tag === "input" ? el.getAttribute("max") : null;
   const step = tag === "input" ? el.getAttribute("step") : null;
+  // Chrome landmark: a <nav>/role=navigation anywhere up the tree, or a PAGE-level <header>/<footer>
+  // (one inside an article/section/main/aside is that region's own header, not page chrome).
+  let landmark: "navigation" | "banner" | "contentinfo" | null = null;
+  for (let a: Element | null = el.parentElement; a !== null; a = a.parentElement) {
+    const r = (a.getAttribute("role") ?? "").toLowerCase();
+    const t = a.tagName.toLowerCase();
+    if (r === "navigation" || t === "nav") {
+      landmark = "navigation";
+      break;
+    }
+    if (r === "banner" || r === "contentinfo") {
+      landmark = r;
+      break;
+    }
+    if ((t === "header" || t === "footer") && (a.parentElement?.closest("article,aside,main,section") ?? null) === null) {
+      landmark = t === "header" ? "banner" : "contentinfo";
+      break;
+    }
+  }
 
   return {
     tag,
@@ -305,6 +332,7 @@ function readControlFacts(node: Node): ControlFacts {
     min,
     max,
     step,
+    landmark,
   };
 }
 
@@ -415,6 +443,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         min: facts.min,
         max: facts.max,
         step: facts.step,
+        landmark: facts.landmark,
       });
       keptFacts.push(facts);
     } catch {

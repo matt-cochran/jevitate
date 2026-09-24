@@ -567,11 +567,18 @@ export interface RunCoverageMissionOptions {
   readonly routeGlobs?: readonly string[];
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /**
+   * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
+   * the last action revealed is tried first (#115).
+   */
+  readonly strategy?: "coverage" | "exploratory";
+  /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
+  readonly stallTimeoutMs?: number;
 }
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
@@ -638,6 +645,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),
+      ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
     });
 
     const recordingPaths: string[] = [];
@@ -652,7 +661,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
     const found = result.coverage.defects.length + (result.invariantDefects?.length ?? 0);
-    const bare = result.outcome === "crashed" ? "crashed" : result.outcome === "scope-unreachable" ? "inconclusive" : null;
+    // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
+    const bare =
+      result.outcome === "crashed"
+        ? "crashed"
+        : result.outcome === "scope-unreachable" || result.outcome === "stalled"
+          ? "inconclusive"
+          : null;
     const thin = bare === null && found === 0 && !result.coverage.sufficiency.sufficient;
     const missionOutcome: MissionOutcome = combineOutcomes([
       bare ?? (thin ? "inconclusive" : found > 0 ? "defects-found" : "clean"),
@@ -884,6 +899,8 @@ export interface RunFeatureCliMissionOptions {
   readonly capability: string;
   readonly routeGlobs: readonly string[];
   readonly headless?: boolean;
+  /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
+  readonly stallTimeoutMs?: number;
   /** Step/action budget (CLI `--max-actions` / `--max-decisions`). */
   readonly bounds?: Partial<Bounds>;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
@@ -971,6 +988,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
     });
 
     const recordingPaths: string[] = [];
@@ -999,7 +1017,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const missionOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed"
         ? "crashed"
-        : result.outcome === "scope-unreachable"
+        : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
           : invariantDefects > 0
             ? "defects-found"
