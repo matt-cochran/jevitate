@@ -64,6 +64,8 @@ export interface TranscriptEntry {
   readonly message?: string;
   /** The conversational reply awaited after the message was sent (redacted, bounded). */
   readonly reply?: TranscriptReply;
+  /** True when this step typed into a `type=password` field: its value is never recorded, even synthetic. */
+  readonly redacted?: boolean;
 }
 
 /** What came back after a message was sent. */
@@ -88,6 +90,7 @@ export interface TranscriptStep {
   readonly timing?: PageTiming;
   readonly message?: string;
   readonly reply?: TranscriptReply;
+  readonly redacted?: boolean;
 }
 
 /**
@@ -125,6 +128,7 @@ export class TranscriptLog {
       ...(step.timing === undefined ? {} : { timing: transcriptTiming(step.timing, this.#secrets) }),
       ...(step.message === undefined ? {} : { message: redactText(step.message, this.#secrets) }),
       ...(step.reply === undefined ? {} : { reply: { ...step.reply, text: redactText(step.reply.text, this.#secrets) } }),
+      ...(step.redacted === true ? { redacted: true } : {}),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);

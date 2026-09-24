@@ -49,6 +49,12 @@ export interface MisuseStep {
   readonly note: string;
   /** The form this step submits, when it is a submit click. */
   readonly submitsForm?: string;
+  /**
+   * True for a `type` into a `type=password` field: the typed value is a synthetic boundary/invalid
+   * value (never a real secret), but it is still recorded as `{redacted:true}` in the Recording and
+   * the transcript — a password field's value is never persisted in the clear, synthetic or not.
+   */
+  readonly redacted?: boolean;
 }
 
 export interface MisuseEpisode {
@@ -62,6 +68,8 @@ export interface FormModel {
   readonly fields: readonly Control[];
   readonly submit: Control;
   readonly cancel: Control | null;
+  /** Checkboxes belonging to the form (e.g. "I agree to the terms") — set, never toggled, before a submit. */
+  readonly checkboxes: readonly Control[];
 }
 
 /** Generic submit-like names, used for pages that do not use `<form>` (and to rank submit buttons). */
@@ -74,6 +82,17 @@ const SESSION_END = /\b(?:log ?out|sign ?out|log ?off|sign ?off)\b/i;
  * Matched on the control's accessible name; a false positive only costs coverage of that control.
  */
 export const DESTRUCTIVE = /\b(?:delete|remove|destroy|erase|purge|wipe|drop|deactivate|terminate|revoke|unsubscribe|close (?:my |your |the )?account|cancel (?:my |your |the )?(?:subscription|plan|membership|order))\b/i;
+
+/**
+ * A control that reveals more UI when clicked (a "Create new key" button opening a dialog with a
+ * form): a button whose accessible name suggests it, or one that declares `aria-haspopup=dialog`.
+ * The adversarial frontier opens these BEFORE giving up on a page that has no form of its own, so a
+ * form that lives behind a modal trigger is still found and exercised.
+ */
+const DISCLOSURE_NAME = /\b(?:create|new|add|edit)\b/i;
+export function isDisclosureControl(c: Control): boolean {
+  return c.role !== "link" && (DISCLOSURE_NAME.test(c.name) || c.ariaHasPopup === "dialog");
+}
 
 /** A stable key for a control across snapshots (its durable descriptor). */
 export function controlKey(c: Pick<Control, "descriptor">): string {
@@ -94,13 +113,16 @@ function leavesScope(href: string | null | undefined, inScope: (url: string) => 
 
 /**
  * Whether a control counts as a target control a misuse run can (and should) exercise: enabled,
- * not a file input (no fixture), not a secret field, not a session-ending or destructive control
- * (Delete, Remove, Close account…), and not a link
- * that leads out of scope (it is navigation away from the target, not part of it).
+ * not a file input (no fixture), not a secret-like field BY NAME (API token, SSN, credit card…) —
+ * except a plain `type=password` field, which IS exercisable (typed with a synthetic boundary/
+ * invalid value, never read back, always recorded redacted — see `edit`) — and not a
+ * session-ending or destructive control (Delete, Remove, Close account…), and not a link that
+ * leads out of scope (it is navigation away from the target, not part of it).
  */
 export function isExercisable(c: Control, inScope: (url: string) => boolean): boolean {
   if (!c.enabled) return false;
-  if (c.inputType === "file" || c.inputType === "password" || isSecretLike(c)) return false;
+  if (c.inputType === "file") return false;
+  if (c.inputType !== "password" && isSecretLike(c)) return false;
   if (SESSION_END.test(c.name) || DESTRUCTIVE.test(c.name)) return false;
   return !leavesScope(c.href, inScope);
 }
@@ -151,7 +173,8 @@ export function detectForms(controls: readonly Control[], inScope: (url: string)
         : (pickSubmit(buttons) ?? loose.find((b) => SUBMIT_NAME.test(b.name) && !CANCEL_NAME.test(b.name)));
     if (submit === undefined) continue;
     const cancel = buttons.find((b) => CANCEL_NAME.test(b.name)) ?? loose.find((b) => CANCEL_NAME.test(b.name)) ?? null;
-    forms.push({ key, fields, submit, cancel });
+    const checkboxes = group.filter((c) => c.role === "checkbox" && isExercisable(c, inScope));
+    forms.push({ key, fields, submit, cancel, checkboxes });
   }
   return forms;
 }
@@ -195,11 +218,24 @@ function pickForm(forms: readonly FormModel[], exercised: ReadonlySet<string>, r
 
 function edit(field: Control, strategy: InputStrategy, note: string, settle = false): MisuseStep {
   if (affordedOp(field) === "select") return { op: "select", control: field, settle, note };
-  return { op: "type", control: field, fillText: valueFor(strategy, field), settle, note };
+  const redacted = field.inputType === "password";
+  return { op: "type", control: field, fillText: valueFor(strategy, field), settle, note, ...(redacted ? { redacted } : {}) };
 }
 
 function submit(form: FormModel, note: string, settle: boolean): MisuseStep {
   return { op: "click", control: form.submit, settle, note, submitsForm: form.key };
+}
+
+/**
+ * Steps that CHECK any of the form's unchecked checkboxes (e.g. "I agree to the terms") — never
+ * unchecks one that is already checked, so a checkbox already in the state that enables submit
+ * stays there (never toggled on then off by a later "exercise" pass; see `planExercise`). Planned
+ * ahead of a submit-attempting episode's edit/submit steps.
+ */
+function ensureCheckboxes(form: FormModel, settle: boolean): MisuseStep[] {
+  return form.checkboxes
+    .filter((c) => c.checked !== true)
+    .map((c) => ({ op: "click" as const, control: c, settle, note: `check "${c.name}" so the form can be submitted` }));
 }
 
 function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ctx: EpisodeContext): MisuseEpisode | null {
@@ -213,6 +249,7 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
     case "double-submit":
       return {
         steps: [
+          ...ensureCheckboxes(form, false),
           edit(field, "normal", "edit a field"),
           submit(form, "submit", false),
           submit(form, "submit again before the first submit settled", true),
@@ -220,12 +257,19 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
       };
     case "boundary-submit": {
       const value = at(BOUNDARY_ORDER, ctx.round) ?? "invalid";
-      return { steps: [edit(field, value, `enter a ${value} value`), submit(form, `submit the ${value} value`, true)] };
+      return {
+        steps: [
+          ...ensureCheckboxes(form, false),
+          edit(field, value, `enter a ${value} value`),
+          submit(form, `submit the ${value} value`, true),
+        ],
+      };
     }
     case "edit-cancel-save": {
       if (form.cancel === null) return null;
       return {
         steps: [
+          ...ensureCheckboxes(form, false),
           edit(field, "normal", "edit a field"),
           { op: "click", control: form.cancel, settle: true, note: "cancel the edit" },
           submit(form, "save after cancelling", true),
@@ -249,15 +293,23 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
                 ? submit(form, "submit again while the first submit is pending", true)
                 : edit(next, "normal", "edit another field while the submit is pending", true);
             })();
-      return { steps: [edit(field, "normal", "edit a field"), submit(form, "submit", false), other] };
+      return {
+        steps: [...ensureCheckboxes(form, false), edit(field, "normal", "edit a field"), submit(form, "submit", false), other],
+      };
     }
   }
 }
 
-/** The next target control not exercised yet, acted on once by its afforded op. */
+/**
+ * The next target control not exercised yet, acted on once by its afforded op. A checkbox already
+ * CHECKED is never picked: clicking it would toggle it back off, undoing a state a submit strategy
+ * may depend on ("keep a checkbox in the state that enables submit", never toggle it on then off).
+ */
 function planExercise(ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
-  const next = ctx.snapshot.controls.find((c) => isExercisable(c, inScope) && !ctx.exercised.has(controlKey(c)));
+  const next = ctx.snapshot.controls.find(
+    (c) => isExercisable(c, inScope) && !ctx.exercised.has(controlKey(c)) && !(c.role === "checkbox" && c.checked === true),
+  );
   if (next === undefined) return null;
   const op = affordedOp(next);
   if (op === "type") return { steps: [edit(next, "normal", "exercise a field", true)] };
@@ -283,6 +335,23 @@ function isFormStrategy(s: MisuseStrategy): s is FormMisuseStrategy {
 }
 
 /**
+ * When a form strategy finds nothing to work with on the current page, open a disclosure control (a
+ * "Create new key" button, a `aria-haspopup=dialog` trigger…) instead of giving up: the next
+ * snapshot then shows whatever it revealed (typically a dialog with its own form), which the SAME
+ * strategies apply to on a later round. An UNEXERCISED one is preferred, but this is reached ONLY
+ * when nothing else applies (the caller already tried), so a previously-opened one is fair game
+ * too — opening it is idempotent, and it is the only way back in after something else (e.g. a
+ * `navigate-away-unsaved` reload) closed what it revealed before it could be submitted.
+ */
+function planDisclosure(ctx: EpisodeContext): MisuseEpisode | null {
+  const inScope = ctx.inScope ?? (() => true);
+  const candidates = ctx.snapshot.controls.filter((c) => isExercisable(c, inScope) && isDisclosureControl(c));
+  const disclosure = candidates.find((c) => !ctx.exercised.has(controlKey(c))) ?? candidates[0];
+  if (disclosure === undefined) return null;
+  return { steps: [{ op: "click", control: disclosure, settle: true, note: `open "${disclosure.name}" to look for a form` }] };
+}
+
+/**
  * Plans the next episode for `strategy` on the current page, or null when the strategy finds
  * nothing to do here. The single-step strategies of `misuse.ts` become one-step episodes; the ones
  * that react to the previous action resolve its control by descriptor on THIS page (never by a
@@ -291,7 +360,13 @@ function isFormStrategy(s: MisuseStrategy): s is FormMisuseStrategy {
 export function planMisuseEpisode(ctx: EpisodeContext): MisuseEpisode | null {
   const { snapshot, strategy } = ctx;
   const inScope = ctx.inScope ?? (() => true);
-  if (isFormStrategy(strategy)) return strategy === "exercise-controls" ? planExercise(ctx) : planForm(strategy, ctx);
+  if (isFormStrategy(strategy)) {
+    const direct = strategy === "exercise-controls" ? planExercise(ctx) : planForm(strategy, ctx);
+    // Nothing to work with for THIS strategy on THIS page (no form at all, or e.g. `edit-cancel-save`
+    // on a form with no Cancel): try opening an unexercised disclosure control instead of giving up —
+    // whatever it reveals (typically a dialog with its own form) benefits every strategy from here on.
+    return direct ?? planDisclosure(ctx);
+  }
   const find = (c: Control | null): Control | undefined =>
     c === null ? undefined : snapshot.controls.find((x) => controlKey(x) === controlKey(c));
   switch (strategy) {

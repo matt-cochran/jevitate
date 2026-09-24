@@ -60,6 +60,18 @@ describe("CoverageTracker", () => {
     expect(empty.shortfalls).toEqual(["the target offered no control to exercise"]);
   });
 
+  it("a control acted on is always counted exercised, even if observe() never saw it first (#76)", () => {
+    const t = new CoverageTracker(inScope);
+    // No observe() call at all — the control is discovered mid-episode (e.g. inside a dialog opened
+    // by an earlier step of the SAME episode) and acted on directly.
+    t.acted("https://app.test/profile", NAME);
+    const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
+    // actionsOnTarget and controls.exercised must agree: an action on a target control is never
+    // invisible to the coverage ratio.
+    expect(r.actionsOnTarget).toBe(1);
+    expect(r.controls).toEqual({ total: 1, exercised: 1, ratio: 1 });
+  });
+
   it("records per strategy how often it applied vs found nothing", () => {
     const t = new CoverageTracker(inScope);
     t.strategy("double-submit", true);

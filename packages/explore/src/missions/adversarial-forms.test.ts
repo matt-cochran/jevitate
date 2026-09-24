@@ -16,7 +16,52 @@ import { withSession } from "../testkit.js";
  * edits, and acting while the save is still pending.
  */
 
-const state = { puts: 0, lastName: "Lovelace" };
+const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0 };
+
+/**
+ * #76 — the issue's minimal repro: a form behind a modal trigger (an API-keys page: "Create new
+ * key" opens a dialog with a Name field and a Create button) alongside an always-visible signup
+ * form whose submit is disabled until its `type=password` field is filled too. Both must be found
+ * AND submitted by the adversarial frontier.
+ */
+const KEYS_AND_SIGNUP = (): string => `<!doctype html><html><body>
+  <h1>Settings</h1>
+  <button id="opener" onclick="document.getElementById('d').showModal()">Create new key</button>
+  <dialog id="d">
+    <form method="dialog" id="keyform">
+      <label>Name <input required name="n" aria-label="Name" /></label>
+      <button id="createKey">Create</button>
+    </form>
+  </dialog>
+  <form id="signup">
+    <label>Email <input type="email" required aria-label="Email" /></label>
+    <label>Password <input type="password" required minlength="8" aria-label="Password" /></label>
+    <button id="signupBtn" disabled>Sign up</button>
+  </form>
+  <div id="toast" role="status"></div>
+  <script>
+    const form = document.getElementById("signup");
+    const btn = document.getElementById("signupBtn");
+    function refresh() { btn.disabled = !form.checkValidity(); }
+    form.addEventListener("input", refresh);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await fetch("/api/signup", { method: "POST" });
+      document.getElementById("toast").textContent = "Signed up";
+    });
+    document.getElementById("keyform").addEventListener("submit", async () => {
+      await fetch("/api/keys", { method: "POST" });
+    });
+  </script>
+</body></html>`;
+
+/** A submit that never becomes enabled — the "never click a disabled control" guard's target. */
+const STUCK_SUBMIT = `<!doctype html><html><body>
+  <form id="f">
+    <label>Name <input aria-label="Name" /></label>
+    <button id="save" disabled>Save</button>
+  </form>
+</body></html>`;
 
 const PROFILE = (): string => `<!doctype html><html><body>
   <h1>Profile</h1>
@@ -60,6 +105,24 @@ beforeAll(async () => {
     }
     if (path === "/app/old") {
       res.writeHead(302, { location: "/" }).end();
+      return;
+    }
+    if (path === "/api/keys" && req.method === "POST") {
+      state.keySubmits += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    if (path === "/api/signup" && req.method === "POST") {
+      state.signups += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    if (path === "/app/keys-and-signup") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(KEYS_AND_SIGNUP());
+      return;
+    }
+    if (path === "/app/stuck-submit") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(STUCK_SUBMIT);
       return;
     }
     if (path === "/") {
@@ -281,6 +344,74 @@ describe("adversarial — coverage and an honest outcome (#64)", () => {
       expect(result.outcome).toBe("inconclusive");
       expect(result.coverage.thresholds).toEqual({ minControlRatio: 0.9, requireFormSubmit: false });
       expect(result.coverage.shortfalls).toEqual([expect.stringMatching(/below the 90% threshold$/)]);
+    },
+    180_000,
+  );
+});
+
+describe("adversarial — a form behind a modal trigger, and a password-gated form (#76)", () => {
+  const FULL_FORM_STRATEGIES: readonly MisuseStrategy[] = [
+    "double-submit",
+    "boundary-submit",
+    "edit-cancel-save",
+    "navigate-away-unsaved",
+    "act-while-pending",
+    "exercise-controls",
+  ];
+
+  it(
+    "the frontier opens the disclosure control's dialog AND fills the password field: both forms found and submitted",
+    async () => {
+      state.keySubmits = 0;
+      state.signups = 0;
+      const result = await huntProfile(FULL_FORM_STRATEGIES, {
+        seedUrl: `${origin}/app/keys-and-signup`,
+        bounds: { maxDecisions: 30, maxActions: 60 },
+      });
+
+      expect(result.outcome).not.toBe("crashed");
+      expect(result.coverage.forms.found).toBe(2);
+      expect(result.coverage.forms.submitted).toBeGreaterThanOrEqual(1);
+
+      // Real submissions actually reached the server (a disabled button can never dispatch a real
+      // submit, so this alone proves the password field really got filled and Sign up really enabled).
+      expect(state.keySubmits).toBeGreaterThanOrEqual(1);
+      expect(state.signups).toBeGreaterThanOrEqual(1);
+
+      // The dialog's own trigger was clicked, and its field ("Name") was exercised once revealed.
+      const opened = result.transcript.some((e) => e.target?.includes("Create new key") === true && e.actOk);
+      expect(opened).toBe(true);
+
+      // A password step is marked redacted, and its synthetic value never appears anywhere in the
+      // Recording or the transcript in the clear.
+      const pwSteps = result.transcript.filter((e) => e.redacted === true);
+      expect(pwSteps.length).toBeGreaterThan(0);
+      // No fill step in the Recording for the password field carries a plaintext value.
+      const fills = result.recording.pages.flatMap((p) => p.steps.map((s) => s.step)).filter((s) => s.kind === "fill");
+      const passwordFills = fills.filter((f) => JSON.stringify(f.target).includes("Password"));
+      expect(passwordFills.length).toBeGreaterThan(0);
+      for (const f of passwordFills) {
+        expect(f.value).toMatchObject({ redacted: true });
+        expect(f.value).not.toHaveProperty("value");
+      }
+    },
+    180_000,
+  );
+
+  it(
+    "never clicks a submit that stays disabled: a no-op is recorded instead of a failed click",
+    async () => {
+      const result = await huntProfile(["double-submit"], {
+        seedUrl: `${origin}/app/stuck-submit`,
+        bounds: { maxDecisions: 4 },
+      });
+      expect(result.outcome).not.toBe("crashed");
+      const clicks = result.transcript.filter((e) => e.op === "click");
+      expect(clicks).toEqual([]);
+      const noOps = result.transcript.filter(
+        (e) => e.strategy === "double-submit" && e.op === null && e.reason?.includes("disabled"),
+      );
+      expect(noOps.length).toBeGreaterThan(0);
     },
     180_000,
   );
