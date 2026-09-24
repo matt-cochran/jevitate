@@ -388,7 +388,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     queue_exploration: {
       description:
-        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues. Refuses unknown/unpromoted targets and over-ceiling budgets.",
+        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only).",
       inputSchema: {
         type: "object",
         properties: {
@@ -406,6 +406,10 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
               maxCandidates: { type: "number" },
             },
           },
+          // App-declared invariants (#86), inline only: a closed schema (observe: dom|network|probe,
+          // invariants: require|never|always). Probes are GET/HEAD on the target's own origin; a spec
+          // that does not validate refuses the enqueue.
+          invariants: { type: "object" },
         },
         required: ["target"],
       },

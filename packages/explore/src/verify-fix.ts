@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
-import type { Recording } from "@jevitate/recording";
+import type { InvariantSpec, Recording } from "@jevitate/recording";
 import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interpreter";
 import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
@@ -9,6 +9,7 @@ import { replayAndDetectHang } from "./hang-repro.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
+import { InvariantMonitor } from "./declared-invariants.js";
 
 /**
  * verifyFix — "is this defect fixed?", answered by REPLAY, not by opinion.
@@ -35,6 +36,11 @@ import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
  *                         a step failed, every session failed to open): that proves nothing either
  *                         way.
  *
+ * A DECLARED `invariant` defect (#86) is re-checked with the same invariant spec: each attempt
+ * replays up to the step BEFORE the defect's, snapshots the invariant's observables, replays the
+ * defect's step, lets it settle and evaluates that one invariant. An attempt whose observables
+ * could not be read did not run (no evidence). A code-level invariant (no spec) stays inconclusive.
+ *
  * Never throws (aside from a caller bug like an invalid `replays` count): every failure is an
  * `inconclusive` verdict with its reason.
  */
@@ -52,10 +58,12 @@ export interface VerifyFixParams {
   /** The defect's fingerprint. */
   readonly fingerprint: string;
   /**
-   * The defect's kind. An `invariant` defect was concluded by a user-supplied probe that is not
-   * part of the Recording, so a replay alone cannot re-check it: its verdict is `inconclusive`.
+   * The defect's kind. An `invariant` defect is re-checked with `invariant` (its declared spec); a
+   * code-level invariant that is not part of the Recording cannot be re-checked: `inconclusive`.
    */
   readonly defectKind: string;
+  /** For a declared `invariant` defect (#86): the spec and id to re-check, and where probes may go. */
+  readonly invariant?: VerifyInvariant;
   /** Opens a FRESH browser session (never the one the defect was found in). */
   readonly openSession: () => Promise<VerifySession>;
   /** Render/settle ceiling after the replay (ms). Default: perceive's default. */
@@ -81,6 +89,16 @@ export interface VerifyFixParams {
    * have been.
    */
   readonly occurrences?: number;
+}
+
+export interface VerifyInvariant {
+  readonly spec: InvariantSpec;
+  readonly id: string;
+  /** The mission's authorized origins (probes never leave them). */
+  readonly allowlist: readonly string[];
+  /** What relative probe paths resolve against (the mission's start URL). */
+  readonly baseUrl: string;
+  readonly secrets?: readonly string[];
 }
 
 export type VerifyFixVerdict = "fixed" | "still-reproduces" | "intermittent" | "inconclusive";
@@ -163,7 +181,8 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     }
     return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})` };
   }
-  if (params.defectKind === "invariant") {
+  const declared = params.defectKind === "invariant" ? params.invariant : undefined;
+  if (params.defectKind === "invariant" && (declared === undefined || !declared.spec.invariants.some((i) => i.id === declared.id))) {
     return {
       ...base,
       verdict: "inconclusive",
@@ -177,7 +196,7 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
 
   const runs: SingleReplayAttempt[] = [];
   for (let i = 0; i < replays; i++) {
-    const attempt = await runOneReplay(params);
+    const attempt = declared === undefined ? await runOneReplay(params) : await runOneInvariantReplay(params, declared);
     runs.push(attempt);
     // The recorded path itself does not match the current app: retrying cannot change that, so more
     // attempts would not add evidence (matches the pre-#74 single-attempt inconclusive verdict).
@@ -199,6 +218,120 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
           ? `the defect's fingerprint was absent on all ${ran}/${runs.length} replay(s) that ran${occNote}`
           : `the defect's fingerprint fired on ${fired}/${ran} replay(s) that ran — intermittent on the current code, never reported as fixed${occNote}`;
   return { ...base, verdict, observedFingerprints, replay: last.replay, reason, attempts };
+}
+
+/** Steps `0..index` of a Recording (flat order), so a resume stops at the defect's step. */
+function truncateAt(recording: Recording, index: number): Recording {
+  const copy: Recording = structuredClone(recording);
+  let i = 0;
+  const pages: Recording["pages"] = [];
+  for (const page of copy.pages) {
+    if (i > index) break;
+    const steps = page.steps.filter(() => i++ <= index);
+    pages.push({ ...page, steps });
+  }
+  return { ...copy, pages };
+}
+
+/** The recorded step at a flat index: its op and the acted control's name (for the invariant's action). */
+function stepAction(recording: Recording, index: number): { op: string; control: string | null } {
+  const step = recording.pages.flatMap((p) => p.steps)[index]?.step;
+  if (step === undefined) return { op: "unknown", control: null };
+  const target = "target" in step ? step.target : undefined;
+  return { op: step.kind, control: target?.name ?? target?.label ?? target?.text ?? null };
+}
+
+/**
+ * One fresh-context re-check of a DECLARED invariant (#86): replay to the step before the defect's,
+ * snapshot, replay the defect's step, settle, evaluate that invariant. Never throws.
+ */
+async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvariant): Promise<SingleReplayAttempt> {
+  let session: VerifySession;
+  try {
+    session = await params.openSession();
+  } catch (e) {
+    return {
+      ran: false,
+      fired: false,
+      observed: [],
+      replay: { outcome: "failed", at: -1, error: firstLine(e) },
+      detail: `could not open a fresh session: ${firstLine(e)}`,
+      targetMismatch: false,
+    };
+  }
+  try {
+    const monitor = new InvariantMonitor(inv.spec, {
+      allowlist: inv.allowlist,
+      baseUrl: inv.baseUrl,
+      ...(inv.secrets === undefined ? {} : { secrets: inv.secrets }),
+    });
+    monitor.attach(session.page);
+    await monitorFor(session.page).instrument();
+    const index = params.recordingStepIndex;
+    const upTo = truncateAt(observeAfterStep(params.recording, index), index);
+    const interpreter = new RecordingInterpreter(params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs });
+    const settle = (): Promise<unknown> =>
+      perceive(session.page, { ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }) }).catch(() => undefined);
+    const failedAt = (r: Awaited<ReturnType<RecordingInterpreter["run"]>>): SingleReplayAttempt | null => {
+      if (r.outcome === "completed") return null;
+      const replay: VerifyFixResult["replay"] =
+        r.outcome === "failed"
+          ? { outcome: "failed", at: r.at, error: r.error.split("\n")[0] ?? r.error, ...(r.reason === undefined ? {} : { reason: r.reason }) }
+          : { outcome: "failed", at: r.at, error: "replay paused for a human hand-back" };
+      const mismatch = r.outcome === "failed" && r.reason !== undefined;
+      return {
+        ran: false,
+        fired: false,
+        observed: [],
+        replay,
+        detail: mismatch
+          ? `replay stopped at step ${r.at}: ${r.reason} — the recorded path was not reproduced, so this proves nothing`
+          : `replay could not reach the defect's step (failed at step ${r.at}); the invariant was not re-checked`,
+        targetMismatch: mismatch,
+      };
+    };
+    if (index > 0) {
+      const pre = failedAt(await interpreter.runToCheckpoint(session.actor, upTo, index - 1));
+      if (pre !== null) return pre;
+      await settle();
+    }
+    const actedOn = session.page.url();
+    await monitor.before(session.actor);
+    const stepResult = index > 0 ? await interpreter.resumeFrom(session.actor, upTo, index) : await interpreter.runToCheckpoint(session.actor, upTo, 0);
+    const failed = failedAt(stepResult);
+    if (failed !== null) return failed;
+    await settle();
+    await session.page.waitForTimeout(10);
+    // The original run already found the invariant applicable to this step: re-check exactly it.
+    const checked = await monitor.after(session.actor, { ...stepAction(params.recording, index), url: actedOn }, { only: inv.id, force: true });
+    const observed = checked.violations.map((v) => v.fingerprint);
+    const replay: VerifyFixResult["replay"] = { outcome: "completed" };
+    if (checked.violations.length > 0) {
+      return {
+        ran: true,
+        fired: true,
+        observed,
+        replay,
+        detail: `the invariant was violated again: ${checked.violations[0]?.reason ?? inv.id}`,
+        targetMismatch: false,
+      };
+    }
+    if (checked.held.length === 0) {
+      return { ran: false, fired: false, observed, replay, detail: `invariant ${inv.id} could not be evaluated (an observable was unreadable); this proves nothing`, targetMismatch: false };
+    }
+    return { ran: true, fired: false, observed, replay, detail: `replay reached the defect's step and invariant ${inv.id} held`, targetMismatch: false };
+  } catch (e) {
+    return {
+      ran: false,
+      fired: false,
+      observed: [],
+      replay: { outcome: "failed", at: -1, error: firstLine(e) },
+      detail: `replay failed: ${firstLine(e)}`,
+      targetMismatch: false,
+    };
+  } finally {
+    await session.close().catch(() => undefined);
+  }
 }
 
 /** One fresh-context replay's raw outcome, before it is folded into the verdict. */

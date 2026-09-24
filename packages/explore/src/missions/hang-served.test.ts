@@ -77,6 +77,22 @@ beforeAll(async () => {
           html(`<button type="button">Go</button><script>setTimeout(() => { const end = Date.now() + 6000; while (Date.now() < end) {} }, 150);</script>`),
         );
         return;
+      case "/lay-hub":
+        // A hub linking to three routes that all share ONE layout widget — a persistent,
+        // indeterminate busy indicator that never resolves (#87).
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<h1>Layout hub</h1><a href="/lay-a">Route A</a><a href="/lay-b">Route B</a><a href="/lay-c">Route C</a>`),
+        );
+        return;
+      case "/lay-a":
+      case "/lay-b":
+      case "/lay-c":
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(
+            `<div class="layout"><div role="progressbar" data-testid="global-progress" style="width:20px;height:20px"></div><h1>${path.slice(-1).toUpperCase()}</h1></div>`,
+          ),
+        );
+        return;
       case "/import":
         // Upload → Confirm → back to the start: an action that silently undoes itself.
         res.writeHead(200, { "content-type": "text/html" }).end(
@@ -342,6 +358,43 @@ describe("coverage exploration KEEPS EXPLORING after a hang", () => {
       // The frontier went on after the hang: the broken page (after both hangs in link order) was reached.
       expect(result.coverage.transitionsExercised).toBe(3);
       expect(result.transcript.some((e) => e.target === 'link "Broken page"')).toBe(true);
+    },
+    180_000,
+  );
+});
+
+describe("#87 — a global hang element is ONE finding across every route it appears on", () => {
+  it(
+    "a persistent busy indicator shared by the layout, met on 3 routes, is 1 hang finding listing all 3 routes, reproduced once",
+    async () => {
+      const result = await withSession(
+        "hang-global-element-",
+        async (session) => {
+          const actor = CastActor.named("coverage").whoCan(new BrowseTheWeb(session, [origin]));
+          return runInductionMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+            seedUrl: `${origin}/lay-hub`,
+            allowlist: [origin],
+            maxDepth: 1,
+            openFreshSession: freshSession,
+            hangReplays: 1,
+            renderWaitMs: FAST.renderWaitMs,
+          });
+        },
+        origin,
+      );
+      // ONE finding — never one per route — even though the frontier visited all three routes.
+      expect(result.hangs).toHaveLength(1);
+      const h = result.hangs[0];
+      expect(h?.hangKind).toBe("ui-no-progress");
+      expect(h?.occurrences).toBe(3);
+      expect([...(h?.routes ?? [])].sort()).toEqual(["/lay-a", "/lay-b", "/lay-c"]);
+      // Confirmed once, from the FIRST route it was met on: no replay budget spent re-confirming the
+      // same element again on the 2nd and 3rd routes.
+      expect(h?.reproduction).toMatchObject({ attempts: 1, status: "reproduced" });
+      expect(result.outcome).toBe("exhausted");
     },
     180_000,
   );

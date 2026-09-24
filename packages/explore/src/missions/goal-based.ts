@@ -13,6 +13,15 @@ import {
 import { explore, type ExploreConfig, type ExploreRun, type TranscriptEntry } from "../explore.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
+import type { InvariantSpec } from "@jevitate/recording";
+import {
+  InvariantDefectLog,
+  InvariantMonitor,
+  recordingStepCount,
+  type InvariantAction,
+  type InvariantDefect,
+  type InvariantReport,
+} from "../declared-invariants.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -44,6 +53,12 @@ import type { VerifySession } from "../verify-fix.js";
  *                   Never a pass: the assertion is not trusted on a broken run.
  *  - `hang` / `intermittent` — the app under test hung; its steps were replayed in fresh
  *                   browser contexts and it reproduced every time (`hang`) or not (`intermittent`).
+ *  - `defects-found` — an app-declared invariant (#86) was violated around an action. A hard
+ *                   defect: it overrides `succeeded`/`exhausted`/`blocked` (the goal may well have
+ *                   been reached — the app still broke a rule getting there).
+ *
+ * Declared invariants are observed through the loop's existing hooks (no change to the loop): each
+ * settled snapshot evaluates the action taken since the previous one and re-arms the next "before".
  *
  * The durable product is always the emitted `Recording`, whatever the outcome.
  */
@@ -72,6 +87,8 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
    * final page, or all together at some settled step of the run. `reloadThen` is final-only.
    */
   readonly successWhen?: SuccessWhen;
+  /** App-declared invariants (#86), evaluated around every action. A violation is `defects-found`. */
+  readonly invariants?: InvariantSpec;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -80,7 +97,15 @@ export type SuccessWhen = "held" | "final";
 /** Bound (ms) on each per-step page-check evaluation under `successWhen: "held"` (a quick look). */
 const HELD_CHECK_TIMEOUT_MS = 250;
 
-export type GoalBasedOutcome = "succeeded" | "exhausted" | "blocked" | "hang" | "intermittent" | "inconclusive" | "crashed";
+export type GoalBasedOutcome =
+  | "succeeded"
+  | "exhausted"
+  | "blocked"
+  | "defects-found"
+  | "hang"
+  | "intermittent"
+  | "inconclusive"
+  | "crashed";
 
 export interface GoalBasedResult {
   readonly outcome: GoalBasedOutcome;
@@ -100,6 +125,10 @@ export interface GoalBasedResult {
    * which success check did not hold.
    */
   readonly reason?: string;
+  /** Declared-invariant violations (#86), deduped by fingerprint, each with its repro step. */
+  readonly invariantDefects?: InvariantDefect[];
+  /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
+  readonly invariants?: InvariantReport[];
 }
 
 /** Does this result belong to a page check (the kind `held` can remember)? Matched by description. */
@@ -159,6 +188,94 @@ async function adjudicated(
   page: Page,
   capture: RequestCapture | null,
 ): Promise<GoalBasedResult> {
+  const declared = declaredInvariants(cfg, page);
+  const result = await adjudicatedRun(cfg, checks, page, capture, declared);
+  return declared === null ? result : declared.fold(result);
+}
+
+/**
+ * Declared invariants (#86) through the loop's own hooks: the transcript names each action, the
+ * Recording its step index, and every settled snapshot evaluates the action(s) since the previous
+ * one (then re-arms the "before" for the next). An action the loop took but never re-observed (the
+ * run ended right after it) is evaluated on the final page once it settles.
+ */
+interface DeclaredHooks {
+  readonly onTranscriptEntry: NonNullable<ExploreConfig["onTranscriptEntry"]>;
+  readonly onRecording: NonNullable<ExploreConfig["onRecording"]>;
+  readonly settled: () => Promise<void>;
+  readonly finish: (run: ExploreRun) => Promise<void>;
+  readonly fold: (result: GoalBasedResult) => GoalBasedResult;
+}
+
+/** Ops that change nothing in the app: no invariant is judged around them. */
+const NON_ACTIONS: ReadonlySet<string> = new Set(["wait", "done", "blocked", "scroll_up", "scroll_down"]);
+
+function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHooks | null {
+  if (cfg.invariants === undefined) return null;
+  const monitor = new InvariantMonitor(cfg.invariants, {
+    allowlist: cfg.allowlist,
+    baseUrl: cfg.startUrl,
+    ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
+  });
+  monitor.attach(page);
+  const log = new InvariantDefectLog();
+  let steps = 0;
+  let pending: InvariantAction | null = null;
+  const settled = async (): Promise<void> => {
+    const action = pending;
+    pending = null;
+    const r = await monitor.after(cfg.actor, action, { rearm: true });
+    for (const v of r.violations) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
+  };
+  return {
+    onTranscriptEntry: (entry, all) => {
+      cfg.onTranscriptEntry?.(entry, all);
+      if (entry.op === null || !entry.actOk || NON_ACTIONS.has(entry.op)) return;
+      const d = entry.descriptor;
+      pending = {
+        op: entry.op,
+        control: d?.name ?? d?.label ?? d?.text ?? entry.target,
+        // Several actions before one settled snapshot (type, then send): judged together, from the first.
+        url: pending?.url ?? entry.url,
+      };
+    },
+    onRecording: (recording) => {
+      cfg.onRecording?.(recording);
+      steps = recordingStepCount(recording);
+    },
+    settled,
+    finish: async (run) => {
+      // Never on a broken or hung page: an unresponsive page proves nothing either way.
+      if (pending === null || run.stop === "crashed" || run.stop === "hang") return;
+      await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
+      await settled().catch(() => undefined);
+    },
+    fold: (result) => {
+      const invariantDefects = log.defects();
+      const invariants = monitor.report();
+      if (invariantDefects.length === 0) return { ...result, invariantDefects, invariants };
+      // A violated invariant is a hard defect: it overrides a pass or a plain miss — never a broken
+      // run or a hang, whose own verdict is more severe (the defects are still reported).
+      const hard = result.outcome === "succeeded" || result.outcome === "exhausted" || result.outcome === "blocked";
+      const why = invariantDefects.map((d) => d.invariant.reason).join("; ");
+      return {
+        ...result,
+        outcome: hard ? "defects-found" : result.outcome,
+        reason: result.reason === undefined ? why : `${why}; ${result.reason}`,
+        invariantDefects,
+        invariants,
+      };
+    },
+  };
+}
+
+async function adjudicatedRun(
+  cfg: GoalBasedMissionConfig,
+  checks: readonly SuccessCheck[],
+  page: Page,
+  capture: RequestCapture | null,
+  declared: DeclaredHooks | null,
+): Promise<GoalBasedResult> {
   const pageChecks = checks.filter((c) => c.kind === "page");
   /** Under `held`: the first settled step at which every page check held together (1-based), or null. */
   let heldAtStep: number | null = null;
@@ -170,8 +287,10 @@ async function adjudicated(
       "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
     // `held`: after every settled step, a quick look at the page checks — remembered once they all
     // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
+    ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
     onSnapshot: async (snap) => {
       await cfg.onSnapshot?.(snap);
+      await declared?.settled().catch(() => undefined);
       settledSteps += 1;
       if (!held || heldAtStep !== null) return;
       const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
@@ -187,6 +306,8 @@ async function adjudicated(
         () => false,
       ),
   });
+
+  await declared?.finish(run);
 
   // A hang is a first-class finding: reproduce it in fresh contexts, then report k/N.
   if (run.stop === "hang" && run.hang !== undefined) {

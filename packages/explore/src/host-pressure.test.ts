@@ -37,6 +37,7 @@ describe("attribution under host pressure — uncertain, and the draft says so",
     hangKind: "main-thread-unresponsive",
     title: "Hang",
     route: "/x",
+    routes: ["/x"],
     url: "http://app.test/x",
     signal: {
       kind: "main-thread-unresponsive",

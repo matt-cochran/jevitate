@@ -23,6 +23,11 @@ export type Op =
   /** Reload the current page — proves whether what the page shows survived (persistence). */
   | "reload"
   | "done"
+  /**
+   * End a find-out / understand goal with its answer (#101): the answer is generated from the
+   * observed page text and accepted only when code finds every claim's quote on the pages seen.
+   */
+  | "report"
   | "blocked";
 
 export const OPS: readonly Op[] = [
@@ -36,6 +41,7 @@ export const OPS: readonly Op[] = [
   "wait",
   "reload",
   "done",
+  "report",
   "blocked",
 ];
 
@@ -121,6 +127,11 @@ export const TARGET_FREE_ACTIONS: ReadonlyArray<{ readonly op: Exclude<Op, Targe
     description: "reload the page (shows whether what was saved actually persisted; unsaved edits are discarded)",
   },
   { op: "done", description: "the goal is achieved on the current page" },
+  {
+    op: "report",
+    description:
+      "the goal asks to find out / understand something and the pages seen show the answer: end the run by reporting it",
+  },
   { op: "blocked", description: "the goal cannot be advanced from here" },
 ];
 

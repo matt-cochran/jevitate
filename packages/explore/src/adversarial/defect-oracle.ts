@@ -22,8 +22,13 @@ import { redactUrl } from "@jevitate/ai-core";
  */
 
 export type DefectSignal =
-  /** `pageUrl`: the (redacted) page the signal fired on — the route part of its fingerprint. */
-  | { kind: "console-error"; detail: string; pageUrl?: string }
+  /**
+   * `pageUrl`: the (redacted) page the signal fired on — the route part of its fingerprint.
+   * `correlatedStatus`/`correlatedUrl` (#88): the captured network response this console error
+   * correlates with (the same request, or the nearest response within `CORRELATION_WINDOW_MS`) —
+   * undefined when none was found. See `isAdvisoryConsoleError`.
+   */
+  | { kind: "console-error"; detail: string; pageUrl?: string; correlatedStatus?: number; correlatedUrl?: string }
   | { kind: "page-error"; detail: string; pageUrl?: string }
   | { kind: "http-5xx"; detail: string; url: string; status: number }
   | { kind: "failed-request"; detail: string; url: string };
@@ -66,11 +71,57 @@ export function isNon5xxResourceConsoleError(text: string): boolean {
  */
 const ERR_ABORTED = "net::ERR_ABORTED";
 
+/**
+ * A console-error CORRELATED with a captured network response (#88, extending #29's 5xx scope) is
+ * classified by that response's status: a 5xx is still a defect (unchanged — it also gates
+ * independently via `http-5xx`); a 4xx is ADVISORY — the app logged an error for a response the
+ * server returned BY DESIGN (an authorization refusal, a validation error), so it is reported but
+ * never counted as a defect. An UNCORRELATED console error (no response near it) stays a defect,
+ * as before.
+ */
+export function isAdvisoryConsoleError(
+  signal: DefectSignal,
+): signal is Extract<DefectSignal, { kind: "console-error" }> & { correlatedStatus: number } {
+  return (
+    signal.kind === "console-error" &&
+    signal.correlatedStatus !== undefined &&
+    signal.correlatedStatus >= 400 &&
+    signal.correlatedStatus < 500
+  );
+}
+
+/** How close (ms) a response must be to a console error to correlate as "near in time" (#88). */
+export const CORRELATION_WINDOW_MS = 2_000;
+
+/** How many recent responses are kept for correlation (bounded so a chatty page cannot grow it). */
+const MAX_RECENT_RESPONSES = 50;
+
 export class PageSignalCollector {
   private buffer: DefectSignal[] = [];
 
-  constructor(page: Page) {
+  constructor(page: Page, now: () => number = Date.now) {
     const responseSeen = new WeakSet<Request>();
+    // Every response seen recently, for correlating a console error to WHAT it was about (#88): the
+    // same request (its URL quoted in the message) or, failing that, the nearest one in time.
+    const recent: Array<{ status: number; url: string; at: number }> = [];
+    const noteResponse = (status: number, url: string): void => {
+      recent.push({ status, url, at: now() });
+      if (recent.length > MAX_RECENT_RESPONSES) recent.shift();
+    };
+    const correlate = (text: string): { status: number; url: string } | undefined => {
+      // Same request: the message quotes the exact (redacted) response URL.
+      const sameRequest = recent.find((r) => text.includes(r.url));
+      if (sameRequest !== undefined) return sameRequest;
+      // Near in time: the closest response within the correlation window, before or shortly after
+      // (a same-tick console.error can log a hair before its response event is processed).
+      const t = now();
+      let best: { status: number; url: string; at: number } | undefined;
+      for (const r of recent) {
+        if (Math.abs(t - r.at) > CORRELATION_WINDOW_MS) continue;
+        if (best === undefined || Math.abs(t - r.at) < Math.abs(t - best.at)) best = r;
+      }
+      return best;
+    };
     page.on("console", (msg) => {
       if (msg.type() !== "error") return;
       const text = msg.text();
@@ -78,7 +129,16 @@ export class PageSignalCollector {
       // §9: the HTTP signal is 5xx-only). Real console errors, page errors and
       // 5xx are untouched and still gate.
       if (isNon5xxResourceConsoleError(text)) return;
-      this.buffer.push({ kind: "console-error", detail: redactUrl(text), pageUrl: redactUrl(page.url()) });
+      const redactedText = redactUrl(text);
+      // Correlated against the REDACTED text (both sides of the match go through the same
+      // redaction, so a query-string secret never breaks an otherwise-matching URL).
+      const correlated = correlate(redactedText);
+      this.buffer.push({
+        kind: "console-error",
+        detail: redactedText,
+        pageUrl: redactUrl(page.url()),
+        ...(correlated === undefined ? {} : { correlatedStatus: correlated.status, correlatedUrl: correlated.url }),
+      });
     });
     page.on("pageerror", (err) => {
       this.buffer.push({ kind: "page-error", detail: redactUrl(err.message), pageUrl: redactUrl(page.url()) });
@@ -86,6 +146,7 @@ export class PageSignalCollector {
     page.on("response", (response) => {
       responseSeen.add(response.request());
       const status = response.status();
+      noteResponse(status, redactUrl(response.url()));
       if (status >= 500) {
         const url = redactUrl(response.url());
         this.buffer.push({ kind: "http-5xx", detail: `${status} ${url}`, url, status });

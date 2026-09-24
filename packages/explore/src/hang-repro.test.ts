@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { hangOutcome, reproduceHang, reproductionStatus, type HangAttempt } from "./hang-repro.js";
+import type { Recording } from "@jevitate/recording";
+import { hangOutcome, recordCoverageHang, reproduceHang, reproductionStatus, type HangAttempt, type HangFinding } from "./hang-repro.js";
 import type { HangSignal } from "./hang.js";
+import type { VerifySession } from "./verify-fix.js";
 
 /** Replays that never ran are not evidence of anything (coordinator ruling, round 2d). */
 
@@ -31,6 +33,36 @@ describe("reproductionStatus — only attempts that RAN count", () => {
     expect(hangOutcome("reproduced")).toBe("hang");
     expect(hangOutcome("intermittent")).toBe("intermittent");
     expect(hangOutcome("inconclusive")).toBe("inconclusive");
+  });
+});
+
+describe("#87 — recordCoverageHang: a known hang (by fingerprint) is never re-reproduced", () => {
+  it("the SAME global element hanging on three different routes spends replay budget once and lists every route", async () => {
+    let opens = 0;
+    const openSession = async (): Promise<VerifySession> => {
+      opens += 1;
+      throw new Error("no fresh session in this test");
+    };
+    const found = new Map<string, HangFinding>();
+    const recording: Recording = { version: "1.0.0", site: "x", pages: [] };
+    const base = {
+      kind: "ui-no-progress" as const,
+      detail: "a busy indicator never went away",
+      url: "http://x.test",
+      pending: [],
+      lastState: { signature: "s", controls: [] },
+      element: "[data-testid=global-progress]",
+    };
+    for (const route of ["/a", "/b", "/c"]) {
+      await recordCoverageHang({ hang: { ...base, route }, recording, steps: [], found, openSession, attempts: 1 });
+    }
+    expect(found.size).toBe(1); // one finding — never one per route
+    const finding = [...found.values()][0];
+    expect(finding?.occurrences).toBe(3);
+    expect(finding?.routes).toEqual(["/a", "/b", "/c"]);
+    // Only the FIRST occurrence attempted reproduction; the 2nd and 3rd spent no replay budget
+    // re-confirming the same element again.
+    expect(opens).toBe(1);
   });
 });
 

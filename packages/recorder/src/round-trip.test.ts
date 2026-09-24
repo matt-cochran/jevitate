@@ -121,7 +121,10 @@ test(
     if (fill === undefined || fill.step.kind !== "fill") {
       throw new Error(`no fill captured; steps: ${JSON.stringify(steps, null, 2)}`);
     }
-    expect(fill.step.target).toEqual({ role: "textbox", name: "Username" });
+    // The recorder may also capture a stable anchor (the input's `name` attribute) depending on when
+    // the descriptor is read; either shape replays. Require the semantic locator, allow that anchor.
+    expect(fill.step.target).toMatchObject({ role: "textbox", name: "Username" });
+    if ("anchor" in fill.step.target) expect(fill.step.target.anchor).toEqual({ name: "username" });
     expect(fill.step.value).toEqual({ redacted: true, length: "jane".length });
     fill.step.value = { var: "username" };
 

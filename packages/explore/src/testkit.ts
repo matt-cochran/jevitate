@@ -55,6 +55,8 @@ export interface ScriptedStep {
   readonly op: Op;
   readonly target?: string;
   readonly confidence?: number;
+  /** This decision's answer to the advisory "goal already met?" head (#91); unanswered when absent. */
+  readonly goalMet?: number;
 }
 
 /** The candidate-action id decide() offers for a scripted step: `<op>:<index>` or a bare op. */
@@ -70,6 +72,8 @@ export function actionId(step: ScriptedStep): string {
 export class ScriptedJudge implements JudgmentPort {
   #i = 0;
   readonly calls: Array<{ state: JudgmentState; questions: Record<string, Question> }> = [];
+  /** Every goal-completion (noul-only) call, for payload assertions. */
+  readonly goalCalls: Array<{ state: JudgmentState; questions: Record<string, Question> }> = [];
   constructor(private readonly seq: readonly ScriptedStep[]) {
     if (seq.length === 0) throw new Error("ScriptedJudge needs at least one step");
   }
@@ -91,6 +95,7 @@ export class ScriptedJudge implements JudgmentPort {
   goalMetProbability = 0.9;
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
     if (!("action" in args.questions)) {
+      this.goalCalls.push(args);
       const out: Record<string, Answer> = {};
       for (const [name, q] of Object.entries(args.questions)) {
         if (q.kind === "noul") out[name] = { kind: "noul", value: this.goalMetProbability >= 0.5, probability: this.goalMetProbability };
@@ -101,6 +106,8 @@ export class ScriptedJudge implements JudgmentPort {
     const cur = this.seq[Math.min(this.#i, this.seq.length - 1)];
     this.#i += 1;
     if (cur === undefined) throw new Error("ScriptedJudge: no step");
-    return { action: { kind: "choice", value: actionId(cur), confidence: cur.confidence ?? 0.9 } };
+    const action: Answer = { kind: "choice", value: actionId(cur), confidence: cur.confidence ?? 0.9 };
+    if (cur.goalMet === undefined) return { action };
+    return { action, goalAlreadyMet: { kind: "noul", value: cur.goalMet >= 0.5, probability: cur.goalMet } };
   }
 }

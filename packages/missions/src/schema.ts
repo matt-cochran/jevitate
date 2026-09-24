@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AssertionSchema, type Assertion } from "@jevitate/recording";
+import { AssertionSchema, InvariantSpecSchema, type Assertion, type InvariantSpec } from "@jevitate/recording";
 
 // `id` is used to build a filesystem path (both for `MissionTarget`s and for
 // `QueuedMission`s), so it is constrained to a safe format at the schema
@@ -65,6 +65,13 @@ export interface MissionRequest {
     maxDecisions?: number;
     maxCandidates?: number;
   };
+  /**
+   * App-declared invariants (#86), INLINE only — never a path (a caller never makes the server read
+   * a file). Closed schema (`@jevitate/recording`'s `InvariantSpecSchema`): unknown keys, a non-GET/
+   * HEAD probe or an expression over an undeclared observable are refused here; probe origins are
+   * authorized against the resolved target in `enqueueMission`.
+   */
+  invariants?: InvariantSpec;
 }
 
 const EXACTLY_ONE_OF_GOAL_FEATURE_ROUTE = {
@@ -80,6 +87,7 @@ export const MissionRequestSchema: z.ZodType<MissionRequest> = z
     successAssertion: AssertionSchema,
     strategy: z.literal("goal-based"),
     budget: PartialBudgetSchema.optional(),
+    invariants: InvariantSpecSchema.optional(),
   })
   .strict()
   .refine(
@@ -109,6 +117,7 @@ export const QueuedMissionSchema: z.ZodType<QueuedMission> = z
         maxCandidates: z.number().int().positive(),
       })
       .strict(),
+    invariants: InvariantSpecSchema.optional(),
     id: z.string().regex(SAFE_ID_RE, "invalid id"),
     status: z.literal("queued"),
     enqueuedAtIso: z.string(),

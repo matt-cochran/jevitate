@@ -163,7 +163,7 @@ export interface Recording {
  * `TargetDescriptorSchema` from inside its own definition needs the binding
  * to already have a declared type to close over.
  */
-const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
+export const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
   .object({
     testId: z.string().optional(),
     role: z.string().optional(),

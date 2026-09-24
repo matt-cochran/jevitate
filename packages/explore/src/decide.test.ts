@@ -34,19 +34,23 @@ const snap: Snapshot = {
 };
 
 const choice = (value: string, confidence = 0.9): Answer => ({ kind: "choice", value, confidence });
+/** The advisory "goal already met?" head every decision also asks (#91). */
+const notMet: Answer = { kind: "noul", value: false, probability: 0.1 };
 
 describe("decide — one candidate-action head", () => {
   it("returns the op afforded by the chosen control, with that control", async () => {
-    const judge = new FakeJudgmentGateway({ action: choice("type:0") });
+    const judge = new FakeJudgmentGateway({ action: choice("type:0"), goalAlreadyMet: notMet });
     const d = await decide(judge, { goal: "log in", snapshot: snap, history: [] });
     expect(d.op).toBe<Op>("type");
     expect(d.control?.name).toBe("Username");
     expect(d.confidence).toBe(0.9);
     expect(d.targetMissing).toBe(false);
+    // The advisory "already met?" head rides the same round-trip (#91).
+    expect(d.goalMet).toBe(0.1);
   });
 
   it("a target-free action carries no control (done never consumes a target)", async () => {
-    const judge = new FakeJudgmentGateway({ action: choice("done") });
+    const judge = new FakeJudgmentGateway({ action: choice("done"), goalAlreadyMet: notMet });
     const d = await decide(judge, { goal: "log in", snapshot: snap, history: [] });
     expect(d.op).toBe<Op>("done");
     expect(d.control).toBeNull();
@@ -54,14 +58,14 @@ describe("decide — one candidate-action head", () => {
   });
 
   it("fails closed (targetMissing) on an action id that was not offered — never a guessed control", async () => {
-    const judge = new FakeJudgmentGateway({ action: choice("click:99") });
+    const judge = new FakeJudgmentGateway({ action: choice("click:99"), goalAlreadyMet: notMet });
     const d = await decide(judge, { goal: "x", snapshot: snap, history: [] });
     expect(d.control).toBeNull();
     expect(d.targetMissing).toBe(true);
   });
 
   it("fails closed on an incoherent op/target pair (clicking a textbox is not an offered action)", async () => {
-    const judge = new FakeJudgmentGateway({ action: choice("click:0") });
+    const judge = new FakeJudgmentGateway({ action: choice("click:0"), goalAlreadyMet: notMet });
     const d = await decide(judge, { goal: "x", snapshot: snap, history: [] });
     expect(d.control).toBeNull();
     expect(d.targetMissing).toBe(true);
@@ -96,7 +100,7 @@ describe("decide — one candidate-action head", () => {
     };
     await decide(judge, { goal: "x", snapshot: snap, history: [] });
     // "Username" is a form field, not a message composer: no `send` for it.
-    expect(asked?.options).toEqual(["type:0", "click:1", "wait", "scroll_down", "scroll_up", "reload", "done", "blocked"]);
+    expect(asked?.options).toEqual(["type:0", "click:1", "wait", "scroll_down", "scroll_up", "reload", "done", "report", "blocked"]);
     expect(asked?.descriptions?.["type:0"]).toBe('type into textbox "Username"');
     expect(asked?.descriptions?.["click:1"]).toBe('click button "Sign in"');
     expect(asked?.instructions).toMatch(/single action/);

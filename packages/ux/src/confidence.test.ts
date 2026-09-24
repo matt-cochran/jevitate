@@ -22,6 +22,18 @@ describe("resolveMinConfidence", () => {
     expect(resolveMinConfidence(undefined, { JEVITATE_UX_MIN_CONFIDENCE: "0.4" }, 0.6)).toBe(0.4);
     expect(resolveMinConfidence(undefined, {}, 0.6)).toBe(0.6);
   });
+
+  it("issue #97: config ux.minConfidenceByAppClass is a fallback BELOW config ux.minConfidence, ABOVE DEFAULT_MIN_CONFIDENCE", () => {
+    expect(resolveMinConfidence(undefined, {}, undefined, 0.55)).toBe(0.55);
+    expect(resolveMinConfidence(undefined, {}, 0.6, 0.55)).toBe(0.6); // global config wins over app-class config
+    expect(resolveMinConfidence(undefined, {}, undefined, undefined)).toBe(DEFAULT_MIN_CONFIDENCE);
+    expect(resolveMinConfidence("0.2", {}, undefined, 0.55)).toBe(0.2); // flag still wins over app-class config
+    expect(resolveMinConfidence(undefined, { JEVITATE_UX_MIN_CONFIDENCE: "0.4" }, undefined, 0.55)).toBe(0.4); // env still wins
+  });
+
+  it("an invalid app-class config value throws, never silently falls back to the default", () => {
+    expect(() => resolveMinConfidence(undefined, {}, undefined, 2)).toThrow(MinConfidenceError);
+  });
   it("invalid values throw", () => {
     expect(() => resolveMinConfidence("abc", {})).toThrow(MinConfidenceError);
     expect(() => resolveMinConfidence(undefined, { JEVITATE_UX_MIN_CONFIDENCE: "2" })).toThrow(MinConfidenceError);

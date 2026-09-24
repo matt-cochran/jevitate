@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { choice, noul, score } from "@typesafe-ai/sdk";
 import type { Question } from "./judgment.js";
+import { UsageTracker } from "./usage.js";
 import {
   JevResponseError,
   apiKeyFromAuthHeader,
@@ -100,6 +101,47 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
 
   test("the default loader resolves the installed SDK", async () => {
     await expect(realJevClientCall()).resolves.toBeTypeOf("function");
+  });
+
+  test("#100: a supplied usage sink records the SDK's own token counts, and retries count (each call)", async () => {
+    const fakeSdk = {
+      TypeSafeClient: class {
+        async systemOne(): Promise<{ answers: unknown; usage: { input_tokens: number; output_tokens: number } }> {
+          return {
+            answers: { op: { type: "choice", choice: "done", confidence: 0.7 } },
+            usage: { input_tokens: 120, output_tokens: 30 },
+          };
+        }
+      },
+    };
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(async () => fakeSdk, usage);
+    const args = {
+      state: { goal: "g", url: "u", controls: [], history: [] },
+      questions: { op: { kind: "choice" as const, options: ["click", "done"] } },
+      authHeader: "Bearer sk-test",
+    };
+    await call(args);
+    await call(args); // a second attempt (e.g. RetryingJudgmentPort re-invoking this same seam) counts too
+    expect(usage.snapshot()).toEqual({ judgments: 2, generations: 0, inputTokens: 240, outputTokens: 60 });
+  });
+
+  test("#100: a missing/malformed usage on the SDK response counts as 0 tokens rather than throwing", async () => {
+    const fakeSdk = {
+      TypeSafeClient: class {
+        async systemOne(): Promise<{ answers: unknown }> {
+          return { answers: { op: { type: "choice", choice: "done", confidence: 0.7 } } };
+        }
+      },
+    };
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(async () => fakeSdk, usage);
+    await call({
+      state: { goal: "g", url: "u", controls: [], history: [] },
+      questions: { op: { kind: "choice", options: ["click", "done"] } },
+      authHeader: "Bearer sk-test",
+    });
+    expect(usage.snapshot()).toEqual({ judgments: 1, generations: 0, inputTokens: 0, outputTokens: 0 });
   });
 });
 

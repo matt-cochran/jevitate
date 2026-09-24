@@ -48,6 +48,31 @@ export function loadUxMinConfidence(path = resolveDataDir(["config.json"])): num
   return v;
 }
 
+/**
+ * `ux.minConfidenceByAppClass` — per-`--app-class` cutoff defaults (issue #97), e.g.:
+ * `{ "ux": { "minConfidenceByAppClass": { "consumer": 0.3, "admin": 0.5 } } }`. Looked up
+ * case-insensitively by `appClass`; falls through to `resolveMinConfidence`'s next precedence
+ * level (`DEFAULT_MIN_CONFIDENCE`) when `appClass` has no entry — today's behavior is unchanged
+ * where no app-class-specific data exists.
+ */
+export function loadUxMinConfidenceByAppClass(path = resolveDataDir(["config.json"]), appClass?: string): number | undefined {
+  if (!appClass) return undefined;
+  const v = loadUxSection(path)?.minConfidenceByAppClass;
+  if (v === undefined) return undefined;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new UxConfigError(`${path}: ux.minConfidenceByAppClass must be an object keyed by app class`);
+  }
+  const rec = v as Record<string, unknown>;
+  const wanted = appClass.trim().toLowerCase();
+  const key = Object.keys(rec).find((k) => k.trim().toLowerCase() === wanted);
+  if (key === undefined) return undefined;
+  const n = rec[key];
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || n > 1) {
+    throw new UxConfigError(`${path}: ux.minConfidenceByAppClass.${key} must be a number in [0,1]`);
+  }
+  return n;
+}
+
 /** `ux.show` — the quality grades a UX report shows (validated by `resolveQualityPolicy`). */
 export function loadUxShow(path = resolveDataDir(["config.json"])): string[] | undefined {
   const v = loadUxSection(path)?.show;

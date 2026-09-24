@@ -9,7 +9,7 @@ import { isNon5xxResourceConsoleError, type DefectSignal } from "./defect-oracle
  *  - HTTP 5xx:       kind + endpoint pattern + exact status
  *  - failed request: kind + endpoint pattern + error class
  *  - console/page:   kind + page route pattern + message class
- *  - invariant:      kind + page route pattern + reason class
+ *  - invariant:      kind + page route pattern + declared invariant id (else reason class)
  *
  * Pure: the same inputs always produce the same fingerprint. Used both when a defect is found and
  * when `verifyFix` replays it, so "still reproduces" means "the SAME fingerprint fired again".
@@ -20,11 +20,23 @@ const NUMERIC = /^\d+$/;
 const HEXISH = /^[0-9a-f]{12,}$/i;
 /** A long opaque token that mixes letters and digits (e.g. an object id or a hash). */
 const OPAQUE = /^(?=.*\d)(?=.*[a-z])[a-z0-9_-]{16,}$/i;
+/** A literal prefix (kept) followed by `-` and a UUID suffix — `candidate-<uuid>` → `candidate-:id`
+ *  (#95). Checked before `PREFIXED_ID_SUFFIX` so a uuid's own internal dashes never split wrong. */
+const PREFIXED_UUID = /^(.+-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+/** A literal prefix (kept) followed by `-` and a short numeric/hex id — `item-42` → `item-:id`; below
+ *  `OPAQUE`'s 16-char floor, so this is what catches the SHORT prefixed ids that floor misses. */
+const PREFIXED_ID_SUFFIX = /^(.+-)([0-9]+|[0-9a-f-]{8,})$/i;
 
-/** One path segment → `:id` when it is an identifier rather than a route word. */
+/** One path segment → `:id` when it is an identifier rather than a route word; `prefix-<id>` → `prefix-:id`
+ *  so a resource id with a literal prefix collapses to ONE route without losing the prefix (#95:
+ *  `/decisions/candidate-<uuid-a>` and `/decisions/candidate-<uuid-b>` both normalize identically). */
 function normalizeSegment(seg: string): string {
   if (seg === "") return seg;
   if (NUMERIC.test(seg) || UUID.test(seg) || HEXISH.test(seg) || OPAQUE.test(seg)) return ":id";
+  const uuidSuffix = PREFIXED_UUID.exec(seg);
+  if (uuidSuffix) return `${uuidSuffix[1]}:id`;
+  const idSuffix = PREFIXED_ID_SUFFIX.exec(seg);
+  if (idSuffix) return `${idSuffix[1]}:id`;
   return seg;
 }
 
@@ -83,8 +95,13 @@ export function signalFingerprint(signal: DefectSignal): string {
   return hashKey(signalKey(signal));
 }
 
-/** A user-invariant violation's fingerprint: route + reason class. */
-export function invariantFingerprint(pageUrl: string, reason: string): string {
+/**
+ * An invariant violation's fingerprint. A DECLARED invariant (#86) is keyed by its id + route —
+ * its reason carries the observed values, which differ between occurrences of the same bug. A
+ * code-level invariant without an id keeps the original key: route + reason class.
+ */
+export function invariantFingerprint(pageUrl: string, reason: string, id?: string): string {
+  if (id !== undefined) return hashKey(`invariant|${normalizeRoute(pageUrl)}|id:${id}`);
   return hashKey(`invariant|${normalizeRoute(pageUrl)}|${messageClass(reason)}`);
 }
 
@@ -132,6 +149,14 @@ export function groupStepSignals(signals: readonly DefectSignal[]): SignalGroup 
   if (primary === undefined) return null;
   const related = [...new Set(signals.map(signalFingerprint))];
   return { primary, fingerprint: signalFingerprint(primary), related };
+}
+
+/**
+ * A short human title for an ADVISORY console-error (#88): a console error correlated with a
+ * captured 4xx response — reported for visibility, but never a defect title (never `defectTitle`).
+ */
+export function advisoryTitle(signal: Extract<DefectSignal, { kind: "console-error" }>, status: number): string {
+  return `Console error on ${normalizeRoute(signal.pageUrl ?? "")} (advisory — correlated with HTTP ${status}): ${messageClass(signal.detail).slice(0, 80)}`;
 }
 
 /** A short human title for a defect's primary signal. */

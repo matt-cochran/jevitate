@@ -34,9 +34,14 @@ import {
   secretPlaceholder,
 } from "./secret-fields.js";
 import { act } from "./act.js";
+import { SideEffectGuard, awaitWrites } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
+import { ObservedPages, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
 import {
+  REPLY_CEILING_MS,
+  GOAL_CHECK_TRIGGER,
+  GOAL_MET_THRESHOLD,
   REPLY_WAIT_MS,
   UnsubmittedTypeTracker,
   groundDone,
@@ -73,6 +78,8 @@ export const MAX_IDLE_STEPS = 6;
 export const FORM_TEXT_MAX_CHARS = 600;
 /** Rejected `done` proposals before the run stops incomplete. */
 export const MAX_DONE_REJECTIONS = 3;
+/** Rejected (ungrounded) `report` answers before the run stops incomplete (#101). */
+export const MAX_REPORT_REJECTIONS = 3;
 /** Repeated-type (typed, never sent, typed again) signals before the run stops as no-progress. */
 export const MAX_REPEAT_TYPE_SIGNALS = 3;
 /**
@@ -163,8 +170,14 @@ export interface ExploreConfig {
    * advisory goal judgment grounded on the visible page (see `groundDone`).
    */
   readonly successCheck?: () => Promise<boolean>;
-  /** Ceiling (ms) on waiting for a conversational reply after a message is sent. Default 60s. */
+  /**
+   * Idle patience (ms) of a conversational reply wait: how long to keep waiting while the page shows
+   * no sign of working on the reply. Default 60s. While it IS working (request in flight, busy
+   * indicator, reply still growing) the wait continues up to `replyCeilingMs` (#93).
+   */
   readonly replyWaitMs?: number;
+  /** Hard ceiling (ms) on one reply wait. Default `REPLY_CEILING_MS` (180s); never below `replyWaitMs`. */
+  readonly replyCeilingMs?: number;
   /** Cap (chars) on each generated chat message. Default `REPLY_MAX_CHARS`. */
   readonly replyMaxChars?: number;
   /** Bound (ms) a `wait` decision waits for the page to change. Default `WAIT_OP_MS`. */
@@ -195,6 +208,11 @@ export interface ExploreRun {
    */
   readonly outcome: RunOutcome;
   /**
+   * For a find-out goal ended by `report` (#101): the answer and the observed page text each claim
+   * rests on. Present only when code grounded it (then `outcome` is completed/grounded-answer).
+   */
+  readonly answer?: RunAnswer;
+  /**
    * The concrete cause the run last ran into (#84), in priority order: the last fail-closed step
    * (field + why), the last disabled / not-visible target (its accessible name), an invalid field's
    * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
@@ -208,8 +226,19 @@ export interface ExploreRun {
  */
 const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit|reload)\b/i;
 
+/** Roles whose click changes an input's value (so a later repeat of a write sends something new). */
+const TOGGLE_ROLES: ReadonlySet<string> = new Set(["checkbox", "radio", "switch", "option", "menuitemcheckbox", "menuitemradio"]);
+
 /** A control's identity across snapshots (indexes are per-snapshot only). */
 const keyOf = (c: Control): string => JSON.stringify(c.descriptor);
+
+/** History text for a reply wait that ended without a reply — and why it stopped waiting (#93). */
+function noReply(r: ReplyResult): string {
+  const s = Math.round(r.waitedMs / 1000);
+  if (r.endedBy === "ceiling") return `no reply within ${s}s (the page was still working when the wait's ceiling passed)`;
+  if (r.endedBy === "idle") return `no reply within ${s}s (the page showed no sign of working on one)`;
+  return `no reply within ${s}s`;
+}
 
 /** A short quote for history lines. */
 function quote(s: string, n = 160): string {
@@ -260,6 +289,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let offerBaseline: Set<string> | null = null;
   let offeredKeys = new Set<string>();
   let doneRejections = 0;
+  let reportRejections = 0;
+  /** The visible text of every page state observed — what a reported answer is grounded against (#101). */
+  const observed = new ObservedPages(secrets);
+  /** The grounded answer a `report` ended the run with. */
+  let answer: RunAnswer | undefined;
+  /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
+  const goalChecked = new Set<string>();
   let idleSteps = 0;
   let idleSince: number | null = null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
@@ -308,6 +344,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     if (blockers.target?.key === keyOf(c)) blockers.target = null;
   };
   const replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
+  const replyCeilingMs = Math.max(replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
   const replyMaxChars = cfg.replyMaxChars ?? REPLY_MAX_CHARS;
   const waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;
   /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
@@ -339,7 +376,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
+  /** The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. */
+  const sideEffects = new SideEffectGuard(monitorFor(page));
   const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
+    // Any input change (type/select/send/upload) makes a repeat send something new.
+    if (!label.startsWith("click ")) sideEffects.inputChanged();
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
@@ -362,6 +403,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // offer an occluded control (see `perceive`).
       const perception = await perceive(page, perceiveOpts);
       timings.push(perception.timing);
+      // The last click's window closes here: what it wrote is now known (#92).
+      sideEffects.settle();
       // A bound secret field shows the model its placeholder only (#72).
       const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
       {
@@ -518,6 +561,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const offered = new Set(snap.controls.filter((c) => offeredKeys.has(keyOf(c))).map((c) => c.index));
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
+      observed.add(snap.url, await readPageText(page));
+
       let decision: Awaited<ReturnType<typeof decide>>;
       try {
         decision = await decide(cfg.judge, {
@@ -558,11 +603,22 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const record = (
         actOk: boolean,
         reason?: string,
-        extra: { message?: string; reply?: ReplyResult; judgments?: Record<string, { value: boolean; probability: number }>; op?: typeof decision.op } = {},
+        extra: {
+          message?: string;
+          value?: string;
+          reply?: ReplyResult;
+          judgments?: Record<string, { value: boolean; probability: number }>;
+          op?: typeof decision.op;
+          control?: Control | null;
+          strategy?: string;
+          answer?: AnswerVerdict["answer"];
+        } = {},
       ): void => {
         transcript.record({
           op: extra.op ?? decision.op,
-          control: decision.control,
+          control: extra.control === undefined ? decision.control : extra.control,
+          ...(extra.strategy === undefined ? {} : { strategy: extra.strategy }),
+          ...(extra.answer === undefined || extra.answer === null ? {} : { answer: { ...extra.answer, accepted: actOk } }),
           confidence: decision.confidence,
           chosenBy: "model",
           actOk,
@@ -570,15 +626,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           snapshot: snap,
           timing: perception.timing,
           ...(extra.message === undefined ? {} : { message: extra.message }),
+          ...(extra.value === undefined ? {} : { value: extra.value }),
           ...(extra.reply === undefined ? {} : { reply: extra.reply }),
           ...(extra.judgments === undefined ? {} : { judgments: extra.judgments }),
         });
       };
 
-      // `done` is a PROPOSAL (guardrail #4). Code grounds it: typed-but-unsent text, the mission's
+      // Grounds "the goal is met on this page" (guardrail #4): typed-but-unsent text, the mission's
       // independent success condition, or — without one — an advisory goal judgment on the visible
-      // page (the run's own messages removed) that must clear the threshold.
-      if (decision.op === "done") {
+      // page (the run's own messages removed) and its status text, which must clear the threshold.
+      const groundGoal = async (): Promise<{
+        verdict: ReturnType<typeof groundDone>;
+        judgments: Record<string, { value: boolean; probability: number }> | undefined;
+      }> => {
         const unsubmittedLabels = [...unsent.pending().values()].map((p) => p.label);
         let successCheck: boolean | undefined;
         let goalMet: number | null | undefined;
@@ -590,9 +650,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             );
           } else {
             const pageText = withoutAuthored(await readPageText(page), conversation.sent);
-            goalMet = await judgeGoalMet(cfg.judge, { goal: cfg.goal, url: snap.url, pageText, history, secrets }).catch(
-              () => null,
-            );
+            goalMet = await judgeGoalMet(cfg.judge, {
+              goal: cfg.goal,
+              url: snap.url,
+              pageText,
+              history,
+              secrets,
+              ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
+            }).catch(() => null);
           }
         }
         const verdict = groundDone({
@@ -600,8 +665,51 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           ...(successCheck === undefined ? {} : { successCheck }),
           ...(goalMet === undefined ? {} : { goalMetProbability: goalMet }),
         });
+        // `value` is code's reading of the probability (the acceptance threshold), not the port's
+        // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).
         const judgments =
-          goalMet === undefined || goalMet === null ? undefined : { goalMet: { value: goalMet >= 0.5, probability: goalMet } };
+          goalMet === undefined || goalMet === null
+            ? undefined
+            : { goalMet: { value: goalMet >= GOAL_MET_THRESHOLD, probability: goalMet } };
+        return { verdict, judgments };
+      };
+
+      // The decision's advisory "already met?" signal (#91): the loop used to act past a met goal
+      // because the model never proposed `done`. Code grounds it BEFORE acting — once per page
+      // state — and stops `done` only on the same grounded verdict a proposed `done` needs.
+      if (
+        decision.goalMet !== null &&
+        decision.goalMet >= GOAL_CHECK_TRIGGER &&
+        decision.op !== "done" &&
+        decision.op !== "report" &&
+        decision.op !== "blocked" &&
+        !goalChecked.has(snap.signature)
+      ) {
+        goalChecked.add(snap.signature);
+        const { verdict, judgments } = await groundGoal();
+        if (verdict.accept) {
+          record(
+            true,
+            `goal already met — stopped instead of "${decision.op}": verified by ${verdict.outcome.status === "completed" ? verdict.outcome.verifiedBy : "?"}`,
+            {
+              op: "done",
+              control: null,
+              strategy: "goal-check",
+              judgments: {
+                ...(judgments ?? {}),
+                goalAlreadyMet: { value: true, probability: decision.goalMet },
+              },
+            },
+          );
+          outcome = verdict.outcome;
+          stop = "done";
+          break;
+        }
+      }
+
+      // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
+      if (decision.op === "done") {
+        const { verdict, judgments } = await groundGoal();
         if (verdict.accept) {
           record(true, `done accepted: goal verified by ${verdict.outcome.status === "completed" ? verdict.outcome.verifiedBy : "?"}`, {
             ...(judgments === undefined ? {} : { judgments }),
@@ -617,6 +725,37 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         });
         if (doneRejections >= MAX_DONE_REJECTIONS) {
           incomplete = `the model proposed done ${doneRejections} times, but ${verdict.reason}`;
+          stop = "blocked";
+          break;
+        }
+        continue;
+      }
+      // `report` (#101) ends a find-out goal with an ANSWER — a proposal too: the answer is generated
+      // from the observed page text and accepted only when code grounds every claim on it.
+      if (decision.op === "report") {
+        const verdict: AnswerVerdict = await reportAnswer(cfg.gen, {
+          goal: cfg.goal,
+          url: snap.url,
+          pages: observed.pages(),
+          history,
+          secrets,
+        }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
+        if (verdict.accept) {
+          record(true, `report accepted: answer grounded on the observed pages (${verdict.answer.evidence.length} claim(s))`, {
+            answer: verdict.answer,
+          });
+          answer = verdict.answer;
+          outcome = { status: "completed", verifiedBy: "grounded-answer" };
+          stop = "done";
+          break;
+        }
+        reportRejections += 1;
+        history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
+        record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
+          answer: verdict.answer,
+        });
+        if (reportRejections >= MAX_REPORT_REJECTIONS) {
+          incomplete = `the model reported an answer ${reportRejections} times, but ${verdict.reason}`;
           stop = "blocked";
           break;
         }
@@ -638,7 +777,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // Still listening for the last message's reply (a slow LLM turn): this wait keeps
           // listening, bounded by what is left of the reply wait, and records the reply if it lands.
           const t0 = now();
-          const reply = await waitForReply(page, { ...lastTurn, timeoutMs: Math.min(replyWaitMs - busyWaitedMs, 20_000) });
+          const listen = Math.min(replyWaitMs - busyWaitedMs, 20_000);
+          const reply = await waitForReply(page, { ...lastTurn, timeoutMs: listen, ceilingMs: listen });
           busyWaitedMs += now() - t0;
           if (reply.received) {
             conversation.latestReply = reply.text;
@@ -720,6 +860,22 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           stop = "exhausted";
           break;
         }
+        // A write this run fired is still in flight (a job it started): reloading now abandons it and
+        // invites a duplicate. Observe until it resolves instead (#92).
+        if (sideEffects.inflight().length > 0) {
+          const what = sideEffects
+            .inflight()
+            .map((w) => `${w.method} ${w.path}`)
+            .join(", ");
+          const w = await awaitWrites(monitorFor(page), sideEffects, replyCeilingMs);
+          const note = `reload deferred: ${what} (sent by an earlier click) is still in flight — waited ${(w.waitedMs / 1000).toFixed(1)}s, ${
+            w.resolved ? "it resolved" : "it is still in flight"
+          }`;
+          history.push(note);
+          record(false, note);
+          lastActedOp = decision.op;
+          continue;
+        }
         const at = now();
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
@@ -764,7 +920,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } else {
           history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
         }
-        record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder));
+        record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder), {
+          value: placeholder,
+        });
         lastActedOp = decision.op;
         continue;
       }
@@ -847,7 +1005,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           unsent.submitted();
           conversation.sent.push(message);
-          const reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs });
+          const reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
           if (reply.received) conversation.latestReply = reply.text;
           awaitingReply = !reply.received;
           busyWaitedMs = reply.waitedMs;
@@ -855,7 +1013,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           offerBaseline = before;
           history.push(
             `sent ${quote(message)} via ${via?.kind === "click" ? `"${via.control.name}"` : "Enter"} → ` +
-              (reply.received ? `reply: ${quote(reply.text, 300)}` : `no reply within ${Math.round(reply.waitedMs / 1000)}s`),
+              (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
           );
           record(true, forcedNote ?? undefined, { op, message, reply });
           lastActedOp = op;
@@ -925,7 +1083,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } else {
           history.push(`select failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: option });
         lastActedOp = op;
         continue;
       }
@@ -987,7 +1145,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } else {
           history.push(`${decision.op} failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: text });
       } else if (decision.op === "click") {
         // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
         // latest reply is a conversation turn: its reply is awaited like a `send`'s.
@@ -997,7 +1155,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const quickReply =
           offeredKeys.has(keyOf(control)) && control.role === "button" && control.name.length <= 60 && !/[→›»]/.test(control.name);
         const turn = submits || quickReply;
+        // The repeated-side-effect guard (#92): a click that already fired a write on this page is not
+        // re-fired while that write is in flight (wait for it instead) or after it went through,
+        // unless the page offers a retry. Refused — never clicked — and the reason is recorded.
+        const repeat = sideEffects.check(keyOf(control), safePath(snap.url), {
+          controlNames: snap.controls.map((c) => c.name),
+          alerts: status.alerts,
+        });
+        if (repeat.refuse) {
+          let note = repeat.reason;
+          if (repeat.inflight) {
+            const w = await awaitWrites(monitorFor(page), sideEffects, replyCeilingMs);
+            note += ` (waited ${(w.waitedMs / 1000).toFixed(1)}s: ${w.resolved ? "it resolved" : "it is still in flight"})`;
+          }
+          history.push(note);
+          record(false, note);
+          lastActedOp = decision.op;
+          continue;
+        }
         const baseline = turn ? await readPageText(page) : "";
+        sideEffects.beginClick(keyOf(control), control.name || control.summary, safePath(snap.url), now());
         const r = await act(cfg.actor, { op: "click", control });
         let reply: ReplyResult | undefined;
         let message: string | undefined;
@@ -1006,10 +1183,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
+          // Toggling an input (a checkbox, a radio, a switch) changes what a repeat would send (#92).
+          if (TOGGLE_ROLES.has(control.role) || (control.tag === "input" && control.inputType !== "submit" && control.inputType !== "button")) {
+            sideEffects.inputChanged();
+          }
           if (turn) {
             message = submits ? pendingTexts.join("\n") : control.name;
             conversation.sent.push(message);
-            reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs });
+            reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
             if (reply.received) conversation.latestReply = reply.text;
             awaitingReply = !reply.received;
             busyWaitedMs = reply.waitedMs;
@@ -1017,7 +1198,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             offerBaseline = new Set(keys.keys());
             history.push(
               `clicked ${control.name}${quickReply ? " (a quick reply)" : ""} → ` +
-                (reply.received ? `reply: ${quote(reply.text, 300)}` : `no reply within ${Math.round(reply.waitedMs / 1000)}s`),
+                (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
             );
           } else {
             history.push(`clicked ${control.name}`);
@@ -1086,6 +1267,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     timing: summarizeTimings(timings),
     ...(hang === undefined ? {} : { hang }),
     outcome: finalOutcome,
+    ...(answer !== undefined && finalOutcome.status === "completed" ? { answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }

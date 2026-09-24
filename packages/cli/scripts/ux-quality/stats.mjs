@@ -30,6 +30,76 @@ export function agreement(pairs) {
   return { four, binary, confusion: confusion(pairs) };
 }
 
+/**
+ * Precision/recall of a binary "shown" decision (default: `SHOWN.has(label)`, i.e.
+ * actionable/relevant-minor vs generic/wrong) against `truth`. `positiveOf` lets a caller reuse
+ * this for the raw 4-class labels too (e.g. `(l) => l === "actionable"`).
+ */
+export function precisionRecall(pairs, positiveOf = (label) => SHOWN.has(label)) {
+  let tp = 0, fp = 0, fn = 0, tn = 0;
+  for (const { truth, pred } of pairs) {
+    const t = positiveOf(truth);
+    const p = positiveOf(pred);
+    if (t && p) tp++;
+    else if (!t && p) fp++;
+    else if (t && !p) fn++;
+    else tn++;
+  }
+  const precision = tp + fp > 0 ? tp / (tp + fp) : NaN;
+  const recall = tp + fn > 0 ? tp / (tp + fn) : NaN;
+  const f1 = Number.isFinite(precision) && Number.isFinite(recall) && precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : NaN;
+  return { n: pairs.length, tp, fp, fn, tn, precision, recall, f1 };
+}
+
+/**
+ * Fleiss' kappa for 3+ raters over a fixed category set (standard formula: Fleiss 1971).
+ * `items` is one entry per rated subject, each entry the array of labels assigned to it (one per
+ * rater who rated it) — all entries must carry the SAME number of raters `n` (the classic,
+ * non-generalized formula; callers filter to subjects every rater in the set actually labeled).
+ * Returns NaN for zero items; kappa is defined as 1 (not NaN) when chance agreement Pe is exactly
+ * 1 (every rating fell in one category), matching `kappa()`'s convention.
+ */
+export function fleissKappa(items, cats) {
+  const N = items.length;
+  if (N === 0) return NaN;
+  const n = items[0].length;
+  const totalsByCat = Object.fromEntries(cats.map((c) => [c, 0]));
+  let sumPi = 0;
+  for (const labels of items) {
+    const counts = Object.fromEntries(cats.map((c) => [c, 0]));
+    for (const l of labels) counts[l] = (counts[l] ?? 0) + 1;
+    for (const c of cats) totalsByCat[c] += counts[c];
+    const sumSq = cats.reduce((a, c) => a + counts[c] * counts[c], 0);
+    sumPi += n > 1 ? (sumSq - n) / (n * (n - 1)) : 1;
+  }
+  const Pbar = sumPi / N;
+  const totalRatings = N * n;
+  const Pe = cats.reduce((a, c) => a + (totalsByCat[c] / totalRatings) ** 2, 0);
+  return Pe === 1 ? 1 : (Pbar - Pe) / (1 - Pe);
+}
+
+/**
+ * Inter-rater agreement over 2+ named rater label sets (issue #97: "multiple rater label sets per
+ * finding"). `raterSets` is `[{ name, labels: [{key,label}] }, ...]`. Agreement is computed only
+ * over keys EVERY rater in the set labeled (a fair, fixed-n comparison) — 2 raters use Cohen's
+ * kappa (`kappa()`), 3+ use `fleissKappa`. Also returns every pairwise Cohen's kappa, useful when
+ * one "rater" is actually the grader and the others are human/model raters.
+ */
+export function interRaterAgreement(raterSets, cats = LABELS) {
+  const maps = raterSets.map((r) => new Map(r.labels.map((l) => [l.key, l.label])));
+  const common = raterSets.length === 0 ? [] : [...maps[0].keys()].filter((k) => maps.every((m) => m.has(k)));
+  const items = common.map((k) => maps.map((m) => m.get(k)));
+  const pairwise = [];
+  for (let i = 0; i < raterSets.length; i++) {
+    for (let j = i + 1; j < raterSets.length; j++) {
+      const pairs = common.map((k) => ({ truth: maps[i].get(k), pred: maps[j].get(k) }));
+      pairwise.push({ a: raterSets[i].name, b: raterSets[j].name, n: pairs.length, kappa: kappa(pairs, cats) });
+    }
+  }
+  const overall = raterSets.length < 2 ? NaN : raterSets.length === 2 ? kappa(items.map(([a, b]) => ({ truth: a, pred: b })), cats) : fleissKappa(items, cats);
+  return { n: common.length, raters: raterSets.map((r) => r.name), method: raterSets.length <= 2 ? "cohen" : "fleiss", kappa: overall, pairwise };
+}
+
 export function findingKey(f) {
   return `${f.rubricItemId}|${f.route}|${[...f.controls].sort().join("+") || [...f.quotes].map((q) => q.toLowerCase()).sort().join("+")}`;
 }

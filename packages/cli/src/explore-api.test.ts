@@ -210,6 +210,23 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     expect(browserPortFactory).not.toHaveBeenCalled();
   });
 
+  it("runCoverageMission (#89): routeGlobs is accepted and the authorized-target guard still runs FIRST", async () => {
+    const browserPortFactory = vi.fn(() => {
+      throw new Error("browser must not be opened for an unauthorized target");
+    });
+    await expect(
+      runCoverageMission({
+        url: "http://127.0.0.1:3000/area-a",
+        allowlist: ["https://only-this.example.com"],
+        judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+        gen: new FakeGenerationGateway(),
+        routeGlobs: ["/**"],
+        browserPortFactory,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
+    expect(browserPortFactory).not.toHaveBeenCalled();
+  });
+
   it("runFeatureCliMission refuses an undeclared origin (no browser touched)", async () => {
     await expect(
       runFeatureCliMission({
@@ -300,6 +317,26 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     const parsed = JSON.parse(lines.join(""));
     // Got PAST the goal-args validation (no E_EXPLORE_ARGS) to gateway setup,
     // proving the coverage strategy is a distinct, goal-free path.
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+
+  it("coverage: --scope only accepts 'app', refused before any gateway/browser setup (#89)", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--strategy", "coverage", "--url", "http://127.0.0.1:3000/login", "--scope", "everything", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("--scope") } });
+  });
+
+  it("coverage: --scope app is accepted and reaches gateway setup (#89)", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--strategy", "coverage", "--url", "http://127.0.0.1:3000/login", "--scope", "app", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
   });
 });

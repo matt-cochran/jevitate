@@ -34,6 +34,15 @@ export interface BuildReportOptions {
    * silently omitted.
    */
   readonly evidenceCaveats?: readonly string[];
+  /**
+   * The grader-calibration caveat(s) for this target (issue #97), e.g. from
+   * `calibration.ts`'s `calibrationCaveat(appContext.appClass)`. Folded into the headline AND
+   * returned verbatim as `report.calibrationCaveats` — a target outside (or only weakly inside)
+   * the calibration corpus is never presented as if `minConfidence`/the quality grade generalized
+   * to it. Optional so existing callers that predate #97 keep compiling; omitting it should be
+   * treated as a gap to fix, not a green light.
+   */
+  readonly calibrationCaveats?: readonly string[];
 }
 
 export interface UxReport {
@@ -61,6 +70,8 @@ export interface UxReport {
   readonly failed?: { readonly reason: string; readonly screenId?: string; readonly rubricItemId?: string };
   /** What this analysis honestly could not see (see `BuildReportOptions.evidenceCaveats`). */
   readonly evidenceCaveats?: readonly string[];
+  /** See `BuildReportOptions.calibrationCaveats`. */
+  readonly calibrationCaveats?: readonly string[];
 }
 
 const SEVERITY_WEIGHT = { info: 1, minor: 2, major: 3 } as const;
@@ -115,9 +126,14 @@ function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
 export function buildReport(outcome: AnalysisOutcome, options: BuildReportOptions = {}): UxReport {
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
   const policy = options.quality ?? DEFAULT_QUALITY_POLICY;
+  const calibrationCaveats = (options.calibrationCaveats ?? []).filter((c) => c.length > 0);
+  // Issue #97 guardrail: never let a report read as if the grader's threshold/labels were
+  // calibrated for this target when they were not measured on it. Folded into every headline
+  // (failed or not) so it cannot be missed by only reading `report.findings`.
+  const calibrationSuffix = calibrationCaveats.length > 0 ? ` [CALIBRATION: ${calibrationCaveats.join(" | ")}]` : "";
   if (outcome.kind === "failed") {
     return {
-      headline: `UX analysis failed: ${outcome.reason}`,
+      headline: `UX analysis failed: ${outcome.reason}${calibrationSuffix}`,
       clean: false,
       coverageComplete: false,
       coverageWarning: `analysis did not complete: ${outcome.reason}`,
@@ -131,6 +147,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
       rawOccurrences: 0,
       failed: { reason: outcome.reason, screenId: outcome.screenId, rubricItemId: outcome.rubricItemId },
       ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
+      ...(calibrationCaveats.length > 0 ? { calibrationCaveats } : {}),
     };
   }
 
@@ -186,7 +203,8 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
   // as one number if this says just "confidence" (issue #83 item 6).
   const headline =
     `${ranked.length} finding(s) graded ${policy.show.join("/")} at finding-confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
-    (suppressed.total > 0 ? `; ${suppressed.total} suppressed (by rubric item: ${byItem})` : "; none suppressed");
+    (suppressed.total > 0 ? `; ${suppressed.total} suppressed (by rubric item: ${byItem})` : "; none suppressed") +
+    calibrationSuffix;
   return {
     headline,
     // Suppression never reads as "no issues": clean needs zero findings AND zero suppressed.
@@ -206,5 +224,6 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     suppressed,
     rawOccurrences: outcome.rawOccurrences ?? outcome.findings.length,
     ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
+    ...(calibrationCaveats.length > 0 ? { calibrationCaveats } : {}),
   };
 }

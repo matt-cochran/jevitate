@@ -25,8 +25,19 @@ describe("normalizeRoute — the route/endpoint pattern", () => {
     ["http://a.test/dev-org-admin/admin/crm-upload-enrichment", "/dev-org-admin/admin/crm-upload-enrichment"],
     ["http://a.test/", "/"],
     ["/relative/7", "/relative/:id"],
+    // #95: a literal prefix + id-like suffix collapses to one route (a long opaque token like a
+    // prefixed uuid is already caught whole by `OPAQUE`; a short prefixed id keeps its prefix).
+    ["http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890", "/decisions/:id"],
+    ["http://a.test/decisions/demo-bet-1", "/decisions/demo-bet-:id"],
+    ["http://a.test/items/item-42", "/items/item-:id"],
   ])("%s → %s", (raw, want) => {
     expect(normalizeRoute(raw)).toBe(want);
+  });
+
+  it("#95: two instances with different ids under a prefix normalize identically", () => {
+    expect(normalizeRoute("http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
+      normalizeRoute("http://a.test/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345"),
+    );
   });
 });
 

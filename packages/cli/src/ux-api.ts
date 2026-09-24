@@ -10,7 +10,7 @@
 // other). Findings are advisory; a UX finding never gates a run.
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
+import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
@@ -22,16 +22,23 @@ import {
   type Control as ExploreControl,
   type Bounds,
   type TimingSummary,
+  type RunAnswer,
   type RunOutcome,
+  type SecretField,
+  secretFieldSecrets,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
   a11yChecks,
   buildReport,
+  calibrationCaveat,
+  detectSignals,
   loadV1Rubric,
   resolveMinConfidence,
   resolveQualityPolicy,
+  withSignalFindings,
   type AppContext,
+  type SignalOptions,
   type Control as UxControl,
   type ScreenRef,
   type UxEvidence,
@@ -39,12 +46,15 @@ import {
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { loadUxMinConfidence, loadUxShow } from "./ux-config.js";
+import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
+import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
+import { transcriptPathFor } from "./transcript-file.js";
+import { UsabilityCapture } from "./usability-capture.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -250,6 +260,11 @@ export interface RunUxReviewOptions {
   /** Structured-output specifics (observation / implicated controls / fix) for flagged items. */
   readonly gen: GenerationPort;
   /**
+   * Usage accounting (#100): when supplied, its snapshot (judgments/generations/tokens/`usd`) lands
+   * in the result as `usage`. The CLI builds one per invocation and hands it to `judge`/`gen`.
+   */
+  readonly usage?: UsageTracker;
+  /**
    * Report cutoff; findings below it are suppressed (counted in `report.suppressed`). Precedence:
    * this (CLI `--min-confidence`) > `JEVITATE_UX_MIN_CONFIDENCE` > config `ux.minConfidence`
    * (`~/.jevitate/config.json`) > `DEFAULT_MIN_CONFIDENCE`.
@@ -284,6 +299,8 @@ export interface RunUxReviewOptions {
 export interface RunUxReviewResult {
   readonly report: UxReport;
   readonly reportPath: string;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 }
 
 const NO_TRANSCRIPT_CAVEAT =
@@ -295,7 +312,12 @@ const NO_TRANSCRIPT_CAVEAT =
  * a fabricated "clean" report.
  */
 export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReviewResult> {
-  const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
+  const minConfidence = resolveMinConfidence(
+    opts.minConfidence,
+    opts.env ?? process.env,
+    loadUxMinConfidence(opts.configPath),
+    loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
+  );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
   const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
   const screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job, opts.missionTranscript);
@@ -310,13 +332,14 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
     throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
   }
   const evidenceCaveats = opts.missionTranscript === undefined ? [opts.missionTranscriptUnavailable ?? NO_TRANSCRIPT_CAVEAT] : [];
-  const report = buildReport(outcome, { minConfidence, quality, evidenceCaveats });
+  const calibrationCaveats = [calibrationCaveat(opts.appContext.appClass)];
+  const report = buildReport(outcome, { minConfidence, quality, evidenceCaveats, calibrationCaveats });
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
   await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  return { report, reportPath };
+  return { report, reportPath, ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }) };
 }
 
 export class UxAnalysisFailedError extends Error {
@@ -336,6 +359,8 @@ export interface RunUsabilityMissionOptions {
   readonly appContext: AppContext;
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
+  /** Usage accounting (#100): see `RunUxReviewOptions.usage`. */
+  readonly usage?: UsageTracker;
   /** Report cutoff (see `RunUxReviewOptions.minConfidence`). */
   readonly minConfidence?: number | string;
   /**
@@ -348,6 +373,13 @@ export interface RunUsabilityMissionOptions {
   readonly configPath?: string;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /**
+   * Secret field bindings (`--secret-field` / `--totp`, #72): typed by code, never by the model;
+   * masked in every screenshot and redacted from the transcript, Recording and report.
+   */
+  readonly secretFields?: readonly SecretField[];
+  /** Tuning of the run-signal oracles (#96), e.g. the hung-request floor. Defaults suit real apps. */
+  readonly signals?: SignalOptions;
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
   readonly fixture?: string;
   readonly judgmentBudget?: number;
@@ -380,9 +412,17 @@ export interface RunUsabilityMissionResult {
    * or why not (`incomplete` + reason)? Never a silent early stop.
    */
   readonly outcome: RunOutcome;
+  /** A find-out job's answer (#101), present only when code grounded it on the observed pages. */
+  readonly answer?: RunAnswer;
   readonly screensObserved: number;
-  /** The explore loop's decision transcript, written next to the report. */
+  /** The explore loop's decision transcript, written next to the report (each step: its screenshot). */
   readonly transcriptPath: string;
+  /** The run's Recording, written next to the report (crash-safe: flushed after every step). */
+  readonly recordingPath: string;
+  /** Where the per-step screenshots are written (secret fields masked). */
+  readonly screenshotDir: string;
+  /** Every per-step screenshot written, in order. */
+  readonly screenshots: readonly string[];
   /**
    * The typed verdict. UX findings are advisory, so a completed review is `clean`; a run whose
    * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced.
@@ -396,6 +436,8 @@ export interface RunUsabilityMissionResult {
   readonly timing: TimingSummary;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 }
 
 /**
@@ -408,7 +450,12 @@ export interface RunUsabilityMissionResult {
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Validate the cutoff before a browser opens — a bad value fails fast, never mid-run.
-  const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
+  const minConfidence = resolveMinConfidence(
+    opts.minConfidence,
+    opts.env ?? process.env,
+    loadUxMinConfidence(opts.configPath),
+    loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
+  );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
@@ -427,18 +474,37 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
       s.page.evaluate(() => (typeof document !== "undefined" && document.body ? document.body.innerText : "")));
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
-  await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-  const reportPath = join(outDir, `usability-${artifactStamp(iso)}.json`);
-  // Crash-safe: the transcript is flushed after every step (next to where the report will go).
-  const journal = new MissionJournal(reportPath);
+  const stamp = artifactStamp(iso);
+  const reportPath = join(outDir, `usability-${stamp}.json`);
+  // #98 — the same artifact shape as goal/adversarial missions, next to the report: the decision
+  // transcript (each step's redacted typed value and screenshot), the Recording and the per-step
+  // screenshots. Crash-safe: the transcript and partial Recording are flushed after every step.
+  const journal = new MissionJournal(join(outDir, `usability-${stamp}.recording.json`), transcriptPathFor(reportPath));
+  const screenshotDir = join(outDir, `usability-${stamp}.screens`);
+  // A bound secret (or TOTP seed) is a run secret too: masked on screen, redacted everywhere.
+  const secrets = [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)];
+  const capture = new UsabilityCapture({
+    page: session.page,
+    screenshotDir,
+    secrets,
+    ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
+  });
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: (entry, all) => {
+        capture.noteEntry(entry, all);
+        journal.onTranscriptEntry(entry, capture.withScreenshots(all));
+      },
+      onRecording: journal.onRecording,
+      ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       actor,
       judge: opts.judge,
       gen: opts.gen,
@@ -462,33 +528,44 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         const ev = snapshotToEvidence(snap, visibleText, opts.appContext, opts.job, [...history]);
         collected.push(ev);
         history.push({ screenId: ev.screenId, url: ev.url });
+        // #98 the step's (secret-masked) screenshot; #96 the screen's facts for the signal oracles.
+        await capture.observe(snap, visibleText);
       },
     });
+    journal.writeRecording(run.recording);
+    journal.writeTranscript(capture.withScreenshots(run.transcript));
 
     // #85 item 1: the live run's own typed values (from its emitted Recording's fill/select
     // steps — never a secret), so the vocabulary/jargon tier can tell the app's own copy apart
     // from user-authored content it merely echoed back (same mechanism as the offline pass).
     const typedValues = extractTypedValues(run.recording);
     const screens = typedValues.length > 0 ? collected.map((ev) => ({ ...ev, typedValues })) : collected;
+    // #96: findings from the run's own measurements (hung request, duplicate write, internal id,
+    // inert control) — independent code, no model — reported alongside the rubric's.
+    const signalFindings = detectSignals(await capture.signalCapture(run.transcript, typedValues), opts.signals);
     const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
     const outcome = await analyzer.analyze({
       screens,
       rubric: loadV1Rubric(),
       appContext: opts.appContext,
-      secrets: opts.secrets,
+      secrets,
       judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
     });
-    journal.writeTranscript(run.transcript);
     const runOutcome: MissionOutcome =
       run.stop === "crashed" ? "crashed" : run.stop === "inconclusive" ? "inconclusive" : "clean";
     const base = {
       timing: run.timing,
       stop: run.stop,
       outcome: run.outcome,
+      ...(run.answer === undefined ? {} : { answer: run.answer }),
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,
+      recordingPath: journal.recordingPath,
+      screenshotDir,
+      screenshots: capture.screenshots(),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
+      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
     };
     if (outcome.kind === "failed") {
       // The analysis is the review's product: without it the review is inconclusive (never a
@@ -504,10 +581,16 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
     }
-    const report = buildReport(outcome, { minConfidence, quality });
+    const report = buildReport(withSignalFindings(outcome, signalFindings), {
+      minConfidence,
+      quality,
+      calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],
+    });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     return { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
   } finally {
+    capture.detach();
+    disarmKillSwitch();
     await closeQuietly(session);
   }
 }

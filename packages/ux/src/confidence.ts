@@ -40,7 +40,19 @@ export const GROUNDING_UNNAMED = 0.6;
  * findings a human rated relevant; the independent grader separates useful findings better
  * (precision 53% / recall 63% vs a 21% base rate). 0.3 drops single-sighting, low-agreement
  * findings on multi-state routes while keeping recurring ones.
- * TODO(calibration): the owner sets the final value from a larger labeled re-run.
+ *
+ * CALIBRATION SCOPE (issue #97, corrected — this value does NOT "generalize"): every number above
+ * was measured on ONE app (Preveti, appClass "consumer"). A follow-up multi-rater check of the
+ * grader's own actionable/relevant-minor/generic/wrong labels against an independent human rater
+ * on a DIFFERENT app found weak agreement (Cohen's kappa in the 0.0-0.15 range — see
+ * packages/cli/scripts/ux-quality/README.md and its `labels/` corpus, and `calibration.ts`'s
+ * `calibrationCaveat()`, which `report.ts` surfaces on every report). Do not read
+ * `DEFAULT_MIN_CONFIDENCE` (or any single global cutoff) as calibrated for an app/app-class it was
+ * never measured on; prefer an app-class-specific value from `ux.minConfidenceByAppClass` config
+ * (see `resolveMinConfidence`) once one is actually backed by a labeled run, and otherwise let the
+ * report's calibration caveat stand.
+ * TODO(calibration): the owner sets the final value(s) from a larger, multi-app, multi-rater
+ * labeled re-run (issue #97 tracks building that harness).
  */
 export const DEFAULT_MIN_CONFIDENCE = 0.3;
 
@@ -66,17 +78,22 @@ function parseCutoff(raw: string, source: string): number {
 
 /**
  * Precedence: explicit flag > `JEVITATE_UX_MIN_CONFIDENCE` > config `ux.minConfidence` >
- * `DEFAULT_MIN_CONFIDENCE`. Invalid values throw — never silently replaced by the default.
+ * config `ux.minConfidenceByAppClass[appClass]` (issue #97: a per-`--app-class` default, so a
+ * class with its OWN measured cutoff need not share the global one) > `DEFAULT_MIN_CONFIDENCE`
+ * (today's behavior, unchanged where no app-class data exists). Invalid values throw — never
+ * silently replaced by the default.
  */
 export function resolveMinConfidence(
   flag: string | number | undefined,
   env: Readonly<Record<string, string | undefined>>,
   configValue?: number,
+  appClassConfigValue?: number,
 ): number {
   if (flag !== undefined) return parseCutoff(String(flag), "--min-confidence");
   const fromEnv = env[MIN_CONFIDENCE_ENV];
   if (fromEnv !== undefined) return parseCutoff(fromEnv, MIN_CONFIDENCE_ENV);
   if (configValue !== undefined) return parseCutoff(String(configValue), "config ux.minConfidence");
+  if (appClassConfigValue !== undefined) return parseCutoff(String(appClassConfigValue), "config ux.minConfidenceByAppClass");
   return DEFAULT_MIN_CONFIDENCE;
 }
 

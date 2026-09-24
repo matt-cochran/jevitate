@@ -24,6 +24,7 @@ export function goalExitCode(outcome: GoalBasedOutcome): number {
       return 0;
     case "exhausted":
     case "blocked":
+    case "defects-found": // an app-declared invariant (#86) was violated
       return 1;
     case "inconclusive":
     case "crashed":

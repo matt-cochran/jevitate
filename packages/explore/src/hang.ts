@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
 import { contentHash } from "@jevitate/domain";
-import { normalizeRoute } from "./adversarial/defect-fingerprint.js";
+import { messageClass, normalizeRoute } from "./adversarial/defect-fingerprint.js";
 import { endpointOf } from "./timing.js";
 import type { InflightRequest, SettleResult } from "./page-monitor.js";
 import type { HostPressure } from "./host-pressure.js";
@@ -38,14 +38,30 @@ export interface HangSignal {
   readonly pending: PendingRequestEvidence[];
   /** The last DOM state seen: its freshness signature and control summaries (may be empty). */
   readonly lastState: { readonly signature: string; readonly controls: string[] };
+  /**
+   * The offending element's identity (role, accessible name, testid or stable anchor — see
+   * `visibleBusyIndicator`), when the hang is attributable to one: a stuck busy indicator
+   * (`ui-no-progress`). Undefined for hang kinds with no single element to name (#87).
+   */
+  readonly element?: string;
   /** The page's used JS heap (bytes), when it could be read. */
   readonly heapBytes?: number;
   /** The host's resource pressure sampled when the hang was detected. */
   readonly host?: HostPressure;
 }
 
-/** Stable identity of a hang: kind + route (+ the stuck endpoint for a pending request). */
-export function hangFingerprint(h: Pick<HangSignal, "kind" | "route" | "pending">): string {
+/**
+ * Stable identity of a hang: kind + route (+ the stuck endpoint for a pending request) — EXCEPT
+ * `ui-no-progress`, whose identity is the offending ELEMENT, not the route (#87). A stuck busy
+ * indicator is usually a page-local bug, but the same widget (a shared layout gauge, a global nav
+ * spinner) can appear on every route: fingerprinting by element means that is ONE finding across
+ * every route it hangs on, not a new finding per route. The element string is normalized the same
+ * way a defect message is (`messageClass`), so incidental differences (ids, counts) still collapse.
+ */
+export function hangFingerprint(h: Pick<HangSignal, "kind" | "route" | "pending" | "element">): string {
+  if (h.kind === "ui-no-progress" && h.element !== undefined) {
+    return contentHash(`hang|${h.kind}|element|${messageClass(h.element)}`).slice(0, 16);
+  }
   const endpoint = h.kind === "request-pending" ? (h.pending[0]?.endpoint ?? "") : "";
   return contentHash(`hang|${h.kind}|${h.route}|${endpoint}`).slice(0, 16);
 }
@@ -102,13 +118,29 @@ export async function probeResponsive(page: Page, boundMs: number): Promise<bool
 
 /**
  * BROWSER CODE — the first VISIBLE busy indicator, described, or null: `aria-busy="true"`, an
- * indeterminate progressbar (no `aria-valuenow`), or a spinner element by class name.
+ * indeterminate progressbar (no `aria-valuenow`), or a spinner element by class name. The
+ * description is a STABLE identity for the element — its testid or id (a stable anchor) when it
+ * has one, else its role (explicit or implicit tag) and accessible name — so the SAME element,
+ * even met on different routes (e.g. a shared layout widget), describes identically (#87).
+ *
+ * Self-contained on purpose: this function is serialized by its OWN source (`.toString()`) for
+ * both `page.evaluate` and a `waitForFunction` predicate, so it can call no outside helper — one
+ * defined elsewhere in this module would not exist in that serialized copy.
  */
 export function visibleBusyIndicator(): string | null {
   const shown = (el: Element): boolean => {
     const r = (el as HTMLElement).getBoundingClientRect();
     const s = window.getComputedStyle(el as HTMLElement);
     return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+  };
+  const describe = (el: Element): string => {
+    const testid = el.getAttribute("data-testid");
+    if (testid) return `[data-testid=${testid}]`;
+    const id = (el as HTMLElement).id;
+    if (id) return `#${id}`;
+    const role = el.getAttribute("role") ?? el.tagName.toLowerCase();
+    const name = (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+    return name ? `role=${role} "${name}"` : `role=${role} <${el.tagName.toLowerCase()}>`;
   };
   const selectors = [
     '[aria-busy="true"]',
@@ -119,8 +151,7 @@ export function visibleBusyIndicator(): string | null {
   for (const sel of selectors) {
     for (const el of Array.from(document.querySelectorAll(sel))) {
       if (!shown(el)) continue;
-      const id = el.getAttribute("data-testid");
-      return id ? `[data-testid=${id}]` : `${sel} <${el.tagName.toLowerCase()}>`;
+      return describe(el);
     }
   }
   return null;

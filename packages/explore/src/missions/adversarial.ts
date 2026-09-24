@@ -29,13 +29,15 @@ import { CrashWatch, describeFailure, tryTriage, type Triage } from "../mission-
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
-import { PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
+import { isAdvisoryConsoleError, PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
 import {
+  advisoryTitle,
   defectTitle,
   groupStepSignals,
   invariantFingerprint,
   messageClass,
   normalizeRoute,
+  signalFingerprint,
 } from "../adversarial/defect-fingerprint.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
@@ -48,6 +50,13 @@ import {
 } from "../adversarial/run-coverage.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import { seedRedirectReason } from "../seed-redirect.js";
+import type { InvariantSpec } from "@jevitate/recording";
+import {
+  InvariantMonitor,
+  type InvariantAction,
+  type InvariantReport,
+  type InvariantViolation,
+} from "../declared-invariants.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -58,7 +67,8 @@ import { seedRedirectReason } from "../seed-redirect.js";
  * other routes) until its step, action or time budget runs out, and after EVERY
  * step asks a TRUSTED HARD-SIGNAL oracle (`PageSignalCollector`) whether the app
  * broke — a console error, an HTTP 5xx, a failed request, an unhandled page
- * exception — plus an optional user-declared invariant.
+ * exception — plus the user's invariants: an optional code-level `userInvariant` and the app-
+ * declared invariant spec (#86), both evaluated around every adjudicated step.
  *
  * A defect is the mission's SUCCESS case, so it is data: finding one does not
  * stop the run. Each defect is keyed by a stable fingerprint (signal kind +
@@ -114,11 +124,37 @@ export interface AdversarialDefect {
   readonly signals: DefectSignal[];
   /** The invariant's reason, for an `invariant` defect. */
   readonly invariantReason?: string;
+  /** For a DECLARED invariant (#86): its id, expression, before/after values, action and evidence. */
+  readonly invariant?: InvariantViolation;
   readonly firstSeenStep: number;
   readonly occurrences: number;
   readonly occurrenceSteps: number[];
   readonly repro: DefectRepro;
   readonly triage: Triage;
+}
+
+/**
+ * A console error correlated with a captured 4xx response (#88): reported for visibility, but
+ * NEVER a defect — a 4xx is a response the server returned by design (an authorization refusal, a
+ * validation error), so it is advisory, lower severity, and never counted toward `defects-found`.
+ * A 5xx-correlated (or uncorrelated) console error is unaffected and still files as a defect.
+ */
+export interface AdvisorySignal {
+  /** Stable identity (16 hex): same signal, same fingerprint — across steps and across runs. */
+  readonly fingerprint: string;
+  readonly kind: "console-error";
+  readonly title: string;
+  /** Normalized route (path pattern) of the page it was first seen on. */
+  readonly route: string;
+  /** The (redacted) page URL it was first seen on. */
+  readonly url: string;
+  /** The correlated response's status (always 4xx — the only case reported as advisory). */
+  readonly status: number;
+  /** The raw console-error detail. */
+  readonly detail: string;
+  readonly firstSeenStep: number;
+  readonly occurrences: number;
+  readonly occurrenceSteps: number[];
 }
 
 /** Why the hunt ended (the mission's budget, or nothing left to try). */
@@ -139,6 +175,8 @@ export interface AdversarialOutcome {
   readonly stop: AdversarialStop;
   /** Distinct defects (deduped by fingerprint), in first-seen order. */
   readonly defects: AdversarialDefect[];
+  /** 4xx-correlated console errors (#88): reported, deduped by fingerprint, never counted as defects. */
+  readonly advisories: AdvisorySignal[];
   /** Hangs found (the run stops at a hang), each with its fresh-context reproduction k/N. */
   readonly hangs: HangFinding[];
   /** The run's Recording (partial when the run crashed) — every defect's repro path. */
@@ -156,6 +194,8 @@ export interface AdversarialOutcome {
   readonly scope: AdversarialScope;
   /** What the run exercised on its target, and whether that was enough for silence to mean clean. */
   readonly coverage: AdversarialCoverage;
+  /** Per declared invariant (#86): how often it applied, held, was violated, or could not be read. */
+  readonly invariants?: InvariantReport[];
 }
 
 export interface AdversarialMissionParams {
@@ -171,8 +211,14 @@ export interface AdversarialMissionParams {
   readonly bounds?: Partial<Bounds>;
   /** Wall-clock budget for the hunt (ms). Default 10 minutes. */
   readonly timeBudgetMs?: number;
-  /** An independent, user-declared invariant. `ok:false` is a HARD defect. */
+  /** An independent, user-declared (code-level) invariant. `ok:false` is a HARD defect. */
   readonly userInvariant?: (page: Page) => Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * App-declared invariants (#86): the closed, declarative spec, snapshotted before each action and
+   * evaluated after it (with every `never`). A violation is a HARD defect keyed by id + route —
+   * the same oracle path as `userInvariant`, generalised to before/after, network and probes.
+   */
+  readonly invariants?: InvariantSpec;
   /** Recording.site label. Defaults to the seed origin. */
   readonly site?: string;
   /** Bound (ms) on waiting for a rendered page before each strategy step. Default `RENDER_WAIT_MS`. */
@@ -252,6 +298,7 @@ interface StepFinding {
   readonly url: string;
   readonly signals: DefectSignal[];
   readonly invariantReason?: string;
+  readonly invariant?: InvariantViolation;
 }
 
 interface MutableDefect extends Omit<StepFinding, "related"> {
@@ -262,6 +309,52 @@ interface MutableDefect extends Omit<StepFinding, "related"> {
   readonly occurrenceSteps: number[];
   readonly repro: DefectRepro;
   readonly triage: Triage;
+}
+
+/** An advisory (4xx-correlated console-error) signal as seen on ONE step, before it is deduped. */
+interface StepAdvisory {
+  readonly fingerprint: string;
+  readonly title: string;
+  readonly route: string;
+  readonly url: string;
+  readonly status: number;
+  readonly detail: string;
+}
+
+interface MutableAdvisory extends StepAdvisory {
+  readonly firstSeenStep: number;
+  readonly occurrenceSteps: number[];
+}
+
+function freezeAdvisory(a: MutableAdvisory): AdvisorySignal {
+  return {
+    fingerprint: a.fingerprint,
+    kind: "console-error",
+    title: a.title,
+    route: a.route,
+    url: a.url,
+    status: a.status,
+    detail: a.detail,
+    firstSeenStep: a.firstSeenStep,
+    occurrences: a.occurrenceSteps.length,
+    occurrenceSteps: [...a.occurrenceSteps],
+  };
+}
+
+/** Builds a step advisory from a console-error signal already confirmed advisory (4xx-correlated). */
+function stepAdvisory(
+  signal: Extract<DefectSignal, { kind: "console-error" }> & { correlatedStatus: number },
+  route: string,
+  url: string,
+): StepAdvisory {
+  return {
+    fingerprint: signalFingerprint(signal),
+    title: advisoryTitle(signal, signal.correlatedStatus),
+    route,
+    url,
+    status: signal.correlatedStatus,
+    detail: signal.detail,
+  };
 }
 
 function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): AdversarialDefect {
@@ -275,6 +368,7 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
     url: d.url,
     signals: d.signals,
     ...(d.invariantReason === undefined ? {} : { invariantReason: d.invariantReason }),
+    ...(d.invariant === undefined ? {} : { invariant: d.invariant }),
     firstSeenStep: d.firstSeenStep,
     occurrences: d.occurrenceSteps.length,
     occurrenceSteps: [...d.occurrenceSteps],
@@ -304,9 +398,23 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   // Attach the hard-signal listeners BEFORE navigating (on every page the run works in).
   let collector = new PageSignalCollector(params.page);
   let crashWatch = new CrashWatch(params.page);
+  // Declared invariants (#86): listening for `network` observables from before the first navigation.
+  const declared =
+    params.invariants === undefined
+      ? null
+      : new InvariantMonitor(params.invariants, {
+          allowlist: params.allowlist,
+          baseUrl: params.seedUrl,
+          ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+        });
+  declared?.attach(params.page);
+  /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
+  let armed = false;
   sessions.onReset((page) => {
     collector = new PageSignalCollector(page);
     crashWatch = new CrashWatch(page);
+    declared?.attach(page);
+    armed = false;
   });
   const heap = new HeapLog();
   const probeHost = params.hostProbe ?? hostProbe();
@@ -318,6 +426,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   let recorder = segments[0] as RunRecorder;
   const transcript = new TranscriptLog(secrets, params.onTranscriptEntry);
   const defects = new Map<string, MutableDefect>();
+  const advisories = new Map<string, MutableAdvisory>();
   const hangs = new Map<string, HangFinding>();
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
@@ -359,6 +468,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       outcome: finished.ok ? honest : "crashed",
       stop: finished.ok ? stop : "crashed",
       defects: [...defects.values()].map((d) => freeze(d, later)),
+      advisories: [...advisories.values()].map(freezeAdvisory),
       hangs: [...hangs.values()],
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
       transcript: transcript.entries(),
@@ -366,6 +476,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       heap: heap.samples(),
       timing: summarizeTimings(timings),
       scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
+      ...(declared === null ? {} : { invariants: declared.report() }),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
             crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
@@ -412,10 +523,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const step = transcript.nextStep - 1;
     const known = hangs.get(hangFingerprint(h));
     if (known !== undefined) {
+      // Already confirmed (or being confirmed): no replay budget spent again — just one more
+      // occurrence, and the route added when it is a new one ("also seen on <route>", #87).
       hangs.set(known.fingerprint, {
         ...known,
         occurrences: known.occurrences + 1,
         occurrenceSteps: [...known.occurrenceSteps, step],
+        routes: known.routes.includes(h.route) ? known.routes : [...known.routes, h.route],
       });
       return;
     }
@@ -488,19 +602,28 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     ]);
 
   /**
-   * The independent oracle for one step: drains the hard signals and checks the user invariant.
-   * Returns the transcript reason and the step's findings, or null when nothing broke.
+   * The independent oracle for one step: drains the hard signals and checks the user invariants —
+   * the code-level `userInvariant` and the declared spec (against the `before` snapshot armed for
+   * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
+   * findings, or null when nothing broke.
    */
-  const adjudicate = async (): Promise<{ reason: string; findings: StepFinding[] } | null> => {
+  const adjudicate = async (action: InvariantAction | null = null): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
     const invariantResult = params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
+    const declaredResult = declared === null ? null : await declared.after(sessions.actor, armed ? action : null);
+    armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
     const hardSignals = collector.drain();
     const url = redactUrl(sessions.page.url());
     const route = normalizeRoute(url);
     const findings: StepFinding[] = [];
+    // A console error correlated with a captured 4xx response is advisory, never a defect (#88) —
+    // excluded from the defect signal pool before grouping, reported separately instead.
+    const advisorySignals = hardSignals.filter(isAdvisoryConsoleError);
+    const stepAdvisories = advisorySignals.map((s) => stepAdvisory(s, route, url));
+    const forDefect = hardSignals.filter((s) => !isAdvisoryConsoleError(s));
 
-    const group = groupStepSignals(hardSignals);
+    const group = groupStepSignals(forDefect);
     if (group !== null) {
       findings.push({
         fingerprint: group.fingerprint,
@@ -509,7 +632,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         title: defectTitle(group.primary),
         route,
         url,
-        signals: hardSignals,
+        signals: forDefect,
       });
     }
     if (!invariantResult.ok) {
@@ -526,11 +649,29 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         invariantReason: reason,
       });
     }
-    if (findings.length === 0) return null;
-    const reasons = [...hardSignals.map((s) => s.detail), invariantResult.ok ? undefined : invariantResult.reason]
+    for (const v of declaredResult?.violations ?? []) {
+      findings.push({
+        fingerprint: v.fingerprint,
+        related: [v.fingerprint],
+        kind: "invariant",
+        title: `Invariant "${v.id}" violated on ${v.route}`,
+        route: v.route,
+        url: v.url,
+        signals: [],
+        invariantReason: v.reason,
+        invariant: v,
+      });
+    }
+    if (findings.length === 0 && stepAdvisories.length === 0) return null;
+    const reasons = [
+      ...hardSignals.map((s) => s.detail),
+      invariantResult.ok ? undefined : invariantResult.reason,
+      ...(declaredResult?.violations ?? []).map((v) => v.reason),
+    ]
       .filter((r): r is string => Boolean(r))
       .join("; ");
-    return { reason: `defect: ${reasons}`, findings };
+    const prefix = findings.length > 0 ? "defect" : "advisory";
+    return { reason: `${prefix}: ${reasons}`, findings, advisories: stepAdvisories };
   };
 
   /**
@@ -540,20 +681,46 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
    */
   const drainLate = async (step: number): Promise<void> => {
     const late = collector.drain();
-    const group = groupStepSignals(late);
-    if (group === null) return;
+    const advisorySignals = late.filter(isAdvisoryConsoleError);
+    const forDefect = late.filter((s) => !isAdvisoryConsoleError(s));
+    const group = groupStepSignals(forDefect);
+    if (group === null && advisorySignals.length === 0) return;
     const url = redactUrl(sessions.page.url());
-    await fold(step, [
-      {
-        fingerprint: group.fingerprint,
-        related: group.related,
-        kind: group.primary.kind,
-        title: defectTitle(group.primary),
-        route: normalizeRoute(url),
-        url,
-        signals: late,
-      },
-    ]);
+    const route = normalizeRoute(url);
+    if (group !== null) {
+      await fold(step, [
+        {
+          fingerprint: group.fingerprint,
+          related: group.related,
+          kind: group.primary.kind,
+          title: defectTitle(group.primary),
+          route,
+          url,
+          signals: forDefect,
+        },
+      ]);
+    }
+    if (advisorySignals.length > 0) {
+      foldAdvisories(
+        step,
+        advisorySignals.map((s) => stepAdvisory(s, route, url)),
+      );
+    }
+  };
+
+  /**
+   * Folds one step's advisory signals into the deduped advisory set (mirrors `fold`, but no repro
+   * or triage — an advisory is reported, never a defect, so nothing here needs to be reproduced).
+   */
+  const foldAdvisories = (step: number, list: readonly StepAdvisory[]): void => {
+    for (const a of list) {
+      const known = advisories.get(a.fingerprint);
+      if (known !== undefined) {
+        if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);
+        continue;
+      }
+      advisories.set(a.fingerprint, { ...a, firstSeenStep: step, occurrenceSteps: [step] });
+    }
   };
 
   /**
@@ -682,7 +849,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         timing: seed.timing,
       });
       snapTiming = undefined;
-      if (verdict !== null) await fold(step, verdict.findings);
+      if (verdict !== null) {
+        await fold(step, verdict.findings);
+        foldAdvisories(step, verdict.advisories);
+      }
     }
 
     let last: LastAction | null = null;
@@ -831,6 +1001,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       if (strategy === undefined) throw new Error("adversarial: strategy index out of range");
       strategySteps += 1;
       const round = rounds.get(strategy) ?? 0;
+      // A snapshot armed by an episode that ended without an adjudication (budget, disabled target)
+      // is stale: the next action gets a fresh one, so no effect is attributed to the wrong action.
+      armed = false;
 
       // A perception's timing is reported once — on the first step decided on it.
       let stepSnap = snap;
@@ -868,7 +1041,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           ...(stepTiming === undefined ? {} : { timing: stepTiming }),
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
-        if (verdict !== null) await fold(step, verdict.findings);
+        if (verdict !== null) {
+          await fold(step, verdict.findings);
+          foldAdvisories(step, verdict.advisories);
+        }
         // A whole cycle of strategies found nothing to do on this page: there is nothing left.
         if (idleStreak >= params.strategies.length) stop = "strategies-exhausted";
         continue;
@@ -898,6 +1074,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           });
           stepTiming = undefined;
           break;
+        }
+        // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
+        const actedOn = sessions.page.url();
+        if (declared !== null && !armed) {
+          await declared.before(sessions.actor);
+          armed = true;
         }
         const at = now();
         const { result, value } = await execute(s);
@@ -931,7 +1113,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
           continue;
         }
-        const verdict = await adjudicate();
+        const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn });
         const soft = verdict === null ? await softJudgment(stepSnap) : {};
         const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
         transcript.record({
@@ -939,7 +1121,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           ...(full === undefined ? {} : { reason: full }),
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
-        if (verdict !== null) await fold(step, verdict.findings);
+        if (verdict !== null) {
+          await fold(step, verdict.findings);
+          foldAdvisories(step, verdict.advisories);
+        }
         const after = await observeAfter(step, s.control?.name ?? s.op);
         if (after.kind === "stop") {
           stop = after.stop;

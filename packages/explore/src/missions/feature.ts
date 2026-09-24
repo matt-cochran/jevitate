@@ -33,6 +33,14 @@ import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
+import type { InvariantSpec } from "@jevitate/recording";
+import {
+  InvariantDefectLog,
+  InvariantMonitor,
+  recordingStepCount,
+  type InvariantDefect,
+  type InvariantReport,
+} from "../declared-invariants.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -99,6 +107,16 @@ export interface FeatureRunResult {
   recordings: Recording[];
   /** The shared decision transcript: each ranked frontier action, whether it landed, in/out of scope, and chrome. */
   transcript: TranscriptEntry[];
+  /** Declared-invariant violations (#86), each with the path Recording that reproduces it. */
+  invariantDefects?: InvariantDefect[];
+  /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
+  invariants?: InvariantReport[];
+}
+
+/** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
+interface Declared {
+  readonly monitor: InvariantMonitor;
+  readonly log: InvariantDefectLog;
 }
 
 const TIMING: StepTiming = { atMs: 0, durationMs: 0, gapBeforeMs: 0 };
@@ -185,7 +203,7 @@ function extendRecording(
   return RecordingSchema.parse({ version: prefix.version, site: prefix.site, pages });
 }
 
-export async function runFeatureMission(params: {
+export type FeatureMissionParams = {
   page: Page;
   actor: Actor;
   seedUrl: string;
@@ -205,9 +223,31 @@ export async function runFeatureMission(params: {
   hangReplays?: number;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   onTranscriptEntry?: TranscriptListener;
-}): Promise<FeatureRunResult> {
+  /** App-declared invariants (#86): evaluated around every frontier action; a violation is a hard defect. */
+  invariants?: InvariantSpec;
+  /** Registered secrets: redacted out of invariant values and evidence. */
+  secrets?: readonly string[];
+};
+
+export async function runFeatureMission(params: FeatureMissionParams): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
+  const declared: Declared | null =
+    params.invariants === undefined
+      ? null
+      : {
+          monitor: new InvariantMonitor(params.invariants, {
+            allowlist: params.allowlist,
+            baseUrl: params.seedUrl,
+            ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+          }),
+          log: new InvariantDefectLog(),
+        };
+  const result = await runFeatureFrontier(params, declared);
+  return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
+}
+
+async function runFeatureFrontier(params: FeatureMissionParams, declared: Declared | null): Promise<FeatureRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const maxPaths = params.maxPaths ?? 20;
@@ -231,8 +271,10 @@ export async function runFeatureMission(params: {
   };
 
   let crashWatch = new CrashWatch(sessions.page);
+  declared?.monitor.attach(sessions.page);
   sessions.onReset((page) => {
     crashWatch = new CrashWatch(page);
+    declared?.monitor.attach(page);
   });
   const visited = new Set<string>();
   const boundaryEdgeSet = new Set<string>();
@@ -316,6 +358,7 @@ export async function runFeatureMission(params: {
       const itemScore = relevanceScore(item.control, words, chrome);
       const itemWasChrome = chrome.isChrome(item.control);
       const rankReason = `relevance=${itemScore} chrome=${itemWasChrome}`;
+      await declared?.monitor.before(sessions.actor);
       const result = await act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null });
       actions += 1;
       if (!result.ok) {
@@ -339,6 +382,15 @@ export async function runFeatureMission(params: {
       const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
       transitionsExercised += 1;
       extended.add(item.fromFingerprint);
+      if (declared !== null && seenHang.last === null) {
+        // Declared invariants (#86): judged on the settled state the action produced; the finding
+        // replays this very path (the seed navigate is its first step).
+        const path = { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) };
+        const checked = await declared.monitor.after(sessions.actor, { op: item.op, control: item.control.name, url: beforeUrl });
+        for (const v of checked.violations) {
+          declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
+        }
+      }
 
       // A hang: record it (reproduced from the path that led here), reset to a known state and keep
       // exploring the rest of the frontier. The hung state is never expanded.

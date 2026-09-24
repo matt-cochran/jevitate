@@ -1,9 +1,10 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
-import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
+import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import type { Assertion, Recording, TargetDescriptor } from "@jevitate/recording";
+import type { Assertion, InvariantSpec, Recording, TargetDescriptor } from "@jevitate/recording";
+import type { InvariantDefect, InvariantReport } from "@jevitate/explore";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -23,6 +24,7 @@ import {
   type CapabilityScope,
   type FeatureRunResult,
   type TranscriptEntry,
+  type RunAnswer,
   type RunOutcome,
   type CoverageThresholds,
   type StatusSpec,
@@ -61,6 +63,7 @@ import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
+import { armMissionKillSwitch } from "./kill-signal.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -88,6 +91,12 @@ export interface RunExplorationOptions {
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
+  /**
+   * Usage accounting (#100): when supplied, its snapshot (judgments/generations/tokens/`usd`) lands
+   * in the result as `usage`. The CLI builds one per invocation and hands it to the gateways
+   * `judge`/`gen` were constructed with, so the counts here are exactly what this run made.
+   */
+  readonly usage?: UsageTracker;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
   /**
@@ -131,6 +140,8 @@ export interface RunExplorationOptions {
   readonly hangReplays?: number;
   /** Conversational pages: the reply wait (ms) and the cap (chars) on each generated message. */
   readonly conversation?: ConversationOptions;
+  /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
+  readonly invariants?: InvariantSpec;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -206,6 +217,8 @@ export interface RunExplorationResult {
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
    */
   readonly runOutcome: RunOutcome;
+  /** A find-out goal's answer (#101), present only when code grounded it on the observed pages. */
+  readonly answer?: RunAnswer;
   readonly assertionPassed: boolean;
   /** Each success check's verdict and what the oracle saw. */
   readonly checks: SuccessCheckResult[];
@@ -241,6 +254,14 @@ export interface RunExplorationResult {
   readonly resultPath: string;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
+  /** Declared-invariant defects (#86) — present when `--invariants` was given; `verify-fix` replays them. */
+  readonly defects?: InvariantDefect[];
+  /** Per declared invariant: applied / held / violated / unreadable counts. */
+  readonly invariants?: InvariantReport[];
+  /** The declared spec the run evaluated — persisted so `verify-fix` re-checks the SAME invariants. */
+  readonly invariantSpec?: InvariantSpec;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -264,10 +285,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const session = await port.open(launch);
 
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-  await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-  // Crash-safe: the transcript and partial Recording are flushed after every step.
+  // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
+  // itself creates `outDir` synchronously (mkdirSync) — no `await` here, so there is no gap between
+  // the browser opening and the kill switch arming below for a SIGTERM/SIGINT to land in unarmed.
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
@@ -294,6 +319,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       site: origin,
       fixture,
       ...conversationConfig(opts.conversation),
+      ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
     journal.writeRecording(mission.recording);
@@ -324,6 +350,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       timing: mission.run.timing,
       outcome: mission.outcome,
       runOutcome: mission.run.outcome,
+      ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       stop: mission.run.stop,
@@ -345,11 +372,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       engine,
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
+      ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
+      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
     return result;
   } finally {
+    disarmKillSwitch();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -505,6 +535,8 @@ export interface RunCoverageMissionOptions {
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
+  /** Usage accounting (#100): see `RunExplorationOptions.usage`. */
+  readonly usage?: UsageTracker;
   readonly bounds?: Partial<Bounds>;
   /** Where the repro Recordings are written. Default `~/.jevitate/recordings`. */
   readonly outDir?: string;
@@ -527,6 +559,14 @@ export interface RunCoverageMissionOptions {
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
+  /**
+   * Extra in-scope route globs (CLI `--route`, #89 — reuses #64's adversarial/feature scope model).
+   * The seed URL's own route is always in scope; these add to it. Pass `["/**"]` (CLI `--scope app`)
+   * to widen containment to the whole app.
+   */
+  readonly routeGlobs?: readonly string[];
+  /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
+  readonly invariants?: InvariantSpec;
 }
 
 export interface RunCoverageMissionResult {
@@ -551,6 +591,12 @@ export interface RunCoverageMissionResult {
   readonly transcriptPath: string;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
+  /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
+  readonly defects?: InvariantDefect[];
+  readonly invariants?: InvariantReport[];
+  readonly invariantSpec?: InvariantSpec;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -569,10 +615,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const session = await port.open(launch);
 
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-  await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
+  // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
+  // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
+  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -588,6 +636,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       allowlist: opts.allowlist,
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
+      ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
+      ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
     const recordingPaths: string[] = [];
@@ -600,10 +650,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // A silent run that never proved anything (the seed redirected off-target, or the frontier
     // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
+    // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
+    const found = result.coverage.defects.length + (result.invariantDefects?.length ?? 0);
     const bare = result.outcome === "crashed" ? "crashed" : result.outcome === "scope-unreachable" ? "inconclusive" : null;
-    const thin = bare === null && result.coverage.defects.length === 0 && !result.coverage.sufficiency.sufficient;
+    const thin = bare === null && found === 0 && !result.coverage.sufficiency.sufficient;
     const missionOutcome: MissionOutcome = combineOutcomes([
-      bare ?? (thin ? "inconclusive" : result.coverage.defects.length > 0 ? "defects-found" : "clean"),
+      bare ?? (thin ? "inconclusive" : found > 0 ? "defects-found" : "clean"),
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
     const coverageFailure: MissionFailure | undefined = thin
@@ -629,9 +681,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       recordingPaths,
       transcriptPath: journal.transcriptPath,
       engine: currentEngineInfo(),
+      ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
+      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
+    disarmKillSwitch();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -648,6 +703,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly strategies: readonly MisuseStrategy[];
   readonly judgment: JudgmentPort;
   readonly generation: GenerationPort;
+  /** Usage accounting (#100): see `RunExplorationOptions.usage`. */
+  readonly usage?: UsageTracker;
   /** Step/action budget (CLI `--max-decisions` / `--max-actions`). */
   readonly bounds?: Partial<Bounds>;
   readonly headless?: boolean;
@@ -686,6 +743,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly routeGlobs?: readonly string[];
   /** Coverage a silent run needs to be `clean` (`--min-control-coverage`, `--no-require-form-submit`). */
   readonly coverageThresholds?: Partial<CoverageThresholds>;
+  /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
+  readonly invariants?: InvariantSpec;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -709,6 +768,10 @@ export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly exitCode: number;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
+  /** The declared spec the run evaluated (#86) — persisted so `verify-fix` re-checks the same one. */
+  readonly invariantSpec?: InvariantSpec;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 };
 
 /**
@@ -736,6 +799,7 @@ export async function runAdversarialCliMission(
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
+  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
@@ -759,6 +823,7 @@ export async function runAdversarialCliMission(
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
       onTranscriptEntry: journal.onTranscriptEntry,
       onRecording: journal.onRecording,
+      ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
     journal.writeRecording(outcome.recording);
     journal.writeTranscript(outcome.transcript);
@@ -794,9 +859,12 @@ export async function runAdversarialCliMission(
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       engine,
+      ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
+      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
+    disarmKillSwitch();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -839,6 +907,8 @@ export interface RunFeatureCliMissionOptions {
    * written with mode 0600, and its contents are never logged.
    */
   readonly saveStorageState?: string;
+  /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
+  readonly invariants?: InvariantSpec;
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
@@ -860,6 +930,11 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   readonly transcriptPath: string;
   /** The persisted typed result (`feature-<stamp>.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath: string;
+  /** Where the run happened — what `verify-fix` needs to replay a declared-invariant defect. */
+  readonly target: MissionTarget;
+  /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
+  readonly defects?: InvariantDefect[];
+  readonly invariantSpec?: InvariantSpec;
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -883,6 +958,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
+  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -894,6 +970,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       scope,
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
+      ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
     const recordingPaths: string[] = [];
@@ -917,12 +994,18 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
           }] — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
         }
       : undefined;
+    // A declared-invariant violation (#86) is a hard defect even on a thin run: it was observed.
+    const invariantDefects = result.invariantDefects?.length ?? 0;
     const missionOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed"
         ? "crashed"
-        : result.outcome === "scope-unreachable" || thin
+        : result.outcome === "scope-unreachable"
           ? "inconclusive"
-          : "clean",
+          : invariantDefects > 0
+            ? "defects-found"
+            : thin
+              ? "inconclusive"
+              : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
     const exitCode = missionExitCode(missionOutcome);
@@ -934,12 +1017,33 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       recordingPaths,
       transcriptPath: journal.transcriptPath,
       engine: currentEngineInfo(),
+      target: {
+        seedUrl: opts.seedUrl,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
+      ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
+    disarmKillSwitch();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
+}
+
+/**
+ * The declared-invariant fields of a persisted result (#86): the defects (top-level `defects`, where
+ * `verify-fix` looks), the per-invariant report, and the spec itself so a later `verify-fix`
+ * re-checks exactly what the run checked. Nothing at all when the run had no `--invariants`.
+ */
+function declaredResult(
+  spec: InvariantSpec | undefined,
+  defects: readonly InvariantDefect[] | undefined,
+  report: readonly InvariantReport[] | undefined,
+): { defects?: InvariantDefect[]; invariants?: InvariantReport[]; invariantSpec?: InvariantSpec } {
+  if (spec === undefined) return {};
+  return { defects: [...(defects ?? [])], invariants: [...(report ?? [])], invariantSpec: spec };
 }
 
 /** Injectable wiring for the `explore` CLI command (all optional). */

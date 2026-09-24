@@ -1,5 +1,6 @@
 import type { Answer, Question } from "./judgment.js";
 import type { JevClientCall } from "./jev.js";
+import type { UsageSink } from "./usage.js";
 
 /**
  * The Jev SDK adapter — lives next to `JevJudgmentGateway` (they change together): pure
@@ -103,10 +104,16 @@ export function apiKeyFromAuthHeader(authHeader: string): string {
   return match[1].trim();
 }
 
+/** Token usage the SDK reports alongside every `systemOne` result (`@typesafe-ai/sdk` >= 0.6). */
+interface SdkUsage {
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+}
+
 /** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
 interface TypeSafeSdk {
   TypeSafeClient: new (config: { apiKey: string }) => {
-    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown }>;
+    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown; usage: SdkUsage }>;
   };
 }
 
@@ -125,8 +132,13 @@ const defaultSdkLoader: SdkLoader = () => {
 /**
  * Real Jev seam (lazy). Fails closed with an actionable message when the SDK is absent or is an
  * unsupported version. `load` is a test seam; production uses the lazy dynamic import.
+ *
+ * `usage` (#100) is an optional sink: when supplied, every call (including a retry — this is the
+ * innermost seam `RetryingJudgmentPort` re-invokes on each attempt) reports one judgment with the
+ * SDK's own token counts. Absent `result.usage` (an unexpected SDK response) counts as 0 tokens
+ * rather than throwing — usage accounting must never itself break a judgment call.
  */
-export async function realJevClientCall(load: SdkLoader = defaultSdkLoader): Promise<JevClientCall> {
+export async function realJevClientCall(load: SdkLoader = defaultSdkLoader, usage?: UsageSink): Promise<JevClientCall> {
   const mod: unknown = await load().catch(() => {
     throw new Error("live judgment requires @typesafe-ai/sdk — install it next to the jevitate CLI (npm i @typesafe-ai/sdk)");
   });
@@ -137,6 +149,10 @@ export async function realJevClientCall(load: SdkLoader = defaultSdkLoader): Pro
   return async ({ state, questions, authHeader }) => {
     const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader) });
     const result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
+    usage?.recordJudgment({
+      inputTokens: result.usage?.input_tokens ?? 0,
+      outputTokens: result.usage?.output_tokens ?? 0,
+    });
     return fromSdkAnswers(questions, result.answers);
   };
 }

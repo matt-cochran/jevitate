@@ -1,8 +1,9 @@
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control, Snapshot } from "./snapshot.js";
-import { redactText, redactUrl } from "./redact.js";
+import { REDACTION_MASK, redactText, redactUrl } from "./redact.js";
 import type { PageTiming, RequestTiming } from "./timing.js";
+import type { RunAnswer } from "./answer.js";
 
 /**
  * The transcript's copy of a perception's timing: redacted, and WITHOUT the per-request sample list
@@ -20,6 +21,21 @@ function redactDescriptor(d: TargetDescriptor, secrets: readonly string[]): Targ
     ...(d.text === undefined ? {} : { text: redactText(d.text, secrets) }),
     ...(d.frameUrl === undefined ? {} : { frameUrl: redactText(redactUrl(d.frameUrl), secrets) }),
     ...(d.container === undefined ? {} : { container: redactDescriptor(d.container, secrets) }),
+  };
+}
+
+function redactAnswer(a: TranscriptAnswer, secrets: readonly string[]): TranscriptAnswer {
+  const r = (v: string): string => redactText(v, secrets);
+  return {
+    text: r(a.text),
+    accepted: a.accepted,
+    evidence: a.evidence.map((e) => ({
+      ...e,
+      claim: r(e.claim),
+      quote: r(e.quote),
+      url: e.url === null ? null : r(redactUrl(e.url)),
+      ...(e.why === undefined ? {} : { why: r(e.why) }),
+    })),
   };
 }
 
@@ -81,6 +97,14 @@ export interface TranscriptEntry {
   readonly reply?: TranscriptReply;
   /** True when this step typed into a `type=password` field: its value is never recorded, even synthetic. */
   readonly redacted?: boolean;
+  /** For a `report` (#101): the proposed answer, whether code accepted it, and each claim's evidence. */
+  readonly answer?: TranscriptAnswer;
+  /**
+   * The value a `type`/`select` step entered (#98), redacted: registered secrets are masked, a
+   * bound secret field shows only its placeholder, and a `type=password` field's value is never
+   * recorded (the mask stands in, even for a synthetic value).
+   */
+  readonly value?: string;
   /**
    * The chosen control's durable, replay-valid descriptor (redacted, same as
    * every other field here) — additive (#81/#85): a failed action never
@@ -98,6 +122,13 @@ export interface TranscriptReply {
   readonly received: boolean;
   readonly text: string;
   readonly waitedMs: number;
+  /** Why the reply wait ended (#93): the reply held still, the page went idle, or the ceiling passed. */
+  readonly endedBy?: "reply" | "idle" | "ceiling";
+}
+
+/** A reported answer as the transcript keeps it (redacted). */
+export interface TranscriptAnswer extends RunAnswer {
+  readonly accepted: boolean;
 }
 
 export interface TranscriptStep {
@@ -116,6 +147,9 @@ export interface TranscriptStep {
   readonly message?: string;
   readonly reply?: TranscriptReply;
   readonly redacted?: boolean;
+  /** The value typed/selected (redacted by `record`; see `TranscriptEntry.value`). */
+  readonly value?: string;
+  readonly answer?: TranscriptAnswer;
 }
 
 /**
@@ -124,6 +158,10 @@ export interface TranscriptStep {
  * leaves every step up to the failure on disk.
  */
 export type TranscriptListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
+
+function isPasswordControl(c: Control | null): boolean {
+  return c !== null && (c.inputType ?? "").toLowerCase() === "password";
+}
 
 /** Append-only, redacting transcript builder. Steps are numbered from 1 in record order. */
 export class TranscriptLog {
@@ -154,6 +192,10 @@ export class TranscriptLog {
       ...(step.message === undefined ? {} : { message: redactText(step.message, this.#secrets) }),
       ...(step.reply === undefined ? {} : { reply: { ...step.reply, text: redactText(step.reply.text, this.#secrets) } }),
       ...(step.redacted === true ? { redacted: true } : {}),
+      ...(step.value === undefined
+        ? {}
+        : { value: step.redacted === true || isPasswordControl(step.control) ? REDACTION_MASK : redactText(step.value, this.#secrets) }),
+      ...(step.answer === undefined ? {} : { answer: redactAnswer(step.answer, this.#secrets) }),
       ...(step.control === null ? {} : { descriptor: redactDescriptor(step.control.descriptor, this.#secrets) }),
     };
     this.#entries.push(entry);
