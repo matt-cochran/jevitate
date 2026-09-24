@@ -86,12 +86,17 @@ quantity.
 
 `queue_exploration` runs against a PROMOTED mission target, never a raw URL.
 When you want to queue a scoped mission at an at-risk area via MCP:
-- `jevitate mission target add <id> --url <authorized-url> [--goal ...] [--route
-  <glob> ...] --json` registers the target (unpromoted).
+- `jevitate mission target add <id> --name <name> --authorized-origin
+  <authorized-origin> --base-url <url> [--description <text>] --json`
+  registers the target (unpromoted). Note the target's own registration takes
+  NO `--goal`/`--route` — those are `queue_exploration` call arguments
+  (`target`, `goal`, `feature`, `route`, ...), supplied per-enqueue, not baked
+  into the target itself.
 - `jevitate mission target list --json` shows registered targets and their
   promoted/unpromoted state.
 - `jevitate mission target promote <id> --json` promotes it — a human-gated act,
-  same as Journey promotion. Only a promoted target is enqueueable.
+  same as Journey promotion (`jevitate journey promote <id>`). Only a promoted
+  target is enqueueable.
 
 Then `queue_exploration({ target: "<id>", ... })` (via the `jevitate mcp`
 server, registered with `jevitate mcp --print-config ...` or `jevitate init`)
@@ -99,9 +104,5 @@ enqueues a bounded mission and returns a `missionId`.
 
 ## Known gaps
 
-- The MCP inbox/command-queue tools (`queue_retrieval`, `queue_action`,
-  `get_command`, `list_incoming`, `get_thread`, `approve_action`,
-  `cancel_command`, `get_site_health`) are registered on the `jevitate mcp`
-  server but return a typed `not_implemented` error today — the wired tools are
-  `find_capabilities`, `run_journey`, `queue_exploration`, and
-  `ai_generate_text`. Scoping and running work fully through those four.
+- Offline only: `queue_exploration` enqueues but does not itself run the
+  mission — treat the returned `missionId` as "accepted," not "finished."

@@ -19,12 +19,16 @@ check (use `jevitate-run-journey` for that instead).
 
 - `jevitate load run <journeyId> --authorized-origin <origin> [--authorized-origin
   <origin2> ...] --param k=v --concurrency <n> --iterations <n> --seed <n>
-  --json`.
+  [--storage-state <file>] --json`.
 - `<journeyId>` must be a promoted Journey id (same discovery flow as
   `jevitate-run-journey`: `jevitate journey find`/`find_capabilities` first).
 - `--seed` makes the run reproducible — if the human wants to compare two
   configurations, keep the seed fixed and vary only `--concurrency`/
   `--iterations`.
+- `--storage-state <file>` seeds EVERY pool member's session from the same
+  Playwright storageState file (the same authenticated pre-step as `jevitate
+  journey run` — see `jevitate-run-journey`), for load-testing a Journey that
+  needs an authenticated session.
 
 ## Reading the result
 
