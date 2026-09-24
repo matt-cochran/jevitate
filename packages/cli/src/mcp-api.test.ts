@@ -102,6 +102,26 @@ describe("mcp-api wired handlers", () => {
     expect(result.content[0].text).toContain("checkout");
   });
 
+  it("#118: run_journey passes an optional storageState PATH through to the runner seam", async () => {
+    const calls: Array<{ id: string; params: Record<string, string>; storageState?: string }> = [];
+    const tools = buildMcpTools({
+      ...baseDeps,
+      runJourney: async (id, params, storageState) => {
+        calls.push({ id, params, storageState });
+        return { outcome: "ok", journeyId: id };
+      },
+    });
+    const runTool = tools.find((t) => t.name === "run_journey")!;
+    const result = await runTool.handler({ id: "checkout", params: {}, storageState: "/tmp/state.json" });
+    expect(calls).toEqual([{ id: "checkout", params: {}, storageState: "/tmp/state.json" }]);
+    expect(result.isError).toBeUndefined();
+
+    // Omitted entirely when not given — never fabricated.
+    const result2 = await runTool.handler({ id: "checkout", params: {} });
+    expect(calls[1]).toEqual({ id: "checkout", params: {}, storageState: undefined });
+    expect(result2.isError).toBeUndefined();
+  });
+
   it("run_journey rejects a missing id with a structured error (never a fake success)", async () => {
     const tools = buildMcpTools({ ...baseDeps, runJourney: async () => ({ outcome: "ok" }) });
     const runTool = tools.find((t) => t.name === "run_journey")!;
