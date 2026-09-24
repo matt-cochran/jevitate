@@ -20,13 +20,16 @@ import {
  * mission's own allowlist before any browser opens.
  *
  * Exit codes: 0 fixed · 1 still reproduces · 2 inconclusive (the replay could not reach the
- * defect's step, or the input was unusable) — a broken check never reads as "fixed".
+ * defect's step, or the input was unusable) · 4 intermittent (the signal fired on some but not
+ * all fresh-context replays — #74; mirrors the mission `intermittent` hang outcome) — a broken or
+ * flaky check never reads as "fixed".
  */
 
 export const VERIFY_FIX_EXIT_CODES: Readonly<Record<VerifyFixVerdict, number>> = {
   fixed: 0,
   "still-reproduces": 1,
   inconclusive: 2,
+  intermittent: 4,
 };
 
 export interface RunVerifyFixOptions {
@@ -42,6 +45,8 @@ export interface RunVerifyFixOptions {
   readonly settleCeilingMs?: number;
   /** Per-target settle/hang configuration, keyed by origin (`~/.jevitate/targets.json`). */
   readonly targets?: Readonly<Record<string, TargetConfig>>;
+  /** Fresh-context replays for a non-hang defect signal (#74, CLI `--replays`). Default 3. */
+  readonly replays?: number;
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
@@ -67,6 +72,8 @@ interface PersistedFinding {
   readonly hang?: HangSignal;
   /** The finding's own Recording (found after a reset / on a coverage path), when it has one. */
   readonly recording?: Recording;
+  /** How many times the mission's OWN run hit this same finding (its `occurrences`), when recorded. */
+  readonly occurrences?: number;
 }
 
 const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
@@ -108,6 +115,7 @@ function asFinding(v: unknown): PersistedFinding | null {
     ...(hang === null ? {} : { hang }),
     ...(Array.isArray(v.related) ? { related: v.related.filter((r): r is string => typeof r === "string") } : {}),
     ...(typeof v.title === "string" ? { title: v.title } : {}),
+    ...(typeof v.occurrences === "number" ? { occurrences: v.occurrences } : {}),
   };
 }
 
@@ -177,7 +185,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     fingerprint: finding.fingerprint,
     defectKind: finding.kind,
     ...(finding.hang === undefined ? {} : { hang: finding.hang }),
+    ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
     ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
+    ...(opts.replays === undefined ? {} : { replays: opts.replays }),
     openSession: async () => {
       const session = await portFactory().open({
         headless: true,

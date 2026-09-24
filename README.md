@@ -89,11 +89,16 @@ one carries its reproduction: the transcript steps that led to it and the
 Recording step to replay up to. To check a fix, replay the defect:
 
 ```bash
-jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp>
-# exit 0 fixed (signal absent) · 1 still reproduces · 2 inconclusive (replay could not reach the step)
+jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp> --replays 3
+# exit 0 fixed (signal absent on every replay) · 1 still reproduces · 2 inconclusive (replay could
+# not reach the step) · 4 intermittent (fired on some but not all replays — never reported as fixed)
 ```
 
-The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
+A single clean replay is not evidence of a fix (#74): an intermittent signal can simply not fire
+once. `verify-fix` replays the defect's repro `--replays` times (default 3), each in a fresh
+session; only absence across EVERY replay that reached the defect's step is `fixed`.
+
+The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same, always with the default replay count.
 
 ### Success checks (goal mission)
 
