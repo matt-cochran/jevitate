@@ -64,6 +64,29 @@ import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
+import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import type { LogSourceSpec } from "./log-sources.js";
+import type { LogDefectMatcher } from "./log-lines.js";
+
+/**
+ * Backend log correlation (#142): already-validated `--log-source`/`--log-defect` specs, threaded
+ * into every mission-type builder below the same way `invariants` is. `undefined`/empty ⇒ no
+ * sources ⇒ `openServerLogRuntime` is a complete no-op (existing runs pay nothing).
+ */
+export interface ServerLogOptions {
+  readonly sources: readonly LogSourceSpec[];
+  readonly logDefect: readonly LogDefectMatcher[];
+  readonly allowLogCmd?: boolean;
+  readonly drainMs?: number;
+}
+
+function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
+  serverLogs?: ServerLogsSummary;
+  serverLogDefects?: ServerLogDefect[];
+} {
+  if (runtimeResult === undefined) return {};
+  return { serverLogs: runtimeResult.summary, ...(runtimeResult.defects.length > 0 ? { serverLogDefects: runtimeResult.defects } : {}) };
+}
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -142,6 +165,8 @@ export interface RunExplorationOptions {
   readonly conversation?: ConversationOptions;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -262,6 +287,10 @@ export interface RunExplorationResult {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -293,6 +322,15 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
   const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
+  // load too; a no-op (`undefined`) when `--log-source` was not given.
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: secrets ?? [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
@@ -302,7 +340,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       onRecording: journal.onRecording,
       actor,
       judge: opts.judge,
@@ -322,8 +360,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
+    // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
     journal.writeRecording(mission.recording);
-    journal.writeTranscript(mission.transcript);
+    journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
     const engine = currentEngineInfo();
     const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page), engine);
     const resultPath = resultPathFor(journal.recordingPath);
@@ -359,7 +399,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       actions: mission.run.actions,
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
-      transcript: mission.transcript,
+      transcript: serverLogRun?.transcript ?? mission.transcript,
       exitCode: goalExitCode(mission.outcome),
       resultPath,
       target: {
@@ -374,12 +414,16 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...serverLogResult(serverLogRun),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
     return result;
   } finally {
     disarmKillSwitch();
+    // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
+    // (no drain wait) rather than leaving them open until process exit.
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -567,6 +611,8 @@ export interface RunCoverageMissionOptions {
   readonly routeGlobs?: readonly string[];
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
 }
 
 export interface RunCoverageMissionResult {
@@ -597,6 +643,10 @@ export interface RunCoverageMissionResult {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -621,6 +671,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
   const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -635,18 +692,19 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       seedUrl: opts.url,
       allowlist: opts.allowlist,
       bounds: opts.bounds,
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
       await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
-    journal.writeTranscript(result.transcript);
+    journal.writeTranscript(serverLogRun?.transcript ?? result.transcript);
     // A silent run that never proved anything (the seed redirected off-target, or the frontier
     // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
@@ -683,10 +741,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...serverLogResult(serverLogRun),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
     disarmKillSwitch();
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -745,6 +805,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly coverageThresholds?: Partial<CoverageThresholds>;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -772,6 +834,10 @@ export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 };
 
 /**
@@ -800,6 +866,13 @@ export async function runAdversarialCliMission(
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: opts.secrets ?? [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
@@ -821,12 +894,16 @@ export async function runAdversarialCliMission(
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       onRecording: journal.onRecording,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(outcome.transcript);
+    // `AdversarialOutcome.transcript` is a mutable `TranscriptEntry[]`; the correlated array only
+    // ADDS an optional `serverLogs` field per entry (`TranscriptEntryWithLogs extends TranscriptEntry`).
+    const transcript = (serverLogRun?.transcript ?? outcome.transcript) as TranscriptEntry[];
     journal.writeRecording(outcome.recording);
-    journal.writeTranscript(outcome.transcript);
+    journal.writeTranscript(transcript);
     const exitCode = missionExitCode(outcome.outcome);
     const resultPath = resultPathFor(journal.recordingPath);
     const engine = currentEngineInfo();
@@ -837,7 +914,7 @@ export async function runAdversarialCliMission(
     for (const h of outcome.hangs) {
       drafts.push(draftForHang(h, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${h.fingerprint}` }));
     }
-    if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, outcome.transcript, ctx));
+    if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, transcript, ctx));
     const issues = await processIssueDrafts(
       journal.recordingPath,
       drafts,
@@ -847,6 +924,7 @@ export async function runAdversarialCliMission(
     );
     const result = {
       ...outcome,
+      transcript,
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       exitCode,
@@ -861,10 +939,12 @@ export async function runAdversarialCliMission(
       engine,
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...serverLogResult(serverLogRun),
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
     disarmKillSwitch();
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -909,6 +989,8 @@ export interface RunFeatureCliMissionOptions {
   readonly saveStorageState?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
@@ -935,6 +1017,10 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
   readonly defects?: InvariantDefect[];
   readonly invariantSpec?: InvariantSpec;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -959,6 +1045,13 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
   const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -969,17 +1062,18 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       allowlist: opts.allowlist,
       scope,
       bounds: opts.bounds,
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `feature-${stamp}-path-${i}.json`);
       await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
-    journal.writeTranscript(result.transcript);
+    journal.writeTranscript(serverLogRun?.transcript ?? result.transcript);
 
     // Honest outcome (ticket #78): a run that exercised nothing in-scope and
     // non-chrome proved nothing about the named capability — `inconclusive`,
@@ -1011,6 +1105,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
       ...result,
+      transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],
       failure: result.failure ?? coverageFailure,
       missionOutcome,
       exitCode,
@@ -1023,10 +1118,12 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
+      ...serverLogResult(serverLogRun),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
     disarmKillSwitch();
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }

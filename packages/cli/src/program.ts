@@ -107,7 +107,11 @@ import {
   parseSuccessSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
+  type ServerLogOptions,
 } from "./explore-api.js";
+import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
+import { parseLogDefectSpecs } from "./log-correlation.js";
+import { LogSpecError } from "./log-lines.js";
 import { runUsabilityMission, runUxReview, UxAnalysisFailedError, type MissionTranscriptEntryLike } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
@@ -1452,6 +1456,27 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--log-source <spec>",
+      "backend log source (repeatable; goal, coverage, exploratory, adversarial, --feature): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--allow-log-cmd",
+      "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
+      false,
+    )
+    .option(
+      "--log-defect <level|/regex/>",
+      "backend log lines matching this (repeatable) become a server-log defect: a level (error|warn|info|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--server-log-drain-ms <ms>",
+      "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
+    )
     .option("--json", "emit a JSON envelope")
     .addHelpText(
       "after",
@@ -1469,6 +1494,10 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
+        logSource: string[];
+        allowLogCmd?: boolean;
+        logDefect: string[];
+        serverLogDrainMs?: string;
         minControlCoverage?: string;
         requireFormSubmit: boolean;
         fileIssues?: boolean;
@@ -1598,6 +1627,32 @@ export function buildProgram(deps: CliDeps): Command {
         }
       }
       const withInvariants = invariants === undefined ? {} : { invariants };
+      // Backend log sources (#142): validated (spec shape, --allow-log-cmd gate, matcher regexes)
+      // BEFORE any browser opens — the same fail-closed discipline as --invariants above.
+      let serverLog: ServerLogOptions | undefined;
+      if (o.logSource.length > 0 || o.logDefect.length > 0) {
+        if (strategy === "usability" && o.feature === undefined) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--log-source/--log-defect is not supported with --strategy usability"));
+          return;
+        }
+        try {
+          const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
+          const logDefect = parseLogDefectSpecs(o.logDefect);
+          serverLog = {
+            sources,
+            logDefect,
+            allowLogCmd: o.allowLogCmd ?? false,
+            ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
+          };
+        } catch (err) {
+          if (err instanceof LogSourceSpecError || err instanceof LogSpecError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          throw err;
+        }
+      }
+      const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
@@ -1670,6 +1725,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1766,6 +1822,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1879,6 +1936,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           process.exitCode = result.exitCode;
@@ -1952,6 +2010,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
           ...withInvariants,
+          ...withServerLog,
         });
         const envelope = ok(result);
         if (o.json) {
@@ -1990,10 +2049,23 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--allow-log-cmd",
+      "re-checking a server-log defect whose --log-source includes cmd:<command> needs this too (operator-declared only)",
+      false,
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<
-        { result: string; fingerprint: string; storageState?: string; replays?: string; invariants: string[]; json?: boolean } & BrowserLaunchFlags
+        {
+          result: string;
+          fingerprint: string;
+          storageState?: string;
+          replays?: string;
+          invariants: string[];
+          allowLogCmd?: boolean;
+          json?: boolean;
+        } & BrowserLaunchFlags
       >();
       try {
         const report = await runVerifyFix({
@@ -2003,6 +2075,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
+          ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });

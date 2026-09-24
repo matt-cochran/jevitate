@@ -11,7 +11,9 @@ import {
   type HangSignal,
   type VerifyFixResult,
   type VerifyFixVerdict,
+  type VerifySession,
 } from "@jevitate/explore";
+import { verifyServerLogDefect } from "./server-log-verify.js";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -53,6 +55,8 @@ export interface RunVerifyFixOptions {
    * the spec persisted with the mission. Validated against the MISSION's allowlist before any replay.
    */
   readonly invariantFiles?: readonly string[];
+  /** Re-checking a `server-log` defect whose sources include a `cmd:` one needs this too (#142). */
+  readonly allowLogCmd?: boolean;
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
@@ -82,6 +86,8 @@ interface PersistedFinding {
   readonly occurrences?: number;
   /** For a declared-invariant defect (#86): the invariant id to re-check. */
   readonly invariantId?: string;
+  /** For a `server-log` defect (#142): what to re-tail and match, from the defect's own `serverLog`. */
+  readonly serverLog?: { readonly sources: readonly string[]; readonly matcher: string; readonly normalizedMessage: string; readonly drainMs: number };
 }
 
 const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
@@ -109,12 +115,22 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
+/** A persisted `server-log` defect's re-check spec (#142), validated just enough to replay it. */
+function asServerLog(v: unknown): PersistedFinding["serverLog"] | null {
+  if (!isRecord(v)) return null;
+  if (!Array.isArray(v.sources) || !v.sources.every((s): s is string => typeof s === "string")) return null;
+  if (typeof v.matcher !== "string" || typeof v.normalizedMessage !== "string" || typeof v.drainMs !== "number") return null;
+  return { sources: v.sources, matcher: v.matcher, normalizedMessage: v.normalizedMessage, drainMs: v.drainMs };
+}
+
 function asFinding(v: unknown): PersistedFinding | null {
   if (!isRecord(v) || typeof v.fingerprint !== "string" || typeof v.kind !== "string") return null;
   const repro = v.repro;
   if (!isRecord(repro) || typeof repro.recordingStepIndex !== "number") return null;
   const hang = v.kind === "hang" ? asHangSignal(v.signal) : null;
   if (v.kind === "hang" && hang === null) return null;
+  const serverLog = v.kind === "server-log" ? asServerLog(v.serverLog) : null;
+  if (v.kind === "server-log" && serverLog === null) return null;
   const own = repro.recording === undefined ? undefined : RecordingSchema.safeParse(repro.recording);
   if (own !== undefined && !own.success) return null; // a finding whose repro cannot be trusted is skipped
   return {
@@ -123,6 +139,7 @@ function asFinding(v: unknown): PersistedFinding | null {
     kind: v.kind,
     repro: { recordingStepIndex: repro.recordingStepIndex },
     ...(hang === null ? {} : { hang }),
+    ...(serverLog === null ? {} : { serverLog }),
     ...(Array.isArray(v.related) ? { related: v.related.filter((r): r is string => typeof r === "string") } : {}),
     ...(typeof v.title === "string" ? { title: v.title } : {}),
     ...(typeof v.occurrences === "number" ? { occurrences: v.occurrences } : {}),
@@ -141,7 +158,7 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   // A run's own Recording (a coverage run has none; its findings carry their path).
   const recording = result.recording === null || result.recording === undefined ? null : RecordingSchema.parse(result.recording);
   const findings: PersistedFinding[] = [];
-  for (const list of [result.defects, result.hangs]) {
+  for (const list of [result.defects, result.hangs, result.serverLogDefects]) {
     if (!Array.isArray(list)) continue;
     for (const item of list) {
       const f = asFinding(item);
@@ -210,6 +227,46 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
       ? { spec: invariantSpec, id: finding.invariantId, allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl }
       : undefined;
+  const openSession = async (): Promise<VerifySession> => {
+    const session = await portFactory().open({
+      headless: true,
+      allowedOrigins: [...mission.target.allowlist],
+      baseUrl: origin,
+      ...opts.browser,
+      ...(storageState !== undefined ? { storageState } : {}),
+    });
+    const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
+    return { page: session.page, actor, close: () => session.close() };
+  };
+  // A `server-log` defect (#142) is re-checked by REPLAYING and re-tailing the SAME log sources —
+  // never by `@jevitate/explore`'s `verifyFix`, which only looks at DOM/console/network signals.
+  if (finding.kind === "server-log") {
+    if (finding.serverLog === undefined) {
+      return {
+        fingerprint: finding.fingerprint,
+        verdict: "inconclusive",
+        observedFingerprints: [],
+        replay: { outcome: "failed", at: -1, error: "not replayed" },
+        reason: "a server-log defect needs its log source(s) and matcher to be re-checked",
+        exitCode: VERIFY_FIX_EXIT_CODES.inconclusive,
+        ...(finding.title === undefined ? {} : { title: finding.title }),
+      };
+    }
+    const result = await verifyServerLogDefect({
+      recording,
+      recordingStepIndex: finding.repro.recordingStepIndex,
+      fingerprint: finding.fingerprint,
+      sources: finding.serverLog.sources,
+      matcher: finding.serverLog.matcher,
+      normalizedMessage: finding.serverLog.normalizedMessage,
+      drainMs: finding.serverLog.drainMs,
+      allowLogCmd: opts.allowLogCmd ?? false,
+      ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
+      ...(opts.replays === undefined ? {} : { replays: opts.replays }),
+      openSession,
+    });
+    return { ...result, exitCode: VERIFY_FIX_EXIT_CODES[result.verdict], ...(finding.title === undefined ? {} : { title: finding.title }) };
+  }
   const result = await verifyFix({
     perceive: perceiveOpts,
     recording,
@@ -221,17 +278,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
     ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
     ...(opts.replays === undefined ? {} : { replays: opts.replays }),
-    openSession: async () => {
-      const session = await portFactory().open({
-        headless: true,
-        allowedOrigins: [...mission.target.allowlist],
-        baseUrl: origin,
-        ...opts.browser,
-        ...(storageState !== undefined ? { storageState } : {}),
-      });
-      const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
-      return { page: session.page, actor, close: () => session.close() };
-    },
+    openSession,
   });
   return {
     ...result,
