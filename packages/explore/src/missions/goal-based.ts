@@ -62,6 +62,13 @@ export async function runGoalBasedMission(
     ...cfg,
     missionContext:
       "success is judged independently by a user-supplied assertion — your `done` is only a proposal, not the verdict",
+    // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
+    // the assertion holds, so an early `done` never ends the run silently.
+    successCheck: () =>
+      checkAssertion(cfg.actor, cfg.successAssertion, { timeoutMs: cfg.oracleTimeoutMs ?? 3000 }).then(
+        (v) => v,
+        () => false,
+      ),
   });
 
   // A hang is a first-class finding: reproduce it in fresh contexts, then report k/N.

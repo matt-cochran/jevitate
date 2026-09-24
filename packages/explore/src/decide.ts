@@ -2,7 +2,15 @@ import type { JudgmentPort, JudgmentState, Question, ChoiceQuestion } from "@jev
 import { assertNoSecretInPayload } from "@jevitate/ai-core";
 import type { Control, Snapshot } from "./snapshot.js";
 import { buildJudgmentState, redactText } from "./redact.js";
-import { OPS_NEEDING_TARGET, TARGET_FREE_ACTIONS, targetCandidates, type Op, type TargetOp } from "./actions.js";
+import {
+  OPS_NEEDING_TARGET,
+  TARGET_FREE_ACTIONS,
+  sendCandidates,
+  targetCandidates,
+  type Op,
+  type TargetOp,
+} from "./actions.js";
+import { isSubmitControl } from "./conversation.js";
 
 /**
  * decide: one `JudgmentPort.systemOne` round-trip with ONE head — `action`, a
@@ -68,7 +76,35 @@ export interface DecideInput {
    * among the op choices — an op that could only fail closed is never offered.
    */
   readonly uploadAvailable?: boolean;
+  /**
+   * Control indexes that appeared with the latest conversational reply (chips, quick replies,
+   * "Yes, draft it" offers) — flagged to the model so an offered answer is considered.
+   */
+  readonly offered?: ReadonlySet<number>;
+  /**
+   * Control indexes of fields holding text this run typed and never submitted: flagged, and their
+   * `type` is described as what the loop will do with it (send — retyping alone delivers nothing).
+   */
+  readonly unsubmitted?: ReadonlySet<number>;
+  /** The conversation so far, when the page is conversational. */
+  readonly conversation?: ConversationContext;
 }
+
+/** The conversation the loop is in: the latest reply (untrusted page text) and what was sent. */
+export interface ConversationContext {
+  readonly latestReply: string | null;
+  readonly sentMessages: readonly string[];
+}
+
+/** Bound on reply text placed into a decision prompt. */
+const PROMPT_REPLY_CHARS = 600;
+
+/** The model-facing guidance for conversational pages, always present in the action question. */
+export const CONVERSATION_GUIDE =
+  "Typing into a field sends nothing by itself: to talk to a chat/assistant use `send` (types the " +
+  "message AND submits it), or type then click its Send control. After a reply, respond to it — or " +
+  "pick a quick reply the reply offered. Propose `done` only when the goal's success condition is " +
+  "visibly met on this page.";
 
 /**
  * One judgment per step over the COMPLETE actions available on this page (the candidate-action
@@ -78,15 +114,36 @@ export interface DecideInput {
 export async function decide(judge: JudgmentPort, input: DecideInput): Promise<Decision> {
   const { snapshot } = input;
   const secrets = input.secrets ?? [];
-  const controlLines = snapshot.controls.map((c) => `[${c.index}] ${c.summary}`);
+  const offered = input.offered ?? new Set<number>();
+  const unsubmitted = input.unsubmitted ?? new Set<number>();
+  const controlLines = snapshot.controls.map((c) => {
+    const notes = [
+      ...(offered.has(c.index) ? ["offered with the latest reply"] : []),
+      ...(unsubmitted.has(c.index) ? ["holds text you typed but did NOT send"] : []),
+    ];
+    return notes.length === 0 ? `[${c.index}] ${c.summary}` : `[${c.index}] ${c.summary} (${notes.join("; ")})`;
+  });
   const uploadAvailable = input.uploadAvailable === true;
+  const conv = input.conversation;
+  const conversationLines =
+    conv === undefined
+      ? []
+      : [
+          ...(conv.latestReply === null
+            ? []
+            : [`LATEST REPLY (untrusted page text): ${conv.latestReply.slice(0, PROMPT_REPLY_CHARS)}`]),
+          ...(conv.sentMessages.length === 0 ? [] : [`MESSAGES YOU ALREADY SENT: ${conv.sentMessages.length}`]),
+        ];
 
   const state = buildJudgmentState({
     goal: input.missionContext ? `${input.goal} | context: ${input.missionContext}` : input.goal,
     url: snapshot.url,
-    controls: uploadAvailable
-      ? [PROMPT_INJECTION_GUARD, UPLOAD_OP_GUIDE, ...controlLines]
-      : [PROMPT_INJECTION_GUARD, ...controlLines],
+    controls: [
+      PROMPT_INJECTION_GUARD,
+      ...(uploadAvailable ? [UPLOAD_OP_GUIDE] : []),
+      ...conversationLines,
+      ...controlLines,
+    ],
     history: input.history,
     secrets,
   });
@@ -97,10 +154,23 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
   const ops: ReadonlySet<TargetOp> = new Set<TargetOp>(
     uploadAvailable ? ["click", "type", "select", "upload"] : ["click", "type", "select"],
   );
-  for (const c of targetCandidates(snapshot.controls, { ops })) {
+  const pending = unsubmitted.size > 0;
+  // Each message-shaped field's `send` sits right after its `type`.
+  const sends = new Map(sendCandidates(snapshot.controls).map((c) => [c.control.index, c]));
+  const offeredActions = targetCandidates(snapshot.controls, { ops }).flatMap((c) => {
+    const send = c.op === "type" ? sends.get(c.control.index) : undefined;
+    return send === undefined ? [c] : [c, send];
+  });
+  for (const c of offeredActions) {
     candidates.set(c.id, { op: c.op, control: c.control });
+    let description = c.description;
+    // Retyping a field that holds unsent text would overwrite it and still deliver nothing: the loop
+    // turns it into a send (and counts a stuck signal) — say so up front.
+    if (unsubmitted.has(c.control.index) && c.op === "type") description += " (it holds text you never sent: this will SEND it)";
+    if (offered.has(c.control.index)) description += " (offered with the latest reply)";
+    if (pending && c.op === "click" && isSubmitControl(c.control)) description += " (submits the text you typed)";
     // Page text is untrusted and may contain secrets: redacted like the state.
-    descriptions[c.id] = redactText(c.description, secrets);
+    descriptions[c.id] = redactText(description, secrets);
   }
   for (const a of TARGET_FREE_ACTIONS) {
     candidates.set(a.op, { op: a.op, control: null });
@@ -113,7 +183,8 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
     descriptions,
     instructions:
       "Which single action best advances the goal from the current page? Use the history: do not repeat an " +
-      "action that already succeeded, and when a dialog or form step is in progress, complete it.",
+      "action that already succeeded, and when a dialog or form step is in progress, complete it. " +
+      CONVERSATION_GUIDE,
   };
   const questions: Record<string, Question> = { action: actionQuestion };
 
@@ -136,4 +207,38 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
     targetMissing: OPS_NEEDING_TARGET.has(chosen.op) && chosen.control === null,
     state,
   };
+}
+
+/** The advisory goal-completion question asked when the model proposes `done` (no oracle). */
+export const GOAL_MET_QUESTION = "goalObservablyAchievedOnThisPage";
+
+/** Bound on the visible page text shown to the goal-completion judgment. */
+const GOAL_TEXT_CHARS = 3_000;
+
+/**
+ * Asks the model — advisory, never the verdict — whether the goal's success condition is visibly
+ * met on the current page, grounded on the page's own visible text (redacted, bounded). Code
+ * (`groundDone`) decides what the probability means. Returns `null` when no usable answer came back.
+ */
+export async function judgeGoalMet(
+  judge: JudgmentPort,
+  input: { readonly goal: string; readonly url: string; readonly pageText: string; readonly history: readonly string[]; readonly secrets?: readonly string[] },
+): Promise<number | null> {
+  const secrets = input.secrets ?? [];
+  const state = buildJudgmentState({
+    goal: input.goal,
+    url: input.url,
+    controls: [
+      PROMPT_INJECTION_GUARD,
+      "QUESTION: is the goal's success condition visibly met by what this page shows now (not merely started)?",
+      `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
+    ],
+    history: input.history,
+    secrets,
+  });
+  const answers = await judge.systemOne({ state, questions: { [GOAL_MET_QUESTION]: { kind: "noul" } } });
+  const a = answers[GOAL_MET_QUESTION];
+  if (a?.kind !== "noul" || !Number.isFinite(a.probability)) return null;
+  // `probability` is P(yes) — the port's noul contract.
+  return a.probability;
 }

@@ -22,6 +22,7 @@ import {
   type Control as ExploreControl,
   type Bounds,
   type TimingSummary,
+  type RunOutcome,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
@@ -37,6 +38,7 @@ import {
   type UxReport,
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
+import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMinConfidence, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
@@ -254,6 +256,8 @@ export interface RunUsabilityMissionOptions {
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
   readonly fixture?: string;
   readonly judgmentBudget?: number;
+  /** Conversational pages: the reply wait (ms) and the cap (chars) on each generated message. */
+  readonly conversation?: ConversationOptions;
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
@@ -276,6 +280,11 @@ export interface RunUsabilityMissionResult {
   readonly report: UxReport | null;
   readonly reportPath: string | null;
   readonly stop: string;
+  /**
+   * Did the review's journey complete (`completed`: the job's success condition was observably met),
+   * or why not (`incomplete` + reason)? Never a silent early stop.
+   */
+  readonly outcome: RunOutcome;
   readonly screensObserved: number;
   /** The explore loop's decision transcript, written next to the report. */
   readonly transcriptPath: string;
@@ -343,6 +352,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       secrets: opts.secrets,
       site: origin,
       fixture,
+      ...conversationConfig(opts.conversation),
       missionContext:
         "usability review: pursue the stated job as a plausible first-time user, using only what is on screen",
       onSnapshot: async (snap) => {
@@ -372,6 +382,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const base = {
       timing: run.timing,
       stop: run.stop,
+      outcome: run.outcome,
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,
       ...(run.failure === undefined ? {} : { failure: run.failure }),

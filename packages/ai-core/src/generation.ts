@@ -7,8 +7,37 @@ export const FormValueInput = z.object({
   goal: z.string(),
   visibleContext: z.string().max(4000),
   history: z.array(z.string()).default([]),
+  /**
+   * For a `<select>`: its actual option labels. The answer must be one of them verbatim — the
+   * caller checks it and never selects a guessed option.
+   */
+  options: z.array(z.string().max(200)).max(100).optional(),
+  /** Task guidance shown to the model (e.g. "answer with exactly one of `options`"). */
+  instructions: z.string().max(1000).optional(),
 }).strict();
 export const FormValueOutput = z.object({ text: z.string().nullable() }).strict();
+
+/** The model-facing brief for a `chat.reply`, carried in the input so every adapter shows it. */
+export const CHAT_REPLY_INSTRUCTIONS =
+  "You are the USER in a chat with a software assistant, pursuing `goal`. Write the user's next " +
+  "message: a short, plain, conversational answer to `latestReply` (answer its question directly; " +
+  "if it offers a choice, pick one). Speak only as the user, in the first person. Never invent the " +
+  "assistant's lines, never use markdown headings or lists, never restate the goal as an essay, and " +
+  "never repeat any of `sentMessages`. At most `maxChars` characters. With no `latestReply` yet, " +
+  "open with one or two sentences stating what you want.";
+
+/** The next user message in a conversation (a chat composer). */
+export const ChatReplyInput = z.object({
+  goal: z.string(),
+  fieldLabel: z.string(),
+  /** The assistant's latest reply (untrusted page text, redacted, bounded), or null before any. */
+  latestReply: z.string().max(2000).nullable(),
+  /** The messages already sent in this conversation (redacted, bounded), oldest first. */
+  sentMessages: z.array(z.string().max(2000)).max(50).default([]),
+  maxChars: z.number().int().min(20).max(2000),
+  instructions: z.string().max(1000).default(CHAT_REPLY_INSTRUCTIONS),
+}).strict();
+export const ChatReplyOutput = z.object({ text: z.string().nullable() }).strict();
 
 export const TriageInput = z.object({ failureSummary: z.string(), url: z.string() }).strict();
 export const TriageOutput = z.object({ summary: z.string(), likelyCause: z.string() }).strict();
@@ -78,7 +107,8 @@ export const UxSpecificsItem = z
 export const UxSpecificsOutput = z.object({ items: z.array(UxSpecificsItem) }).strict();
 
 export const GEN_TASKS = {
-  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "1" },
+  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "2" },
+  "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "1" },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
   "ux.specifics": { input: UxSpecificsInput, output: UxSpecificsOutput, promptVersion: "1", temperature: 0 },
@@ -127,7 +157,17 @@ export class FakeGenerationGateway implements GenerationPort {
     };
   }
   private defaultFor(kind: GenTaskKind, input: unknown): unknown {
-    if (kind === "form.value") return { text: `value:${(input as { fieldLabel: string }).fieldLabel}` };
+    if (kind === "form.value") {
+      const i = input as { fieldLabel: string; options?: string[] };
+      // A select answers with a real option (the first non-empty one), deterministically.
+      const option = i.options?.find((o) => o.trim() !== "");
+      return { text: option ?? `value:${i.fieldLabel}` };
+    }
+    if (kind === "chat.reply") {
+      const i = input as { fieldLabel: string; sentMessages: string[]; latestReply: string | null };
+      const turn = i.sentMessages.length + 1;
+      return { text: turn === 1 ? `message 1 for ${i.fieldLabel}` : `message ${turn}, answering: ${(i.latestReply ?? "").slice(0, 40)}` };
+    }
     if (kind === "ux.recommendation") {
       const i = input as { principle: string };
       return { recommendation: `Improve "${i.principle}" on this screen.` };
