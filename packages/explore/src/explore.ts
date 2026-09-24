@@ -1,7 +1,8 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import type { Recording, ValueOrVar } from "@jevitate/recording";
+import type { Page } from "playwright";
+import { writeClassifier, type Recording, type ValueOrVar } from "@jevitate/recording";
 import {
   BoundsTracker,
   NoProgressDetector,
@@ -23,30 +24,38 @@ import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalMet } from "./decide.js";
-import { FillHelper, capMessage, chatReply, matchOption } from "./fill.js";
+import { FieldValueLog, FillHelper, capMessage, chatReply, matchOption } from "./fill.js";
 import {
   type SecretField,
   boundSecretField,
   maskSecretFields,
   secretFieldContext,
+  secretFieldNeedsValue,
   secretFieldSecrets,
   secretFieldValue,
+  secretFieldsToFill,
   secretPlaceholder,
 } from "./secret-fields.js";
-import { act } from "./act.js";
-import { SideEffectGuard, awaitWrites } from "./side-effects.js";
+import { act, parseInterceptor } from "./act.js";
+import { SideEffectGuard, SideEffectLog, awaitWrites, type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
+import { coveredByInterceptors } from "./occlusion.js";
+import { descriptorToLocator } from "@jevitate/recorder";
 import { ObservedPages, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
 import {
   REPLY_CEILING_MS,
   GOAL_CHECK_TRIGGER,
   GOAL_MET_THRESHOLD,
   REPLY_WAIT_MS,
+  STUCK_TURNS,
   UnsubmittedTypeTracker,
+  goalCallToAction,
   groundDone,
   isSubmitControl,
+  lastQuestion,
   readPageText,
+  repetitiveTurns,
   sameMessage,
   stillBusy,
   waitForChange,
@@ -60,8 +69,17 @@ import { resolveMissionFixture } from "./fixture.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, describeFailure } from "./mission-failure.js";
-import { EMPTY_STATUS, describeStatus, isEmptyStatus, readPageStatus, statusDelta, type PageStatus } from "./status.js";
+import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
+import {
+  EMPTY_STATUS,
+  describeStatus,
+  isEmptyStatus,
+  readInProgressStatus,
+  readPageStatus,
+  statusDelta,
+  type PageStatus,
+} from "./status.js";
+import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
@@ -182,6 +200,14 @@ export interface ExploreConfig {
   readonly replyMaxChars?: number;
   /** Bound (ms) a `wait` decision waits for the page to change. Default `WAIT_OP_MS`. */
   readonly waitOpMs?: number;
+  /**
+   * Job-wait budget (ms, #92): how long `wait`s keep waiting, with backoff, while the page shows an
+   * in-progress status ("Simulating…", `aria-busy`, a job "is running") — and how long a model
+   * `blocked` is deferred into such a wait. Default `replyCeilingMs`.
+   */
+  readonly jobWaitMs?: number;
+  /** The shared safety policy (#116) and write classifier (#110) configuration. */
+  readonly safety?: SafetyConfig;
 }
 
 export interface ExploreRun {
@@ -218,6 +244,34 @@ export interface ExploreRun {
    * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
    */
   readonly blockingCause?: string;
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  /** Writes past the listed cap (`MAX_SIDE_EFFECTS`), counted — present only when some were. */
+  readonly sideEffectsTruncated?: number;
+}
+
+/** The longest single slice (ms) of one job wait: the model re-perceives the page between slices. */
+const JOB_WAIT_SLICE_MS = 60_000;
+
+/**
+ * Waits, with backoff, while the page shows an in-progress status (#92): until it clears (the job
+ * finished — then the page is given a moment to settle), the page navigates, or `budgetMs` passes.
+ */
+async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: boolean; waitedMs: number }> {
+  const started = Date.now();
+  const url = safeUrl(page);
+  let delay = 1_000;
+  for (;;) {
+    const left = budgetMs - (Date.now() - started);
+    if (left <= 0) return { cleared: false, waitedMs: Date.now() - started };
+    await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
+    delay = Math.min(delay * 2, 15_000);
+    if (safeUrl(page) !== url || (await readInProgressStatus(page)) === null) {
+      const rest = budgetMs - (Date.now() - started);
+      if (rest > 0) await monitorFor(page).waitSettled({ ceilingMs: Math.min(rest, 5_000) }).catch(() => undefined);
+      return { cleared: true, waitedMs: Date.now() - started };
+    }
+  }
 }
 
 /**
@@ -228,6 +282,17 @@ const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset
 
 /** Roles whose click changes an input's value (so a later repeat of a write sends something new). */
 const TOGGLE_ROLES: ReadonlySet<string> = new Set(["checkbox", "radio", "switch", "option", "menuitemcheckbox", "menuitemradio"]);
+
+/** A button whose name reads as a form's submit (#111: a SPA's "Sign up" / "Create account" / "Save"). */
+const SUBMIT_LIKE_NAME = /^\s*(?:sign ?up|register|create(?: account)?|continue|log ?in|sign ?in|save|next|submit|confirm|finish)\b/i;
+
+/** A click that submits a form: a real submit control, a Send-like button, or a submit-named button. */
+const submitsAForm = (c: Control): boolean =>
+  c.submits === true || isSubmitControl(c) || ((c.role === "button" || c.tag === "button") && SUBMIT_LIKE_NAME.test(c.name));
+
+/** A click that may submit what was typed (#123: typed values count as used after it). */
+const buttonLike = (c: Control): boolean =>
+  c.role === "button" || c.tag === "button" || (c.tag === "input" && (c.inputType === "submit" || c.inputType === "button"));
 
 /** A control's identity across snapshots (indexes are per-snapshot only). */
 const keyOf = (c: Control): string => JSON.stringify(c.descriptor);
@@ -249,6 +314,13 @@ function quote(s: string, n = 160): string {
 function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
+
+/**
+ * Unwinds out of the loop after the FIRST navigation failed unreachable (#128) — `stop`/`failure`
+ * are already set at the point it's thrown; the outer catch recognises it and does nothing more
+ * (never reclassifies it as a generic `crashed` engine failure).
+ */
+class FirstNavigationFailedSentinel extends Error {}
 
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   // #1 — authorize the start target before ANY snapshot/decision/action.
@@ -285,6 +357,30 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let incomplete: string | null = null;
   const unsent = new UnsubmittedTypeTracker();
   const conversation: { latestReply: string | null; sent: string[] } = { latestReply: null, sent: [] };
+  /** Consecutive message generations made while the conversation was stuck (#122). */
+  let stuckTurns = 0;
+  /** The current stuck episode was already told to the decision (#122). */
+  let stuckNoted = false;
+  /**
+   * After a user turn went out (#122): when the conversation is now stuck on content-free / repeated
+   * turns, the NEXT decision is told so once per episode — answer concretely, or take the page's
+   * call to action toward the goal.
+   */
+  const noteStuckConversation = (controls: readonly Control[]): void => {
+    if (!repetitiveTurns(conversation.sent)) {
+      stuckNoted = false;
+      return;
+    }
+    if (stuckNoted) return;
+    stuckNoted = true;
+    const cta = goalCallToAction(controls, cfg.goal);
+    history.push(
+      `the conversation is stuck: your last ${STUCK_TURNS} messages acknowledged or repeated without answering — ` +
+        `answer the assistant's question with a concrete fact or choice${cta === null ? "" : `, or take the page's call to action ${quote(cta.name, 80)}`}`,
+    );
+  };
+  /** The values this run typed into each form field, and which were submitted (#123). */
+  const valueLog = new FieldValueLog();
   /** Controls present just before a message was sent — the next snapshot's new ones were offered with the reply. */
   let offerBaseline: Set<string> | null = null;
   let offeredKeys = new Set<string>();
@@ -311,19 +407,37 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let statusAfter: string | null = null;
   /** Consecutive `wait`s that changed nothing while nothing was pending. */
   let quietWaits = 0;
+  /**
+   * CSS selectors (parsed from a Playwright "intercepts pointer events" failure, #90) for elements
+   * proven to cover a real click. Every control they still cover is withheld from the model until the
+   * page state changes — a click failure otherwise burns the whole run re-choosing the same or a
+   * sibling target under the same backdrop.
+   */
+  let blockedInterceptors: readonly string[] = [];
+  /** The page signature blocked interceptors were recorded against — cleared once it changes. */
+  let blockedSinceSignature: string | null = null;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
     target: null,
   };
-  /** The most concrete cause known now, in #84's priority order; null when there is none. */
+  /**
+   * The most concrete cause known now, in #84's priority order; null when there is none. An invalid
+   * field is named ONLY when the last action taken was a click that sent no request at all (#130a) —
+   * the shape of a form submit the browser's own validation silently blocked. A click that DID send a
+   * request (even to the wrong endpoint — a `--success` typo, say) clears the field as the blocker: an
+   * unrelated field's stale `:invalid` state elsewhere on the page never gets blamed for that. An
+   * error toast/alert is preferred over a field either way.
+   */
   const blockingCause = (): string | null => {
     if (blockers.failClosed !== null) return blockers.failClosed;
     if (blockers.target !== null) return blockers.target.text;
-    const field = status.invalid[0];
-    if (field !== undefined) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
     const alert = status.alerts[0];
     if (alert !== undefined) return `the page shows alert ${quote(alert)}`;
+    const field = status.invalid[0];
+    const lastClick = sideEffects.lastClick();
+    const blockedBySubmit = lastActedOp === "click" && lastClick !== null && !lastClick.requestSent;
+    if (field !== undefined && blockedBySubmit) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
     return null;
   };
   /**
@@ -377,20 +491,61 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
   /** The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. */
-  const sideEffects = new SideEffectGuard(monitorFor(page));
-  const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
-    // Any input change (type/select/send/upload) makes a repeat send something new.
-    if (!label.startsWith("click ")) sideEffects.inputChanged();
+  // A write is classified by the shared classifier (#110): a gRPC-web/Connect read is never guarded.
+  const isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
+  const sideEffects = new SideEffectGuard(monitorFor(page), { isWrite });
+  /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */
+  const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
+  /** The writes the run's actions fire (#116: the result's `sideEffects`). */
+  const effectLog = new SideEffectLog({ isWrite, now });
+  const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
+  /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
+  let jobWaitedMs = 0;
+  const noteMutation = (
+    label: string,
+    descriptor: unknown,
+    before: string,
+    at: number,
+    input?: { readonly field: string; readonly value: string },
+  ): void => {
+    // An input change (type/select/send/upload) makes a repeat send something new — unless it set
+    // the same value again (#123): the guard compares the values.
+    if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
   };
 
+  // #128: real network evidence for the FIRST navigation, preferred over whatever `page.goto`
+  // itself reports — a refused connection can still surface as a bare navigation timeout.
+  let firstNavNetError: string | null = null;
+  const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
+    const text = req.failure()?.errorText;
+    if (text !== undefined) firstNavNetError = text;
+  };
+  let firstNavFailed = false;
+
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
     await monitorFor(page).instrument();
+    effectLog.attach(monitorFor(page));
     // Initial navigation (authorized above).
-    await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+    page.on("requestfailed", onFirstNavRequestFailed);
+    try {
+      await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+    } catch (e) {
+      const message = firstLine(e);
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem (a bad URL, the target not running). `inconclusive`, not `crashed`;
+      // no crash report is built for it, so no issue is ever drafted from it.
+      firstNavFailed = true;
+      stop = "inconclusive";
+      failure = { kind: "target-unreachable", message: `target unreachable (${describeUnreachable(message, firstNavNetError)})` };
+    } finally {
+      page.off("requestfailed", onFirstNavRequestFailed);
+    }
+    if (firstNavFailed) throw new FirstNavigationFailedSentinel();
     recorder.navigate(cfg.startUrl, now());
 
     for (;;) {
@@ -546,10 +701,30 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       seen.add(snap.signature);
 
+      // #90 — an interceptor proven by a real click failure stays blocked only while the page it was
+      // proven on is still up; a re-render/navigation may have removed or moved it.
+      if (blockedSinceSignature !== null && snap.signature !== blockedSinceSignature) {
+        blockedInterceptors = [];
+        blockedSinceSignature = null;
+      }
+      let modelControls = snap.controls;
+      if (blockedInterceptors.length > 0) {
+        const covered = new Set<number>();
+        for (const c of snap.controls) {
+          const loc = descriptorToLocator(page, c.descriptor);
+          const hit = await loc.evaluate(coveredByInterceptors, blockedInterceptors).catch(() => false);
+          if (hit) covered.add(c.index);
+        }
+        if (covered.size > 0) modelControls = snap.controls.filter((c) => !covered.has(c.index));
+      }
+
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
       const path = safePath(snap.url);
-      if (lastPath !== null && path !== lastPath) unsent.submitted();
+      if (lastPath !== null && path !== lastPath) {
+        unsent.submitted();
+        valueLog.submitted();
+      }
       lastPath = path;
       const keys = new Map<string, Control>(snap.controls.map((c) => [keyOf(c), c]));
       unsent.retain(new Set(keys.keys()));
@@ -567,7 +742,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       try {
         decision = await decide(cfg.judge, {
           goal: cfg.goal,
-          snapshot: snap,
+          snapshot: modelControls === snap.controls ? snap : { ...snap, controls: modelControls },
           history,
           missionContext,
           secrets,
@@ -612,6 +787,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           control?: Control | null;
           strategy?: string;
           answer?: AnswerVerdict["answer"];
+          /** See `TranscriptEntry.origin` — set for a refusal decided by jevitate's own guard/fail-closed logic, never after a real `act()` attempt. */
+          origin?: "engine";
         } = {},
       ): void => {
         transcript.record({
@@ -623,6 +800,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           chosenBy: "model",
           actOk,
           ...(reason === undefined ? {} : { reason }),
+          ...(extra.origin === undefined ? {} : { origin: extra.origin }),
           snapshot: snap,
           timing: perception.timing,
           ...(extra.message === undefined ? {} : { message: extra.message }),
@@ -762,6 +940,24 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         continue;
       }
       if (decision.op === "blocked") {
+        // The page says work is under way (#92): "blocked" is premature while a job the page reports
+        // is still running. Code defers it into a bounded job wait; past the budget it stands.
+        const job = await readInProgressStatus(page);
+        if (job !== null && jobWaitedMs < jobWaitMs) {
+          const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
+          jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
+          const note = `blocked deferred: the page shows ${job} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          history.push(note);
+          record(true, note, { op: "wait" });
+          idleSteps = 0;
+          idleSince = null;
+          quietWaits = 0;
+          lastActedOp = "wait";
+          statusAfter = "waiting";
+          continue;
+        }
         record(true, "model blocked");
         incomplete = "the model reported the goal cannot be advanced from this page";
         stop = "blocked";
@@ -791,6 +987,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           changed = true;
           quietWaits = 0;
           record(true, note, reply.received ? { reply } : {});
+        } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && (await readInProgressStatus(page)) !== null) {
+          // The page shows an in-progress status (#92: "Simulating…", aria-busy, a job "is running")
+          // — pending work even with no request in flight (the app polls). Wait it out with backoff,
+          // bounded by the job-wait budget: patience, never "nothing is pending".
+          const job = (await readInProgressStatus(page)) ?? "an in-progress status";
+          const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
+          jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
+          note = `waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.cleared
+              ? `the in-progress status ${job} cleared`
+              : `the page still shows ${job} — the app is still working; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          changed = true;
+          quietWaits = 0;
+          record(true, note);
         } else if (decision.op === "wait") {
           const t0 = now();
           changed = await waitForChange(page, waitOpMs);
@@ -798,7 +1009,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // a slow reply — not idleness: it does not count toward the idle cap.
           // Bounded: patience lasts as long as a conversational reply may take (`replyWaitMs`).
           // A sent message whose reply has not arrived yet is also still in flight.
-          const pending = !changed && (awaitingReply || (await stillBusy(page)));
+          const pending =
+            !changed && (awaitingReply || (await stillBusy(page)) || (await readInProgressStatus(page)) !== null);
           const busy = pending && busyWaitedMs < replyWaitMs;
           busyWaitedMs = busy ? busyWaitedMs + (now() - t0) : 0;
           // Nothing changed and nothing is pending: waiting again cannot help (#79).
@@ -816,10 +1028,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           record(true, note);
         } else {
           quietWaits = 0;
-          const y0 = await page.evaluate(() => window.scrollY).catch(() => null);
+          // #109 — act() itself polls the scroll position (of the nearest scrollable container under
+          // the pointer, else the window) until it settles, so this never reads immediately after the
+          // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
-          const y1 = await page.evaluate(() => window.scrollY).catch(() => null);
-          changed = y0 !== null && y1 !== null && y0 !== y1;
+          changed = r.moved === true;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
           record(r.ok, r.ok ? note : r.reason);
         }
@@ -856,7 +1069,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
         // and it counts as an action. Returning to the state the page had is its point, never a stall.
         if (!tracker.mayAct()) {
-          record(false, "action budget exhausted");
+          record(false, "action budget exhausted", { origin: "engine" });
           stop = "exhausted";
           break;
         }
@@ -872,11 +1085,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             w.resolved ? "it resolved" : "it is still in flight"
           }`;
           history.push(note);
-          record(false, note);
+          record(false, note, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
         const at = now();
+        effectLog.mark(transcript.nextStep, "reload");
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
           recorder.navigate(page.url(), at);
@@ -894,16 +1108,63 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // Target-requiring op with no valid target → fail-closed.
       if (control === null || decision.targetMissing) {
-        record(false, "no valid target (fail-closed)");
+        record(false, "no valid target (fail-closed)", { origin: "engine" });
         stop = "blocked";
         break;
       }
       if (!tracker.mayAct()) {
-        record(false, "action budget exhausted");
+        record(false, "action budget exhausted", { origin: "engine" });
         stop = "exhausted";
         break;
       }
+      // The shared safety policy (#116): a session-ending, destructive, paid or --deny'd control is
+      // never clicked unless the goal itself asks for it (or --allow-destructive). Refused, recorded.
+      if (decision.op === "click") {
+        const unsafe = safety.refuses(control);
+        if (unsafe !== null) {
+          history.push(unsafe.reason);
+          record(false, unsafe.reason, { origin: "engine" });
+          lastActedOp = decision.op;
+          continue;
+        }
+      }
       const at = now();
+      effectLog.mark(transcript.nextStep, control.name || control.summary, safety.riskOf(control));
+
+      // An EMPTY bound secret field (#111) is typed by code on its own — before a submit of its form,
+      // or once a validation message names it: the model cannot see the value and was seen never
+      // choosing `type` on it (a signup stuck on "Password: Please fill out this field"). Same
+      // guarantees as the chosen-`type` path below: placeholder only, Recording `{ redacted: true }`.
+      {
+        const submitting = decision.op === "click" && submitsAForm(control) ? control : null;
+        const due = secretFieldsToFill(snap.controls, cfg.secretFields, {
+          submitting,
+          status,
+          exclude: decision.op === "type" ? control : null,
+        });
+        for (const { control: field, field: binding, why } of due) {
+          if (!tracker.mayAct() || !(await secretFieldNeedsValue(page, field))) continue;
+          const t = now();
+          const value = secretFieldValue(binding, t);
+          const placeholder = secretPlaceholder(binding);
+          const r = await act(cfg.actor, { op: "type", control: field, value });
+          const cause = why === "submit" ? `before submitting with ${control.name || control.summary}` : "a validation message names it";
+          if (r.ok) {
+            recorder.fill(field.descriptor, { redacted: true, length: value.length }, t);
+            noteMutation(`type ${field.name}`, field.descriptor, snap.signature, t);
+            tracker.countAction();
+            history.push(`typed ${placeholder} into the empty ${field.name} (bound secret, typed by code — ${cause})`);
+          } else {
+            history.push(`type into ${field.name} failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
+          }
+          record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code — ${cause})` : (r.reason ?? "").split(value).join(placeholder), {
+            op: "type",
+            control: field,
+            strategy: "secret-field",
+            value: placeholder,
+          });
+        }
+      }
 
       // A bound secret field (#72): code types the real value (a TOTP code is computed now); the model,
       // history and transcript see only the placeholder, the Recording `{ redacted: true }`.
@@ -914,7 +1175,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const r = await act(cfg.actor, { op: "type", control, value });
         if (r.ok) {
           recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
           tracker.countAction();
           history.push(`typed ${placeholder} into ${control.name} (bound secret, typed by code)`);
         } else {
@@ -936,7 +1197,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const n = unsent.noteRepeat();
         forcedNote = `repeated type into ${control.name} without sending (stuck signal ${n}/${MAX_REPEAT_TYPE_SIGNALS}) — sent instead`;
         if (n >= MAX_REPEAT_TYPE_SIGNALS) {
-          record(false, forcedNote);
+          record(false, forcedNote, { origin: "engine" });
           incomplete = `stuck: typed into ${quote(control.name, 60)} ${n} times without sending`;
           stop = "no-progress";
           break;
@@ -949,6 +1210,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const isMessage =
         op === "send" || (op === "type" && sendable(control));
       if (isMessage) {
+        // Stuck detection (independent code, #122): the last user turns only acknowledged / promised,
+        // or said the same thing again. The next turn is generated with the stuck brief (answer the
+        // assistant's question with a concrete fact or choice), the decision is pointed at the
+        // page's call to action, and a conversation still stuck after that ends the run.
+        const stuck = repetitiveTurns(conversation.sent);
+        stuckTurns = stuck ? stuckTurns + 1 : 0;
+        if (stuckTurns > STUCK_TURNS) {
+          const reason = `stuck: the messages kept acknowledging or repeating without answering the assistant (still after ${STUCK_TURNS} nudged turns)`;
+          record(false, reason, { op });
+          incomplete = reason;
+          stop = "no-progress";
+          break;
+        }
         let text: string | null;
         try {
           text = await chatReply(cfg.gen, {
@@ -958,17 +1232,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             sentMessages: conversation.sent,
             maxChars: replyMaxChars,
             secrets,
+            question: lastQuestion(conversation.latestReply),
+            stuck,
           });
         } catch (e) {
           const reason = `message generation unavailable: ${firstLine(e)}`;
           history.push(`${op} skipped: ${reason}`);
-          record(false, reason, { op });
+          record(false, reason, { op, origin: "engine" });
           lastActedOp = op;
           continue;
         }
         if (text === null) {
           blockers.failClosed = `no message for ${quote(control.name || control.summary, 80)} (the message generator returned none)`;
-          record(false, "no message available (fail-closed)", { op });
+          record(false, "no message available (fail-closed)", { op, origin: "engine" });
           incomplete = "no message could be generated for the conversation";
           stop = "blocked";
           break;
@@ -978,7 +1254,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const n = unsent.noteRepeat();
           const reason = `message not sent: it repeats an earlier message (stuck signal ${n}/${MAX_REPEAT_TYPE_SIGNALS})`;
           history.push(`${reason} — answer the latest reply with something new`);
-          record(false, reason, { op, message });
+          record(false, reason, { op, message, origin: "engine" });
           lastActedOp = op;
           if (n >= MAX_REPEAT_TYPE_SIGNALS) {
             incomplete = "stuck: the generated messages kept repeating";
@@ -1001,7 +1277,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const via = r.submittedVia;
           if (via !== undefined && via.kind === "click") recorder.click(via.control.descriptor, now());
           else recorder.press("Enter", control.descriptor, now());
-          noteMutation(`send ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`send ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
           tracker.countAction();
           unsent.submitted();
           conversation.sent.push(message);
@@ -1015,6 +1291,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             `sent ${quote(message)} via ${via?.kind === "click" ? `"${via.control.name}"` : "Enter"} → ` +
               (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
           );
+          noteStuckConversation(snap.controls);
           record(true, forcedNote ?? undefined, { op, message, reply });
           lastActedOp = op;
           continue;
@@ -1023,7 +1300,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const r = await act(cfg.actor, { op: "type", control, value: message });
         if (r.ok) {
           recorder.fill(control.descriptor, message, at);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
           tracker.countAction();
           unsent.typed(keyOf(control), control.name, message, true);
           history.push(`typed ${quote(message, 80)} into ${control.name} — NOT sent yet (send it)`);
@@ -1037,7 +1314,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       if (op === "send") {
         // Not message-shaped after all (unreachable: `send` is always a message) — fail closed.
-        record(false, "send without a message (fail-closed)", { op });
+        record(false, "send without a message (fail-closed)", { op, origin: "engine" });
         stop = "blocked";
         break;
       }
@@ -1058,7 +1335,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
           history.push(`select skipped: ${reason}`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = op;
           continue;
         }
@@ -1068,14 +1345,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const reason = `no valid option chosen for ${control.name} (fail-closed)`;
           blockers.failClosed = `no valid option for field ${quote(control.name || control.summary, 80)} (fail-closed)`;
           history.push(`select failed: ${reason}`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = op;
           continue;
         }
         const r = await act(cfg.actor, { op: "select", control, value: option });
         if (r.ok) {
           recorder.select(control.descriptor, option, at);
-          noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: option });
           tracker.countAction();
           fillHelper.commit();
           history.push(`selected ${quote(option, 80)} in ${control.name}`);
@@ -1100,13 +1377,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
             secrets,
-            // A text field's value is field-scoped and checked before it is typed (#71).
-            ...(decision.op === "type" ? { field: { tag: control.tag, inputType: control.inputType } } : {}),
+            // A text field's value is field-scoped and checked before it is typed (#71); in an
+            // add-another flow it is the next item, not one already submitted into this field (#123).
+            ...(decision.op === "type"
+              ? { field: { tag: control.tag, inputType: control.inputType }, alreadyUsed: valueLog.used(control.name || control.summary) }
+              : {}),
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
           history.push(`${decision.op} skipped: ${reason}`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
@@ -1115,14 +1395,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // model sees in its history, never typed.
           const reason = `typed value rejected: ${rejected}`;
           history.push(`type into ${control.name} failed: ${reason} — the value must be only what goes in this one field`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
         if (text === null) {
           // The generator will not honestly supply a required value → never guess.
           blockers.failClosed = `no value for field ${quote(control.name || control.summary, 80)} (the value generator returned none)`;
-          record(false, "no value available (fail-closed)");
+          record(false, "no value available (fail-closed)", { origin: "engine" });
           stop = "blocked";
           break;
         }
@@ -1136,8 +1416,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             // A form field (not a message composer) is submitted with its form's own button; retyping
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
+            valueLog.typed(control.name || control.summary, text);
           } else recorder.select(control.descriptor, text, at);
-          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
           tracker.countAction();
           fillHelper.commit();
           history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
@@ -1169,7 +1450,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             note += ` (waited ${(w.waitedMs / 1000).toFixed(1)}s: ${w.resolved ? "it resolved" : "it is still in flight"})`;
           }
           history.push(note);
-          record(false, note);
+          record(false, note, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
@@ -1183,9 +1464,17 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
+          // What was typed has now been submitted (a form's button): an add-another flow's next
+          // item must differ from it (#123).
+          if (buttonLike(control) || control.submits === true) valueLog.submitted();
           // Toggling an input (a checkbox, a radio, a switch) changes what a repeat would send (#92).
           if (TOGGLE_ROLES.has(control.role) || (control.tag === "input" && control.inputType !== "submit" && control.inputType !== "button")) {
-            sideEffects.inputChanged();
+            // A radio/option now holds "selected"; a checkbox/switch flips — so toggling twice is no
+            // change (#123). Clicking into a text input changes nothing it would send.
+            const picks = ["radio", "option", "menuitemradio"].includes(control.role) || control.inputType === "radio";
+            const flips = ["checkbox", "switch", "menuitemcheckbox"].includes(control.role) || control.inputType === "checkbox";
+            if (picks) sideEffects.inputChanged(keyOf(control), "selected");
+            else if (flips) sideEffects.inputChanged(keyOf(control), { toggled: true });
           }
           if (turn) {
             message = submits ? pendingTexts.join("\n") : control.name;
@@ -1200,12 +1489,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               `clicked ${control.name}${quickReply ? " (a quick reply)" : ""} → ` +
                 (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
             );
+            noteStuckConversation(snap.controls);
           } else {
             history.push(`clicked ${control.name}`);
           }
           cleared(control);
         } else {
           history.push(`click failed: ${failNote(r.reason, control)}`);
+          // #90 — a real "intercepts pointer events" failure proves what covers this control (and,
+          // in practice, its neighbours under the same backdrop): remember it so the model is not
+          // offered another target it covers until the page changes.
+          const interceptor = r.reason === undefined ? null : parseInterceptor(r.reason);
+          if (interceptor !== null && !blockedInterceptors.includes(interceptor)) {
+            blockedInterceptors = [...blockedInterceptors, interceptor];
+            blockedSinceSignature = snap.signature;
+          }
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control), {
           ...(message === undefined ? {} : { message }),
@@ -1237,10 +1535,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       lastActedOp = decision.op;
     }
   } catch (e) {
-    // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
-    // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
-    failure = describeFailure(e, crashWatch.signals());
-    stop = "crashed";
+    if (!(e instanceof FirstNavigationFailedSentinel)) {
+      // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
+      // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
+      failure = describeFailure(e, crashWatch.signals());
+      stop = "crashed";
+    }
+    // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
+    // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
   }
 
   const finished = recorder.tryFinish({ intent: cfg.goal });
@@ -1255,7 +1557,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     failure = failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
     stop = "crashed";
   }
+  const fired = effectLog.entries();
+  effectLog.close();
   return {
+    sideEffects: fired.sideEffects,
+    ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
     stop,
     recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
     transcript: transcript.entries(),

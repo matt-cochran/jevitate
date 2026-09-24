@@ -47,6 +47,39 @@ describe("runAdversarialMission — clean run", () => {
   );
 });
 
+describe("runAdversarialMission — the seed itself cannot be loaded (#128)", () => {
+  test(
+    "a net::ERR_UNSAFE_PORT on the first navigation ends scope-unreachable/inconclusive with target-unreachable, never crashed",
+    async () => {
+      const url = "http://127.0.0.1:1/";
+      const browserPort = new PlaywrightBrowserPort();
+      const badSession = await browserPort.open({ headless: true, allowedOrigins: [url], baseUrl: url });
+      try {
+        const badActor = CastActor.named("unreachable-tester").whoCan(new BrowseTheWeb(badSession, [url]));
+        const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+        const result = await runAdversarialMission({
+          page: badSession.page,
+          actor: badActor,
+          judgment,
+          generation: new FakeGenerationGateway(),
+          seedUrl: url,
+          allowlist: [url],
+          bounds: { maxDecisions: 4 },
+          strategies: ["exercise-controls"],
+        });
+        expect(result.stop).toBe("scope-unreachable");
+        expect(result.outcome).toBe("inconclusive");
+        expect(result.failure?.kind).toBe("target-unreachable");
+        expect(result.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
+        expect(result.defects).toEqual([]);
+      } finally {
+        await badSession.close();
+      }
+    },
+    30_000,
+  );
+});
+
 describe("runAdversarialMission — hard defect", () => {
   test(
     "a console error stops the mission, keeps the Recording, and produces a triage narrative",

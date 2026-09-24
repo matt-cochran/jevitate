@@ -65,6 +65,25 @@ export interface NetworkObservable {
   optional?: boolean;
 }
 
+/**
+ * Authenticates a probe from the run's own session (#135) — never a new credential path. Exactly one
+ * source:
+ *  - `localStorage` — a key read from the live page's `localStorage` (via `page.evaluate`);
+ *  - `cookie`       — a named cookie's value, read from the browser context;
+ *  - `secret`       — a `--secret`/env reference (`env:VAR`), resolved by the CLI dispatch — never
+ *                      read from a file here.
+ * The value becomes the probe's `Authorization` header, prefixed by `scheme` (default `Bearer`; `""`
+ * sends the raw value with no prefix). The token itself never reaches the model, is never persisted,
+ * and is redacted from every evidence line the same way a bound secret is.
+ */
+export interface ProbeAuthFrom {
+  localStorage?: string;
+  cookie?: string;
+  secret?: string;
+  /** Prefixed onto the Authorization header's value. Default `"Bearer"`; `""` = no prefix. */
+  scheme?: string;
+}
+
 export interface ProbeObservable {
   /** A read-only GET of this path (resolved against the mission's start URL) or absolute URL. */
   get?: string;
@@ -73,6 +92,8 @@ export interface ProbeObservable {
   /** JSON path into a GET's body; without it the value is the HTTP status. */
   json?: string;
   optional?: boolean;
+  /** Authenticates the probe from the run's session (#135); see `ProbeAuthFrom`. */
+  authFrom?: ProbeAuthFrom;
 }
 
 export type ObservableSpec = { dom: DomObservable } | { network: NetworkObservable } | { probe: ProbeObservable };
@@ -494,12 +515,30 @@ const NetworkObservableSchema = z
   })
   .strict();
 
+/** `authFrom.secret`'s only accepted shape (#135): the same `env:VAR` reference `--secret-field` uses. */
+export const AUTH_SECRET_REF_RE = /^env:[A-Za-z_][A-Za-z0-9_]*$/;
+
+const ProbeAuthFromSchema = z
+  .object({
+    localStorage: z.string().min(1).optional(),
+    cookie: z.string().min(1).optional(),
+    secret: z.string().regex(AUTH_SECRET_REF_RE, 'a secret ref must be "env:VAR"').optional(),
+    scheme: z.string().max(40).optional(),
+  })
+  .strict()
+  .superRefine((a, ctx) => {
+    if ([a.localStorage, a.cookie, a.secret].filter((k) => k !== undefined).length !== 1) {
+      ctx.addIssue({ code: "custom", message: "authFrom is exactly one of localStorage, cookie or secret" });
+    }
+  });
+
 const ProbeObservableSchema = z
   .object({
     get: z.string().min(1).optional(),
     head: z.string().min(1).optional(),
     json: JsonPathStringSchema.optional(),
     optional: z.boolean().optional(),
+    authFrom: ProbeAuthFromSchema.optional(),
   })
   // `.strict()` is the method guardrail: a `post`/`put`/`delete`/`method`/`headers`/`body` key is an
   // unknown key and the spec is refused — a probe can only ever be a GET or a HEAD, with no payload.
@@ -735,4 +774,16 @@ export function mergeInvariantSpecs(specs: readonly InvariantSpec[]): InvariantS
   });
   if (problems.length > 0) throw new InvariantSpecError(problems);
   return { ...(Object.keys(observe).length > 0 ? { observe } : {}), invariants };
+}
+
+/**
+ * Every `authFrom.secret` ref (`env:VAR`) a spec's probes use (#135), deduped — what the dispatch
+ * resolves from the environment before any browser opens (never read here: this module is pure).
+ */
+export function invariantAuthSecretRefs(spec: InvariantSpec): string[] {
+  const refs = new Set<string>();
+  for (const o of Object.values(spec.observe ?? {})) {
+    if ("probe" in o && o.probe.authFrom?.secret !== undefined) refs.add(o.probe.authFrom.secret);
+  }
+  return [...refs];
 }

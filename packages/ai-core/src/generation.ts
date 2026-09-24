@@ -8,11 +8,15 @@ import type { UsageSink } from "./usage.js";
  */
 export const FORM_VALUE_INSTRUCTIONS =
   "Return in `text` ONLY the literal characters to type into the single field named `fieldLabel` " +
-  "(its HTML input type is `fieldType` when given) — nothing else: no explanation, no steps, no " +
-  "JSON, no other field's value, and never the field's label or a `Label:` prefix. When `goal` " +
-  "states the value for this field, copy it verbatim. Otherwise invent a short, plausible value " +
-  "of the right kind (an email address for an email field, an absolute URL for a url field). " +
-  "Return null only when the goal gives no value and none can be invented safely.";
+  "(HTML input type `fieldType`) — no explanation, no steps, no JSON, no other field's value, no " +
+  "`Label:` prefix, and NEVER the goal or a sentence copied from it: the goal says what the user " +
+  "wants done, not what this field holds. When `goal` states this field's value, copy just that " +
+  "value. Otherwise invent a short, plausible value of the field's kind (`fieldKind`): a name → a " +
+  "plausible name (e.g. Dana Ruiz); a search → a 1-3 word search term; a title → a short title; a " +
+  "rationale/notes/description → one sentence of reasoning in the user's words; email/url → an " +
+  "email address / absolute URL. `alreadyUsed` lists values already submitted into this field: " +
+  "when the goal names several items, use the next item not yet used, never one of them again. " +
+  "Return null only when no value can be invented safely.";
 
 /** Text-only generation tasks (form values / triage). Closed set. */
 export const FormValueInput = z.object({
@@ -27,6 +31,16 @@ export const FormValueInput = z.object({
    * caller checks it and never selects a guessed option.
    */
   options: z.array(z.string().max(200)).max(100).optional(),
+  /**
+   * What kind of value the field wants, classified by code from its label/type (#71): `name`,
+   * `search`, `title`, `reasoning` (a rationale / notes / description) — absent when unknown.
+   */
+  fieldKind: z.string().max(40).optional(),
+  /**
+   * Values this run already submitted into the same field (#123), oldest first (redacted, bounded):
+   * in an "add several items" flow the next value is the next item not yet used.
+   */
+  alreadyUsed: z.array(z.string().max(200)).max(20).optional(),
   /** Task guidance shown to the model (default `FORM_VALUE_INSTRUCTIONS`; a select sends its own). */
   instructions: z.string().max(1000).default(FORM_VALUE_INSTRUCTIONS),
 }).strict();
@@ -35,11 +49,28 @@ export const FormValueOutput = z.object({ text: z.string().nullable() }).strict(
 /** The model-facing brief for a `chat.reply`, carried in the input so every adapter shows it. */
 export const CHAT_REPLY_INSTRUCTIONS =
   "You are the USER in a chat with a software assistant, pursuing `goal`. Write the user's next " +
-  "message: a short, plain, conversational answer to `latestReply` (answer its question directly; " +
-  "if it offers a choice, pick one). Speak only as the user, in the first person. Never invent the " +
-  "assistant's lines, never use markdown headings or lists, never restate the goal as an essay, and " +
-  "never repeat any of `sentMessages`. At most `maxChars` characters. With no `latestReply` yet, " +
-  "open with one or two sentences stating what you want.";
+  "message: a short, plain, conversational answer to `latestReply`. When it asks something " +
+  "(`question` is its last question), ANSWER it with substance: pick one of the options it offers, " +
+  "or give a concrete fact — a number, a date, a name, an owner — inventing a plausible one, " +
+  "consistent with what you said before, when the goal does not say. Never merely acknowledge, " +
+  "thank, or promise to do something later. Speak only as the user, in the first person. Never " +
+  "invent the assistant's lines, never use markdown headings or lists, never restate the goal as an " +
+  "essay, and never repeat any of `sentMessages`. At most `maxChars` characters. With no " +
+  "`latestReply` yet, open with one or two sentences stating what you want.";
+
+/**
+ * The `chat.reply` brief once code found the conversation stuck (#122): the user's last turns kept
+ * acknowledging without answering, so the next one must supply a concrete fact or choice.
+ */
+export const CHAT_REPLY_STUCK_INSTRUCTIONS =
+  "You are the USER in a chat with a software assistant, pursuing `goal`. The conversation is STUCK: " +
+  "your recent messages (`sentMessages`) only acknowledged or promised to do something, and never " +
+  "answered. Write the next message so it moves forward NOW: answer `question` (the assistant's last " +
+  "question) directly with a concrete, plausible, invented-but-consistent fact or choice — a number, a " +
+  "date, a name, one of the options it offered — and, when the goal's outcome is within reach, ask the " +
+  "assistant to do it (save it, draft it, create it). No acknowledgement, thanks or promise, nothing " +
+  "resembling `sentMessages`. Speak only as the user, first person, plain text, at most `maxChars` " +
+  "characters.";
 
 /** The next user message in a conversation (a chat composer). */
 export const ChatReplyInput = z.object({
@@ -49,6 +80,8 @@ export const ChatReplyInput = z.object({
   latestReply: z.string().max(2000).nullable(),
   /** The messages already sent in this conversation (redacted, bounded), oldest first. */
   sentMessages: z.array(z.string().max(2000)).max(50).default([]),
+  /** The assistant's last question, extracted by code from `latestReply` (#122), when it asked one. */
+  question: z.string().max(500).nullable().optional(),
   maxChars: z.number().int().min(20).max(2000),
   instructions: z.string().max(1000).default(CHAT_REPLY_INSTRUCTIONS),
 }).strict();
@@ -149,8 +182,8 @@ export const UxSpecificsItem = z
 export const UxSpecificsOutput = z.object({ items: z.array(UxSpecificsItem) }).strict();
 
 export const GEN_TASKS = {
-  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "3" },
-  "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "1" },
+  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "4" },
+  "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "2" },
   "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "1", temperature: 0 },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },

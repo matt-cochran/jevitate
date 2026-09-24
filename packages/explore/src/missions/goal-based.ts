@@ -1,5 +1,5 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion } from "@jevitate/interpreter";
+import { checkAssertion, readAssertionText } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import { reloadPage } from "../act.js";
@@ -10,7 +10,8 @@ import {
   type SuccessCheck,
   type SuccessCheckResult,
 } from "../success-checks.js";
-import { explore, type ExploreConfig, type ExploreRun, type TranscriptEntry } from "../explore.js";
+import { redactText } from "../redact.js";
+import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
@@ -89,6 +90,11 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly successWhen?: SuccessWhen;
   /** App-declared invariants (#86), evaluated around every action. A violation is `defects-found`. */
   readonly invariants?: InvariantSpec;
+  /**
+   * Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value, resolved
+   * by the CLI dispatch from the environment (this package never reads `process.env`).
+   */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -119,6 +125,12 @@ export interface GoalBasedResult {
   readonly finalUrl: string;
   /** The hang finding (with its reproduction k/N), for a `hang`/`intermittent` outcome. */
   readonly hang?: HangFinding;
+  /**
+   * #126: a hang met on the SEED load (before any action) that did NOT reproduce (0/N). It never
+   * ends the mission — it is kept here as evidence and the run retried the goal once more, whatever
+   * that retry's own `outcome` turned out to be.
+   */
+  readonly intermittentHangs?: HangFinding[];
   /**
    * Why the mission did not succeed, in one line — set for EVERY outcome but `succeeded`
    * (`blocked`/`exhausted` included, which carry no engine `failure`): how the loop ended and
@@ -154,14 +166,25 @@ function whyNot(run: ExploreRun, results: readonly SuccessCheckResult[]): string
 
 const DEFAULT_ORACLE_SETTLE_MS = 10_000;
 
-/** Every check the oracle must pass, in the order given. Throws (a setup error) when there is none. */
+/** Bound on the text quoted into a failed check's detail (#113): enough to see the mismatch, never a page dump. */
+const READ_TEXT_MAX_CHARS = 200;
+
+function quoteRead(s: string): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return `"${flat.length > READ_TEXT_MAX_CHARS ? `${flat.slice(0, READ_TEXT_MAX_CHARS)}…` : flat}"`;
+}
+
+/**
+ * Every check the oracle must pass, in the order given — possibly none (#130d): a find-out goal has
+ * no page state to assert on, and is verified instead by a grounded `report` answer (#101). Without
+ * a check AND without the goal ending via `report`, the run is simply incomplete (never a vacuous
+ * pass) — see `adjudicatedRun`.
+ */
 function successChecksOf(cfg: GoalBasedMissionConfig): SuccessCheck[] {
-  const checks: SuccessCheck[] = [
+  return [
     ...(cfg.successAssertion === undefined ? [] : [{ kind: "page" as const, assertion: cfg.successAssertion }]),
     ...(cfg.successChecks ?? []),
   ];
-  if (checks.length === 0) throw new Error("runGoalBasedMission: a success assertion or at least one success check is required");
-  return checks;
 }
 
 export async function runGoalBasedMission(
@@ -216,6 +239,7 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     allowlist: cfg.allowlist,
     baseUrl: cfg.startUrl,
     ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
+    ...(cfg.invariantAuthTokens === undefined ? {} : { authTokens: cfg.invariantAuthTokens }),
   });
   monitor.attach(page);
   const log = new InvariantDefectLog();
@@ -281,68 +305,71 @@ async function adjudicatedRun(
   let heldAtStep: number | null = null;
   let settledSteps = 0;
   const held = cfg.successWhen === "held" && pageChecks.length > 0;
-  const run = await explore({
-    ...cfg,
-    missionContext:
-      "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
-    // `held`: after every settled step, a quick look at the page checks — remembered once they all
-    // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
-    ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
-    onSnapshot: async (snap) => {
-      await cfg.onSnapshot?.(snap);
-      await declared?.settled().catch(() => undefined);
-      settledSteps += 1;
-      if (!held || heldAtStep !== null) return;
-      const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
-      if (ok) heldAtStep = settledSteps;
-    },
-    // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
-    // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
-    // final verdict — reloading mid-run would throw away the state the run is still building.
-    // Under `held`, a page check that already held (together, at a settled step) counts.
-    successCheck: () =>
-      evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
-        (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
-        () => false,
-      ),
-  });
+  // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
+  // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
+  // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
+  // "passes" over zero checks) sends `done` through the advisory goal-judgment path instead of a
+  // false independent pass.
+  const hasChecks = checks.length > 0;
+  const runOnce = (): Promise<ExploreRun> =>
+    explore({
+      ...cfg,
+      missionContext: hasChecks
+        ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
+        : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
+      // `held`: after every settled step, a quick look at the page checks — remembered once they all
+      // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
+      ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
+      onSnapshot: async (snap) => {
+        await cfg.onSnapshot?.(snap);
+        await declared?.settled().catch(() => undefined);
+        settledSteps += 1;
+        if (!held || heldAtStep !== null) return;
+        const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
+        if (ok) heldAtStep = settledSteps;
+      },
+      // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
+      // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
+      // final verdict — reloading mid-run would throw away the state the run is still building.
+      // Under `held`, a page check that already held (together, at a settled step) counts.
+      ...(hasChecks
+        ? {
+            successCheck: () =>
+              evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
+                (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
+                () => false,
+              ),
+          }
+        : {}),
+    });
+
+  let run = await runOnce();
+  /**
+   * #126: a hang met on the SEED load (before any action — `recordingStepIndex === 0`) that does
+   * NOT reproduce is not proof the app is stuck; it can be a single slow request on a loaded host.
+   * It must not end the mission. It is recorded as an intermittent finding and the goal is tried
+   * once more from a fresh navigate of the seed. A hang that DOES reproduce (or that could not be
+   * replayed at all) ends the run exactly as before.
+   */
+  const intermittentHangs: HangFinding[] = [];
+  if (run.stop === "hang" && run.hang !== undefined && run.hang.recordingStepIndex === 0 && cfg.openFreshSession !== undefined) {
+    const h = run.hang;
+    const reproduction = await reproduceSeedHang(cfg, run, h);
+    if (reproduction.status === "intermittent") {
+      intermittentHangs.push(hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction));
+      run = await runOnce();
+    } else {
+      return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
+    }
+  }
 
   await declared?.finish(run);
 
   // A hang is a first-class finding: reproduce it in fresh contexts, then report k/N.
   if (run.stop === "hang" && run.hang !== undefined) {
     const h = run.hang;
-    const reproduction: HangReproduction =
-      cfg.openFreshSession === undefined
-        ? NOT_REPLAYED
-        : await reproduceHang({
-            recording: run.recording,
-            recordingStepIndex: h.recordingStepIndex,
-            hang: h.signal,
-            openSession: cfg.openFreshSession,
-            ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
-            perceive: {
-              ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
-              ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
-              ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
-              ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
-              ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
-            },
-            ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
-          });
-    const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
-    return {
-      // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
-      outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
-      assertionPassed: false,
-      checks: [],
-      run,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      hang: finding,
-      reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
-    };
+    const reproduction = await reproduceSeedHang(cfg, run, h);
+    return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
   }
 
   // A broken run proves nothing: its assertion is never evaluated into a pass.
@@ -356,6 +383,25 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: whyNot(run, []),
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+    };
+  }
+
+  // A find-out goal (#130d): no --success check was given, so there is nothing to evaluate against
+  // the live page. The verdict is the run's own grounded outcome instead — `report` grounding an
+  // answer (#101), or the advisory goal judgment grounding a `done`. Never a vacuous pass: a run that
+  // exhausted its budget or got blocked without either is simply not succeeded.
+  if (!hasChecks) {
+    const succeeded = run.outcome.status === "completed";
+    return {
+      outcome: succeeded ? "succeeded" : run.stop === "exhausted" ? "exhausted" : "blocked",
+      assertionPassed: succeeded,
+      checks: [],
+      run,
+      recording: run.recording,
+      transcript: run.transcript,
+      finalUrl: run.finalUrl,
+      ...(succeeded ? {} : { reason: whyNot(run, []) }),
     };
   }
 
@@ -380,6 +426,7 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: `success oracle failed: ${message}`,
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
   }
 
@@ -400,15 +447,69 @@ async function adjudicatedRun(
       ? "exhausted"
       : "blocked";
 
+  // `runOutcome` and `outcome` must never disagree (#113): the in-run `done` grounding (the
+  // `successCheck` given to `explore` above) evaluates every check EXCEPT `reloadThen` — a mid-run
+  // reload would throw away state the run is still building — so a run can end `completed` there and
+  // this, the final, full evaluation (including `reloadThen`) can still fail. The final verdict
+  // overrides: a mission that did not succeed never carries a `completed` runOutcome.
+  const runOutcome: RunOutcome =
+    !assertionPassed && run.outcome.status === "completed"
+      ? { status: "incomplete", reason: whyNot(run, results) }
+      : run.outcome;
+  const finalRun: ExploreRun = runOutcome === run.outcome ? run : { ...run, outcome: runOutcome };
+
   return {
     outcome,
     assertionPassed,
     checks: results,
-    run,
+    run: finalRun,
     recording: run.recording,
     transcript: run.transcript,
     finalUrl: run.finalUrl,
     ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
+    ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+  };
+}
+
+/** Reproduce a hang the loop stopped on, in fresh contexts (owner ruling 7). */
+async function reproduceSeedHang(
+  cfg: GoalBasedMissionConfig,
+  run: ExploreRun,
+  h: NonNullable<ExploreRun["hang"]>,
+): Promise<HangReproduction> {
+  return cfg.openFreshSession === undefined
+    ? NOT_REPLAYED
+    : await reproduceHang({
+        recording: run.recording,
+        recordingStepIndex: h.recordingStepIndex,
+        hang: h.signal,
+        openSession: cfg.openFreshSession,
+        ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
+        perceive: {
+          ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
+          ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
+          ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+          ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
+          ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
+        },
+        ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
+      });
+}
+
+/** The mission-ending result for a hang whose reproduction is already known. */
+function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reproduction: HangReproduction): GoalBasedResult {
+  const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
+  return {
+    // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
+    outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
+    assertionPassed: false,
+    checks: [],
+    run,
+    recording: run.recording,
+    transcript: run.transcript,
+    finalUrl: run.finalUrl,
+    hang: finding,
+    reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
   };
 }
 
@@ -433,7 +534,14 @@ async function evaluateChecks(
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
-    return { check: describeCheck(check), passed, detail: passed ? `held ${when}` : `did not hold ${when}` };
+    if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
+    // #113 — a `textIncludes` mismatch is otherwise invisible ("did not hold" alone doesn't say
+    // whether the text is wrong or just differently cased). What was actually read, bounded and
+    // redacted (page text is untrusted, and may carry a secret) — never a full-page dump.
+    const read = await readAssertionText(actor, assertion);
+    const detail =
+      read === null ? `did not hold ${when}` : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;
+    return { check: describeCheck(check), passed, detail };
   };
 
   for (const [i, c] of checks.entries()) {

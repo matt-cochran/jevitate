@@ -368,6 +368,34 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
   expect(process.exitCode).toBe(1);
 });
 
+test("#124: recording diff gives a clear error (not a zod dump) when handed a raw Recording instead of a take file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+
+  const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+  const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+  // A raw Recording — what `explore`/`explore-author-journey`/a usability run emit — handed
+  // directly to `recording diff` instead of a `{recording, values}` take file.
+  await writeFile(takeAPath, JSON.stringify(takeA.recording));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "diff", takeAPath, takeBPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
+  expect(parsed.error.message).toContain("looks like a Recording");
+  expect(parsed.error.message).toContain("jevitate record");
+  // NOT a zod dump: no "Unrecognized keys" issue-array text.
+  expect(parsed.error.message).not.toMatch(/Unrecognized keys/);
+  expect(process.exitCode).toBe(1);
+});
+
 test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is malformed (wrong shape)", async () => {
   const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);

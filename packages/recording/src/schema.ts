@@ -133,7 +133,19 @@ export interface Recording {
   startedAtIso?: string;
   intent?: string;
   retro?: string;
+  /**
+   * The mission fixture the run started from (#140/#144): its identity, spec hash and NON-secret
+   * outputs — so a replay (verify-fix, regression capture) restores the same state and rebinds the
+   * values the run's navigations carry. Absent for a run without fixtures.
+   */
+  fixture?: RecordingFixture;
   pages: PageSegment[];
+}
+
+export interface RecordingFixture {
+  identity: string;
+  specHash: string;
+  outputs?: Record<string, string>;
 }
 
 // === Zod Schemas ===
@@ -408,5 +420,9 @@ export const RecordingSchema: ZodType<Recording> = z.object({
   startedAtIso: z.string().optional(),
   intent: z.string().optional(),
   retro: z.string().optional(),
+  fixture: z
+    .object({ identity: z.string(), specHash: z.string(), outputs: z.record(z.string(), z.string()).optional() })
+    .strict()
+    .optional(),
   pages: z.array(PageSegmentSchema),
 });

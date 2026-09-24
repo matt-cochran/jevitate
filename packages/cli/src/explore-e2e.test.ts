@@ -199,6 +199,38 @@ describe("jevitate explore — --fake-ai smoke answers the candidate-action ques
     },
     180_000,
   );
+
+  it(
+    "#136: a configured JEVITATE_JEV_UNIT_PRICE_USD prices jevUsd end to end, with its source labelled",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-explore-fake-priced-"));
+      const lines: string[] = [];
+      const program = buildProgram({
+        profiles: new ProfileManager("/unused"),
+        explore: { env: { JEVITATE_JEV_UNIT_PRICE_USD: "0.01" } },
+      });
+      program.configureOutput({ writeOut: (s) => lines.push(s) });
+      program.exitOverride();
+      try {
+        await program.parseAsync(
+          ["explore", "--url", `${site.url}/login`, "--goal", "sign in", "--success", "urlIncludes:/inbox", "--fake-ai", "--out", outDir, "--json"],
+          { from: "user" },
+        );
+        const parsed = JSON.parse(lines.join(""));
+        expect(parsed.ok).toBe(true);
+        const { usage } = parsed.data;
+        expect(usage.judgments).toBeGreaterThanOrEqual(1);
+        expect(usage.jevUsd).toBeCloseTo(usage.judgments * 0.01, 10);
+        expect(usage.jevPriceSource).toBe("env:JEVITATE_JEV_UNIT_PRICE_USD");
+        expect(usage.totalUsd).toBeCloseTo(usage.jevUsd, 10);
+        expect(usage.usd).toBeCloseTo(usage.jevUsd, 10); // #100 compat alias
+        expect(usage.priced).toBe("full"); // no generations were made (the fake judge never calls one)
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
 });
 
 describe("shared decision transcript — every model-deciding strategy writes one", () => {

@@ -6,7 +6,7 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import type { BrowserPort, OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
-import { InvariantsFileError, loadInvariantFiles } from "./invariants-file.js";
+import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { parsePersistedMission } from "./verify-fix-api.js";
 
 /**
@@ -84,6 +84,42 @@ describe("loadInvariantFiles (#86)", () => {
     ).toMatch(/origin http:\/\/evil\.test is not an authorized origin/);
     const g = file("g.json", GOOD);
     expect(refuse([g, g])).toMatch(/repeats/);
+  });
+});
+
+describe("resolveInvariantAuthTokens (#135)", () => {
+  const bounds = { allowlist: ["http://127.0.0.1:3000"], baseUrl: URL };
+  const withAuth = {
+    observe: {
+      ...GOOD.observe,
+      secure: { probe: { get: "/v1/secure", authFrom: { secret: "env:JEV_TEST_INV_TOKEN" } } },
+    },
+    invariants: [...GOOD.invariants, { id: "secure-ok", require: "secure > 0" }],
+  };
+
+  it("resolves an env: ref from the given environment — never process.env directly", () => {
+    const spec = loadInvariantFiles([file("auth.json", withAuth)], bounds);
+    expect(spec).toBeDefined();
+    const tokens = resolveInvariantAuthTokens(spec!, { JEV_TEST_INV_TOKEN: "shh-secret-value" });
+    expect(tokens).toEqual(new Map([["env:JEV_TEST_INV_TOKEN", "shh-secret-value"]]));
+  });
+
+  it("refuses (never crashes) when the referenced variable is unset — the ref is named, never a value", () => {
+    const spec = loadInvariantFiles([file("auth2.json", withAuth)], bounds)!;
+    expect(() => resolveInvariantAuthTokens(spec, {})).toThrow(InvariantsFileError);
+    try {
+      resolveInvariantAuthTokens(spec, {});
+      throw new Error("expected a refusal");
+    } catch (e) {
+      expect(e).toBeInstanceOf(InvariantsFileError);
+      expect((e as Error).message).toContain("env:JEV_TEST_INV_TOKEN");
+      expect((e as Error).message).not.toContain("shh-secret-value");
+    }
+  });
+
+  it("returns an empty map for a spec with no authFrom.secret refs", () => {
+    const spec = loadInvariantFiles([file("noauth.json", GOOD)], bounds)!;
+    expect(resolveInvariantAuthTokens(spec, {}).size).toBe(0);
   });
 });
 

@@ -1,0 +1,20 @@
+{
+  "_source": "Preveti dogfood round 2 (2026-09-24), P-4: runs/g-J8b-fx/explore-2026-09-24T15-38-39-336Z.transcript.json (steps, targets, typed value, request endpoints/statuses) + its result's invariant evidence (\"What is the problem-validation for this work?\", \"Something went wrong\"). Redacted: the one-time /e/ token is replaced by «token»; timestamps are relative. Requests are attributed to the step whose action they followed, as UsabilityCapture does.",
+  "steps": [
+    { "step": 1, "op": "click", "target": "button \"Agree & continue\"", "actOk": true, "url": "http://127.0.0.1:5192/e/«token»", "descriptor": { "role": "button", "name": "Agree & continue" } },
+    { "step": 2, "op": "type", "target": "textbox \"Your answer…\"", "actOk": true, "url": "http://127.0.0.1:5192/e/«token»", "value": "I agree to take part in the feedback.", "descriptor": { "role": "textbox", "name": "Your answer…" } },
+    { "step": 3, "op": "click", "target": "button \"Next\"", "actOk": true, "url": "http://127.0.0.1:5192/e/«token»", "descriptor": { "role": "button", "name": "Next" } },
+    { "step": 4, "op": "wait", "target": null, "actOk": false, "url": "http://127.0.0.1:5192/e/«token»", "reason": "page settled with no interactive controls (fail-closed)" }
+  ],
+  "requests": [
+    { "id": 0, "method": "POST", "endpoint": "POST /v1/elicit/:id/consent", "url": "http://127.0.0.1:18582/v1/elicit/«token»/consent", "resourceType": "fetch", "startedAt": 2000, "endedAt": 5177, "status": 200, "step": 1 },
+    { "id": 1, "method": "POST", "endpoint": "POST /v1/elicit/:id/answer", "url": "http://127.0.0.1:18582/v1/elicit/«token»/answer", "resourceType": "fetch", "startedAt": 9000, "endedAt": 9036, "status": 503, "step": 3 }
+  ],
+  "screens": [
+    { "index": 0, "step": 1, "at": 1000, "url": "http://127.0.0.1:5192/e/«token»", "signature": "p4-consent", "visibleText": "Give feedback on pricing\nBefore we start: your answers are shared with the product team.\nAgree & continue", "busy": false },
+    { "index": 1, "step": 2, "at": 6000, "url": "http://127.0.0.1:5192/e/«token»", "signature": "p4-question", "visibleText": "Question 1 of 1\nWhat is the problem-validation for this work?\nNext", "busy": false },
+    { "index": 2, "step": 3, "at": 8000, "url": "http://127.0.0.1:5192/e/«token»", "signature": "p4-question-typed", "visibleText": "Question 1 of 1\nWhat is the problem-validation for this work?\nNext", "busy": false },
+    { "index": 3, "step": 4, "at": 10000, "url": "http://127.0.0.1:5192/e/«token»", "signature": "p4-error", "visibleText": "Something went wrong", "busy": false }
+  ],
+  "endedAt": 13000
+}

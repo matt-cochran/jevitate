@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import {
   InvariantSpecError,
+  invariantAuthSecretRefs,
   mergeInvariantSpecs,
   validateInvariantSpec,
   type InvariantSpec,
@@ -52,4 +53,26 @@ export function loadInvariantFiles(paths: readonly string[], opts: LoadInvariant
     if (e instanceof InvariantSpecError) throw new InvariantsFileError(e.problems.join("; "));
     throw e;
   }
+}
+
+/**
+ * Resolves every `authFrom.secret` ref (#135, `env:VAR`) a spec's probes use, from `env` — the ONE
+ * place this ever happens (the CLI dispatch), matching `--secret-field`'s own `env:VAR` resolution.
+ * Throws `InvariantsFileError` (naming the ref, never a value) for an unset/empty variable. Returns
+ * a map keyed by the ref itself (`"env:APP_TOKEN"` → its value) for `InvariantMonitorOptions.authTokens`.
+ */
+export function resolveInvariantAuthTokens(
+  spec: InvariantSpec,
+  env: Readonly<Record<string, string | undefined>>,
+): Map<string, string> {
+  const tokens = new Map<string, string>();
+  for (const ref of invariantAuthSecretRefs(spec)) {
+    const name = ref.slice("env:".length);
+    const value = env[name];
+    if (value === undefined || value === "") {
+      throw new InvariantsFileError(`--invariants: authFrom.secret ${ref}: environment variable ${name} is not set`);
+    }
+    tokens.set(ref, value);
+  }
+  return tokens;
 }

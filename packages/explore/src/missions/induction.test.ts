@@ -72,9 +72,9 @@ describe("runInductionMission — branching", () => {
       routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
-    // inbox + thread-:id = 2 distinct states. `/thread/t-1` and `/thread/t-2` are PREFIXED ids
-    // (a literal "t-" prefix + a numeric suffix): #95 templates the suffix, so both collapse to
-    // the same `/thread/t-:id` state — the mission still exercises BOTH links (both transitions
+    // inbox + :id = 2 distinct states. `/thread/t-1` and `/thread/t-2` are PREFIXED ids (a literal
+    // "t-" prefix + a numeric suffix): #95/#127 templates the WHOLE segment, so both collapse to
+    // the same `/thread/:id` state — the mission still exercises BOTH links (both transitions
     // land), it just correctly recognizes the second as an already-visited state, not a new one.
     expect(result.coverage.statesVisited).toBe(2);
     expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
@@ -157,6 +157,32 @@ describe("runInductionMission — a lost --storage-state session (#82)", () => {
       expect(result.recordings).toEqual([]);
     } finally {
       await unauthSession.close();
+    }
+  }, 30_000);
+});
+
+describe("runInductionMission — the seed itself cannot be loaded (#128)", () => {
+  test("a net::ERR_UNSAFE_PORT on the first navigation ends scope-unreachable/inconclusive with target-unreachable, never crashed", async () => {
+    const browserPort = new PlaywrightBrowserPort();
+    const url = "http://127.0.0.1:1/";
+    const badSession = await browserPort.open({ headless: true, allowedOrigins: [url], baseUrl: url });
+    try {
+      const badActor = CastActor.named("unreachable-tester").whoCan(new BrowseTheWeb(badSession, [url]));
+      const result = await runInductionMission({
+        page: badSession.page,
+        actor: badActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: url,
+        allowlist: [url],
+      });
+      expect(result.outcome).toBe("scope-unreachable");
+      expect(result.failure?.kind).toBe("target-unreachable");
+      expect(result.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
+      expect(result.coverage.statesVisited).toBe(0);
+      expect(result.recordings).toEqual([]);
+    } finally {
+      await badSession.close();
     }
   }, 30_000);
 });
