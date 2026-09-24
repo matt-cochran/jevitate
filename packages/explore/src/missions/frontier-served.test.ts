@@ -132,7 +132,8 @@ describe("frontier missions — a departure never leaves the run idle (#114)", (
     async () => {
       await withSession(async (session, actor) => {
         const start = Date.now();
-        const result = await coverage(session, actor, {});
+        // Losing the session is the scenario: opt in to session-ending clicks (#116 refuses them by default).
+        const result = await coverage(session, actor, { safety: { allowDestructive: true } });
         const elapsedMs = Date.now() - start;
         expect(result.outcome).toBe("scope-unreachable");
         expect(result.failure?.kind).toBe("target-unreachable");
@@ -160,6 +161,7 @@ describe("frontier missions — a departure never leaves the run idle (#114)", (
           allowlist: [origin],
           scope: { name: "account details", originAllowlist: [origin], routeGlobs: ["/settings"] },
           bounds: { maxActions: 20 },
+          safety: { allowDestructive: true },
         });
         expect(result.outcome).toBe("scope-unreachable");
         expect(result.failure?.message).toContain("could not return to the seed after a departure");
@@ -266,5 +268,19 @@ describe("exploratory differs from coverage (#115)", () => {
       expect([...exp.strategies]).toEqual(["exploratory-frontier"]);
     },
     90_000,
+  );
+});
+
+describe("frontier missions — the safety default keeps the session (#116 × #114)", () => {
+  it(
+    "coverage never clicks 'Sign out' by default, so the session is never lost",
+    async () => {
+      await withSession(async (session, actor) => {
+        const result = await coverage(session, actor, {});
+        expect(acted(result.transcript.filter((e) => e.actOk))).not.toContain("Sign out");
+        expect(result.outcome).not.toBe("scope-unreachable");
+      });
+    },
+    60_000,
   );
 });
