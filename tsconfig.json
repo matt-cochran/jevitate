@@ -24,6 +24,7 @@
     { "path": "packages/regression" },
     { "path": "packages/skills" },
     { "path": "packages/ux" },
+    { "path": "packages/findings" },
     { "path": "apps/example-site" },
     { "path": "site-integrations/example-network" }
   ]

@@ -63,6 +63,28 @@ test("single-take authoring (takes: 1) produces a fully-materialized, replayable
   }
 });
 
+test("#118: the authored Journey's final step asserts the independent success condition", async () => {
+  const result = await authorJourney({
+    goal: "search for widgets",
+    successAssertion: { kind: "visible", target: { testId: "results" } },
+    allowlist: ["https://example.test"],
+    startUrl: "https://example.test/search",
+    actor: {} as never,
+    judgment: fakeJudgment,
+    generation: fakeGeneration,
+    takes: 1,
+    journeyId: "explore-search",
+    journeyName: "Explore: search",
+  });
+
+  expect(result.outcome).toBe("authored");
+  if (result.outcome !== "authored") throw new Error("unreachable");
+  const pages = result.journey.recording.pages;
+  const lastPage = pages[pages.length - 1];
+  const lastStep = lastPage.steps[lastPage.steps.length - 1].step;
+  expect(lastStep).toEqual({ kind: "assert", check: { kind: "visible", target: { testId: "results" } } });
+});
+
 test("returns not-reached when the discovery mission does not succeed", async () => {
   const { runGoalBasedMission } = await import("../missions/goal-based.js");
   (runGoalBasedMission as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

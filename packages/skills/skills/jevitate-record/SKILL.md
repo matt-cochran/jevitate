@@ -16,9 +16,15 @@ headed browser demonstration a human performs — you launch it and they drive.
   `Recording` JSON file (default `~/.jevitate/recordings`). The session is
   headed by design — a record session IS a live human demonstration; add
   `--headless` only when a caller explicitly asks. The target must be
-  authorized (defaults to `--url`'s own origin; widen only with explicit
-  `--allow`), and an unauthorized target is refused
-  (`E_UNAUTHORIZED_EXPLORE_TARGET`).
+  authorized (`--allow` REPLACES the default allowlist when given at all —
+  it defaults to `--url`'s own origin only when `--allow` is omitted
+  entirely; include that origin explicitly in `--allow` if you still need
+  it), and an unauthorized target is refused (`E_UNAUTHORIZED_EXPLORE_TARGET`).
+- **Ending a take**: press Enter on stdin, or send SIGINT (Ctrl-C) — both end
+  the take the SAME way (the demonstrated steps are stopped and written to
+  disk). This matters most for `--headless`, where there is no visible
+  window to interact with: Ctrl-C is the way to end a headless take, and it
+  saves the take rather than killing the process and losing it.
 - The emitted `recordingPath` is the take you then feed into the diff/postdoc
   flow below. Capture two or more takes of the same flow (varying the data each
   time) when you want `diff` to classify which values are variables.
@@ -30,6 +36,13 @@ headed browser demonstration a human performs — you launch it and they drive.
   (constant vs. likely-variable) with a confidence score. Read the confidences;
   do not treat a low-confidence classification as settled — surface it to the
   human via `postdoc` instead of deciding for them.
+- **Input shape**: `diff`/`postdoc` accept ONLY a `jevitate record`-produced
+  take file — `{ "recording": <Recording>, "values": {...} }`. A raw
+  `Recording` (what `explore`, `explore-author-journey`, or a usability run
+  write directly — `{version, site, pages, ...}` with no `recording`/`values`
+  wrapper) is refused with a clear `E_INVALID_TAKE` message naming the
+  mismatch, not a zod dump. Wrap a raw Recording as `{ "recording": <it>,
+  "values": {} }` first if you need to diff/postdoc one.
 
 ## Review and classify (postdoc)
 

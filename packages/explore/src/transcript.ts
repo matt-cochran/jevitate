@@ -80,10 +80,24 @@ export interface TranscriptEntry {
   readonly strategy?: string;
   readonly actOk: boolean;
   readonly reason?: string;
+  /**
+   * Set when a failed step was refused by jevitate's OWN guard/fail-closed logic before any
+   * interaction with the app was attempted (the repeated-side-effect guard #92, a budget/fail-closed
+   * refusal, …) — never when the app itself was interacted with and reported the failure (a disabled
+   * target, an automation error). Additive (#119/#129): `regression capture`'s oracle derivation
+   * must never pick one of these as "the" failure to reproduce — replaying jevitate's own refusal
+   * can never fail against a fixed app, since nothing about the app changed.
+   */
+  readonly origin?: "engine";
   readonly url: string;
   readonly signature: string;
   /** Interactive controls perceived on the page when this step was decided. */
   readonly controlCount: number;
+  /**
+   * Those controls' identities (`role "name"`, redacted, first {@link TRANSCRIPT_CONTROL_CAP}) — additive
+   * (#143): what a persona could see, so a persona matrix can diff controls visible to one role only.
+   */
+  readonly controls?: readonly string[];
   /** Advisory model judgments made at this step, by question name (e.g. `looksBroken`). */
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
   /**
@@ -115,6 +129,10 @@ export interface TranscriptEntry {
    * usability run sees.
    */
   readonly descriptor?: TargetDescriptor;
+  /** The acted control's resolved `href` (redacted, path only), when it was a link. #127. */
+  readonly href?: string | null;
+  /** The acted control's raw `aria-current` attribute, or null. #127. */
+  readonly ariaCurrent?: string | null;
 }
 
 /** What came back after a message was sent. */
@@ -139,6 +157,8 @@ export interface TranscriptStep {
   readonly strategy?: string;
   readonly actOk: boolean;
   readonly reason?: string;
+  /** See `TranscriptEntry.origin`. */
+  readonly origin?: "engine";
   /** The snapshot the step was decided on. */
   readonly snapshot: Snapshot;
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
@@ -158,6 +178,15 @@ export interface TranscriptStep {
  * leaves every step up to the failure on disk.
  */
 export type TranscriptListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
+
+/** How many control identities one transcript entry keeps (#143). */
+export const TRANSCRIPT_CONTROL_CAP = 100;
+
+/** A control's identity as a person reads it: `button "Save"` (role alone when it has no name). */
+function controlLabel(c: Control): string {
+  const name = c.name.trim().replace(/\s+/g, " ").slice(0, 80);
+  return name === "" ? c.role : `${c.role} ${JSON.stringify(name)}`;
+}
 
 function isPasswordControl(c: Control | null): boolean {
   return c !== null && (c.inputType ?? "").toLowerCase() === "password";
@@ -184,9 +213,11 @@ export class TranscriptLog {
       ...(step.strategy === undefined ? {} : { strategy: step.strategy }),
       actOk: step.actOk,
       ...(step.reason === undefined ? {} : { reason: redactText(step.reason, this.#secrets) }),
+      ...(step.origin === undefined ? {} : { origin: step.origin }),
       url: redactText(redactUrl(step.snapshot.url), this.#secrets),
       signature: step.snapshot.signature,
       controlCount: step.snapshot.controls.length,
+      controls: step.snapshot.controls.slice(0, TRANSCRIPT_CONTROL_CAP).map((c) => redactText(controlLabel(c), this.#secrets)),
       ...(step.judgments === undefined ? {} : { judgments: step.judgments }),
       ...(step.timing === undefined ? {} : { timing: transcriptTiming(step.timing, this.#secrets) }),
       ...(step.message === undefined ? {} : { message: redactText(step.message, this.#secrets) }),
@@ -197,6 +228,8 @@ export class TranscriptLog {
         : { value: step.redacted === true || isPasswordControl(step.control) ? REDACTION_MASK : redactText(step.value, this.#secrets) }),
       ...(step.answer === undefined ? {} : { answer: redactAnswer(step.answer, this.#secrets) }),
       ...(step.control === null ? {} : { descriptor: redactDescriptor(step.control.descriptor, this.#secrets) }),
+      ...(step.control?.href === undefined ? {} : { href: step.control.href }),
+      ...(step.control?.ariaCurrent === undefined ? {} : { ariaCurrent: step.control.ariaCurrent }),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);

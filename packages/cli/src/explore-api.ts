@@ -1,10 +1,22 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import type { Assertion, InvariantSpec, Recording, TargetDescriptor } from "@jevitate/recording";
-import type { InvariantDefect, InvariantReport } from "@jevitate/explore";
+import {
+  AssertionSchema,
+  STYLE_CHANNELS,
+  STYLE_PROPERTIES,
+  type Assertion,
+  type CompareOp,
+  type InvariantSpec,
+  type Recording,
+  type RecordingEmulation,
+  type StyleChannel,
+  type StyleProperty,
+  type TargetDescriptor,
+} from "@jevitate/recording";
+import type { InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -64,6 +76,37 @@ import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
+import {
+  applyServerLogOutcome,
+  openServerLogRuntime,
+  type ServerLogDefect,
+  type ServerLogRuntimeResult,
+  type ServerLogsSummary,
+} from "./log-correlation.js";
+import type { LogSourceSpec } from "./log-sources.js";
+import type { LogDefectMatcher } from "./log-lines.js";
+import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
+import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
+
+/**
+ * Backend log correlation (#142): already-validated `--log-source`/`--log-defect` specs, threaded
+ * into every mission-type builder below the same way `invariants` is. `undefined`/empty ⇒ no
+ * sources ⇒ `openServerLogRuntime` is a complete no-op (existing runs pay nothing).
+ */
+export interface ServerLogOptions {
+  readonly sources: readonly LogSourceSpec[];
+  readonly logDefect: readonly LogDefectMatcher[];
+  readonly allowLogCmd?: boolean;
+  readonly drainMs?: number;
+}
+
+export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
+  serverLogs?: ServerLogsSummary;
+  serverLogDefects?: ServerLogDefect[];
+} {
+  if (runtimeResult === undefined) return {};
+  return { serverLogs: runtimeResult.summary, ...(runtimeResult.defects.length > 0 ? { serverLogDefects: runtimeResult.defects } : {}) };
+}
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -142,6 +185,55 @@ export interface RunExplorationOptions {
   readonly conversation?: ConversationOptions;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * Mission fixtures (#140/#144), ALREADY set up by the caller: every hang replay re-runs
+   * restore+setup first, the state is restored when the mission ends (the caller also restores on
+   * every exit path — idempotent), and the result/Recording carry the identity.
+   */
+  readonly fixtures?: MissionFixtures;
+  /**
+   * Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`,
+   * mutually exclusive). An unknown device name (or both given together) is refused BEFORE any
+   * browser opens (`PlaywrightBrowserPort.open`'s `resolveEmulation`). Recorded on the Recording,
+   * so replay/verify-fix reproduce under the SAME device by default.
+   */
+  readonly emulation?: EmulationSpec;
+  /**
+   * #147: the mission's actors (`--actor`). The primary's storageState seeds the mission session
+   * (it must equal `storageState` when both are given); each observer gets its own fresh context,
+   * opened only when a declared cross-actor check needs it, never driven by the model.
+   */
+  readonly actors?: MissionActors;
+}
+
+/**
+ * Overflow/emulation CLI flags shared by every strategy (#149): `emulation` is validated and
+ * resolved by `PlaywrightBrowserPort.open` itself (an unknown device or --viewport+--device
+ * together refuses BEFORE any browser opens); `overflow` gates and configures the horizontal-
+ * overflow hard signal (coverage only, for now).
+ */
+export interface OverflowFlags {
+  readonly checkOverflow?: boolean;
+  readonly toleranceCss?: number;
+  readonly ignoreSelectors?: readonly string[];
+}
+
+/** The viewport/device emulation actually applied to a session — recorded on the Recording (#149). */
+function recordingEmulation(
+  resolved: { viewport: { width: number; height: number }; device?: string; deviceScaleFactor?: number; isMobile?: boolean; hasTouch?: boolean } | undefined,
+): RecordingEmulation | undefined {
+  if (resolved === undefined) return undefined;
+  return {
+    viewport: resolved.viewport,
+    ...(resolved.device === undefined ? {} : { device: resolved.device }),
+    ...(resolved.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: resolved.deviceScaleFactor }),
+    ...(resolved.isMobile === undefined ? {} : { isMobile: resolved.isMobile }),
+    ...(resolved.hasTouch === undefined ? {} : { hasTouch: resolved.hasTouch }),
+  };
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -212,6 +304,9 @@ function browserVersionOf(page: { context(): { browser(): { version(): string } 
 
 export interface RunExplorationResult {
   readonly outcome: GoalBasedOutcome;
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /**
    * Did the loop complete its goal (`completed`, verified by the success assertion), or why not
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
@@ -262,6 +357,39 @@ export interface RunExplorationResult {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
+  /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
+  readonly fixtures?: MissionFixtureResult;
+}
+
+/** Outcomes that already mean the run itself broke or hung — a server-log finding never downgrades
+ *  (or, for the oracle-unreadable case, elevates) one of these; they already prove more, or the same. */
+const BROKEN_GOAL_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["inconclusive", "crashed", "hang", "intermittent"]);
+
+/**
+ * Folds a server-log correlation result into the goal mission's own `GoalBasedOutcome` (#142): a
+ * found `server-log` defect makes an otherwise-not-broken run `defects-found`; an unreadable
+ * `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` — mirrors
+ * `applyServerLogOutcome` (the `MissionOutcome` version the other three builders use), but
+ * `GoalBasedOutcome` has its own extra values (`succeeded`/`exhausted`/`blocked`).
+ */
+function applyServerLogGoalOutcome(outcome: GoalBasedOutcome, run: ServerLogRuntimeResult | undefined): GoalBasedOutcome {
+  if (run === undefined) return outcome;
+  if (run.defects.length > 0 && !BROKEN_GOAL_OUTCOMES.has(outcome)) return "defects-found";
+  if (!run.summary.oracleOk && outcome === "succeeded") return "inconclusive";
+  return outcome;
+}
+
+/** One-line reason for a server-log-driven outcome change (`reason` is unset otherwise for `succeeded`). */
+function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, run: ServerLogRuntimeResult | undefined): string {
+  if (newOutcome === "defects-found") {
+    const n = run?.defects.length ?? 0;
+    return `${n} server-log defect${n === 1 ? "" : "s"} found (--log-defect)`;
+  }
+  return "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -269,10 +397,22 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
-  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well.
-  const bound = secretFieldSecrets(opts.secretFields);
+  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well. So is a
+  // declared probe's resolved auth token (#135) — redacted everywhere a run secret is, not only in
+  // the invariant monitor's own evidence.
+  const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
+  const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? []), ...authTokenValues];
   const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
+  // The state the mission starts from — replays restore THIS fixture and rebind its recorded outputs.
+  const fx = opts.fixtures;
+  const missionFixture = fx === undefined ? undefined : { record: fx.record(), persisted: fx.persisted() };
 
+  // #149: refused BEFORE any browser opens (an unknown --device, or --viewport + --device together).
+  const resolvedEmulation = resolveEmulation(opts.emulation);
+  if (opts.actors !== undefined && opts.storageState !== undefined && resolvePath(opts.storageState) !== opts.actors.primary.storageState) {
+    throw new Error("runExploration: storageState must be the primary actor's own");
+  }
+  const primaryState = opts.actors?.primary.storageState ?? opts.storageState;
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const launch = {
@@ -280,9 +420,15 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
-    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+    ...opts.emulation,
+    ...(primaryState !== undefined ? { storageState: primaryState } : {}),
   };
   const session = await port.open(launch);
+  // #147: each observer in its OWN fresh context (only its own storageState), opened on first use.
+  const observers =
+    opts.actors === undefined || opts.actors.observers.length === 0
+      ? undefined
+      : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
 
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -292,17 +438,35 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
+  // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
+  // load too; a no-op (`undefined`) when `--log-source` was not given.
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: secrets ?? [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
-      // A hang is reproduced by replaying its steps in fresh contexts (same auth).
-      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
+      // A hang is reproduced by replaying its steps in fresh contexts (same auth, same fixture state).
+      openFreshSession:
+        fx === undefined || missionFixture === undefined
+          ? freshSessionOpener(portFactory, launch, opts.allowlist)
+          : fixtureReplayOpener(freshSessionOpener(portFactory, launch, opts.allowlist), fx, missionFixture.record.outputs),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       onRecording: journal.onRecording,
       actor,
       judge: opts.judge,
@@ -320,10 +484,27 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       fixture,
       ...conversationConfig(opts.conversation),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      ...(observers === undefined ? {} : { observers }),
+      ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
     });
+    await observers?.close();
 
-    journal.writeRecording(mission.recording);
-    journal.writeTranscript(mission.transcript);
+    // The mission (and its hang replays) is done: restore now, so the persisted log includes it. The
+    // caller restores again on every exit path (a no-op once restored).
+    await fx?.restore();
+    const recording: Recording = {
+      ...mission.recording,
+      ...(missionFixture === undefined ? {} : { fixture: recordingFixture(missionFixture.record) }),
+      ...(resolvedEmulation === undefined ? {} : { emulation: recordingEmulation(resolvedEmulation) }),
+    };
+    // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
+    // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1); an unreadable
+    // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
+    const goalOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
+    journal.writeRecording(recording);
+    journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
     const engine = currentEngineInfo();
     const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page), engine);
     const resultPath = resultPathFor(journal.recordingPath);
@@ -348,7 +529,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const result: RunExplorationResult = {
       issues,
       timing: mission.run.timing,
-      outcome: mission.outcome,
+      outcome: goalOutcome,
       runOutcome: mission.run.outcome,
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       assertionPassed: mission.assertionPassed,
@@ -359,27 +540,50 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       actions: mission.run.actions,
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
-      transcript: mission.transcript,
-      exitCode: goalExitCode(mission.outcome),
+      transcript: serverLogRun?.transcript ?? mission.transcript,
+      exitCode: goalExitCode(goalOutcome),
       resultPath,
       target: {
         seedUrl: opts.url,
         allowlist: [...opts.allowlist],
-        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+        ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}),
+        ...(opts.actors === undefined ? {} : { actors: persistedActors(opts.actors) }),
       },
-      recording: mission.recording,
+      recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      sideEffects: mission.run.sideEffects,
+      ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
       engine,
+      ...(fx === undefined || missionFixture === undefined
+        ? {}
+        : {
+            fixtures: {
+              ...missionFixture.record,
+              cycles: fx.record().cycles,
+              log: fx.record().log,
+              ...(missionFixture.persisted.spec === undefined ? {} : { spec: missionFixture.persisted.spec }),
+              ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
+            },
+          }),
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
-      ...(mission.reason === undefined ? {} : { reason: mission.reason }),
+      ...(goalOutcome === mission.outcome
+        ? mission.reason === undefined
+          ? {}
+          : { reason: mission.reason }
+        : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...serverLogResult(serverLogRun),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
-    writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
+    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result);
     return result;
   } finally {
     disarmKillSwitch();
+    // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
+    // (no drain wait) rather than leaving them open until process exit.
+    await serverLog?.abort();
+    await observers?.close().catch(() => undefined);
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -567,11 +771,26 @@ export interface RunCoverageMissionOptions {
   readonly routeGlobs?: readonly string[];
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
+   * the last action revealed is tried first (#115).
+   */
+  readonly strategy?: "coverage" | "exploratory";
+  /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
+  readonly stallTimeoutMs?: number;
+  /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
+  readonly emulation?: EmulationSpec;
+  /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
+  readonly overflow?: OverflowFlags;
 }
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
@@ -589,6 +808,9 @@ export interface RunCoverageMissionResult {
   readonly recordingPaths: string[];
   /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
+  /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
@@ -597,12 +819,18 @@ export interface RunCoverageMissionResult {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
 
+  // #149: refused BEFORE any browser opens.
+  const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const launch = {
@@ -610,6 +838,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await port.open(launch);
@@ -620,7 +849,19 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
   // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -635,29 +876,61 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       seedUrl: opts.url,
       allowlist: opts.allowlist,
       bounds: opts.bounds,
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),
+      ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
+      overflow: {
+        ...(opts.overflow?.checkOverflow === undefined ? {} : { checkOverflow: opts.overflow.checkOverflow }),
+        ...(opts.overflow?.toleranceCss === undefined ? {} : { toleranceCss: opts.overflow.toleranceCss }),
+        ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+        ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+      },
     });
 
+    // #149: every repro Recording (per-state, and each defect's own) is stamped with the emulation
+    // it was found under, so `verify-fix` replays it under the SAME device by default.
+    const emu = recordingEmulation(resolvedEmulation);
+    const withEmu = (r: Recording): Recording => (emu === undefined ? r : { ...r, emulation: emu });
+    const stampedDefects = result.coverage.defects.map((d) => ({ ...d, recording: withEmu(d.recording) }));
+    const stampedCoverage = { ...result.coverage, defects: stampedDefects };
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
-      await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
+      await writeFile(p, `${JSON.stringify(withEmu(result.recordings[i]!), null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
-    journal.writeTranscript(result.transcript);
+    journal.writeTranscript(serverLogRun?.transcript ?? result.transcript);
     // A silent run that never proved anything (the seed redirected off-target, or the frontier
     // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
-    const found = result.coverage.defects.length + (result.invariantDefects?.length ?? 0);
-    const bare = result.outcome === "crashed" ? "crashed" : result.outcome === "scope-unreachable" ? "inconclusive" : null;
+    const found = stampedDefects.length + (result.invariantDefects?.length ?? 0);
+    // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
+    // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
+    // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
+    const bare =
+      result.outcome === "crashed"
+        ? "crashed"
+        : result.outcome === "scope-unreachable" || result.outcome === "stalled"
+          ? "inconclusive"
+          : result.outcome === "budget"
+            ? found > 0
+              ? "defects-found"
+              : "inconclusive"
+            : null;
     const thin = bare === null && found === 0 && !result.coverage.sufficiency.sufficient;
-    const missionOutcome: MissionOutcome = combineOutcomes([
+    const preLogOutcome: MissionOutcome = combineOutcomes([
       bare ?? (thin ? "inconclusive" : found > 0 ? "defects-found" : "clean"),
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
+    // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
+    // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
+    const missionOutcome = applyServerLogOutcome(preLogOutcome, serverLogRun);
     const coverageFailure: MissionFailure | undefined = thin
       ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${result.coverage.sufficiency.shortfalls.join("; ")}` }
       : undefined;
@@ -673,24 +946,50 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       timing: result.timing,
-      coverage: result.coverage,
+      coverage: stampedCoverage,
       outcome: result.outcome,
       missionOutcome,
       exitCode,
       ...(failure === undefined ? {} : { failure }),
       recordingPaths,
       transcriptPath: journal.transcriptPath,
+      sideEffects: result.sideEffects ?? [],
+      ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...serverLogResult(serverLogRun),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
     disarmKillSwitch();
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
+
+/**
+ * The misuse strategies `explore --strategy adversarial` runs, in order — shared with the queue drain
+ * (`jevitate mission run`, #117) so a queued adversarial mission hunts exactly like the CLI's.
+ */
+export const CLI_ADVERSARIAL_STRATEGIES: readonly MisuseStrategy[] = [
+  // Form-aware misuse around submitting (#64): most app pages are forms.
+  "double-submit",
+  "boundary-submit",
+  "edit-cancel-save",
+  "navigate-away-unsaved",
+  "act-while-pending",
+  // Coverage: act on every target control once.
+  "exercise-controls",
+  "ordering-violation",
+  "repeat-rapid",
+  "boundary-input",
+  "contradictory-actions",
+  "nav-during-pending",
+  // Keep hunting on other routes (within the target's scope) after and between defects.
+  "visit-route",
+];
 
 /**
  * Options for the additive adversarial CLI mission. Mirrors `runExploration`'s
@@ -745,6 +1044,14 @@ export interface RunAdversarialCliMissionOptions {
   readonly coverageThresholds?: Partial<CoverageThresholds>;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
+  readonly emulation?: EmulationSpec;
+  /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
+  readonly overflow?: OverflowFlags;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -754,6 +1061,8 @@ export interface MissionTarget {
   readonly allowlist: string[];
   /** Absolute path of the storageState file the run started from (never its contents). */
   readonly storageStatePath?: string;
+  /** #147: every actor's name, role and storageState PATH (never its contents) — for verify-fix. */
+  readonly actors?: ReadonlyArray<{ readonly name: string; readonly storageStatePath: string; readonly role: "primary" | "observer" }>;
 }
 
 export type AdversarialCliMissionResult = AdversarialOutcome & {
@@ -772,6 +1081,10 @@ export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 };
 
 /**
@@ -785,6 +1098,8 @@ export async function runAdversarialCliMission(
 ): Promise<AdversarialCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
+  // #149: refused BEFORE any browser opens.
+  const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const launch = {
@@ -792,6 +1107,7 @@ export async function runAdversarialCliMission(
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await port.open(launch);
@@ -799,13 +1115,26 @@ export async function runAdversarialCliMission(
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: opts.secrets ?? [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       page: session.page,
       actor,
       judgment: opts.judgment,
@@ -821,13 +1150,27 @@ export async function runAdversarialCliMission(
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       onRecording: journal.onRecording,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      overflow: {
+        ...(opts.overflow?.checkOverflow === undefined ? {} : { checkOverflow: opts.overflow.checkOverflow }),
+        ...(opts.overflow?.toleranceCss === undefined ? {} : { toleranceCss: opts.overflow.toleranceCss }),
+        ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+        ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+      },
     });
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(outcome.transcript);
+    // `AdversarialOutcome.transcript` is a mutable `TranscriptEntry[]`; the correlated array only
+    // ADDS an optional `serverLogs` field per entry (`TranscriptEntryWithLogs extends TranscriptEntry`).
+    const transcript = (serverLogRun?.transcript ?? outcome.transcript) as TranscriptEntry[];
     journal.writeRecording(outcome.recording);
-    journal.writeTranscript(outcome.transcript);
-    const exitCode = missionExitCode(outcome.outcome);
+    journal.writeTranscript(transcript);
+    // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
+    // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
+    const missionOutcome = applyServerLogOutcome(outcome.outcome, serverLogRun);
+    const exitCode = missionExitCode(missionOutcome);
     const resultPath = resultPathFor(journal.recordingPath);
     const engine = currentEngineInfo();
     const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page), engine);
@@ -837,7 +1180,7 @@ export async function runAdversarialCliMission(
     for (const h of outcome.hangs) {
       drafts.push(draftForHang(h, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${h.fingerprint}` }));
     }
-    if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, outcome.transcript, ctx));
+    if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, transcript, ctx));
     const issues = await processIssueDrafts(
       journal.recordingPath,
       drafts,
@@ -847,6 +1190,11 @@ export async function runAdversarialCliMission(
     );
     const result = {
       ...outcome,
+      // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
+      recording:
+        resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
+      outcome: missionOutcome,
+      transcript,
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       exitCode,
@@ -861,10 +1209,12 @@ export async function runAdversarialCliMission(
       engine,
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...serverLogResult(serverLogRun),
     };
-    return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
+    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result) };
   } finally {
     disarmKillSwitch();
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -884,6 +1234,8 @@ export interface RunFeatureCliMissionOptions {
   readonly capability: string;
   readonly routeGlobs: readonly string[];
   readonly headless?: boolean;
+  /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
+  readonly stallTimeoutMs?: number;
   /** Step/action budget (CLI `--max-actions` / `--max-decisions`). */
   readonly bounds?: Partial<Bounds>;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
@@ -909,6 +1261,14 @@ export interface RunFeatureCliMissionOptions {
   readonly saveStorageState?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Backend log sources (`--log-source`/`--log-defect`, #142), already validated. */
+  readonly serverLog?: ServerLogOptions;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /** The shared safety policy (#116: `--deny`, `--allow-destructive`, `--read-rpc`). */
+  readonly safety?: SafetyConfig;
+  /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
+  readonly emulation?: EmulationSpec;
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
@@ -935,6 +1295,10 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
   readonly defects?: InvariantDefect[];
   readonly invariantSpec?: InvariantSpec;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  readonly serverLogDefects?: ServerLogDefect[];
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -942,12 +1306,15 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
 
+  // #149: refused BEFORE any browser opens.
+  resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const launch = {
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await portFactory().open(launch);
@@ -958,7 +1325,18 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+  });
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets: [],
+    onTranscriptEntry: journal.onTranscriptEntry,
+  });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -969,17 +1347,21 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       allowlist: opts.allowlist,
       scope,
       bounds: opts.bounds,
-      onTranscriptEntry: journal.onTranscriptEntry,
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
+      ...(opts.safety === undefined ? {} : { safety: opts.safety }),
     });
 
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `feature-${stamp}-path-${i}.json`);
       await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
-    journal.writeTranscript(result.transcript);
+    journal.writeTranscript(serverLogRun?.transcript ?? result.transcript);
 
     // Honest outcome (ticket #78): a run that exercised nothing in-scope and
     // non-chrome proved nothing about the named capability — `inconclusive`,
@@ -996,21 +1378,31 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       : undefined;
     // A declared-invariant violation (#86) is a hard defect even on a thin run: it was observed.
     const invariantDefects = result.invariantDefects?.length ?? 0;
-    const missionOutcome: MissionOutcome = combineOutcomes([
+    // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
+    // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
+    const preLogOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed"
         ? "crashed"
-        : result.outcome === "scope-unreachable"
+        : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
-          : invariantDefects > 0
-            ? "defects-found"
-            : thin
-              ? "inconclusive"
-              : "clean",
+          : result.outcome === "budget"
+            ? invariantDefects > 0
+              ? "defects-found"
+              : "inconclusive"
+            : invariantDefects > 0
+              ? "defects-found"
+              : thin
+                ? "inconclusive"
+                : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
+    // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
+    // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
+    const missionOutcome = applyServerLogOutcome(preLogOutcome, serverLogRun);
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
       ...result,
+      transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],
       failure: result.failure ?? coverageFailure,
       missionOutcome,
       exitCode,
@@ -1023,10 +1415,12 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
+      ...serverLogResult(serverLogRun),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
     disarmKillSwitch();
+    await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -1067,9 +1461,23 @@ export interface ExploreCliDeps {
  * Compact assertion spec parser (a recording `Assertion`, checked on a page). Supported forms:
  *   urlIncludes:<text>
  *   visible:<descriptor>
- *   textIncludes:<descriptor>|<text>
+ *   textIncludes:<descriptor>|<text>  — case-insensitive (#113): matches regardless of case, or of a
+ *                                        CSS text-transform (a badge whose DOM text is "Approved" but
+ *                                        renders `uppercase` still matches `|Approved`)
  *   count:<descriptor>|min=<n>,max=<n>
  *   valueEquals:<descriptor>|<value>   — a form control's VALUE (input, textarea, select), exactly
+ * and the visual-state kinds (#148), decided by code from fixed page reads:
+ *   style:<descriptor>|<prop><op><value>   — the COMPUTED style of EVERY match (at least one);
+ *                                        <prop> is an allowlisted CSS property, optionally one
+ *                                        channel of it: alpha(background-color)>0, px(outline-width)>=2;
+ *                                        <op> is = != > >= < <= (= compares colors as colors).
+ *                                        `styleMatches:` is an alias.
+ *   inViewport:<descriptor>[|min=<ratio>] — each match's visible fraction (0..1, default 0.5)
+ *   box:<descriptor>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> — each match's size (px)
+ *   overlaps:<descriptor>|<descriptor2> / noOverlap:<descriptor>|<descriptor2> — the first matches' boxes
+ *   attr:<descriptor>|<name>=<value> | attr:<descriptor>|<name> (present) | attr:<descriptor>|!<name> (absent)
+ *   flashed:<descriptor>|class=<cls>|attr=<name>|animation [|withinMs=<n>] — a match GAINED the
+ *                                        class / attribute / an animation after the last user input
  * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS
  * selector starting with `[`, `#` or `.` (`[data-testid=x]` is read as `testId=x`). In
  * `textIncludes` / `valueEquals` the LAST `|` separates the descriptor from the text.
@@ -1110,9 +1518,131 @@ export function parseAssertionSpec(spec: string): Assertion {
       }
       return out;
     }
+    case "style":
+    case "styleMatches":
+    case "inViewport":
+    case "box":
+    case "overlaps":
+    case "noOverlap":
+    case "attr":
+    case "flashed":
+      return parseVisualSpec(kind, rest);
     default:
       throw new Error(`unsupported assertion kind ${JSON.stringify(kind)}`);
   }
+}
+
+/** A finite number from a spec, or a precise error. */
+function specNumber(kind: string, key: string, v: string | undefined): number {
+  const n = v === undefined || v.trim() === "" ? Number.NaN : Number(v);
+  if (!Number.isFinite(n)) throw new Error(`${kind}: ${key} must be a number, got ${JSON.stringify(v ?? "")}`);
+  return n;
+}
+
+/** `<descriptor>|<rest>` split at the FIRST `|`; `rest` required unless `optional`. */
+function splitDescriptor(kind: string, spec: string, shape: string, optional = false): [TargetDescriptor, string] {
+  const bar = spec.indexOf("|");
+  if (bar === -1 && !optional) throw new Error(`${kind} requires "${shape}"`);
+  return [parseDescriptorSpec(bar === -1 ? spec : spec.slice(0, bar)), bar === -1 ? "" : spec.slice(bar + 1)];
+}
+
+/**
+ * The visual-state assertion specs (#148) — see `parseAssertionSpec`. Validated through the
+ * recording `AssertionSchema` (the allowlisted properties, a closed set of ops/channels), so a typo
+ * fails here, before any browser work.
+ */
+function parseVisualSpec(kind: string, rest: string): Assertion {
+  let out: Assertion;
+  switch (kind) {
+    case "style":
+    case "styleMatches": {
+      // The descriptor ends at the LAST `|` (a style value never contains one).
+      const bar = rest.lastIndexOf("|");
+      if (bar === -1) throw new Error(`${kind} requires "<descriptor>|<prop><op><value>", e.g. ${kind}:[data-heat]|alpha(background-color)>0`);
+      const target = parseDescriptorSpec(rest.slice(0, bar));
+      const m = /^\s*(?:([a-z]+)\(\s*([a-z-]+)\s*\)|([a-z-]+))\s*(>=|<=|!=|=|>|<)\s*(.*)$/.exec(rest.slice(bar + 1));
+      if (m === null) throw new Error(`${kind}: expected <prop><op><value> (op = != > >= < <=), got ${JSON.stringify(rest.slice(bar + 1))}`);
+      const channel = m[1];
+      const property = m[2] ?? m[3] ?? "";
+      if (channel !== undefined && !(STYLE_CHANNELS as readonly string[]).includes(channel)) {
+        throw new Error(`${kind}: unknown channel ${JSON.stringify(channel)} (one of ${STYLE_CHANNELS.join(", ")})`);
+      }
+      if (!(STYLE_PROPERTIES as readonly string[]).includes(property)) {
+        throw new Error(`${kind}: property ${JSON.stringify(property)} is not allowlisted (one of ${STYLE_PROPERTIES.join(", ")})`);
+      }
+      out = {
+        kind: "style",
+        target,
+        property: property as StyleProperty,
+        ...(channel === undefined ? {} : { channel: channel as StyleChannel }),
+        op: m[4] as CompareOp,
+        value: (m[5] ?? "").trim(),
+      };
+      break;
+    }
+    case "inViewport": {
+      const [target, opts] = splitDescriptor(kind, rest, "<descriptor>[|min=<ratio>]", true);
+      out = { kind: "inViewport", target };
+      for (const pair of opts.split(",").filter((p) => p !== "")) {
+        const [k, v] = pair.split("=");
+        if (k !== "min") throw new Error(`inViewport: unknown option ${JSON.stringify(k)} (only min=<ratio>)`);
+        out = { ...out, min: specNumber(kind, "min", v) };
+      }
+      break;
+    }
+    case "box": {
+      const [target, opts] = splitDescriptor(kind, rest, "<descriptor>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n>");
+      const bounds: Record<string, number> = {};
+      for (const pair of opts.split(",").filter((p) => p !== "")) {
+        const [k, v] = pair.split("=");
+        if (k !== "minWidth" && k !== "maxWidth" && k !== "minHeight" && k !== "maxHeight") {
+          throw new Error(`box: unknown bound ${JSON.stringify(k)} (minWidth, maxWidth, minHeight, maxHeight)`);
+        }
+        bounds[k] = specNumber(kind, k, v);
+      }
+      if (Object.keys(bounds).length === 0) throw new Error("box needs at least one bound");
+      out = { kind: "box", target, ...bounds };
+      break;
+    }
+    case "overlaps":
+    case "noOverlap": {
+      const [target, other] = splitDescriptor(kind, rest, "<descriptor>|<descriptor2>");
+      out = { kind: "overlap", target, other: parseDescriptorSpec(other), overlapping: kind === "overlaps" };
+      break;
+    }
+    case "attr": {
+      const [target, spec] = splitDescriptor(kind, rest, "<descriptor>|<name>[=<value>] or <descriptor>|!<name>");
+      if (spec.startsWith("!")) out = { kind: "attr", target, name: spec.slice(1), absent: true };
+      else {
+        const eq = spec.indexOf("=");
+        out = eq === -1 ? { kind: "attr", target, name: spec } : { kind: "attr", target, name: spec.slice(0, eq), value: spec.slice(eq + 1) };
+      }
+      break;
+    }
+    case "flashed": {
+      const [target, opts] = splitDescriptor(kind, rest, "<descriptor>|class=<cls> (or attr=<name>, animation)[|withinMs=<n>]");
+      let f: Extract<Assertion, { kind: "flashed" }> = { kind: "flashed", target };
+      for (const part of opts.split("|").filter((p) => p !== "")) {
+        const eq = part.indexOf("=");
+        const k = eq === -1 ? part : part.slice(0, eq);
+        const v = eq === -1 ? "" : part.slice(eq + 1);
+        if (k === "class") f = { ...f, className: v };
+        else if (k === "attr") f = { ...f, attr: v };
+        else if (k === "animation" && eq === -1) f = { ...f, animation: true };
+        else if (k === "withinMs") f = { ...f, withinMs: specNumber(kind, "withinMs", v) };
+        else throw new Error(`flashed: unknown option ${JSON.stringify(part)} (class=<cls>, attr=<name>, animation, withinMs=<n>)`);
+      }
+      out = f;
+      break;
+    }
+    default:
+      throw new Error(`unsupported assertion kind ${JSON.stringify(kind)}`);
+  }
+  const parsed = AssertionSchema.safeParse(out);
+  if (!parsed.success) {
+    throw new Error(`invalid ${kind} spec: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+  return parsed.data;
 }
 
 const HTTP_METHOD = /^(?:[A-Za-z]+|\*)$/;

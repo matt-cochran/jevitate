@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import type { Assertion } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { checkAssertion } from "./assertion.js";
+import { checkAssertion, readAssertionText } from "./assertion.js";
 
 function fakeLocator(overrides: Partial<Record<string, any>> = {}) {
   return {
@@ -80,6 +80,16 @@ test("checkAssertion: a textIncludes assertion that becomes true after a delay p
 
   expect(result).toBe(true);
   expect((locator.innerText as any).mock.calls.length).toBeGreaterThan(1);
+});
+
+test("checkAssertion: textIncludes matches case-insensitively (#113) — innerText applies CSS text-transform: uppercase", async () => {
+  // A status badge whose DOM text is "Approved" but renders `text-transform: uppercase` reads back
+  // as "APPROVED" through innerText. The page holds the text; the check must not fail on case alone.
+  const locator = fakeLocator({ innerText: vi.fn(async () => "APPROVED"), count: vi.fn(async () => 1) });
+  const actor = actorWithPage(fakePage(locator));
+  const a: Assertion = { kind: "textIncludes", target: { testId: "badge" }, text: "Approved" };
+
+  expect(await checkAssertion(actor as any, a, { timeoutMs: 200, pollMs: 20 })).toBe(true);
 });
 
 // === RED/GREEN: fails closed once the timeout elapses ===
@@ -180,4 +190,20 @@ test("checkAssertion: a textIncludes target that is not on the page is `false` w
   const a: Assertion = { kind: "textIncludes", target: { testId: "status" }, text: "done" };
   await expect(checkAssertion(actor as any, a, { timeoutMs: 200, pollMs: 20 })).resolves.toBe(false);
   expect(locator.innerText).not.toHaveBeenCalled();
+});
+
+test("readAssertionText: the literal text a failed textIncludes read, for enriching a failure detail (#113)", async () => {
+  const locator = fakeLocator({ innerText: vi.fn(async () => "Pending"), count: vi.fn(async () => 1) });
+  const actor = actorWithPage(fakePage(locator));
+  const a: Assertion = { kind: "textIncludes", target: { testId: "badge" }, text: "Approved" };
+  await expect(readAssertionText(actor as any, a)).resolves.toBe("Pending");
+});
+
+test("readAssertionText: null for a target that did not resolve, or for any other assertion kind", async () => {
+  const missing = actorWithPage(fakePage(fakeLocator({ count: vi.fn(async () => 0) })));
+  await expect(
+    readAssertionText(missing as any, { kind: "textIncludes", target: { testId: "badge" }, text: "x" }),
+  ).resolves.toBeNull();
+  const actor = actorWithPage(fakePage(fakeLocator()));
+  await expect(readAssertionText(actor as any, { kind: "urlIncludes", text: "/inbox" })).resolves.toBeNull();
 });

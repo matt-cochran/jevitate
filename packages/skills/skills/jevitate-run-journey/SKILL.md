@@ -25,13 +25,29 @@ artifact; your job is to find the right one and run it with the right params.
   Every param the `find`/`find_capabilities` result listed under `params` is
   required; passing an unknown param key is a refusal (`E_INVALID_PARAMS`), not
   a silent ignore. An unknown id is `E_UNKNOWN_JOURNEY`.
-- MCP: `run_journey(id, params)` — same param-schema validation, same refusal on
-  an unknown id or params. It NEVER accepts inline steps or a raw recording —
-  a published id only.
+- MCP: `run_journey({ id, params, storageState? })` — same param-schema
+  validation, same refusal on an unknown id or params. It NEVER accepts inline
+  steps or a raw recording — a published id only.
 - Read the JSON envelope's `outcome` field. `"ok"` and `"healed"` (a run that
   recovered via self-heal) are both successes; `"quarantined"` (and any other
   value, including a secret-handback pause) means it did not complete — report
   that honestly, do not summarize a non-success outcome as success.
+
+## Authenticated Journeys (#118)
+
+- A Journey authored behind a login needs a deterministic authenticated
+  pre-step to replay: `--storage-state <file>` (a Playwright storageState JSON
+  path — cookies + origin storage) on `jevitate journey run`, `jevitate load
+  run`, and `jevitate source run`; over MCP, `run_journey`'s optional
+  `storageState` argument is the SAME thing — a file PATH on the machine
+  running the MCP server, never raw cookie/session content in the call itself.
+  The file's contents are read only by the browser session; never logged,
+  never echoed back.
+- A Journey CAN declare `metadata.requiresAuth: true` if it only reaches its
+  steps from an authenticated session. A run given no `storageState` then
+  fails fast — before any browser opens — with `E_JOURNEY_REQUIRES_AUTH`
+  naming the actual problem, instead of a confusing deep
+  `replay-target-not-found` partway through the steps.
 
 ## Self-heal (optional, additive)
 
@@ -54,19 +70,26 @@ artifact; your job is to find the right one and run it with the right params.
   result in this same session — a promoted id can be revoked; don't rely on a
   memorized id from an earlier conversation.
 
+## Promoting a Journey
+
+- `jevitate journey promote <id> --json` promotes a local Journey — a
+  deliberate human-approval gate (mirrors `mission target promote`'s
+  semantics), never automatic. Every authored/recorded Journey starts
+  `metadata.promoted: false` (`explore-author-journey`, `jevitate record` +
+  `recording postdoc`); only a promoted Journey is discoverable via `journey
+  find`/`find_capabilities` and runnable via `journey run`/`run_journey`.
+  There is still no "raw Recording -> promoted Journey in one step" command —
+  a Recording becomes a Journey first (through an authoring path, or the
+  `JourneyRegistry` API), then `journey promote <id>` promotes it.
+
 ## Publishing to a distributed source
 
 - `jevitate journey publish <id> --to <source>` pushes a PROMOTED local Journey
   up to a registered distributed source (see `jevitate-sources`). It preserves
   every publish-side guard: promoted-only, secret-references-only, and
   declared-origin coverage; it writes onto a new `publish/<id>` branch and,
-  when `gh` is present, opens a PR. It never publishes an unpromoted Journey.
-
-## Known gaps
-
-- There is no single "raw Recording -> promoted Journey" command: a Recording
-  becomes a Journey through the authoring paths (`jevitate
-  explore-author-journey`, which writes an UNPROMOTED Journey a human still
-  promotes) or the `JourneyRegistry` API, and promotion stays a deliberate
-  human gate. If a user asks you to "promote this recording," recommend those
-  paths rather than guessing at a promote command — do not invent one.
+  when `gh` is present, opens a PR. When `gh` is absent, or a PR can't be
+  opened (e.g. the remote isn't GitHub), the branch is still pushed and the
+  command still reports success (`pushed: true`, no PR) with instructions to
+  open one manually — pushing the branch is never reported as a failure. It
+  never publishes an unpromoted Journey.

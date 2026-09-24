@@ -47,6 +47,39 @@ describe("runAdversarialMission — clean run", () => {
   );
 });
 
+describe("runAdversarialMission — the seed itself cannot be loaded (#128)", () => {
+  test(
+    "a net::ERR_UNSAFE_PORT on the first navigation ends scope-unreachable/inconclusive with target-unreachable, never crashed",
+    async () => {
+      const url = "http://127.0.0.1:1/";
+      const browserPort = new PlaywrightBrowserPort();
+      const badSession = await browserPort.open({ headless: true, allowedOrigins: [url], baseUrl: url });
+      try {
+        const badActor = CastActor.named("unreachable-tester").whoCan(new BrowseTheWeb(badSession, [url]));
+        const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+        const result = await runAdversarialMission({
+          page: badSession.page,
+          actor: badActor,
+          judgment,
+          generation: new FakeGenerationGateway(),
+          seedUrl: url,
+          allowlist: [url],
+          bounds: { maxDecisions: 4 },
+          strategies: ["exercise-controls"],
+        });
+        expect(result.stop).toBe("scope-unreachable");
+        expect(result.outcome).toBe("inconclusive");
+        expect(result.failure?.kind).toBe("target-unreachable");
+        expect(result.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
+        expect(result.defects).toEqual([]);
+      } finally {
+        await badSession.close();
+      }
+    },
+    30_000,
+  );
+});
+
 describe("runAdversarialMission — hard defect", () => {
   test(
     "a console error stops the mission, keeps the Recording, and produces a triage narrative",
@@ -350,4 +383,56 @@ describe("runAdversarialMission — the outcome is a typed result, never a throw
     },
     120_000,
   );
+});
+
+describe("runAdversarialMission — horizontal-overflow hard signal (#149)", () => {
+  test(
+    "at a 375px viewport, /responsive/overflow is a hard defect attributed to [data-testid=wide], with a stable fingerprint",
+    async () => {
+      const browserPort = new PlaywrightBrowserPort();
+      const narrowSession = await browserPort.open({
+        headless: true,
+        allowedOrigins: [site.url],
+        baseUrl: site.url,
+        viewport: { width: 375, height: 812 },
+      });
+      try {
+        const narrowActor = CastActor.named("responsive-adversary").whoCan(new BrowseTheWeb(narrowSession, [site.url]));
+        const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+        const result = await runAdversarialMission({
+          page: narrowSession.page,
+          actor: narrowActor,
+          judgment,
+          generation: new FakeGenerationGateway(),
+          seedUrl: `${site.url}/responsive/overflow`,
+          allowlist: [site.url],
+          bounds: { maxDecisions: 1 },
+          strategies: ["exercise-controls"],
+        });
+        const overflowDefects = result.defects.filter((d) => d.kind === "horizontal-overflow");
+        expect(overflowDefects).toHaveLength(1);
+        expect(overflowDefects[0]!.title).toContain("[data-testid=wide]");
+        expect(overflowDefects[0]!.route).toBe("/responsive/overflow");
+        expect(overflowDefects[0]!.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+      } finally {
+        await narrowSession.close();
+      }
+    },
+    30_000,
+  );
+
+  test("at a 1280px viewport, the same page is clean (no horizontal-overflow defect)", async () => {
+    const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+    const result = await runAdversarialMission({
+      page: session.page,
+      actor,
+      judgment,
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/responsive/overflow`,
+      allowlist: [site.url],
+      bounds: { maxDecisions: 1 },
+      strategies: ["exercise-controls"],
+    });
+    expect(result.defects.filter((d) => d.kind === "horizontal-overflow")).toEqual([]);
+  }, 30_000);
 });

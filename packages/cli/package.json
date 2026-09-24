@@ -52,6 +52,7 @@
     "@jevitate/domain": "workspace:*",
     "@jevitate/example-site": "workspace:*",
     "@jevitate/explore": "workspace:*",
+    "@jevitate/findings": "workspace:*",
     "@jevitate/inbox": "workspace:*",
     "@jevitate/interpreter": "workspace:*",
     "@jevitate/journey": "workspace:*",

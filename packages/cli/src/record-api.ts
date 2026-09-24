@@ -120,37 +120,52 @@ export function resolveRecordAllowlist(url: string, allow: readonly string[]): s
 }
 
 /**
- * The default stop signal for an interactive `jevitate record` session:
- * resolves the first time the user presses Enter on stdin. Best-effort — if
- * stdin is not a TTY / not readable, it resolves immediately rather than
- * hanging the capture forever.
+ * The default stop signal for an interactive `jevitate record` session: resolves the first time
+ * the user presses Enter on stdin, OR on SIGINT (Ctrl-C, #124) — both end the take the SAME way,
+ * through `recorder.stop()` + the write to disk in `runRecording`'s normal path, so a take is
+ * never silently lost. SIGINT matters most for `--headless` (no visible window to interact with,
+ * so Ctrl-C is the natural way to signal "done"): registering a listener here means Node does NOT
+ * fall back to its default "kill the process" SIGINT behavior — the take is saved first.
+ * Best-effort on stdin — if it is not a TTY / not readable, resolves immediately rather than
+ * hanging the capture forever (SIGINT still works either way).
  */
 export function waitForEnterKey(): Promise<void> {
   return new Promise<void>((resolve) => {
+    let settled = false;
     const stdin = process.stdin;
-    if (!stdin || !stdin.readable) {
+    const onSigint = (): void => finish();
+    const onData = (chunk: Buffer): void => {
+      if (chunk.includes(0x0a) || chunk.includes(0x0d)) finish();
+    };
+    function cleanup(): void {
+      process.off("SIGINT", onSigint);
+      if (stdin && stdin.readable) {
+        stdin.off("data", onData);
+        try {
+          stdin.pause();
+        } catch {
+          // stdin may already be closed; nothing to pause.
+        }
+      }
+    }
+    function finish(): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
       resolve();
+    }
+
+    process.on("SIGINT", onSigint);
+
+    if (!stdin || !stdin.readable) {
+      finish();
       return;
     }
-    const onData = (chunk: Buffer): void => {
-      if (chunk.includes(0x0a) || chunk.includes(0x0d)) {
-        cleanup();
-        resolve();
-      }
-    };
-    const cleanup = (): void => {
-      stdin.off("data", onData);
-      try {
-        stdin.pause();
-      } catch {
-        // stdin may already be closed; nothing to pause.
-      }
-    };
     try {
       stdin.resume();
       stdin.on("data", onData);
     } catch {
-      resolve();
+      finish();
     }
   });
 }

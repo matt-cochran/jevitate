@@ -90,8 +90,12 @@ describe("runInductionMission — a visually-hidden skip link never burns the bu
         const inPageSteps = result.transcript.filter((e) => e.target?.includes("In-page action") === true);
         expect(inPageSteps.some((e) => e.actOk)).toBe(true);
         expect(result.coverage.sufficiency.nonNavActionsExercised).toBeGreaterThan(0);
-        expect(result.coverage.sufficiency.sufficient).toBe(true);
-        expect(result.coverage.sufficiency.shortfalls).toEqual([]);
+        // The out-of-scope <nav> links (/a, /b) are chrome (#115): tried only after the page's own
+        // controls, and never beyond 20% of the actions — here, not at all. They no longer pad the
+        // action count, so this tiny page's one failed skip link is a third of its actions: the
+        // unchanged #75 failed-ratio threshold then reads it as inconclusive, never clean.
+        expect(result.transcript.some((e) => /"(A|B)"/.test(e.target ?? ""))).toBe(false);
+        expect(result.coverage.sufficiency.failedActionRatio).toBeGreaterThanOrEqual(0.25);
       } finally {
         await session.close();
       }

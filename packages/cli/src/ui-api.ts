@@ -12,6 +12,7 @@ import {
   SAFE_INBOX_ID_RE,
   type Action,
 } from "@jevitate/inbox";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
 
 /**
  * The `jevitate ui` local HTTP server — the human-facing side of the HITL
@@ -41,6 +42,8 @@ export interface StartUiServerDeps {
   open?: boolean;
   /** Structured log sink: `method <pathname> status` lines only. */
   logger?: (line: string) => void;
+  /** The serving build's identity (#112), reported by `/api/health`. Default: this build's. */
+  engine?: EngineInfo;
 }
 
 export interface UiServerHandle {
@@ -165,7 +168,8 @@ function openInBrowser(url: string): void {
 }
 
 export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHandle> {
-  const store = new FsInboxStore(deps.inboxDir);
+  // `/api/health` reports the serving build (#112), never the store's placeholder version.
+  const store = new FsInboxStore(deps.inboxDir, deps.engine ?? currentEngineInfo());
   const token = randomBytes(32).toString("hex");
   const logger = deps.logger ?? (() => {});
   const shouldOpen = deps.open ?? true;

@@ -35,9 +35,13 @@ an unsafe or unbounded move.
   deterministic, replayable regression.
 - **Self-healing.** Repair a broken step under policy — never auto-healing a
   write or irreversible action.
-- **UX review.** Ranked, cited, evidence-anchored usability findings (Nielsen +
-  cognitive-science heuristics), advisory only.
+- **UX review.** Usability findings grounded in what the run observed (run
+  signals and journey friction), ranked by impact on the job and cited to Nielsen
+  and cognitive-science heuristics. Heuristic-only findings go in an appendix.
+  Advisory only.
 - **Load testing** of a Journey against an authorized origin.
+- **CI gate.** `jevitate check --suite` runs Journeys, invariants, goals and missions within a
+  budget; JUnit + SARIF + JSON; `report` and `diff` give one deduped defect list and a baseline diff.
 - **MCP server** exposing only an allowlisted, safe tool surface.
 - **Distributed Journey sources** with an explicit trust/run gate.
 
@@ -76,7 +80,16 @@ never a fabricated commit or time.
 
 The same `{version, commit, builtAt}` (as `engine`) is on every mission's result — the
 persisted `*.result.json`, the `--json` envelope, and every issue draft's `## Environment`
-section — so a result on disk always says which build produced it.
+section — so a result on disk always says which build produced it. So is every other command's
+result envelope (`ux`, `journey run`, `load run`, `source run`, `verify-fix`, `regression capture`,
+`mission run`), a killed run's partial result, `jevitate mcp`'s `initialize` (`serverInfo.version`,
+with the commit in its description), MCP `get_site_health`, and `jevitate ui`'s `/api/health`.
+
+A run killed by SIGTERM/SIGINT (`timeout -s TERM 900 jevitate explore …`) exits 143/130 and still
+writes `<stem>.result.json`: `missionOutcome: "inconclusive"`, `stop: "terminated"`, the real step
+count and transcript, the `transcriptPath` that exists, `engine`, the `usage` spent so far, and any
+partial report (a usability review's observed screens). With `--json` the same result is printed
+as the envelope before the process exits.
 
 ### Mission outcomes and exit codes
 
@@ -94,7 +107,36 @@ clean.
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
 The MCP tool `get_mission_result` returns the same status and code for a
-finished run; a broken run comes back as an error result.
+finished run; a broken run comes back as an error result. Its `id` is a result stem —
+`explore-<stamp>` (a goal run; its own `succeeded`/`exhausted`/`blocked` comes back as
+`goalOutcome`, folded onto `clean`/`defects-found`), `coverage-`, `adversarial-`, `feature-` or
+`usability-<stamp>` — or a `queue_exploration` `missionId`.
+
+### Queued missions (MCP)
+
+`queue_exploration` only enqueues a mission (`~/.jevitate/missions/queue/<missionId>.json`).
+`jevitate mission run` drains the queue: each mission runs through the runner its strategy uses on
+the CLI, its result lands in `~/.jevitate/recordings`, and its queue record moves
+`queued → running → done | failed`. `get_mission_result {id: missionId}` reports `queued`/`running`
+(`pending: true`), the finished result, or `failed` (an error: it could not run, e.g. its target was
+unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
+
+```bash
+jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \
+  --api-origin http://127.0.0.1:18582 --base-url http://127.0.0.1:5193/settings --json
+jevitate mission target promote spa --json          # a human act: only promoted targets are queueable
+jevitate mission run --once --real --json           # drain what is queued now (--watch keeps polling)
+```
+
+A mission may reach only its target's `--authorized-origin` plus its `--api-origin`s (each a bare
+http(s) origin — the queued-mission form of a second `explore --allow`); the target is re-resolved
+(promoted-only) when the mission runs. Queueable strategies: `goal-based` (a goal and a
+`successAssertion`), `coverage` and `adversarial` (an optional in-scope `route` glob), and
+`feature` (a `feature` name, optional `route`). A usability review needs an app class the request
+cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven missions stay queued
+(reported as `skipped`) and only feature missions run. The exit code is 1 only when a mission could
+not run at all; each mission's own outcome is in its result. A drain killed mid-mission records
+that mission `done` with its partial `inconclusive` result, never leaves it `running`.
 
 The adversarial mission keeps hunting after a defect until its step, action or
 time budget runs out. Defects are deduplicated by a stable fingerprint, and each
@@ -131,7 +173,7 @@ own terms.
 | `succeeded` | 0 | the success assertion held |
 | `exhausted` | 1 | the action/decision budget ran out before the assertion held |
 | `blocked` | 1 | the model decided it could not proceed (e.g. no matching control) |
-| `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) |
+| `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable, or a declared mission spend budget was crossed — `run.stop === "budget"`, see below) |
 | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
 | `hang` | 3 | the app under test hung, and it reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
@@ -148,6 +190,7 @@ the `outcome` above; not separately exit-coded):
 | `hang` | the app under test hung |
 | `inconclusive` | a required decision round-trip stayed unavailable |
 | `crashed` | the engine failed |
+| `budget` | a declared mission spend budget (#150) was crossed, or a paid action was refused before crossing it — folds into `outcome: "inconclusive"`, never `succeeded`, never `crashed` |
 
 **Adversarial mission (`--strategy adversarial`) — `stop: AdversarialStop`**, why the hunt
 ended (its own top-level `outcome` is already the canonical `MissionOutcome` from the table
@@ -164,15 +207,18 @@ above, so it needs no separate exit-code mapping):
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |
 
-**Coverage mission (`--strategy coverage`) — its own `outcome`**, before it's folded into
-`missionOutcome`:
+**Coverage and exploratory missions (`--strategy coverage` / `exploratory`) — their own
+`outcome`**, before it's folded into `missionOutcome`:
 
 | `outcome` | Meaning |
 |---|---|
 | `exhausted` | the state frontier was fully explored |
 | `cap` | the action budget ran out before the frontier was exhausted |
+| `scope-unreachable` | the start URL redirected elsewhere, or the run could not return to it after a departure (e.g. the session was lost after "Sign out") — `inconclusive` |
+| `stalled` | no step completed within `--stall-timeout` seconds (default 120) — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+| `budget` | a declared mission spend budget (#150) was crossed, or a paid action was refused before crossing it — `inconclusive` (`defects-found` still wins if any were found first) |
 
 **Feature mission (`--feature`) — its own `outcome`**, same idea plus its own path cap:
 
@@ -181,8 +227,20 @@ above, so it needs no separate exit-code mapping):
 | `exhausted` | the state frontier was fully explored |
 | `cap` | the action budget ran out |
 | `path-cap` | the max-discovered-paths budget ran out |
+| `scope-unreachable` | as above — `inconclusive` |
+| `stalled` | as above — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+| `budget` | as above — `inconclusive` (`defects-found` still wins if any were found first) |
+
+**Coverage vs exploratory.** Both expand the same state frontier. `coverage` sweeps it
+breadth-first: every control of a state, in page order, before the controls a click revealed.
+`exploratory` seeks novelty: it tries the control that appeared most recently first (a panel
+that just opened, a page just reached), so it follows the UI deeper before it sweeps siblings.
+In all three frontier missions (coverage, exploratory, `--feature`), global chrome — controls
+inside `<nav>` or a page-level `<header>`/`<footer>`, or repeated unchanged across pages — is
+tried only after the target's own controls, each destination at most once per run. Chrome that
+leaves the target scope never takes more than 20% of the run's actions.
 
 ### Success checks (goal mission)
 
@@ -193,9 +251,15 @@ decides it. `--success` can be repeated, and every check must hold:
 |---|---|
 | `urlIncludes:<text>` | the final URL contains the text |
 | `visible:<d>` | the element is visible |
-| `textIncludes:<d>\|<text>` | the element's text contains the text |
+| `textIncludes:<d>\|<text>` | the element's text contains the text (case-insensitive) |
 | `count:<d>\|min=<n>,max=<n>` | the number of matching elements is within the bounds |
 | `valueEquals:<d>\|<value>` | a form control's **value** (input, textarea, select) equals the value exactly |
+| `style:<d>\|<prop><op><value>` | the **computed** style of every match (at least one) compares true — e.g. `style:[data-heat]\|alpha(background-color)>0`, `style:#title\|color=rgb(255, 0, 0)` (`styleMatches:` is an alias) |
+| `inViewport:<d>[\|min=<ratio>]` | the visible fraction (0..1) of every match's box inside the viewport is at least `min` (default 0.5) |
+| `box:<d>\|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n>` | every match's rendered size (CSS px) is within the bounds |
+| `overlaps:<d>\|<d2>` / `noOverlap:<d>\|<d2>` | the first matches' boxes do / do not overlap |
+| `attr:<d>\|<name>=<value>` | the first match's attribute equals the value (`attr:<d>\|<name>`: present; `attr:<d>\|!<name>`: absent) |
+| `flashed:<d>\|class=<cls>[\|withinMs=<n>]` | a match **gained** the class (or `attr=<name>`, or `animation`) after the last user input — a transient flash that is gone by the time the page settles |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
 | `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing) |
 | `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status |
@@ -204,7 +268,20 @@ In these specs:
 
 - `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…`, or a CSS selector
   (`[data-testid=x]` is read as the test id).
-- The last `|` separates the descriptor from the text or value.
+- The last `|` separates the descriptor from the text or value (for `style` too). The other
+  visual kinds split the descriptor off at the first `|`.
+- Visual-state checks are read by fixed built-in page functions and decided by code, never a
+  model, and never by evaluating a declared string. `<prop>` is one of an allowlist (`color`,
+  `background-color`, `opacity`, `visibility`, `display`, `outline-color|style|width`,
+  `border-{top,right,bottom,left}-color`, `transform`, `font-weight`, `font-style`,
+  `text-decoration-line`, `fill`, `fill-opacity`, `stroke`), optionally one numeric channel of it:
+  `alpha(…)`, `r(…)`, `g(…)`, `b(…)` of a color, `px(…)` of a length. `<op>` is
+  `= != > >= < <=`; `=`/`!=` compare colors as colors (`red` = `rgb(255, 0, 0)`). A missing
+  element or a value that cannot be read as asked never holds, and the result says what was
+  observed (the ratio, the computed values, the flash timing).
+- `flashed` needs its recorder installed before the action that triggers the flash; the goal
+  mission installs it at the start of any run with a `flashed` check. Canvas pixels are not read:
+  expose canvas state through DOM/ARIA/`data-*` and check that.
 - Path globs match the request path: `*` within one segment, `**` across segments.
   A method of `*` matches any method. **The glob must start with `/`** (it matches the
   request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
@@ -220,6 +297,41 @@ check that caught it:
 jevitate explore --url https://app.example.test/profile --goal "set the last name to Litmus and save" \
   --success 'requestMade:PUT /api/profile' --success 'responseStatus:PUT /api/profile=2xx' \
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
+```
+
+### Rich-text editors
+
+A `contenteditable` element (a document editor's prose block) is also offered the `edit_text`
+op: an edit INSIDE its text instead of `type`, which replaces the whole element. The model
+proposes one edit — `replace` a verbatim quote of the current text, `insertBefore`/`insertAfter`
+it, or `format` it (bold/italic/underline via the keyboard shortcut) — and code checks it: the
+quote must occur in the element's text exactly once, and neither the quote nor the typed text
+may contain a registered secret. A quote that is not there is refused, never degraded to
+replacing the whole element. The caret/selection is placed with a DOM Range and the text is
+typed with keyboard events. The Recording stores the anchor as an `editText` step
+(`anchor: { quote } | { start, end } | { at: "start" | "end" }`), and replay places the same
+anchor in the element's current text — a quote that has gone fails the replay closed.
+
+```bash
+jevitate explore --url http://localhost:8088/editor --goal "in paragraph 2, change 'quick' to 'slow'" \
+  --success 'reloadThen:textIncludes:#b2|slow brown fox'
+```
+
+### Find-out goals (no `--success`)
+
+A goal that asks the run to find out / understand something (e.g. "find out how many
+contacts are overdue and report the count") has no page state to assert on, so
+`--success` can be omitted. The model ends such a run with a `report` op instead of
+`done`: it proposes an answer, and code grounds it — every claim must trace back to
+text the run actually observed on a page — before accepting it. An ungrounded report
+is rejected and the model keeps looking; the run is `succeeded` only once a report is
+accepted, and the accepted answer (with its grounding evidence) is returned as
+`answer`. Never Jev's self-report: the same independent-grounding rule the page/network
+checks get.
+
+```bash
+jevitate explore --url https://app.example.test/contacts \
+  --goal "find out how many contacts are overdue and report the count"
 ```
 
 ### App-declared invariants
@@ -261,12 +373,28 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
 - `dom`: the text of the first match of a `selector` (CSS) or a `target` descriptor.
   Add `read: "value"` for a form value, `read: "count"` for the number of matches, and
   `number: true` to parse the first number (`"≈ 1,240 credits"` becomes `1240`).
+  Visual state: `read: "inViewport"` (the first match's visible fraction, 0..1),
+  `read: { "attr": "<name>" }`, or `read: { "style": "<prop>", "channel": "alpha", "reduce": "min" }`
+  (a computed style from the allowlist above; with a `channel` it is a number, and `reduce`
+  `first`/`min`/`max` picks across matches). For example, a heat map whose highlights must stay
+  visible: `"heatAlpha": { "dom": { "selector": "[data-heat]", "read": { "style": "background-color",
+  "channel": "alpha", "reduce": "min" } } }` with `"require": "heatSpans >= 1 -> heatAlpha > 0"`.
 - `network`: a JSON path in the last response whose URL matches the glob. Only
   responses from an authorized origin are read.
 - `probe`: a `get` (or `head`) of an existing endpoint. It must be on an `--allow`
   origin, and it runs with the mission browser's own cookies. Redirects are not
-  followed, and nothing else is sent: no other method, headers or body. Without
-  `json`, the value is the HTTP status.
+  followed, and nothing else is sent: no other method, headers or body (except
+  `authFrom`'s `Authorization` header — see below). Without `json`, the value is the
+  HTTP status.
+  - `authFrom` (read-only probes, an authenticated API): `{ "localStorage": "<key>" }`
+    reads a token from the run's own page (`page.evaluate`); `{ "cookie": "<name>" }`
+    reads a named cookie from the browser context; `{ "secret": "env:VAR" }` resolves
+    from the environment (the same `env:VAR` shape `--secret-field` uses) — never read
+    from a file. All three become an `Authorization` header, prefixed by `scheme`
+    (default `"Bearer"`; `""` sends the raw value). The token is never logged, never
+    persisted, and is redacted from every value/evidence the same way a bound secret
+    is. When the token cannot be read, the probe is refused (unknown) — never sent
+    unauthenticated.
 
 `optional: true` makes a missing value `null`. Without it, a value that cannot be read
 makes the invariant **unknown**. An unknown invariant is not a violation and is not a
@@ -276,7 +404,11 @@ pass: it is counted in the result's `invariants` report.
 
 - `require`: an expression checked after each action that matches `when` (every
   action when `when` is left out). `when` can match `control.name` (an exact string or
-  a `/regex/flags` pattern), `route` (a path glob) and `op`.
+  a `/regex/flags` pattern), `route` (a path glob) and `op` — `op` is an ARRAY of one
+  or more action-op names (e.g. `"op": ["click", "type"]`, not a bare string), matched
+  if the action's op is any one of them. The op vocabulary: `click`, `type`, `send`
+  (type-and-submit, e.g. a chat composer), `select`, `upload`, `scroll_up`,
+  `scroll_down`, `wait`, `reload`.
 - `never`: `pageText` (a pattern) or `assertion` (a success-check assertion) that must
   never hold. It is checked after every action.
 - `always`: an assertion that must hold after every action.
@@ -302,6 +434,128 @@ spec, so `jevitate verify-fix --result … --fingerprint …` re-checks the same
 by replaying up to the step. `--invariants` on `verify-fix` overrides the saved spec.
 Over MCP, `queue_exploration` takes the same spec inline as `invariants`. It never takes
 a path, and its probes are checked against the target's origin.
+
+### Mission spend budgets
+
+A `budget` key in the same invariants file (#150) puts a cumulative spend cap on a declared
+observable — e.g. a credits balance that pays for real LLM/provider calls. Code reads it at
+run start and after every settled step; crossing it stops the mission CLEANLY, before its
+next action, with `stop: "budget"` (never folded into `clean`/`succeeded`, never `crashed`).
+
+```json
+{
+  "observe": {
+    "credits":    { "probe": { "get": "/v1/billing/balance", "json": "$.credits" } },
+    "confirmEst": { "dom": { "selector": "[data-testid=confirm-estimate]", "number": true, "optional": true } }
+  },
+  "invariants": [],
+  "budget": [
+    {
+      "observe": "credits",
+      "maxDelta": -150,
+      "guard": { "estimate": "confirmEst", "factor": 2.0 },
+      "settle": { "withinMs": 600000, "pollMs": 10000 },
+      "onUnreadable": "stop"
+    }
+  ]
+}
+```
+
+- `observe` names an entry in this same file's `observe` map (a `dom` read or a read-only
+  `probe`, authenticated the same way #86/#135 probes are — never a new credential path).
+- `maxDelta` is the cap on `current - baseline` since the run's first settled snapshot:
+  **negative** caps spend (a balance that must not drop past it), **positive** caps growth
+  (a counter that must not climb past it).
+- `guard` (optional): before an action the #116 safety policy flags **paid**, code computes
+  `estimate × factor` (`estimate` is a constant or another observable, read before the
+  action) and refuses the action if it would cross what remains of the budget — a missing
+  estimate is refused, never treated as zero cost.
+- `settle`: after the loop ends (for any reason), keep re-reading for `withinMs` to catch a
+  charge that lands after the last action (an async job that settles after the click) — an
+  overrun seen during drain is still reported.
+- `onUnreadable` (default `"stop"`): an observable that cannot be read fails the run closed
+  (`inconclusive`, with the reason) rather than being treated as unspent.
+
+The result carries a `budget` field per declared budget: `{ observe, limit, baseline, final,
+delta, perAction, refused?, unreadable? }` — the full observed trajectory, whatever the
+outcome. If a hard defect was already found before the budget stopped the run, the defect
+still wins (`missionOutcome: "defects-found"`, reported with `stop: "budget"`).
+
+`budget` works through the same `--invariants <file.json>` transport (repeatable, merged) as
+declared invariants — no separate flag, and it currently applies to the **goal**, **coverage**
+and **exploratory** and **`--feature`** missions. (Adversarial and the usability review do not
+yet read a declared budget — tracked as follow-up work.)
+
+### Backend log correlation
+
+`--log-source <spec>` (repeatable; every strategy, including `--strategy usability`) tails a
+backend log for the run and correlates its lines to the step they landed during — turning "blocked:
+could not verify plan limit" into "blocked: the server denied `GetActiveRatePlanForOffer` for this
+user". Sources are **operator-declared, read-only and never the model's choice** — CLI/local-config
+only, never part of an MCP `MissionRequest`. On a usability run a `server-log` defect is reported
+(`serverLogs`/`serverLogDefects` on the result) but stays advisory, like every other UX finding — it
+never gates `missionOutcome`/`exitCode`.
+
+```bash
+jevitate explore --url http://localhost:5173/imports --goal "import https://example.com" \
+  --success 'visible:testId=import-result' --allow http://localhost:5173 --allow http://localhost:8088 \
+  --log-source docker:autopilot-local-autopilot_api-1 --log-defect error
+```
+
+- `file:<path>` tails from the file's CURRENT end (a file that does not exist yet is not an error —
+  once it appears, everything written to it is new, since nothing could predate the source).
+- `docker:<container>` spawns `docker logs -f --since 0s <container>`.
+- `cmd:<command>` streams an arbitrary command's stdout/stderr — refused unless `--allow-log-cmd` is
+  also given (a bigger trust step than reading a file or a container's own logs, since it runs a
+  process). `docker:`/`cmd:` children run in their own process group and are killed as a group on
+  SIGTERM/SIGINT/exit (#94) — never orphaned, never awaited past the run.
+
+**Parsing.** A line's level and timestamp are read from common formats, in order: JSON
+(`level`/`severity` + `time`/`timestamp`/`ts`/`@timestamp`), logfmt (`level=error msg="…" time=…`),
+then a bracketed/bare level with an optional leading ISO timestamp. A line that matches none of
+these keeps its arrival order and an `unknown` level rather than being dropped.
+
+**Correlation.** Each step's window runs from the previous step's settle time to this step's own
+settle time — the wall-clock epoch a mission's incremental transcript-flush listener already
+observes, so this needs no change to the mission loop. The LAST step's window is additionally held
+open for `--server-log-drain-ms` (default 3000, operator-settable up to minutes) so async backend
+work that settles after the browser gave up is still caught: the run's own await for this only
+happens AFTER the mission function has returned, so a log source never blocks a mission's own
+budget or progress. Only `warn`/`error` lines (or any line a `--log-defect` matcher below hits,
+whatever its level) are attached as evidence, redacted with the run's own `--secret` list, to the
+step's transcript entry (`serverLogs`) and to any defect or `blocked` reason on it.
+
+**Optional oracle.** `--log-defect <level|/regex/>` (repeatable) makes a matching line a defect kind
+`server-log`: `error`/`warn`/`info`/`debug` matches as `level >= this`; `/pattern/flags` is compiled
+once via `new RegExp` (never `eval`ed, bounded to 500 chars) and matched against the RAW line.
+Its fingerprint is the normalized message (ids, numbers, uuids and timestamps stripped) plus the
+correlated step's route (`"(run)"` for a line outside every step window). `verify-fix` re-checks a
+`server-log` defect by replaying its recorded steps in a fresh session AND re-tailing the SAME log
+source(s) for the same drain window — never by looking for it among DOM/console/network signals,
+which a backend log line is none of. A `cmd:` source needs `--allow-log-cmd` on `verify-fix` too.
+
+**Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
+messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
+`--log-defect` was given but every source failed to open or delivered not one line. A found
+`server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. An
+unreadable oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
+than a false clean — its absence of defects proves nothing when the source that would have caught
+them was never demonstrably read. (A usability run keeps its own advisory rule instead: see above.)
+
+**MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
+name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /
+`logDefect` / `allowLogCmd` per origin in `~/.jevitate/targets.json` instead:
+
+```json
+{ "https://app.example.test": {
+    "logSources": ["docker:app-1"], "logDefect": ["error"], "allowLogCmd": false } }
+```
+
+`jevitate mission run` (the queue drain) resolves this by the queued mission's target origin and
+applies it exactly like `--log-source`/`--log-defect` would — a queued mission itself carries no log
+source of its own. `verify_fix` over MCP re-checks a `server-log` defect's sources the same way
+CLI's own `verify-fix` does (they're persisted with the defect); `allowLogCmd` for a `cmd:` source
+still needs this same targets.json opt-in, never a tool argument.
 
 ### Authenticated missions
 
@@ -336,6 +590,73 @@ transcript, Recording and issue draft, but it is never typed into a field.
 
 The bound value and the seed are registered as run secrets, so the existing
 redaction seams scrub them everywhere.
+
+**Replaying an authenticated Journey.** A Journey `explore-author-journey` authors
+with `--storage-state` needs the SAME authenticated pre-step to replay: pass
+`--storage-state <file>` to `jevitate journey run`, `jevitate load run` and
+`jevitate source run`. Over MCP, `run_journey`'s optional `storageState` argument is
+the same thing — a file PATH on the machine running the MCP server; its contents are
+read only by that server's own browser session, never returned or logged. A Journey
+can also declare `metadata.requiresAuth: true` so a run given no `storageState` fails
+fast, before any browser opens, with a clear message — instead of a confusing
+`replay-target-not-found` partway into the steps.
+
+### Usage accounting
+
+An exploration mission's result carries `usage: { judgments, generations,
+inputTokens, outputTokens, usd? }` when the CLI command was built with usage
+tracking (a `--real` run). `usd` is populated ONLY when the underlying provider
+itself reports a cost — today, that is OpenRouter's usage-accounting `cost` on a
+**generation** call (the model that writes form text). It is never estimated or
+derived from a price table. **Jev's own judgment calls are not priced**: they have
+no cost-reporting path today, so `usage.usd` is absent whenever a run made only
+judgments and no generations (`generations: 0`), even though `judgments` is
+non-zero and those calls cost real money against your provider account. Read
+`usage.usd`'s absence as "not priced by this build," never as "free."
+
+### Persistent browser profiles (`jevitate profile`)
+
+`jevitate profile create <name>` / `jevitate profile status <name>` provision and
+check a directory under `~/.jevitate/profiles/<name>` — an on-disk Chromium
+user-data directory (Playwright's `persistentProfile`, distinct from a
+`--storage-state` JSON snapshot: a real profile directory instead of a serialized
+cookie/localStorage file). **No `jevitate` command consumes one yet** — there is no
+`--profile` flag on `explore`, `journey run`, `record` or `load run` today. Treat
+`jevitate profile` as reserved surface: it prepares the directory a future
+`--profile` flag would point a browser session at, not a currently wired
+authentication path. Use `--storage-state` (above) for authenticated runs today.
+
+### Viewport and device emulation
+
+By default every mission opens its browser context at **Playwright's own default
+viewport (1280x720, desktop, no touch)** — nothing narrower is emulated unless
+you ask for it. Two mutually exclusive flags override that, on `explore` (every
+strategy), `journey run`, `load run`, `source run`, `verify-fix` and
+`regression capture`/`regression run`:
+
+- `--viewport <W>x<H>` — an exact viewport size, e.g. `--viewport 375x812`.
+- `--device "<name>"` — a device from Playwright's own built-in `devices`
+  registry, e.g. `--device "iPhone 13"`. This also sets `deviceScaleFactor`,
+  `isMobile`, `hasTouch` and the device's user agent string — never an
+  arbitrary caller-supplied UA (emulation cannot be used to impersonate an
+  unregistered client). An unknown device name is refused **before any
+  browser opens**, listing the closest registered names.
+
+The chosen emulation is recorded on the mission's Recording. `verify-fix`,
+`regression capture` and `regression run` replay under that **same recorded
+emulation by default** — a defect found at 375px never silently "verifies
+fixed" at a desktop width. An explicit `--viewport`/`--device` on `verify-fix`
+that differs from the finding's own recorded emulation is refused (fails
+closed) unless you pass `--allow-emulation-override`.
+
+A built-in hard signal, the horizontal-overflow check
+(`document.scrollingElement.scrollWidth > window.innerWidth`), runs by default
+whenever the emulated viewport is narrower than 1024px, or always with
+`--check-overflow` (`--strategy coverage`/`exploratory`). It is pure DOM
+geometry — never a model judgment — and is attributed to the widest offending
+element (excluded: content inside a scroll container, an intentionally
+off-screen `position: fixed` element, and the sr-only/clipped idiom).
+`--ignore-overflow <selector>` (repeatable) excludes an intentional case.
 
 ### Stateful and conversational runs: sequential only, one tenant at a time
 
@@ -549,6 +870,182 @@ Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API wit
 `GITHUB_TOKEN` from jevitate's credential store. Before it opens an issue, it
 searches for an open issue carrying the same fingerprint marker and comments on
 that one instead.
+
+### CI mode: `jevitate check`
+
+`jevitate check --suite <file.json>` runs a suite of promoted Journeys, invariant files, goals and
+missions against one or more targets, one after another, within a total budget. It then decides
+pass or fail:
+
+- **Hard failures fail the gate:** a Journey assertion fails, an invariant is violated, a goal
+  success check fails, a `verify-fix` replay still reproduces (or is intermittent), or a
+  hard-signal defect or hang is found.
+- **Advisory findings never fail the gate** (UX findings, 4xx-correlated console errors, Jev
+  flags), unless the suite sets `"gateAdvisory": true`.
+- **Fail closed:** an item that crashed, was inconclusive or was refused is an error, never a
+  pass. So is going over the budget. An item is skipped once the budget is spent, and the skipped
+  item counts as an error.
+- `--baseline <run|tag|last>`: only findings **not** in the baseline gate. That includes a new
+  finding that is flaky. Findings already in the baseline are listed but do not gate.
+- `--changed-routes '/settings/**,/cart/*'`: only Journeys and goals that touch those routes run.
+  A Journey's routes are its Recording's pages, or the `routes` you give it. A goal's routes are
+  its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
+- `--target-build <id>` stamps your build/commit on every result, next to `engine`.
+
+Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored,
+the budget was exceeded, or the suite was refused. Outputs go under `--out` (default
+`jevitate-check/`):
+
+| File | What |
+| --- | --- |
+| `results/` | every run's persisted result (what `report`, `diff` and `baseline tag` read) |
+| `junit.xml` | one `<testsuite>` per target, one `<testcase>` per item (`--junit` to move it) |
+| `jevitate.sarif` | SARIF 2.1.0, one result per finding, keyed by its finding key (`--sarif`) |
+| `check.json` | the JSON envelope, also a run reference for `diff`/`baseline tag` (`--json-out`) |
+| `report.md` | the consolidated defect list, with the baseline diff |
+
+The suite schema (validated in full before any browser opens; an unknown field is refused, and
+relative paths resolve against the suite file):
+
+```json
+{
+  "version": 1,
+  "name": "shop-ci",
+  "budget": { "maxActions": 400, "maxMinutes": 20, "maxUsd": 2 },
+  "ai": "real",
+  "gateAdvisory": false,
+  "targets": [
+    {
+      "name": "shop",
+      "url": "https://staging.shop.example/",
+      "allow": ["https://staging.shop.example"],
+      "storageState": "auth.json",
+      "invariants": ["invariants/credits.json"],
+      "journeysDir": "journeys",
+      "journeys": ["login", { "id": "checkout", "params": { "sku": "A1" }, "routes": ["/cart/**"] }],
+      "goals": [
+        { "name": "export", "goal": "export the report as CSV", "success": ["requestMade:GET /api/export"], "routes": ["/reports/**"], "maxActions": 40 }
+      ],
+      "missions": [
+        { "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60 },
+        { "strategy": "feature", "feature": "import", "routes": ["/imports/**"] },
+        { "strategy": "coverage", "routes": ["/**"] },
+        { "strategy": "usability", "goal": "invite a teammate", "appClass": "admin" }
+      ],
+      "verifyFix": [{ "result": "baseline/adversarial-2026-09-20T10-00-00-000Z.result.json", "fingerprint": "3fa2c1d09b7e4a55" }]
+    }
+  ]
+}
+```
+
+- `budget`: the total over every item. `maxActions` counts executed browser actions, and each item
+  is capped at what is left. `maxMinutes` is wall-clock time. `maxUsd` is the provider-reported
+  model spend. If a model call reports no cost, the spend cannot be measured, so the check fails.
+  Fake gateways cost nothing.
+- `ai`: the gateway for goals and model-driven missions (`coverage`, `adversarial`, `usability`).
+  `--real` or `--fake-ai` override it. If a suite needs a model and none is selected, it is refused
+  before anything runs. Journeys, `feature` missions and verify-fix are model-free.
+- `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
+- `invariants`: checked around every action of every goal and mission of the target. A target that
+  has invariants but no goals and no missions gets a model-free invariant sweep: the feature
+  frontier from `url`.
+- `verifyFix`: replays a finding from an earlier result. `still-reproduces` and `intermittent` fail.
+
+A GitHub Actions example:
+
+```yaml
+name: jevitate
+on: [pull_request]
+permissions: { contents: read, security-events: write, checks: write }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i -g @jevitate/cli && npx playwright install --with-deps chromium
+      - name: Changed routes
+        id: routes
+        run: echo "globs=$(git diff --name-only origin/${{ github.base_ref }}... | ./scripts/routes-for-files.sh)" >> "$GITHUB_OUTPUT"
+      - name: jevitate check
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: >
+          jevitate check --suite ci/jevitate-suite.json --real
+          --target-build ${{ github.sha }}
+          --baseline ci/baseline-check.json
+          ${{ steps.routes.outputs.globs && format('--changed-routes {0}', steps.routes.outputs.globs) || '' }}
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: jevitate-check/jevitate.sarif, category: jevitate }
+      - if: always()
+        uses: mikepenz/action-junit-report@v4
+        with: { report_paths: jevitate-check/junit.xml }
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: jevitate-check, path: jevitate-check/ }
+```
+
+`scripts/routes-for-files.sh` is your own mapping from changed files to route globs (a comma
+list); leave `--changed-routes` off to run everything. `--baseline` takes a committed `check.json`
+from a main-branch run, a `jevitate baseline tag` name, or `last`. With `last`, `--baseline-dir`
+points at a restored results cache.
+
+### Consolidated defect report and baseline diff
+
+Each run writes its own result: goal, coverage/exploratory, adversarial, feature, usability,
+verify-fix and invariants. `jevitate report` merges them into **one deduped defect list** per
+target:
+
+```bash
+jevitate report --target https://app.example.test            # markdown
+jevitate report --target shop --since 2026-09-20 --json       # the JSON envelope
+jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baseline last --out ./report
+```
+
+`--target` takes an origin (or any URL on it), a suite target name, or a registered mission
+target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
+(default `~/.jevitate/recordings` and `~/.jevitate/ux-reports`). Each defect lists:
+
+- every mode and run that observed it, with occurrence counts;
+- evidence refs (step, screenshot, request, URL, transcript);
+- its reproduction command, the `verify-fix` input.
+
+Advisory findings are listed separately. The report only reads results that were already
+redacted: it adds no page data and makes no model call.
+
+**Finding identity.** Findings are matched across modes, runs and builds by a stable key. When
+the finding has an engine fingerprint (a hard-signal defect, a hang, an invariant, a 4xx
+advisory), the key is that fingerprint. The fingerprint already folds in the signal, the templated
+route or endpoint, and the message class. Otherwise (a UX finding, a failed Journey step, a failed
+goal check) the key is the signal, the templated route (`/items/42` → `/items/:id`), the control
+and the request. Two findings whose fingerprint cascades overlap are merged: for example, the same
+broken call surfacing as a 503 in one run and as its page error in another.
+
+**Baselines and diffs.**
+
+```bash
+jevitate diff adversarial-2026-09-20T10-00-00-000Z adversarial-2026-09-22T10-00-00-000Z
+jevitate baseline tag release-1 jevitate-check/check.json   # run ids, result files, check records or other tags
+jevitate report --target shop --baseline release-1
+```
+
+Each finding is classified as one of:
+
+- **new:** in no baseline run.
+- **resolved:** in every comparable baseline run and in no current run.
+- **still-present:** in every comparable run on both sides.
+- **flaky:** in some but not all comparable runs of a side, or a run itself saw it come and go.
+- **not-rerun:** a baseline finding that no current run could have seen. It is never reported as
+  resolved without evidence.
+
+"Comparable" runs are runs of the modes that observed the finding: a goal run's silence is not
+evidence that an adversarial-only defect is gone. `last` means the previous run on the same
+target, per mode. A tag is a snapshot stored under `~/.jevitate/baselines/<name>.json`, so it
+survives pruned result files.
 
 ## How it's packaged
 

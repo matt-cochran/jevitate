@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { UnauthorizedLoadTargetError } from "@jevitate/load";
-import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
 import type { RunPolicy } from "@jevitate/domain";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
+import { JourneyRequiresAuthError } from "./journey-api.js";
 
-async function seedJourney(dir: string, site = "https://example.com") {
+async function seedJourney(dir: string, site = "https://example.com", overrides: { requiresAuth?: boolean } = {}) {
   const store = new FsJourneyStore(dir);
   const registry = new JourneyRegistry(store);
   await registry.put({
@@ -18,6 +19,7 @@ async function seedJourney(dir: string, site = "https://example.com") {
       promoted: true,
       params: [],
       createdAtIso: "2026-09-20T00:00:00Z",
+      ...(overrides.requiresAuth !== undefined ? { requiresAuth: overrides.requiresAuth } : {}),
     },
     recording: { version: "1", site, pages: [] },
   } as any);
@@ -32,9 +34,10 @@ type FakeSession = BrowserSession & { close: ReturnType<typeof vi.fn> };
  * the whole pool's lifecycle (opened count, closed count) with no real
  * Playwright/Chromium involved.
  */
-function fakeBrowserPortFactory(sessions: FakeSession[]): () => BrowserPort {
+function fakeBrowserPortFactory(sessions: FakeSession[], opens?: OpenOptions[]): () => BrowserPort {
   return () => ({
-    async open(): Promise<BrowserSession> {
+    async open(opts): Promise<BrowserSession> {
+      opens?.push(opts);
       const session: FakeSession = {
         page: {} as BrowserSession["page"],
         startTracing: vi.fn(async () => {}),
@@ -134,5 +137,69 @@ describe("runJourneyLoadTest", () => {
     for (const session of sessions) {
       expect(session.close).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("#118: --storage-state reaches every pool member's BrowserPort.open", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir);
+    const sessions: FakeSession[] = [];
+    const opens: OpenOptions[] = [];
+
+    await runJourneyLoadTest({
+      dir,
+      id: "checkout",
+      params: {},
+      concurrency: 2,
+      iterationsPerActor: 1,
+      seed: 1,
+      authorizedOrigins: ["https://example.com"],
+      storageState: "/tmp/state.json",
+      browserPortFactory: fakeBrowserPortFactory(sessions, opens),
+    });
+
+    expect(opens).toHaveLength(2);
+    for (const opts of opens) expect(opts.storageState).toBe("/tmp/state.json");
+  });
+
+  it("#149: --viewport/--device (opts.emulation) reaches EVERY pool member's BrowserPort.open", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir);
+    const sessions: FakeSession[] = [];
+    const opens: OpenOptions[] = [];
+
+    await runJourneyLoadTest({
+      dir,
+      id: "checkout",
+      params: {},
+      concurrency: 2,
+      iterationsPerActor: 1,
+      seed: 1,
+      authorizedOrigins: ["https://example.com"],
+      emulation: { viewport: { width: 375, height: 812 } },
+      browserPortFactory: fakeBrowserPortFactory(sessions, opens),
+    });
+
+    expect(opens).toHaveLength(2);
+    for (const opts of opens) expect(opts.viewport).toEqual({ width: 375, height: 812 });
+  });
+
+  it("#118: a journey declaring metadata.requiresAuth refuses BEFORE any browser opens when no --storage-state is given", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir, "https://example.com", { requiresAuth: true });
+    const sessions: FakeSession[] = [];
+
+    await expect(
+      runJourneyLoadTest({
+        dir,
+        id: "checkout",
+        params: {},
+        concurrency: 1,
+        iterationsPerActor: 1,
+        seed: 1,
+        authorizedOrigins: ["https://example.com"],
+        browserPortFactory: fakeBrowserPortFactory(sessions),
+      }),
+    ).rejects.toBeInstanceOf(JourneyRequiresAuthError);
+    expect(sessions).toHaveLength(0);
   });
 });

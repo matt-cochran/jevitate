@@ -1,0 +1,19 @@
+{
+  "_source": "Preveti dogfood round 1 (2026-09-23), P-2: the canned fallback \"Guided AI framing is unavailable right now\" came back as the assistant reply on 6 of 8 real framing turns (report P-1…P-12 table; host-framing-log-excerpt). Messages are shortened stand-ins for the run's own synthetic framing inputs; replies are the report's quoted copy. Timestamps are relative.",
+  "steps": [
+    { "step": 1, "op": "send", "target": "textbox \"Start a new inquiry\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Would a free tier grow our product?", "reply": "Guided AI framing is unavailable right now. You can keep writing and try again later." },
+    { "step": 2, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Our users are small teams on the Pro plan.", "reply": "Guided AI framing is unavailable right now. You can keep writing and try again later." },
+    { "step": 3, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "We care most about activation.", "reply": "Which metric would tell you the free tier worked?" },
+    { "step": 4, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Weekly active teams after 30 days.", "reply": "Guided AI framing is unavailable right now. You can keep writing and try again later." },
+    { "step": 5, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Pricing today is $49 and $149.", "reply": "Guided AI framing is unavailable right now. You can keep writing and try again later." },
+    { "step": 6, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Churn is about 4% a month.", "reply": "What would you stop doing if the free tier works?" },
+    { "step": 7, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Paid acquisition.", "reply": "Guided AI framing is unavailable right now. You can keep writing and try again later." },
+    { "step": 8, "op": "send", "target": "textbox \"Reply\"", "actOk": true, "url": "http://127.0.0.1:5192/workspace", "message": "Can you frame the question now?", "reply": "Guided AI framing is unavailable right now. You can keep writing and try again later." }
+  ],
+  "requests": [],
+  "screens": [
+    { "index": 0, "step": 1, "at": 1000, "url": "http://127.0.0.1:5192/workspace", "signature": "p2-ws-0", "visibleText": "Workspace\nStart a new inquiry", "busy": false },
+    { "index": 1, "step": 8, "at": 90000, "url": "http://127.0.0.1:5192/workspace", "signature": "p2-ws-8", "visibleText": "Workspace\nGuided AI framing is unavailable right now. You can keep writing and try again later.", "busy": false }
+  ],
+  "endedAt": 95000
+}

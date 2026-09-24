@@ -4,6 +4,7 @@ import {
   FindingSchema,
   InboxItemKindSchema,
   type InboxStore,
+  type InboxHealth,
   type InboxItem,
   type InboxItemKind,
   type InboxSummary,
@@ -319,8 +320,6 @@ export function facadeCancelCommand(): HumanApprovalRequiredError {
   return APPROVAL_REFUSAL;
 }
 
-export async function facadeGetSiteHealth(
-  store: InboxStore,
-): Promise<{ ok: boolean; pending: number; oldestPendingAgeSec: number; version: string }> {
+export async function facadeGetSiteHealth(store: InboxStore): Promise<InboxHealth> {
   return store.health();
 }

@@ -8,7 +8,7 @@ import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
-import { runRecording, resolveRecordAllowlist, type RecorderLike } from "./record-api.js";
+import { runRecording, resolveRecordAllowlist, waitForEnterKey, type RecorderLike } from "./record-api.js";
 
 /**
  * A schema-valid demonstrated Recording the fake recorder hands back — a real
@@ -241,5 +241,24 @@ describe("record command — wiring (no real browser)", () => {
     expect(parsed).toMatchObject({ ok: true, data: { steps: 2, pages: 1, finalUrl: "https://fixture.test/inbox" } });
     const onDisk = JSON.parse(await readFile(parsed.data.recordingPath, "utf8"));
     expect(RecordingSchema.parse(onDisk).site).toBe("https://fixture.test");
+  });
+});
+
+describe("waitForEnterKey (#124: SIGINT saves the take, instead of killing the process)", () => {
+  it("resolves on SIGINT — registering a listener means Node does not fall back to killing the process", async () => {
+    const promise = waitForEnterKey();
+    // Synthetic emit — never raises a real OS signal, so it cannot affect the test runner itself;
+    // it only invokes whatever listener `waitForEnterKey` registered via `process.on("SIGINT", ...)`.
+    process.emit("SIGINT");
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("removes its SIGINT listener once resolved (no leak across takes)", async () => {
+    const before = process.listenerCount("SIGINT");
+    const promise = waitForEnterKey();
+    expect(process.listenerCount("SIGINT")).toBe(before + 1);
+    process.emit("SIGINT");
+    await promise;
+    expect(process.listenerCount("SIGINT")).toBe(before);
   });
 });

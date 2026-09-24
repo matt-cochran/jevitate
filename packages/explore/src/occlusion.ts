@@ -76,6 +76,70 @@ export function occluderOf(node: Node): string | null {
 }
 
 /**
+ * BROWSER CODE — does the SAME element that intercepted an earlier click (#90; parsed from
+ * Playwright's failure message into a CSS selector by `parseInterceptor` in ./act.ts) still cover
+ * this control's clickable point? A GEOMETRIC containment check against the interceptor's live box,
+ * not a fresh `elementFromPoint` hit-test: the failed click already proved the interceptor covers a
+ * real click there, so a control found within its current box is deprioritised without re-running
+ * (and re-racing) the hit-test. An sr-only input is judged at its visible label's point, exactly like
+ * `occluderOf`.
+ */
+export function coveredByInterceptors(node: Node, selectors: readonly string[]): boolean {
+  const el = node as Element;
+  const pointOf = (e: Element): { x: number; y: number } | null => {
+    const r = (e as HTMLElement).getBoundingClientRect();
+    const s = window.getComputedStyle(e as HTMLElement);
+    if (s.visibility === "hidden" || s.display === "none" || r.width <= 0 || r.height <= 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  };
+  let point: { x: number; y: number } | null = null;
+  if (el instanceof HTMLInputElement) {
+    const r = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    const clip = style.clip.replace(/\s+/g, "");
+    const srOnly =
+      r.width <= 1 ||
+      r.height <= 1 ||
+      /^rect\(0(px)?,?0(px)?,?0(px)?,?0(px)?\)$/.test(clip) ||
+      /inset\(50%\)|circle\(0/.test(style.clipPath) ||
+      r.left <= -1_000 ||
+      r.top <= -1_000;
+    if (srOnly) {
+      const labelledBy = (el.getAttribute("aria-labelledby") ?? "")
+        .split(/\s+/)
+        .map((id) => (id === "" ? null : document.getElementById(id)))
+        .filter((e): e is HTMLElement => e !== null);
+      const candidates: Element[] = [...Array.from(el.labels ?? []), ...labelledBy];
+      for (const label of candidates) {
+        const p = pointOf(label);
+        if (p !== null) {
+          point = p;
+          break;
+        }
+      }
+    }
+  }
+  if (point === null) point = pointOf(el);
+  if (point === null) return false;
+  const p = point;
+  for (const selector of selectors) {
+    let matches: Element[];
+    try {
+      matches = Array.from(document.querySelectorAll(selector));
+    } catch {
+      continue;
+    }
+    for (const m of matches) {
+      const s = window.getComputedStyle(m as HTMLElement);
+      if (s.visibility === "hidden" || s.display === "none") continue;
+      const r = (m as HTMLElement).getBoundingClientRect();
+      if (p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * BROWSER CODE — how a user activates a visually-hidden (sr-only) input: through its visible native
  * `<label>` (#90). Returns null when the input is not sr-only (it is clicked directly); otherwise
  * where its first rendered label is — `{ for: id, nth }` for a `<label for>` (the nth such label),

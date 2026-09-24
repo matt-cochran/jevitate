@@ -124,6 +124,19 @@ threshold generalized to it. `ux.minConfidenceByAppClass` in `~/.jevitate/config
 operator set a per-`--app-class` cutoff once a real multi-rater run in this harness backs one;
 today's global `DEFAULT_MIN_CONFIDENCE` remains the fallback wherever no such data exists.
 
+## The grader does not filter by default (issue #133)
+
+Until an app class has calibration evidence, the quality grader labels findings but does not
+suppress them. The evidence needed is ≥ 3 apps of different classes, ≥ 2 independent raters and a
+held-out set, with a kappa of at least `GRADER_FILTER_KAPPA_GATE` (0.4) off the tuning app. The
+default `--show` policy is therefore every grade (`grade.ts` `defaultQualityPolicy`). Each finding
+carries its grade in `finding.quality`, and `report.qualityFiltered` is `false`. Filtering is an
+explicit opt-in: `--show actionable,relevant-minor`, `JEVITATE_UX_SHOW` or config `ux.show`.
+
+The default flips per app class only when its `CALIBRATION_KNOWN_APP_CLASSES` entry in
+`calibration.ts` records a measured `heldOutKappa` ≥ 0.4. Record it from a real multi-rater
+`grader-eval.mjs` run over a held-out `labels/<app>/` set. Today `"consumer"` records 0.15.
+
 ## Running
 
 ```sh

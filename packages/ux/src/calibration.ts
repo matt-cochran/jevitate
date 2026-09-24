@@ -12,19 +12,45 @@
 //
 // Extend `CALIBRATION_KNOWN_APP_CLASSES` only when a real `grader-eval.mjs` multi-rater run over a
 // `packages/cli/scripts/ux-quality/labels/<app>/` directory backs the `note`.
+//
+// #133: the same evidence decides whether the grader may FILTER by default. Until a class has a
+// held-out, multi-rater kappa ≥ GRADER_FILTER_KAPPA_GATE off the tuning app, the default `--show`
+// policy is every grade (grade.ts `defaultQualityPolicy`): findings are shown with their grade.
 
 export interface CalibrationNote {
   readonly appClass: string;
   readonly note: string;
+  /**
+   * Cohen's kappa of the grader against ≥2 independent raters on a HELD-OUT set from an app OTHER
+   * than the tuning app (#133). Absent = never measured. Only a value ≥ `GRADER_FILTER_KAPPA_GATE`
+   * lets the grader filter findings by default for this class.
+   */
+  readonly heldOutKappa?: number;
 }
+
+/**
+ * #133: the grader may suppress findings by default only once held-out, multi-rater agreement OFF
+ * the tuning app reaches this kappa. Until then every finding is shown with its grade.
+ */
+export const GRADER_FILTER_KAPPA_GATE = 0.4;
 
 export const CALIBRATION_KNOWN_APP_CLASSES: readonly CalibrationNote[] = [
   {
     appClass: "consumer",
     note:
       "tuning app only (Preveti; packages/cli/scripts/ux-quality/corpus/legacy-labels.json). A second, different app in the same class showed weak grader/human agreement (Cohen's kappa 0.0-0.15, issue #97) — treat this class as UNVERIFIED, not calibrated.",
+    heldOutKappa: 0.15,
   },
 ];
+
+/** Does calibration evidence let the grader filter findings by default for `appClass`? (#133) */
+export function graderMayFilterByDefault(appClass: string | undefined): boolean {
+  const kappa = calibrationNoteFor(appClass)?.heldOutKappa;
+  return kappa !== undefined && kappa >= GRADER_FILTER_KAPPA_GATE;
+}
+
+/** #133: what every caveat says about the grader's role until calibration backs it. */
+const NOT_FILTERING = `the quality grade is shown on each finding and does NOT hide findings by default (no held-out, multi-rater kappa ≥ ${GRADER_FILTER_KAPPA_GATE} off the tuning app yet); filter explicitly with --show actionable,relevant-minor`;
 
 /** The known-app-class entry for `appClass` (case-insensitive), if any. */
 export function calibrationNoteFor(appClass: string | undefined): CalibrationNote | undefined {
@@ -41,8 +67,9 @@ export function calibrationNoteFor(appClass: string | undefined): CalibrationNot
  */
 export function calibrationCaveat(appClass: string | undefined): string {
   const known = calibrationNoteFor(appClass);
-  if (known) return `app class "${appClass}" calibration: ${known.note}`;
+  const role = graderMayFilterByDefault(appClass) ? "" : `; ${NOT_FILTERING}`;
+  if (known) return `app class "${appClass}" calibration: ${known.note}${role}`;
   return appClass
-    ? `app class "${appClass}" is outside the grader's calibration corpus — its confidence threshold and actionable/relevant-minor/generic/wrong labels are UNVERIFIED for this target (see packages/cli/scripts/ux-quality/README.md)`
-    : "no app class was given — the grader's confidence threshold is UNVERIFIED for this target (see packages/cli/scripts/ux-quality/README.md)";
+    ? `app class "${appClass}" is outside the grader's calibration corpus — its confidence threshold and actionable/relevant-minor/generic/wrong labels are UNVERIFIED for this target (see packages/cli/scripts/ux-quality/README.md)${role}`
+    : `no app class was given — the grader's confidence threshold is UNVERIFIED for this target (see packages/cli/scripts/ux-quality/README.md)${role}`;
 }

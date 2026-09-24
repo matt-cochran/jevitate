@@ -102,6 +102,9 @@ importers:
       '@jevitate/explore':
         specifier: workspace:*
         version: link:../explore
+      '@jevitate/findings':
+        specifier: workspace:*
+        version: link:../findings
       '@jevitate/inbox':
         specifier: workspace:*
         version: link:../inbox
@@ -216,6 +219,15 @@ importers:
       '@jevitate/example-site':
         specifier: workspace:*
         version: link:../../apps/example-site
+
+  packages/findings:
+    dependencies:
+      '@jevitate/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@jevitate/explore':
+        specifier: workspace:*
+        version: link:../explore
 
   packages/inbox:
     dependencies:

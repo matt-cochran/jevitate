@@ -9,8 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
 import { parseSecretField } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
-import type { Recording } from "@jevitate/recording";
-import { runUsabilityMission } from "./ux-api.js";
+import { RecordingSchema, type Recording } from "@jevitate/recording";
+import { discoverRecordingSidecars, loadRecordingSidecars, runUsabilityMission, runUxReview } from "./ux-api.js";
 
 /**
  * #98 + #96 end to end on REAL Chromium: a usability run writes the goal/adversarial artifact shape
@@ -89,7 +89,12 @@ function scriptedJudge(actions: readonly string[]): JudgmentPort {
       }
       const out: Record<string, Answer> = {};
       for (const [key, q] of Object.entries(questions)) {
-        if (q.kind === "noul") out[key] = { kind: "noul", value: true, probability: 0.9 };
+        // A rubric principle question (`<item>::<q>`): judged violated, so the rubric tier yields
+        // findings the #134 offline comparison can check (the applicability question: applies).
+        const rubric = key.includes("::") && !key.startsWith("grade::") && !key.endsWith("::__applies");
+        if (rubric && q.kind === "noul") out[key] = { kind: "noul", value: false, probability: 0.1 };
+        else if (rubric && q.kind === "score") out[key] = { kind: "score", value: 0.1 };
+        else if (q.kind === "noul") out[key] = { kind: "noul", value: true, probability: 0.9 };
         else if (q.kind === "score") out[key] = { kind: "score", value: 0.9 };
         else out[key] = { kind: "choice", value: q.options[0] ?? "", confidence: 0.5 };
       }
@@ -187,6 +192,35 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
           expect(f.signal!.screenshot).toBeDefined();
           expect(existsSync(f.signal!.screenshot!)).toBe(true);
         }
+
+        // --- #134: offline `ux <recording>` on this run's Recording reproduces the live findings ---
+        expect(result.evidencePath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.evidence.json"));
+        const sidecars = discoverRecordingSidecars(result.recordingPath);
+        expect(sidecars).toEqual({ evidencePath: result.evidencePath, transcriptPath: result.transcriptPath, screenshotDir: result.screenshotDir });
+        const offline = await runUxReview({
+          recording: RecordingSchema.parse(JSON.parse(readFileSync(result.recordingPath, "utf8"))),
+          appContext: { appClass: "admin" },
+          judge: scriptedJudge([]),
+          gen: new FakeGenerationGateway(),
+          judgmentBudget: 2,
+          minConfidence: 0,
+          env: {},
+          configPath: join(outDir, "no-config.json"),
+          outDir: join(outDir, "offline"),
+          nowIso: () => "2026-09-24T00:00:01.000Z",
+          ...(await loadRecordingSidecars(sidecars)),
+        });
+        // Each finding, and the rubric findings collapsed into it on the same friction point (#132).
+        const set = (r: NonNullable<typeof result.report>) =>
+          [...r.findings, ...r.heuristicAppendix]
+            .flatMap((f) => [`${f.tier}|${f.rubricItemId}|${f.route}|${f.severity}`, ...(f.contributing ?? []).map((c) => `contributing|${c.rubricItemId}|${f.rubricItemId}`)])
+            .sort();
+        expect(offline.report.evidenceCaveats).toBeUndefined();
+        expect(set(offline.report)).toEqual(set(result.report!));
+        expect(set(offline.report).some((k) => k.startsWith("signal|"))).toBe(true);
+        expect(set(offline.report).some((k) => k.startsWith("semantic|") || k.startsWith("contributing|")), JSON.stringify(set(offline.report))).toBe(true);
+        expect(offline.report.suppressed.byRubricItem).toEqual(result.report!.suppressed.byRubricItem);
+        expect(offline.report.coverage).toEqual(result.report!.coverage);
 
         // --- secret canary: no secret in ANY artifact (JSON and PNG bytes alike) ---
         const files = filesUnder(outDir);

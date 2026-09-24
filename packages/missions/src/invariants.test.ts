@@ -77,4 +77,22 @@ describe("MissionRequest.invariants (#86)", () => {
     await expect(enqueueMission(targets, queue, { ...baseRequest, invariants: offOrigin })).rejects.toBeInstanceOf(InvariantSpecError);
     expect(await queue.list()).toEqual([]);
   });
+
+  it("a probe on one of the target's declared API origins is authorized (#117)", async () => {
+    const { targets, queue } = await buildDeps();
+    await targets.put({
+      id: "spa",
+      name: "spa",
+      authorizedOrigin: "https://demo.example.com",
+      apiOrigins: ["https://api.example.com"],
+      baseUrl: "https://demo.example.com",
+      promoted: true,
+      createdAtIso: "2026-09-24T00:00:00Z",
+    });
+    const onApi = { ...invariants, observe: { ...invariants.observe, imports: { probe: { get: "https://api.example.com/v1/imports" } } } };
+    await expect(enqueueMission(targets, queue, { ...baseRequest, target: "spa", invariants: onApi })).resolves.toMatchObject({ status: "queued" });
+    // …but still not on an origin the target never declared.
+    const offOrigin = { ...invariants, observe: { ...invariants.observe, imports: { probe: { get: "https://evil.example.com/v1/imports" } } } };
+    await expect(enqueueMission(targets, queue, { ...baseRequest, target: "spa", invariants: offOrigin })).rejects.toBeInstanceOf(InvariantSpecError);
+  });
 });

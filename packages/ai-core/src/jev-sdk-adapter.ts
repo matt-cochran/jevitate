@@ -108,6 +108,8 @@ export function apiKeyFromAuthHeader(authHeader: string): string {
 interface SdkUsage {
   readonly input_tokens: number;
   readonly output_tokens: number;
+  /** A provider-reported call cost (#136), when a future SDK version reports one; today it never does. */
+  readonly cost?: number;
 }
 
 /** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
@@ -152,6 +154,7 @@ export async function realJevClientCall(load: SdkLoader = defaultSdkLoader, usag
     usage?.recordJudgment({
       inputTokens: result.usage?.input_tokens ?? 0,
       outputTokens: result.usage?.output_tokens ?? 0,
+      ...(result.usage?.cost === undefined ? {} : { usd: result.usage.cost }),
     });
     return fromSdkAnswers(questions, result.answers);
   };

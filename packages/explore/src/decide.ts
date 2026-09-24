@@ -5,6 +5,7 @@ import { buildJudgmentState, redactText } from "./redact.js";
 import {
   OPS_NEEDING_TARGET,
   TARGET_FREE_ACTIONS,
+  editCandidates,
   sendCandidates,
   targetCandidates,
   type Op,
@@ -173,9 +174,12 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
   const pending = unsubmitted.size > 0;
   // Each message-shaped field's `send` sits right after its `type`.
   const sends = new Map(sendCandidates(snapshot.controls).map((c) => [c.control.index, c]));
+  // Each rich-text control's `edit_text` (#148) sits right after its own action.
+  const edits = new Map(editCandidates(snapshot.controls).map((c) => [c.control.index, c]));
   const offeredActions = targetCandidates(snapshot.controls, { ops }).flatMap((c) => {
     const send = c.op === "type" ? sends.get(c.control.index) : undefined;
-    return send === undefined ? [c] : [c, send];
+    const edit = edits.get(c.control.index);
+    return [c, ...(send === undefined ? [] : [send]), ...(edit === undefined ? [] : [edit])];
   });
   for (const c of offeredActions) {
     candidates.set(c.id, { op: c.op, control: c.control });

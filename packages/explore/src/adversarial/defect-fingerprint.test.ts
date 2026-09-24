@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  defectTitle,
   groupStepSignals,
   invariantFingerprint,
   isResourceLoadEcho,
@@ -25,18 +26,25 @@ describe("normalizeRoute — the route/endpoint pattern", () => {
     ["http://a.test/dev-org-admin/admin/crm-upload-enrichment", "/dev-org-admin/admin/crm-upload-enrichment"],
     ["http://a.test/", "/"],
     ["/relative/7", "/relative/:id"],
-    // #95: a literal prefix + id-like suffix collapses to one route (a long opaque token like a
-    // prefixed uuid is already caught whole by `OPAQUE`; a short prefixed id keeps its prefix).
+    // #95/#127: a literal prefix + id-like suffix collapses to the SAME whole-segment `:id` route,
+    // whatever shape the id part is (a long opaque/uuid token or a short trailing number) — a
+    // literal prefix is never kept, so the same route isn't split into different templates.
     ["http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890", "/decisions/:id"],
-    ["http://a.test/decisions/demo-bet-1", "/decisions/demo-bet-:id"],
-    ["http://a.test/items/item-42", "/items/item-:id"],
+    ["http://a.test/decisions/demo-bet-1", "/decisions/:id"],
+    ["http://a.test/items/item-42", "/items/:id"],
   ])("%s → %s", (raw, want) => {
     expect(normalizeRoute(raw)).toBe(want);
   });
 
-  it("#95: two instances with different ids under a prefix normalize identically", () => {
+  it("#95/#127: two instances with different ids under a prefix normalize identically", () => {
     expect(normalizeRoute("http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
       normalizeRoute("http://a.test/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345"),
+    );
+  });
+
+  it("#127: a short trailing-digit slug and a uuid slug under the SAME prefix normalize to the same route", () => {
+    expect(normalizeRoute("http://a.test/decisions/demo-bet-1")).toBe(
+      normalizeRoute("http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890"),
     );
   });
 });
@@ -93,5 +101,44 @@ describe("groupStepSignals — one broken call is one defect", () => {
     const pageErr: DefectSignal = { kind: "page-error", detail: "TypeError: x is undefined", pageUrl: "http://a.test/" };
     expect(groupStepSignals([http("http://a.test/api"), pageErr])?.primary).toBe(pageErr);
     expect(groupStepSignals([])).toBeNull();
+  });
+
+  it("#149: a horizontal-overflow signal is grouped (lowest priority — a co-occurring crash/network signal wins)", () => {
+    const overflow: DefectSignal = {
+      kind: "horizontal-overflow",
+      detail: "horizontal-overflow: [data-testid=wide] overflows the 375px viewport by 225px at /settings/api-keys",
+      overflowPx: 225,
+      route: "/settings/api-keys",
+      url: "http://a.test/settings/api-keys",
+      descriptor: "[data-testid=wide]",
+    };
+    expect(groupStepSignals([overflow])?.primary).toBe(overflow);
+    expect(groupStepSignals([overflow])?.fingerprint).toBe(signalFingerprint(overflow));
+    expect(groupStepSignals([http("http://a.test/api"), overflow])?.primary.kind).toBe("http-5xx");
+  });
+
+  it("#149: a horizontal-overflow fingerprint is stable across occurrences (route + descriptor), independent of overflowPx/url", () => {
+    const a: DefectSignal = {
+      kind: "horizontal-overflow",
+      detail: "d1",
+      overflowPx: 225,
+      route: "/settings/api-keys",
+      url: "http://a.test/settings/api-keys?x=1",
+      descriptor: "[data-testid=wide]",
+    };
+    const b: DefectSignal = { ...a, detail: "d2", overflowPx: 230, url: "http://a.test/settings/api-keys?x=2" };
+    expect(signalFingerprint(a)).toBe(signalFingerprint(b));
+  });
+
+  it("#149: defectTitle names the route, element and overflow amount", () => {
+    const overflow: DefectSignal = {
+      kind: "horizontal-overflow",
+      detail: "d",
+      overflowPx: 225,
+      route: "/settings/api-keys",
+      url: "http://a.test/settings/api-keys",
+      descriptor: "[data-testid=wide]",
+    };
+    expect(defectTitle(overflow)).toBe("Horizontal overflow on /settings/api-keys: [data-testid=wide] (225px)");
   });
 });

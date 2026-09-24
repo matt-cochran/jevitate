@@ -1,14 +1,20 @@
 import { expect, test } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import {
+  FsMissionQueueStore,
   FsMissionTargetStore,
   MissionTargetRegistry,
   UnknownOrUnpromotedMissionTargetError,
+  enqueueMission,
 } from "@jevitate/missions";
 import { buildProgram } from "./program.js";
+import { buildMcpTools } from "./mcp-api.js";
+import { currentEngineInfo } from "./engine.js";
+import { writeMissionResult } from "./mission-journal.js";
+import type { QueuedMissionExecutor, QueuedMissionSpec } from "./mission-queue-runner.js";
 
 /**
  * Browser-free, fast CLI tests for `jevitate mission target`. Kept separate
@@ -190,6 +196,177 @@ test("mission target promote of an unknown id fails with E_UNKNOWN_MISSION_TARGE
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_MISSION_TARGET" } });
     expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #117 — `mission target add --api-origin` and `mission run` (the queue drain).
+// The executor is injected, so no browser opens; everything else (queue, targets,
+// result files, the MCP read-back) is the real fs-backed wiring.
+// ---------------------------------------------------------------------------
+
+test("mission target add --api-origin declares extra authorized origins; a malformed origin is refused", async () => {
+  const dir = await newTargetsDir();
+  const { program, lines } = newProgram();
+  await program.parseAsync(
+    [
+      "mission", "target", "add", "spa",
+      "--name", "SPA",
+      "--authorized-origin", "http://127.0.0.1:5193",
+      "--api-origin", "http://127.0.0.1:18582",
+      "--api-origin", "http://127.0.0.1:18583",
+      "--base-url", "http://127.0.0.1:5193/settings",
+      "--dir", dir, "--json",
+    ],
+    { from: "user" },
+  );
+  expect(JSON.parse(lines.join(""))).toMatchObject({
+    ok: true,
+    data: { apiOrigins: ["http://127.0.0.1:18582", "http://127.0.0.1:18583"] },
+  });
+
+  const savedExitCode = process.exitCode;
+  try {
+    const { program: p2, lines: l2 } = newProgram();
+    await p2.parseAsync(
+      [
+        "mission", "target", "add", "bad",
+        "--name", "Bad",
+        "--authorized-origin", "http://127.0.0.1:5193",
+        "--api-origin", "http://127.0.0.1:18582/api",
+        "--base-url", "http://127.0.0.1:5193/",
+        "--dir", dir, "--json",
+      ],
+      { from: "user" },
+    );
+    expect(JSON.parse(l2.join(""))).toMatchObject({ ok: false, error: { code: "E_MISSION_TARGET_ADD" } });
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+async function missionRunFixture() {
+  const root = await mkdtemp(join(tmpdir(), "jevitate-mission-run-"));
+  const targetsDir = join(root, "targets");
+  const queueDir = join(root, "queue");
+  const recordingsDir = join(root, "recordings");
+  const store = new FsMissionTargetStore(targetsDir);
+  const registry = new MissionTargetRegistry(store);
+  await registry.put({
+    id: "spa",
+    name: "SPA",
+    authorizedOrigin: "http://127.0.0.1:5193",
+    apiOrigins: ["http://127.0.0.1:18582"],
+    baseUrl: "http://127.0.0.1:5193/settings",
+    promoted: true,
+    createdAtIso: "2026-09-24T00:00:00Z",
+  });
+  const queue = new FsMissionQueueStore(queueDir);
+  let n = 0;
+  const enqueue = (req: Record<string, unknown>) =>
+    enqueueMission(registry, queue, { target: "spa", ...req }, { clock: () => `2026-09-24T00:00:0${n++}.000Z` });
+  const specs: QueuedMissionSpec[] = [];
+  let stamp = 0;
+  const execute: QueuedMissionExecutor = async (spec) => {
+    specs.push(spec);
+    const prefix = spec.mission.strategy === "goal-based" ? "explore" : spec.mission.strategy;
+    const recordingPath = join(recordingsDir, `${prefix}-2026-09-24T00-00-0${stamp++}-000Z.json`);
+    await mkdir(recordingsDir, { recursive: true });
+    const outcome = spec.mission.strategy === "goal-based" ? "succeeded" : "clean";
+    return { resultPath: writeMissionResult(recordingPath, outcome, 0, { outcome }), missionOutcome: outcome, exitCode: 0 };
+  };
+  const run = async (args: string[]) => {
+    const lines: string[] = [];
+    const program = buildProgram({ profiles: new ProfileManager("/unused-in-these-tests"), missions: { execute } });
+    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.exitOverride();
+    await program.parseAsync(["mission", "run", "--dir", queueDir, "--targets-dir", targetsDir, "--json", ...args], { from: "user" });
+    return JSON.parse(lines.join(""));
+  };
+  return { store, registry, queue, queueDir, recordingsDir, enqueue, specs, run };
+}
+
+test("mission run --once drains every queued strategy; get_mission_result {id: missionId} then reads each result", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const f = await missionRunFixture();
+    const goal = await f.enqueue({ strategy: "goal-based", goal: "find the plan", successAssertion: { kind: "urlIncludes", text: "/settings" } });
+    const coverage = await f.enqueue({ strategy: "coverage", route: "/settings/**" });
+    const adversarial = await f.enqueue({ strategy: "adversarial" });
+    const feature = await f.enqueue({ strategy: "feature", feature: "billing" });
+
+    const env = await f.run(["--once", "--fake-ai"]);
+    expect(env).toMatchObject({ v: 1, ok: true, data: { skipped: [], engine: currentEngineInfo() } });
+    expect(env.data.ran.map((m: { missionId: string }) => m.missionId)).toEqual([goal.id, coverage.id, adversarial.id, feature.id]);
+    expect(env.data.ran.every((m: { status: string }) => m.status === "done")).toBe(true);
+    expect(process.exitCode).toBe(0);
+
+    // Each run was confined to the target's own origins (app + declared API) and started at its baseUrl.
+    for (const spec of f.specs) {
+      expect(spec.allowlist).toEqual(["http://127.0.0.1:5193", "http://127.0.0.1:18582"]);
+      expect(spec.target.baseUrl).toBe("http://127.0.0.1:5193/settings");
+    }
+
+    const tool = buildMcpTools({ journeysDir: "/unused", recordingsDir: f.recordingsDir, missionQueueDir: f.queueDir }).find(
+      (t) => t.name === "get_mission_result",
+    )!;
+    for (const m of [goal, coverage, adversarial, feature]) {
+      const record = await f.queue.get(m.id);
+      expect(record).toMatchObject({ status: "done", exitCode: 0 });
+      const r = await tool.handler({ id: m.id });
+      expect(r.isError).toBeUndefined();
+      expect(JSON.parse(r.content[0]!.text)).toMatchObject({ missionId: m.id, resultId: record!.resultId, status: "clean" });
+    }
+
+    // A second drain finds nothing left to run — a done mission never runs twice.
+    const again = await f.run(["--once", "--fake-ai"]);
+    expect(again.data.ran).toEqual([]);
+    expect(f.specs).toHaveLength(4);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("mission run without a gateway selection runs only model-free missions; the rest stay queued", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const f = await missionRunFixture();
+    const goal = await f.enqueue({ strategy: "goal-based", goal: "g", successAssertion: { kind: "urlIncludes", text: "/x" } });
+    const feature = await f.enqueue({ strategy: "feature", feature: "billing" });
+    const env = await f.run([]);
+    expect(env.data.ran).toMatchObject([{ missionId: feature.id, status: "done" }]);
+    expect(env.data.skipped).toMatchObject([{ missionId: goal.id, reason: expect.stringContaining("needs a model gateway") }]);
+    expect(await f.queue.get(goal.id)).toMatchObject({ status: "queued" });
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("mission run marks a mission failed (exit 1) when its target is no longer promoted — it never runs", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const f = await missionRunFixture();
+    const m = await f.enqueue({ strategy: "feature", feature: "billing" });
+    const target = (await f.store.get("spa"))!;
+    await f.store.put({ ...target, promoted: false });
+    const env = await f.run(["--once"]);
+    expect(env.data.ran).toMatchObject([{ missionId: m.id, status: "failed", error: "unknown or unpromoted mission target" }]);
+    expect(await f.queue.get(m.id)).toMatchObject({ status: "failed", error: "unknown or unpromoted mission target" });
+    expect(f.specs).toHaveLength(0);
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("mission run refuses --once together with --watch", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const f = await missionRunFixture();
+    const env = await f.run(["--once", "--watch"]);
+    expect(env).toMatchObject({ ok: false, error: { code: "E_MISSION_RUN_ARGS" } });
   } finally {
     process.exitCode = savedExitCode;
   }

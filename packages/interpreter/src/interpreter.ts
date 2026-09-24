@@ -1,6 +1,7 @@
-import type { Recording, RecordedStep, Step, StepTiming } from "@jevitate/recording";
+import type { Assertion, Recording, RecordedStep, Step, StepTiming } from "@jevitate/recording";
 import { RecordingSchema } from "@jevitate/recording";
-import type { Actor } from "@jevitate/screenplay";
+import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
+import { installFlashRecorder } from "./flash-recorder.js";
 import type { InterpretResult } from "./interpret-result.js";
 import { runStep } from "./run-step.js";
 import { ReplayTargetError, type ResolveTargetOptions } from "./resolve-target.js";
@@ -216,6 +217,10 @@ async function runFlat(
   sink?: RecordingSink,
   startIndex = 0,
 ): Promise<InterpretResult> {
+  // A transient-state check (#148) needs the flash recorder BEFORE the action that triggers it.
+  if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
+    await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
+  }
   const runStartedAt = performance.now();
   let lastSunkStepEndedAt = runStartedAt;
   for (let i = startIndex; i <= lastIndex; i++) {
@@ -244,4 +249,11 @@ async function runFlat(
     }
   }
   return { outcome: "completed", vars: Object.fromEntries(vars) };
+}
+
+/** Every assertion a step carries (its postcondition / check / resume). */
+function stepAssertions(step: Step): Assertion[] {
+  if (step.kind === "assert") return [step.check];
+  if (step.kind === "handback") return [step.resume];
+  return "expect" in step ? [step.expect] : [];
 }

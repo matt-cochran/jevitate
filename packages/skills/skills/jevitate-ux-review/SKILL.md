@@ -16,7 +16,14 @@ item; the platform structurally cannot emit an uncited finding.
   [--show <labels>] --real --json`. Analyzes a
   Recording you already captured (e.g. from `jevitate-record` or a successful
   `jevitate explore`). It launches no browser. `--app-class` is REQUIRED
-  (e.g. `consumer`, `admin`, `internal`); `--job` sharpens relevance.
+  (e.g. `consumer`, `admin`, `internal`); `--job` sharpens relevance. It reads
+  the artifacts next to `<stem>.recording.json` automatically: the live
+  usability run's evidence sidecar `<stem>.evidence.json` (the screens as
+  analyzed plus the run signals), `<stem>.result.json` or
+  `<stem>.transcript.json`, and `<stem>.screens/`. With the sidecar, offline
+  review reproduces the live run's findings. Without it, `report.evidenceCaveats`
+  names what could not be checked. `--evidence` and `--result` override the
+  discovered files.
 - LIVE, against an authorized target — `jevitate explore --strategy usability
   --url <authorized-url> --goal "<the job>" --app-class <class> [--allow
   <origin>] [--secret <value>] [--max-actions <n>] [--min-confidence <n>]
@@ -48,18 +55,38 @@ authorized the target.
 ## Filtering what is shown
 
 - `--min-confidence <0..1>` (also `JEVITATE_UX_MIN_CONFIDENCE`, or `ux.minConfidence` in
-  `~/.jevitate/config.json`; default 0.3, a secondary filter behind the quality grade): findings below it are suppressed.
-- `--show <labels>` (also `JEVITATE_UX_SHOW`, or `ux.show` in the config; default
-  `actionable,relevant-minor`): which quality grades are shown. The grades are
-  `actionable`, `relevant-minor`, `generic` and `wrong`.
-- Both filters apply. Nothing is dropped silently: every suppressed candidate is
-  counted in `report.suppressed`. Change a filter only when the human asks, and
-  say which filter you changed.
+  `~/.jevitate/config.json`; default 0.3): findings below it are suppressed.
+- `--show <labels>` (also `JEVITATE_UX_SHOW`, or `ux.show` in the config): an
+  opt-in filter on the quality grade. The grades are `actionable`,
+  `relevant-minor`, `generic` and `wrong`. The default shows ALL grades. The
+  grader is not calibrated (no held-out, multi-rater kappa ≥ 0.4 off its tuning
+  app), so it labels findings and does not hide them. Each finding carries its
+  grade in `quality`, and `report.qualityFiltered` says whether a filter was
+  applied. `--show actionable,relevant-minor` restores the old filter.
+- Nothing is dropped silently: every suppressed candidate is counted in
+  `report.suppressed`. Change a filter only when the human asks, and say which
+  filter you changed.
 
 ## Reading the result
 
-- Lead with `report.headline`. It gives the shown findings and "N suppressed (by
+- Lead with `report.headline`. It gives the findings grounded in observed run
+  behavior, the heuristic-only count in the appendix, and "N suppressed (by
   rubric item: …)".
+- `report.findings` holds only findings with behavioral evidence:
+  - run signals (tier `signal`): a hung request, a stuck job still offered
+    again, a duplicate write or create, a failed submit with no or only generic
+    error copy, a repeated assistant reply, an inert control, an internal id,
+    or a URL whose page shows another route's content. Each cites its steps,
+    requests, text and screenshot in `signal`.
+  - rubric findings grounded in the friction the run hit on that screen: a
+    backtrack, a retry, a dead end, a long wait, an error, an abandoned field,
+    or the goal not reached. `journeyEvidence` gives the kind and step range.
+  - Their `severity` and `impact` come from the observed impact on the job:
+    `blocked` > `slowed` > `confused`. Findings on the same friction point are
+    collapsed into one, with the others listed in `contributing`.
+- `report.heuristicAppendix` holds rubric findings with no observed friction.
+  They are screen-level heuristics only, capped at `info`. Mention them as an
+  appendix, never as the review's findings.
 - Each finding is specific and grounded:
   - `observation`: what is wrong, naming the control, label or text, relative to
     the job.
@@ -76,14 +103,15 @@ authorized the target.
   - `confidence` with its `confidenceBasis`: violation × applicability ×
     grounding × agreement. Quote the observation and recommendation; don't
     paraphrase them into generic heuristic advice.
-- Rank your summary by severity and lead with the `major` findings.
+- Rank your summary the way the report does: by `impact`, then severity. Lead
+  with what blocked the job.
 - `report.suppressed` counts what was not shown: `byReason`, `byRubricItem` and
   `byRubricItemRoute`. The reasons are:
   - `ungrounded`: named no control or text.
   - `rejected-evidence`: cited a control or text that is not on the screen.
   - `not-confirmed`: the specifics step found no concrete violation.
   - `below-min-confidence`
-  - `quality-policy`: graded generic or wrong.
+  - `quality-policy`: a grade outside an explicit `--show` filter.
   Say how many were suppressed. `clean: true` only happens with zero findings
   AND zero suppressed, so never describe a report with suppressions as "no
   issues".

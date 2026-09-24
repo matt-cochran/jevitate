@@ -219,22 +219,45 @@ describe("goal mission — a correct save passes every check (#65)", () => {
   );
 });
 
-describe("goal mission — needs at least one success check", () => {
-  it("refuses to start without one (a setup error, before any navigation)", async () => {
-    await expect(
-      withSession(
-        "goal-checks-none-",
-        async (session) =>
-          runGoalBasedMission({
-            actor: CastActor.named("x").whoCan(new BrowseTheWeb(session, [origin])),
-            judge: new ScriptedJudge([{ op: "done" }]),
-            gen: new FakeGenerationGateway(),
-            goal: "g",
-            allowlist: [origin],
-            startUrl: `${origin}/good/profile`,
-          }),
-        origin,
-      ),
-    ).rejects.toThrow(/at least one success check/);
+describe("goal mission — no success check (#130d, a find-out goal)", () => {
+  it("does not refuse to start — `done` is verified by the advisory goal judgment instead", async () => {
+    const result = await withSession(
+      "goal-checks-none-",
+      async (session) =>
+        runGoalBasedMission({
+          actor: CastActor.named("x").whoCan(new BrowseTheWeb(session, [origin])),
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway(),
+          goal: "g",
+          allowlist: [origin],
+          startUrl: `${origin}/good/profile`,
+        }),
+      origin,
+    );
+    expect(result.outcome).toBe("succeeded");
+    expect(result.assertionPassed).toBe(true);
+    expect(result.checks).toEqual([]);
+    expect(result.run.outcome).toMatchObject({ status: "completed", verifiedBy: "grounded-judgment" });
+  });
+
+  it("never a vacuous pass: exhausting the budget without `done`/`report` stays unsucceeded", async () => {
+    const judge = new ScriptedJudge([{ op: "wait" }]);
+    const result = await withSession(
+      "goal-checks-none-exhausted-",
+      async (session) =>
+        runGoalBasedMission({
+          actor: CastActor.named("x").whoCan(new BrowseTheWeb(session, [origin])),
+          judge,
+          gen: new FakeGenerationGateway(),
+          goal: "g",
+          allowlist: [origin],
+          startUrl: `${origin}/good/profile`,
+          bounds: { maxDecisions: 2 },
+        }),
+      origin,
+    );
+    expect(result.outcome).not.toBe("succeeded");
+    expect(result.assertionPassed).toBe(false);
+    expect(result.reason).toBeDefined();
   });
 });

@@ -16,6 +16,8 @@ import { transcriptPathFor } from "./transcript-file.js";
  */
 export class MissionJournal {
   readonly transcriptPath: string;
+  /** The entries last flushed — the live step list a killed run reports (#120). */
+  #entries: readonly TranscriptEntry[] = [];
 
   /**
    * `recordingPath` is the run's Recording file; the transcript goes to `<recording>.transcript.json`
@@ -31,8 +33,14 @@ export class MissionJournal {
 
   /** TranscriptLog listener: rewrites the whole (small) transcript file after each step. */
   readonly onTranscriptEntry = (_entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    this.#entries = [...all];
     writeFileSync(this.transcriptPath, `${JSON.stringify(all, null, 2)}\n`, "utf8");
   };
+
+  /** Every transcript entry flushed so far (a copy). */
+  get transcript(): readonly TranscriptEntry[] {
+    return this.#entries;
+  }
 
   /** RunRecorder listener: rewrites the partial Recording after each recorded step. */
   readonly onRecording = (recording: Recording): void => {
@@ -46,6 +54,7 @@ export class MissionJournal {
 
   /** Final write of the transcript (idempotent with the incremental writes). */
   writeTranscript(entries: readonly TranscriptEntry[]): void {
+    this.#entries = [...entries];
     writeFileSync(this.transcriptPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
   }
 }

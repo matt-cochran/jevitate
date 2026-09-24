@@ -123,7 +123,7 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
     };
     await call(args);
     await call(args); // a second attempt (e.g. RetryingJudgmentPort re-invoking this same seam) counts too
-    expect(usage.snapshot()).toEqual({ judgments: 2, generations: 0, inputTokens: 240, outputTokens: 60 });
+    expect(usage.snapshot()).toEqual({ judgments: 2, generations: 0, inputTokens: 240, outputTokens: 60, priced: "none" });
   });
 
   test("#100: a missing/malformed usage on the SDK response counts as 0 tokens rather than throwing", async () => {
@@ -141,7 +141,31 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
       questions: { op: { kind: "choice", options: ["click", "done"] } },
       authHeader: "Bearer sk-test",
     });
-    expect(usage.snapshot()).toEqual({ judgments: 1, generations: 0, inputTokens: 0, outputTokens: 0 });
+    expect(usage.snapshot()).toEqual({ judgments: 1, generations: 0, inputTokens: 0, outputTokens: 0, priced: "none" });
+  });
+
+  test("#136: a provider-reported per-call cost (a future SDK) is recorded as jevUsd, no unit price needed", async () => {
+    const fakeSdk = {
+      TypeSafeClient: class {
+        async systemOne(): Promise<{ answers: unknown; usage: { input_tokens: number; output_tokens: number; cost: number } }> {
+          return {
+            answers: { op: { type: "choice", choice: "done", confidence: 0.7 } },
+            usage: { input_tokens: 120, output_tokens: 30, cost: 0.0012 },
+          };
+        }
+      },
+    };
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(async () => fakeSdk, usage);
+    await call({
+      state: { goal: "g", url: "u", controls: [], history: [] },
+      questions: { op: { kind: "choice", options: ["click", "done"] } },
+      authHeader: "Bearer sk-test",
+    });
+    const s = usage.snapshot();
+    expect(s.jevUsd).toBeCloseTo(0.0012, 10);
+    expect(s.jevPriceSource).toBeUndefined();
+    expect(s.priced).toBe("full");
   });
 });
 

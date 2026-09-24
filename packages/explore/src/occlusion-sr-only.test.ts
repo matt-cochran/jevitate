@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
-import { act, failureLine, occluderOf, snapshot } from "./index.js";
+import { act, coveredByInterceptors, failureLine, occluderOf, snapshot } from "./index.js";
 import { withSession } from "./testkit.js";
 
 /**
@@ -155,5 +155,53 @@ describe("failureLine — a Playwright click failure names what intercepted it (
     ].join("\n");
     expect(failureLine(msg)).toBe('locator.click: Timeout 5000ms exceeded. (<div class="inspector">…</div> intercepts pointer events)');
     expect(failureLine("boom\nmore")).toBe("boom");
+  });
+});
+
+describe("coveredByInterceptors — geometric deprioritisation after a proven click failure (#90)", () => {
+  it("a control under the interceptor's live box is covered — checked at its LABEL for an sr-only input", async () => {
+    await withSession(
+      "sr-only-interceptor-covered-",
+      async (session) => {
+        await session.page.goto(`${origin}/sr`, { waitUntil: "domcontentloaded" });
+        await session.page.evaluate(() => {
+          const o = document.getElementById("inspector");
+          if (o !== null) o.style.display = "block";
+        });
+        const covered = await session.page.locator("#agree").evaluate(coveredByInterceptors, ['[data-testid="inspector"]']);
+        expect(covered).toBe(true);
+      },
+      origin,
+    );
+  });
+
+  it("not covered once the interceptor is hidden again (display:none) — the geometric fallback still respects visibility", async () => {
+    await withSession(
+      "sr-only-interceptor-hidden-",
+      async (session) => {
+        await session.page.goto(`${origin}/sr`, { waitUntil: "domcontentloaded" });
+        // The inspector starts hidden (display:none) on this fixture — the interceptor is still
+        // present in the DOM (as it would be for a closed-but-not-removed modal) but not visible.
+        const covered = await session.page.locator("#agree").evaluate(coveredByInterceptors, ['[data-testid="inspector"]']);
+        expect(covered).toBe(false);
+      },
+      origin,
+    );
+  });
+
+  it("not covered when the tracked selector matches nothing on the page", async () => {
+    await withSession(
+      "sr-only-interceptor-nomatch-",
+      async (session) => {
+        await session.page.goto(`${origin}/sr`, { waitUntil: "domcontentloaded" });
+        await session.page.evaluate(() => {
+          const o = document.getElementById("inspector");
+          if (o !== null) o.style.display = "block";
+        });
+        const covered = await session.page.locator("#agree").evaluate(coveredByInterceptors, ['[data-testid="nope"]']);
+        expect(covered).toBe(false);
+      },
+      origin,
+    );
   });
 });

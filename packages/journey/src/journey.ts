@@ -11,6 +11,13 @@ export interface JourneyMetadata {
   secretRefs?: SecretRef[];
   authoredBy?: "human-demonstration" | "jev-driven";
   createdAtIso: string;
+  /**
+   * Declares that this Journey only reaches its steps starting from an authenticated session
+   * (#118). When true, a run given no `storageState` fails fast — before any browser launches —
+   * with a clear "this Journey needs auth" message, instead of the confusing
+   * `replay-target-not-found` a logged-out replay would otherwise hit deep into the steps.
+   */
+  requiresAuth?: boolean;
 }
 export interface Journey { metadata: JourneyMetadata; recording: Recording }
 
@@ -37,6 +44,7 @@ export const JourneySchema: ZodType<Journey> = z.object({
     secretRefs: z.array(SecretRefSchema).optional(),
     authoredBy: z.enum(["human-demonstration", "jev-driven"]).optional(),
     createdAtIso: z.string(),
+    requiresAuth: z.boolean().optional(),
   }).strict(),
   recording: RecordingSchema,
 });

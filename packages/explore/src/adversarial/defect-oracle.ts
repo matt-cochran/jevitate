@@ -31,7 +31,14 @@ export type DefectSignal =
   | { kind: "console-error"; detail: string; pageUrl?: string; correlatedStatus?: number; correlatedUrl?: string }
   | { kind: "page-error"; detail: string; pageUrl?: string }
   | { kind: "http-5xx"; detail: string; url: string; status: number }
-  | { kind: "failed-request"; detail: string; url: string };
+  | { kind: "failed-request"; detail: string; url: string }
+  /**
+   * Horizontal-overflow (#149): pure DOM geometry (`packages/explore/src/overflow.ts`'s
+   * `detectOverflow`), never a console/network event — synthesized once per adjudicated step and
+   * folded into that step's hard signals the same way. `route`/`descriptor` are already the
+   * finding's own (redacted, route-templated) values; `signalKey` keys on them directly.
+   */
+  | { kind: "horizontal-overflow"; detail: string; overflowPx: number; route: string; url: string; descriptor: string };
 
 /**
  * Chromium emits a browser-generated console "error" for EVERY failed resource

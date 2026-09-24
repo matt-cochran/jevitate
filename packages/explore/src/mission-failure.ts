@@ -21,6 +21,51 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
 
+/** Chromium's own network-error code from a message (`net::ERR_CONNECTION_REFUSED` in
+ *  `page.goto: net::ERR_CONNECTION_REFUSED at http://…`), or null. */
+function netErrorCode(text: string): string | null {
+  return /net::(ERR_[A-Z_]+)/.exec(text)?.[1] ?? null;
+}
+
+/** Plain-words phrases for the network errors seen when a target simply cannot be reached. */
+const NET_ERROR_PHRASES: Readonly<Record<string, string>> = {
+  ERR_CONNECTION_REFUSED: "connection refused",
+  ERR_CONNECTION_RESET: "connection reset",
+  ERR_CONNECTION_CLOSED: "connection closed",
+  ERR_CONNECTION_TIMED_OUT: "connection timed out",
+  ERR_NAME_NOT_RESOLVED: "name not resolved",
+  ERR_ADDRESS_UNREACHABLE: "address unreachable",
+  ERR_UNSAFE_PORT: "unsafe port",
+  ERR_EMPTY_RESPONSE: "empty response",
+};
+
+/**
+ * Is this failure the start URL simply not loading — a `net::ERR_*` network error, an OS-level
+ * connection refusal, or a timeout before any response? Never a defect in the app under test or a
+ * bug in jevitate (#128): the target was never reached at all, so nothing about ITS behaviour, or
+ * jevitate's, was ever observed.
+ */
+export function isUnreachableTarget(message: string): boolean {
+  return /net::ERR_[A-Z_]+/.test(message) || /ECONNREFUSED/i.test(message) || /Timeout \d+ms exceeded/i.test(message);
+}
+
+/**
+ * A plain-words cause for a target that could not be reached (#128). `netErrorText` is real network
+ * evidence (a `requestfailed` event's `errorText`) when one was observed during the attempt — it is
+ * preferred over the thrown error's own message, since Playwright's `page.goto` sometimes surfaces
+ * only a bare "Timeout …ms exceeded" even when the underlying cause (e.g. a refused connection) was
+ * actually seen on the wire. Never fabricated: with no net-error evidence at all, a bare timeout
+ * reads as "timed out before any response", not a guessed cause.
+ */
+export function describeUnreachable(message: string, netErrorText?: string | null): string {
+  const fromNet = netErrorText === null || netErrorText === undefined ? null : netErrorCode(netErrorText) ?? netErrorCode(message);
+  const code = fromNet ?? netErrorCode(message);
+  if (code !== null) return NET_ERROR_PHRASES[code] ?? code;
+  if (/ECONNREFUSED/i.test(netErrorText ?? "") || /ECONNREFUSED/i.test(message)) return "connection refused";
+  if (/Timeout \d+ms exceeded/i.test(message)) return "timed out before any response";
+  return messageOf(new Error(message));
+}
+
 /**
  * Generates the triage narrative from an already-redacted failure summary + URL (guardrail #3:
  * never raw form state). A generation failure is DATA: `{ status: "unavailable", reason }`.

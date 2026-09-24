@@ -8,6 +8,7 @@ import type { GhPort, GitExec, JevitateManifest, SharedJourneyFile } from "@jevi
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { RunResolvedJourney } from "./source-run-api.js";
 import { buildProgram, type CliDeps } from "./program.js";
+import { currentEngineInfo } from "./engine.js";
 
 /**
  * End-to-end CLI tests for `jevitate source` (#18) and `jevitate journey
@@ -194,6 +195,8 @@ test("source run --json runs a read-only journey from a trusted, ToU-acked sourc
   const env = parse(lines);
   expect(env.ok).toBe(true);
   expect(env.data.outcome).toBe("ok");
+  // #112: every result envelope says which build produced it.
+  expect(env.data.engine).toEqual(currentEngineInfo());
   expect(spy.calls).toEqual([{ id: "checkout", params: {} }]);
 });
 
