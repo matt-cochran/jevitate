@@ -555,7 +555,7 @@ function versionString(): string {
 
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("jevitate").description("Local browser automation platform").version(versionString());
+  program.name("jevitate").description("Autonomous browser testing that turns discovered bugs into deterministic regression tests").version(versionString());
 
   program
     .command("init")

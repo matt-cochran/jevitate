@@ -4,6 +4,7 @@ import formbody from "@fastify/formbody";
 import { appendFileSync } from "node:fs";
 import { SEED_THREADS } from "./data.js";
 import { registerTenancy, type TenancyOptions } from "./tenancy.js";
+import { registerDemo, type DemoOptions } from "./demo.js";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const authed = (req: { cookies: Record<string, string | undefined> }) => req.cookies.sid === "ok";
@@ -11,6 +12,8 @@ const authed = (req: { cookies: Record<string, string | undefined> }) => req.coo
 export interface ServerOptions {
   /** The `/tenancy/*` two-tenant fixture (#147); the object is kept, so `leaky` can be flipped at runtime. */
   readonly tenancy?: TenancyOptions;
+  /** The `/demo/*` launch-demo form (docs/demo.md) and whether its planted bug is fixed. */
+  readonly demo?: DemoOptions;
 }
 
 export function buildServer(opts: ServerOptions = {}): FastifyInstance {
@@ -18,6 +21,7 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   app.register(cookie);
   app.register(formbody);
   registerTenancy(app, opts.tenancy);
+  registerDemo(app, opts.demo);
 
   app.get("/login", async (_req, reply) => {
     reply.type("text/html").send(`<!doctype html><html><body><h1>Sign in</h1>
