@@ -48,7 +48,7 @@ import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
-import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
+import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -438,6 +438,8 @@ export interface RunUsabilityMissionResult {
   readonly engine: EngineInfo;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** The persisted typed result (`usability-<stamp>.recording.result.json`), readable via MCP `get_mission_result`. */
+  readonly resultPath?: string;
 }
 
 /**
@@ -492,7 +494,16 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   });
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
+  // Recording — so the killed run's result names the real file, and reports the live step list,
+  // the tokens spent so far and the screens already observed.
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
+  });
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
@@ -572,7 +583,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       // fabricated clean report) — but the run's transcript is kept, and this is a typed result.
       const why = new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId).message;
       const missionOutcome: MissionOutcome = runOutcome === "clean" ? "inconclusive" : runOutcome;
-      return {
+      const unavailable = {
         ...base,
         report: null,
         reportPath: null,
@@ -580,6 +591,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         exitCode: missionExitCode(missionOutcome),
         analysisUnavailable: why,
       };
+      // Persisted like every other mission's typed result, so MCP `get_mission_result` can read it (#117).
+      return { ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable) };
     }
     const report = buildReport(withSignalFindings(outcome, signalFindings), {
       minConfidence,
@@ -587,7 +600,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    return { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
+    const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
+    return { ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed) };
   } finally {
     capture.detach();
     disarmKillSwitch();

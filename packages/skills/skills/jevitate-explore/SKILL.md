@@ -103,12 +103,20 @@ mission and reading the result honestly.
   and promote one first with `jevitate mission target add <id> ...` then
   `jevitate mission target promote <id>` (see `jevitate-mission-scope`). It
   enqueues and returns a `missionId` immediately — it never runs inline.
+- Strategies: `goal-based` (`goal` + `successAssertion`), `coverage` and
+  `adversarial` (optional in-scope `route` glob), `feature` (`feature` name).
+  Usability reviews are CLI-only (`explore --strategy usability`).
+- `jevitate mission run --once --real --json` (a human runs it, or `--watch`
+  keeps it draining) runs every queued mission and writes its result.
+  `get_mission_result({ id: missionId })` then reports `queued`/`running`
+  (`pending: true` — poll again), the typed result, or `failed`. `verify_fix`
+  accepts the missionId once it is done.
 
 ## Known gaps
 
-- Offline only: `queue_exploration` enqueues but does not itself run the
-  mission; a separate runner drains the queue. Treat the returned `missionId`
-  as "accepted," not "finished."
+- `queue_exploration` enqueues but does not itself run the mission; nothing
+  runs until `jevitate mission run` drains the queue. Treat the returned
+  `missionId` as "accepted," not "finished."
 - The MCP server also registers 8 inbox/command-queue tools
   (`queue_retrieval`, `queue_action`, `get_command`, `list_incoming`,
   `get_thread`, `approve_action`, `cancel_command`, `get_site_health`) that

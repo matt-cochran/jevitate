@@ -76,7 +76,16 @@ never a fabricated commit or time.
 
 The same `{version, commit, builtAt}` (as `engine`) is on every mission's result — the
 persisted `*.result.json`, the `--json` envelope, and every issue draft's `## Environment`
-section — so a result on disk always says which build produced it.
+section — so a result on disk always says which build produced it. So is every other command's
+result envelope (`ux`, `journey run`, `load run`, `source run`, `verify-fix`, `regression capture`,
+`mission run`), a killed run's partial result, `jevitate mcp`'s `initialize` (`serverInfo.version`,
+with the commit in its description), MCP `get_site_health`, and `jevitate ui`'s `/api/health`.
+
+A run killed by SIGTERM/SIGINT (`timeout -s TERM 900 jevitate explore …`) exits 143/130 and still
+writes `<stem>.result.json`: `missionOutcome: "inconclusive"`, `stop: "terminated"`, the real step
+count and transcript, the `transcriptPath` that exists, `engine`, the `usage` spent so far, and any
+partial report (a usability review's observed screens). With `--json` the same result is printed
+as the envelope before the process exits.
 
 ### Mission outcomes and exit codes
 
@@ -94,7 +103,36 @@ clean.
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
 The MCP tool `get_mission_result` returns the same status and code for a
-finished run; a broken run comes back as an error result.
+finished run; a broken run comes back as an error result. Its `id` is a result stem —
+`explore-<stamp>` (a goal run; its own `succeeded`/`exhausted`/`blocked` comes back as
+`goalOutcome`, folded onto `clean`/`defects-found`), `coverage-`, `adversarial-`, `feature-` or
+`usability-<stamp>` — or a `queue_exploration` `missionId`.
+
+### Queued missions (MCP)
+
+`queue_exploration` only enqueues a mission (`~/.jevitate/missions/queue/<missionId>.json`).
+`jevitate mission run` drains the queue: each mission runs through the runner its strategy uses on
+the CLI, its result lands in `~/.jevitate/recordings`, and its queue record moves
+`queued → running → done | failed`. `get_mission_result {id: missionId}` reports `queued`/`running`
+(`pending: true`), the finished result, or `failed` (an error: it could not run, e.g. its target was
+unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
+
+```bash
+jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \
+  --api-origin http://127.0.0.1:18582 --base-url http://127.0.0.1:5193/settings --json
+jevitate mission target promote spa --json          # a human act: only promoted targets are queueable
+jevitate mission run --once --real --json           # drain what is queued now (--watch keeps polling)
+```
+
+A mission may reach only its target's `--authorized-origin` plus its `--api-origin`s (each a bare
+http(s) origin — the queued-mission form of a second `explore --allow`); the target is re-resolved
+(promoted-only) when the mission runs. Queueable strategies: `goal-based` (a goal and a
+`successAssertion`), `coverage` and `adversarial` (an optional in-scope `route` glob), and
+`feature` (a `feature` name, optional `route`). A usability review needs an app class the request
+cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven missions stay queued
+(reported as `skipped`) and only feature missions run. The exit code is 1 only when a mission could
+not run at all; each mission's own outcome is in its result. A drain killed mid-mission records
+that mission `done` with its partial `inconclusive` result, never leaves it `running`.
 
 The adversarial mission keeps hunting after a defect until its step, action or
 time budget runs out. Defects are deduplicated by a stable fingerprint, and each

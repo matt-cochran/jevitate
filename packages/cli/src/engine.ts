@@ -49,3 +49,12 @@ export function currentEngineInfo(): EngineInfo {
     builtAt: bundledBuiltAt() ?? GENERATED_BUILT_AT,
   };
 }
+
+/**
+ * Stamps a CLI result with the build that produced it (#112) — every envelope a command emits
+ * (`journey run`, `load run`, `source run`, `verify-fix`, `regression capture`, `ux`) carries the
+ * same `engine` the explore results do, so evidence from any surface can be tied to a build.
+ */
+export function withEngine<T extends object>(result: T, engine: EngineInfo = currentEngineInfo()): T & { engine: EngineInfo } {
+  return { ...result, engine };
+}

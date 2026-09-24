@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { validateInvariantSpec } from "@jevitate/recording";
-import { MissionRequestSchema, type MissionRequest, type QueuedMission } from "./schema.js";
+import { MissionRequestSchema, targetAllowlist, type MissionRequest, type QueuedMission } from "./schema.js";
 import { MISSION_BOUNDS_CEILING, type Budget } from "./bounds.js";
 import { BudgetExceedsCeilingError } from "./errors.js";
 import type { MissionTargetRegistry } from "./target-registry.js";
@@ -56,10 +56,11 @@ export async function enqueueMission(
   const request = MissionRequestSchema.parse(rawRequest); // schema refusal first — no I/O yet
   const budget = resolveBudget(request.budget); // throws BudgetExceedsCeilingError before any lookup
   const target = await targets.resolve(request.target); // throws UnknownOrUnpromotedMissionTargetError
-  // Declared invariants (#86): a probe may only ever read the target's own authorized origin —
-  // checked against the resolved target BEFORE the write (throws `InvariantSpecError`).
+  // Declared invariants (#86): a probe may only ever read the target's own authorized origins (its
+  // app origin and declared API origins) — checked against the resolved target BEFORE the write
+  // (throws `InvariantSpecError`).
   if (request.invariants !== undefined) {
-    validateInvariantSpec(request.invariants, { allowlist: [target.authorizedOrigin], baseUrl: target.baseUrl });
+    validateInvariantSpec(request.invariants, { allowlist: targetAllowlist(target), baseUrl: target.baseUrl });
   }
 
   const mission: QueuedMission = {

@@ -97,6 +97,14 @@ Then `queue_exploration({ target: "<id>", ... })` (via the `jevitate mcp`
 server, registered with `jevitate mcp --print-config ...` or `jevitate init`)
 enqueues a bounded mission and returns a `missionId`.
 
+An app whose API lives on another origin declares it on the target:
+`--authorized-origin <app-origin> --api-origin <api-origin>` (repeatable; each a
+bare http(s) origin). A queued mission can reach only those origins.
+
+Queued missions run when `jevitate mission run --once --real --json` drains the
+queue (`--watch` keeps draining). `get_mission_result({ id: missionId })` reports
+`queued`/`running` (`pending: true`), the typed result once done, or `failed`.
+
 ## Known gaps
 
 - The MCP inbox/command-queue tools (`queue_retrieval`, `queue_action`,

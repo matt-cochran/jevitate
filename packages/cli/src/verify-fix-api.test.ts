@@ -9,6 +9,7 @@ import { runAdversarialCliMission } from "./explore-api.js";
 import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
 import { buildMcpTools } from "./mcp-api.js";
 import { buildProgram } from "./program.js";
+import { currentEngineInfo } from "./engine.js";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import type { ProfileManager } from "@jevitate/daemon";
 
@@ -84,7 +85,7 @@ describe("verify-fix — CLI surface", () => {
         program.exitOverride();
         program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: () => undefined });
         await program.parseAsync(["node", "jevitate", "verify-fix", "--result", run.resultPath, "--fingerprint", defect.fingerprint, "--json"]);
-        expect(JSON.parse(lines.join(""))).toMatchObject({ ok: true, data: { verdict: "still-reproduces" } });
+        expect(JSON.parse(lines.join(""))).toMatchObject({ ok: true, data: { verdict: "still-reproduces", engine: currentEngineInfo() } });
         expect(process.exitCode).toBe(1);
         process.exitCode = 0;
       } finally {
