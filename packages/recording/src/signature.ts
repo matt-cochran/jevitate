@@ -7,7 +7,7 @@ import type { Assertion, Step, TargetDescriptor } from "./schema.js";
  * "same" semantic page with a different record id) template to the same
  * `/thread/:id`.
  *
- * A path segment is treated as "id-like" when it's one of:
+ * A whole path segment is treated as "id-like" when it's one of:
  *  - all digits (`/^[0-9]+$/`) — e.g. `1`, `42`
  *  - a standard UUID (8-4-4-4-12 hex, case-insensitive)
  *  - a long (length >= 8) token composed only of hex digits and/or dashes —
@@ -18,16 +18,20 @@ import type { Assertion, Step, TargetDescriptor } from "./schema.js";
  *    not a guarantee — a route word that happens to be a long lowercase hex
  *    run (unlikely in practice) would be mis-templated.
  *
+ * A segment that ISN'T id-like as a whole is also checked for a PREFIXED id —
+ * a literal route word followed by `-` and an id-like suffix (#95), e.g.
+ * `candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890` or `item-42`: only the
+ * suffix templates, so `/decisions/candidate-<uuid-a>` and
+ * `/decisions/candidate-<uuid-b>` both become `/decisions/candidate-:id` (one
+ * route), while the literal prefix stays legible in reports.
+ *
  * Pure string transform: no I/O, no randomness.
  */
 export function urlTemplate(url: string): string {
   const [pathAndQuery, hash] = splitOnce(url, "#");
   const [path, query] = splitOnce(pathAndQuery, "?");
 
-  const templatedPath = path
-    .split("/")
-    .map((segment) => (isIdLikeSegment(segment) ? ":id" : segment))
-    .join("/");
+  const templatedPath = path.split("/").map(templateSegment).join("/");
 
   return templatedPath + (query !== undefined ? `?${query}` : "") + (hash !== undefined ? `#${hash}` : "");
 }
@@ -42,12 +46,28 @@ const ALL_DIGITS = /^[0-9]+$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONG_HEX_OR_DASH = /^[0-9a-f-]+$/i;
 
+/** A literal prefix (kept) followed by `-` and a UUID suffix (templated) — checked BEFORE
+ *  `PREFIXED_ID_SUFFIX` so a uuid's own internal dashes are never split at the wrong one. */
+const PREFIXED_UUID = /^(.+-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+/** A literal prefix (kept) followed by `-` and an all-digits or long hex/dash id suffix. */
+const PREFIXED_ID_SUFFIX = /^(.+-)([0-9]+|[0-9a-f-]{8,})$/i;
+
 function isIdLikeSegment(segment: string): boolean {
   if (segment.length === 0) return false;
   if (ALL_DIGITS.test(segment)) return true;
   if (UUID.test(segment)) return true;
   if (segment.length >= 8 && LONG_HEX_OR_DASH.test(segment)) return true;
   return false;
+}
+
+/** Templates one path segment: whole-segment id → `:id`; `prefix-<id>` → `prefix-:id`; else unchanged. */
+function templateSegment(segment: string): string {
+  if (isIdLikeSegment(segment)) return ":id";
+  const uuidSuffix = PREFIXED_UUID.exec(segment);
+  if (uuidSuffix) return `${uuidSuffix[1]}:id`;
+  const idSuffix = PREFIXED_ID_SUFFIX.exec(segment);
+  if (idSuffix) return `${idSuffix[1]}:id`;
+  return segment;
 }
 
 /**

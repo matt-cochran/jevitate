@@ -1343,9 +1343,13 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
-      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial beyond the start URL's route",
+      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial/coverage/exploratory beyond the start URL's route",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
+    )
+    .option(
+      "--scope <mode>",
+      "--strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs",
     )
     .option(
       "--allow <origin>",
@@ -1474,6 +1478,7 @@ export function buildProgram(deps: CliDeps): Command {
         successWhen?: string;
         feature?: string;
         route: string[];
+        scope?: string;
         allow: string[];
         secret: string[];
         secretField: string[];
@@ -1591,10 +1596,17 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_EXPLORE_ARGS", "--url is required"));
           return;
         }
+        if (o.scope !== undefined && o.scope !== "app") {
+          emitJson(program, fail("E_EXPLORE_ARGS", `--scope must be "app" (got ${JSON.stringify(o.scope)})`));
+          return;
+        }
         const covAllowlist = resolveExploreAllowlist(o.url, o.allow);
         const covBounds: Record<string, number> = {};
         if (o.maxActions !== undefined) covBounds.maxActions = Number(o.maxActions);
         if (o.maxDecisions !== undefined) covBounds.maxDecisions = Number(o.maxDecisions);
+        // Scope containment (#89, reusing #64's model): the start URL's route plus --route globs;
+        // --scope app (or --route '/**') widens it to the whole app.
+        const covRouteGlobs = [...o.route, ...(o.scope === "app" ? ["/**"] : [])];
 
         let covJudge: JudgmentPort;
         let covGen: GenerationPort;
@@ -1620,6 +1632,7 @@ export function buildProgram(deps: CliDeps): Command {
             judge: covJudge,
             gen: covGen,
             bounds: Object.keys(covBounds).length > 0 ? covBounds : undefined,
+            ...(covRouteGlobs.length > 0 ? { routeGlobs: covRouteGlobs } : {}),
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
