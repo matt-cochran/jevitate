@@ -51,6 +51,15 @@ export const SETTLE_QUIET_MS = 500;
  */
 export const DEFERRED_EFFECT_MAX_MS = 5_000;
 
+/**
+ * Response content types that are STREAMS (#153): once such a response has STARTED (headers
+ * received), the request is a long-lived connection the server keeps writing to — SSE, gRPC-web and
+ * Connect server streams, NDJSON / JSON-seq feeds, multipart replace — not pending work. A request
+ * that never got a response at all is still pending (and can still be a hang).
+ */
+export const STREAMING_CONTENT =
+  /^\s*(?:text\/event-stream|application\/grpc-web(?:-text)?(?:\+[\w.-]+)?|application\/connect\+[\w.-]+|application\/(?:x-)?ndjson|application\/jsonl|application\/json-seq|application\/stream\+json|multipart\/x-mixed-replace)\b/i;
+
 /** Resource types that are open-ended streams, never counted as pending work. */
 const STREAM_TYPES = new Set(["eventsource", "websocket"]);
 
@@ -331,7 +340,7 @@ export class PageMonitor {
       // SSE over fetch/XHR never "finishes": it is a long-lived connection, not pending work.
       const type = res.headers()["content-type"] ?? "";
       if (type !== "") this.#contentTypes.set(res.request(), type);
-      if (type.includes("text/event-stream")) {
+      if (STREAMING_CONTENT.test(type)) {
         this.#background.set(res.request(), "stream");
         this.#touch(); // wake a settle wait that was counting it as pending
       }
