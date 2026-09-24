@@ -686,6 +686,10 @@ async function runInductionFrontier(
       snap = await guard(takeSnapshot());
       observe(snap);
       const newFingerprint = stateFingerprint(snap);
+      // #160: a toggle exercised once in each direction is dropped for the rest of the run instead
+      // of oscillating forever (the same fix as the feature mission's frontier, which shares this
+      // class).
+      frontier.noteTransition(item.fromFingerprint, liveControl, newFingerprint);
       const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
       transitionsExercised += 1;
       if (declared !== null && seenHang.last === null) {
