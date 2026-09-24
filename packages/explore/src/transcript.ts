@@ -80,6 +80,15 @@ export interface TranscriptEntry {
   readonly strategy?: string;
   readonly actOk: boolean;
   readonly reason?: string;
+  /**
+   * Set when a failed step was refused by jevitate's OWN guard/fail-closed logic before any
+   * interaction with the app was attempted (the repeated-side-effect guard #92, a budget/fail-closed
+   * refusal, …) — never when the app itself was interacted with and reported the failure (a disabled
+   * target, an automation error). Additive (#119/#129): `regression capture`'s oracle derivation
+   * must never pick one of these as "the" failure to reproduce — replaying jevitate's own refusal
+   * can never fail against a fixed app, since nothing about the app changed.
+   */
+  readonly origin?: "engine";
   readonly url: string;
   readonly signature: string;
   /** Interactive controls perceived on the page when this step was decided. */
@@ -144,6 +153,8 @@ export interface TranscriptStep {
   readonly strategy?: string;
   readonly actOk: boolean;
   readonly reason?: string;
+  /** See `TranscriptEntry.origin`. */
+  readonly origin?: "engine";
   /** The snapshot the step was decided on. */
   readonly snapshot: Snapshot;
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
@@ -198,6 +209,7 @@ export class TranscriptLog {
       ...(step.strategy === undefined ? {} : { strategy: step.strategy }),
       actOk: step.actOk,
       ...(step.reason === undefined ? {} : { reason: redactText(step.reason, this.#secrets) }),
+      ...(step.origin === undefined ? {} : { origin: step.origin }),
       url: redactText(redactUrl(step.snapshot.url), this.#secrets),
       signature: step.snapshot.signature,
       controlCount: step.snapshot.controls.length,

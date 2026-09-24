@@ -68,7 +68,7 @@ export class VerifyFixInputError extends Error {
   }
 }
 
-interface PersistedFinding {
+export interface PersistedFinding {
   readonly fingerprint: string;
   readonly related?: readonly string[];
   readonly kind: string;
@@ -97,7 +97,7 @@ function asHangSignal(v: unknown): HangSignal | null {
   return v as unknown as HangSignal;
 }
 
-interface PersistedMission {
+export interface PersistedMission {
   readonly recording: Recording | null;
   readonly target: { readonly seedUrl: string; readonly allowlist: string[]; readonly storageStatePath?: string };
   readonly findings: PersistedFinding[];
@@ -162,6 +162,17 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   };
 }
 
+/**
+ * The one place a mission's findings (declared-invariant defects, hangs, adversarial defects) are
+ * looked up by fingerprint — a fingerprint the CALLER supplied may equal the finding's own, or one
+ * of its `related` fingerprints (the same underlying defect observed at a different point). Shared
+ * by `verify-fix` and `regression capture` (#119/#129): the latter reuses this lookup rather than
+ * re-implementing "is this fingerprint a defect this mission found" itself.
+ */
+export function findFinding(mission: PersistedMission, fingerprint: string): PersistedFinding | undefined {
+  return mission.findings.find((f) => f.fingerprint === fingerprint || (f.related ?? []).includes(fingerprint));
+}
+
 export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFixReport> {
   let raw: unknown;
   try {
@@ -170,9 +181,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     throw new VerifyFixInputError(`cannot read mission result ${opts.resultPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
   const mission = parsePersistedMission(raw);
-  const finding = mission.findings.find(
-    (f) => f.fingerprint === opts.fingerprint || (f.related ?? []).includes(opts.fingerprint),
-  );
+  const finding = findFinding(mission, opts.fingerprint);
   if (finding === undefined) {
     throw new VerifyFixInputError(`no finding with fingerprint ${opts.fingerprint} in ${opts.resultPath}`);
   }
