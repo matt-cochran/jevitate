@@ -1067,7 +1067,9 @@ export interface ExploreCliDeps {
  * Compact assertion spec parser (a recording `Assertion`, checked on a page). Supported forms:
  *   urlIncludes:<text>
  *   visible:<descriptor>
- *   textIncludes:<descriptor>|<text>
+ *   textIncludes:<descriptor>|<text>  — case-insensitive (#113): matches regardless of case, or of a
+ *                                        CSS text-transform (a badge whose DOM text is "Approved" but
+ *                                        renders `uppercase` still matches `|Approved`)
  *   count:<descriptor>|min=<n>,max=<n>
  *   valueEquals:<descriptor>|<value>   — a form control's VALUE (input, textarea, select), exactly
  * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS

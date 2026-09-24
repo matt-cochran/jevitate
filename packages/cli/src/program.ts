@@ -1330,7 +1330,7 @@ export function buildProgram(deps: CliDeps): Command {
       "--success <spec>",
       [
         "independent success check (repeatable; every one must hold). Kinds:",
-        "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> | count:<d>|min=<n>,max=<n>",
+        "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> (case-insensitive) | count:<d>|min=<n>,max=<n>",
         "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
         "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
         "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",

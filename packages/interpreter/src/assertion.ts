@@ -75,6 +75,17 @@ export async function checkAssertion(
   return pollUntil(() => evaluateAssertionOnce(actor, a), opts);
 }
 
+/**
+ * `textIncludes`'s match: case-INsensitive (#113), and documented as such (`--help`, README). The
+ * element's text comes from `TextOf` (`innerText`), which applies CSS `text-transform` — a badge
+ * whose DOM text is "Approved" but renders `uppercase` reads "APPROVED", and a case-sensitive compare
+ * would say the page never showed what it plainly does. Locale-aware casing (`toLocaleLowerCase`),
+ * same as the rest of the interpreter's text matching.
+ */
+export function textIncludesCI(haystack: string, needle: string): boolean {
+  return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+}
+
 /** A single, non-retrying sample of `a` against the current page state. */
 async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolean> {
   switch (a.kind) {
@@ -86,7 +97,7 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
     }
     case "textIncludes": {
       const text = await actor.asks(TextOf.target(descriptorToTarget(a.target)));
-      return text !== null && text.includes(a.text);
+      return text !== null && textIncludesCI(text, a.text);
     }
     case "count": {
       const n = await actor.asks(CountOf.target(descriptorToTarget(a.target)));
@@ -95,6 +106,17 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
     case "valueEquals":
       return (await actor.asks(ValueOf.target(descriptorToTarget(a.target)))) === a.value;
   }
+}
+
+/**
+ * The literal text `textIncludes` compares against, for enriching a failure detail with what was
+ * actually read (#113) — a case/CSS-text-transform mismatch is otherwise invisible in "did not
+ * hold". The caller bounds and redacts it before surfacing it (page text is untrusted, and may carry
+ * a secret). Returns null for a target that did not resolve, or for any other assertion kind.
+ */
+export async function readAssertionText(actor: Actor, a: Assertion): Promise<string | null> {
+  if (a.kind !== "textIncludes") return null;
+  return actor.asks(TextOf.target(descriptorToTarget(a.target))).catch(() => null);
 }
 
 function sleep(ms: number): Promise<void> {

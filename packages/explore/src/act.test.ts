@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
-import { act, snapshot } from "./index.js";
+import { act, parseInterceptor, snapshot } from "./index.js";
 import type { Control } from "./snapshot.js";
 import { withSession, LOGIN_FIXTURE_HTML } from "./testkit.js";
 
@@ -210,4 +210,96 @@ describe("act — gate refuses a clipped/offscreen skip link, fast (#75)", () =>
     },
     30_000,
   );
+});
+
+describe("act — scroll settles before it is measured, and handles inner scroll containers (#109)", () => {
+  it(
+    "scroll_down on a tall page reports the page moved, and a below-the-fold element becomes visible",
+    async () => {
+      await withSession("explore-act-scroll-tall-", async (session) => {
+        await session.page.setContent(
+          `<!doctype html><html><body style="margin:0">
+            <div style="height:650px">top</div>
+            <button id="below" style="margin-top:0">Below the fold</button>
+            <div style="height:5000px">more, so the page can keep scrolling</div>
+          </body></html>`,
+        );
+        await session.page.setViewportSize({ width: 800, height: 600 });
+        const actor = CastActor.named("act").whoCan(new BrowseTheWeb(session, [ORIGIN]));
+
+        const topBefore = await session.page.evaluate(() => document.getElementById("below")!.getBoundingClientRect().top);
+        expect(topBefore).toBeGreaterThan(600); // below the 600px-tall viewport
+        const r = await act(actor, { op: "scroll_down", control: null });
+        expect(r).toEqual({ ok: true, mutated: false, moved: true });
+        expect(await session.page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+        const topAfter = await session.page.evaluate(() => document.getElementById("below")!.getBoundingClientRect().top);
+        expect(topAfter).toBeLessThan(topBefore);
+        expect(topAfter).toBeLessThan(600); // now within the viewport
+      });
+    },
+    30_000,
+  );
+
+  it(
+    "scroll_down on a page too short to scroll reports the page did not move",
+    async () => {
+      await withSession("explore-act-scroll-short-", async (session) => {
+        await session.page.setContent(`<!doctype html><html><body><p>short</p></body></html>`);
+        await session.page.setViewportSize({ width: 800, height: 600 });
+        const actor = CastActor.named("act").whoCan(new BrowseTheWeb(session, [ORIGIN]));
+        const r = await act(actor, { op: "scroll_down", control: null });
+        expect(r).toEqual({ ok: true, mutated: false, moved: false });
+      });
+    },
+    30_000,
+  );
+
+  it(
+    "scroll_down under an inner overflow:auto pane scrolls THAT pane, not the window",
+    async () => {
+      await withSession("explore-act-scroll-inner-", async (session) => {
+        await session.page.setContent(
+          `<!doctype html><html><body style="margin:0">
+            <main style="position:fixed;inset:0;overflow:auto">
+              <div style="height:5000px">top of the inner pane</div>
+            </main>
+          </body></html>`,
+        );
+        await session.page.setViewportSize({ width: 800, height: 600 });
+        const actor = CastActor.named("act").whoCan(new BrowseTheWeb(session, [ORIGIN]));
+
+        const r = await act(actor, { op: "scroll_down", control: null });
+        expect(r).toEqual({ ok: true, mutated: false, moved: true });
+        // The window itself never scrolled (there is nothing outside the fixed pane to scroll) —
+        // the inner pane did.
+        expect(await session.page.evaluate(() => window.scrollY)).toBe(0);
+        expect(await session.page.evaluate(() => document.querySelector("main")!.scrollTop)).toBeGreaterThan(0);
+      });
+    },
+    30_000,
+  );
+});
+
+describe("parseInterceptor — the covering element parsed out of Playwright's failure text (#90)", () => {
+  it("builds a selector from identifying attributes (data-testid preferred)", () => {
+    expect(parseInterceptor('<div data-testid="inspector" class="overlay">…</div> intercepts pointer events')).toBe(
+      'div[data-testid="inspector"][class="overlay"]',
+    );
+    expect(parseInterceptor('<button aria-label="Close inspector"></button> intercepts pointer events')).toBe(
+      'button[aria-label="Close inspector"]',
+    );
+    expect(
+      parseInterceptor(
+        '<div class="inspector">…</div> from <div class="panel">…</div> subtree intercepts pointer events',
+      ),
+    ).toBe('div[class="inspector"]');
+  });
+
+  it("returns null for a bare tag with no identifying attribute (never a selector broad enough to match everything)", () => {
+    expect(parseInterceptor("<div>…</div> intercepts pointer events")).toBeNull();
+  });
+
+  it("returns null when the message names no interception", () => {
+    expect(parseInterceptor("locator.click: Timeout 5000ms exceeded.")).toBeNull();
+  });
 });
