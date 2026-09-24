@@ -1657,7 +1657,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--log-source <spec>",
-      "backend log source (repeatable; goal, coverage, exploratory, adversarial, --feature): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
+      "backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2908,6 +2908,10 @@ export function buildProgram(deps: CliDeps): Command {
       }
       const queue = new FsMissionQueueStore(o.dir ?? resolveDataDir(["missions", "queue"]));
       const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
+      // #142 follow-up: ~/.jevitate/targets.json's per-origin logSources/logDefect/allowLogCmd — a
+      // queued mission never carries its own (never an MCP argument); this is the operator's only
+      // way to declare one for a mission drained here.
+      const targetConfigs = loadTargetsFile(deps.explore?.targetsConfigPath);
       const execute =
         deps.missions?.execute ??
         realQueuedMissionExecutor({
@@ -2915,6 +2919,7 @@ export function buildProgram(deps: CliDeps): Command {
           gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
+          targets: targetConfigs,
         });
       const drainOnce = () =>
         drainMissionQueue({

@@ -333,7 +333,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
           matcher: finding.serverLog.matcher,
           normalizedMessage: finding.serverLog.normalizedMessage,
           drainMs: finding.serverLog.drainMs,
-          allowLogCmd: opts.allowLogCmd ?? false,
+          // #142 follow-up: an explicit --allow-log-cmd wins; otherwise the operator's own
+          // ~/.jevitate/targets.json entry for this origin may opt in (never an MCP argument).
+          allowLogCmd: opts.allowLogCmd === true || target.allowLogCmd === true,
           ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
           ...(opts.replays === undefined ? {} : { replays: opts.replays }),
           openSession: replaySession,

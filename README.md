@@ -391,11 +391,13 @@ a path, and its probes are checked against the target's origin.
 
 ### Backend log correlation
 
-`--log-source <spec>` (repeatable; goal, coverage, exploratory, adversarial, `--feature`) tails a
+`--log-source <spec>` (repeatable; every strategy, including `--strategy usability`) tails a
 backend log for the run and correlates its lines to the step they landed during — turning "blocked:
 could not verify plan limit" into "blocked: the server denied `GetActiveRatePlanForOffer` for this
 user". Sources are **operator-declared, read-only and never the model's choice** — CLI/local-config
-only, never part of an MCP `MissionRequest`:
+only, never part of an MCP `MissionRequest`. On a usability run a `server-log` defect is reported
+(`serverLogs`/`serverLogDefects` on the result) but stays advisory, like every other UX finding — it
+never gates `missionOutcome`/`exitCode`.
 
 ```bash
 jevitate explore --url http://localhost:5173/imports --goal "import https://example.com" \
@@ -435,10 +437,28 @@ correlated step's route (`"(run)"` for a line outside every step window). `verif
 source(s) for the same drain window — never by looking for it among DOM/console/network signals,
 which a backend log line is none of. A `cmd:` source needs `--allow-log-cmd` on `verify-fix` too.
 
-**Result.** `serverLogs` on the result carries counts by level, the top normalized messages, each
-source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when `--log-defect` was
-given but every source failed to open or delivered not one line, so a `server-log` defect's absence
-is never misread as "held"/clean off an oracle that was not actually watching anything.
+**Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
+messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
+`--log-defect` was given but every source failed to open or delivered not one line. A found
+`server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. An
+unreadable oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
+than a false clean — its absence of defects proves nothing when the source that would have caught
+them was never demonstrably read. (A usability run keeps its own advisory rule instead: see above.)
+
+**MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
+name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /
+`logDefect` / `allowLogCmd` per origin in `~/.jevitate/targets.json` instead:
+
+```json
+{ "https://app.example.test": {
+    "logSources": ["docker:app-1"], "logDefect": ["error"], "allowLogCmd": false } }
+```
+
+`jevitate mission run` (the queue drain) resolves this by the queued mission's target origin and
+applies it exactly like `--log-source`/`--log-defect` would — a queued mission itself carries no log
+source of its own. `verify_fix` over MCP re-checks a `server-log` defect's sources the same way
+CLI's own `verify-fix` does (they're persisted with the defect); `allowLogCmd` for a `cmd:` source
+still needs this same targets.json opt-in, never a tool argument.
 
 ### Authenticated missions
 
