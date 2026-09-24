@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { AssertionSchema, TargetDescriptorSchema, type Assertion, type TargetDescriptor } from "./schema.js";
+import {
+  ATTR_NAME_RE,
+  AssertionSchema,
+  STYLE_PROPERTIES,
+  TargetDescriptorSchema,
+  type Assertion,
+  type StyleChannel,
+  type StyleProperty,
+  type TargetDescriptor,
+} from "./schema.js";
 
 /**
  * App-declared invariants (#86): a CLOSED, declarative spec a caller hands to a dispatch
@@ -11,7 +20,9 @@ import { AssertionSchema, TargetDescriptorSchema, type Assertion, type TargetDes
  *
  *  - `observe`: named, READ-ONLY observables —
  *      `dom`     text / value / count / number read from a target on the current page (the
- *                recording `TargetDescriptor` vocabulary, or a CSS `selector` shorthand);
+ *                recording `TargetDescriptor` vocabulary, or a CSS `selector` shorthand) — or its
+ *                visual state (#148): a computed style (`{ style, channel?, reduce? }`), an
+ *                attribute (`{ attr }`), or `inViewport` (the box's visible fraction, 0..1);
  *      `network` a JSON path in the last captured response whose URL matches a glob;
  *      `probe`   a `get` (or `head`) of an existing endpoint on an AUTHORIZED origin, with the
  *                mission session's own cookies — never another method, never another origin.
@@ -47,13 +58,33 @@ export interface DomObservable {
   /** A CSS selector (shorthand for `target: { css }`). Exactly one of `selector` / `target`. */
   selector?: string;
   target?: TargetDescriptor;
-  /** What to read from the FIRST match: its text (default), its form value, or the match count. */
-  read?: "text" | "value" | "count";
+  /**
+   * What to read: the FIRST match's text (default) or form value, the match count, or its visual
+   * state (#148) — see `DomRead`.
+   */
+  read?: DomRead;
   /** Parse the first number out of what was read (`"≈ 1,240 credits"` → 1240). */
   number?: boolean;
   /** When the element is absent the value is `null` (instead of "could not be read"). */
   optional?: boolean;
 }
+
+/**
+ * A `dom` observable's read. Besides `text`/`value`/`count`:
+ *  - `inViewport` — the first match's visible fraction of its box inside the viewport (0..1);
+ *  - `{ style, channel?, reduce? }` — the COMPUTED value of an allowlisted CSS property, parsed by
+ *    code: with a `channel` (a color's `alpha`/`r`/`g`/`b`, a length's `px`) a number, else the raw
+ *    string. `reduce` picks across matches: `first` (default), `min`/`max` (numeric: need a channel);
+ *  - `{ attr }` — an attribute of the first match (absent attribute → the observable is missing).
+ * All are read by fixed built-in page functions — never a declared string evaluated as JS.
+ */
+export type DomRead =
+  | "text"
+  | "value"
+  | "count"
+  | "inViewport"
+  | { style: StyleProperty; channel?: StyleChannel; reduce?: "first" | "min" | "max" }
+  | { attr: string };
 
 export interface NetworkObservable {
   /** URL glob over the full URL (`**` any run, `*` any run without `/`); a leading `/` globs path+query. */
@@ -495,7 +526,22 @@ const DomObservableSchema = z
   .object({
     selector: z.string().min(1).optional(),
     target: TargetDescriptorSchema.optional(),
-    read: z.enum(["text", "value", "count"]).optional(),
+    read: z
+      .union([
+        z.enum(["text", "value", "count", "inViewport"]),
+        z
+          .object({
+            style: z.enum(STYLE_PROPERTIES),
+            channel: z.enum(["alpha", "r", "g", "b", "px"]).optional(),
+            reduce: z.enum(["first", "min", "max"]).optional(),
+          })
+          .strict()
+          .refine((r) => (r.reduce ?? "first") === "first" || r.channel !== undefined, {
+            message: "reduce min/max needs a numeric channel",
+          }),
+        z.object({ attr: z.string().regex(ATTR_NAME_RE) }).strict(),
+      ])
+      .optional(),
     number: z.boolean().optional(),
     optional: z.boolean().optional(),
   })

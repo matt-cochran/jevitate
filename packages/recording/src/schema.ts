@@ -53,7 +53,116 @@ export type Assertion =
   | { kind: "textIncludes"; target: TargetDescriptor; text: string }
   | { kind: "count"; target: TargetDescriptor; min?: number; max?: number }
   /** A form control's current VALUE (input, textarea, select) equals `value` exactly — never its text content. */
-  | { kind: "valueEquals"; target: TargetDescriptor; value: string };
+  | { kind: "valueEquals"; target: TargetDescriptor; value: string }
+  /**
+   * Visual state (#148), read by fixed built-in page functions — never evaluated as JS. `style`: the
+   * COMPUTED value of an allowlisted CSS property (optionally one channel of it: a color's
+   * `alpha`/`r`/`g`/`b`, or a length's `px`) compared with `op` on EVERY matching element (at least
+   * one must match).
+   */
+  | { kind: "style"; target: TargetDescriptor; property: StyleProperty; channel?: StyleChannel; op: CompareOp; value: string }
+  /** The fraction (0..1) of each matching element's box inside the viewport is at least `min` (default 0.5). */
+  | { kind: "inViewport"; target: TargetDescriptor; min?: number }
+  /** Every matching element's rendered box (CSS px) lies within the given size bounds. */
+  | { kind: "box"; target: TargetDescriptor; minWidth?: number; maxWidth?: number; minHeight?: number; maxHeight?: number }
+  /** Whether the first `target` match's box overlaps the first `other` match's box (`overlapping`). */
+  | { kind: "overlap"; target: TargetDescriptor; other: TargetDescriptor; overlapping: boolean }
+  /**
+   * An attribute on the first match: equals `value`, or (no `value`) is present — or, with
+   * `absent: true`, is not present. Element state such as `data-state`, `aria-expanded`, a minimap
+   * cell's `data-active`.
+   */
+  | { kind: "attr"; target: TargetDescriptor; name: string; value?: string; absent?: boolean }
+  /**
+   * A TRANSIENT state (#148): a matching element GAINED `className` (or attribute `attr`, or started a
+   * CSS animation) after the page's last user input, within `withinMs` of it when given. Needs the
+   * flash recorder installed before the triggering action; without it the check never holds.
+   */
+  | { kind: "flashed"; target: TargetDescriptor; className?: string; attr?: string; animation?: boolean; withinMs?: number };
+
+/** A comparison in a visual-state assertion. `=`/`!=` compare colors as colors (`red` = `rgb(255, 0, 0)`). */
+export type CompareOp = "=" | "!=" | ">" | ">=" | "<" | "<=";
+export const COMPARE_OPS: readonly CompareOp[] = [">=", "<=", "!=", "=", ">", "<"];
+/** One numeric channel of a computed style value: a color's `r`/`g`/`b`/`alpha`, a length's `px`. */
+export type StyleChannel = "alpha" | "r" | "g" | "b" | "px";
+export const STYLE_CHANNELS: readonly StyleChannel[] = ["alpha", "r", "g", "b", "px"];
+
+/**
+ * The CSS properties a `style` check (or a `dom` style read) may name — a fixed allowlist of the
+ * properties that carry visual state (color, highlight, visibility, emphasis, focus rings, movement).
+ */
+export const STYLE_PROPERTIES = [
+  "color",
+  "background-color",
+  "opacity",
+  "visibility",
+  "display",
+  "outline-color",
+  "outline-style",
+  "outline-width",
+  "border-top-color",
+  "border-right-color",
+  "border-bottom-color",
+  "border-left-color",
+  "transform",
+  "font-weight",
+  "font-style",
+  "text-decoration-line",
+  "fill",
+  "fill-opacity",
+  "stroke",
+] as const;
+export type StyleProperty = (typeof STYLE_PROPERTIES)[number];
+
+/**
+ * Where a rich-text edit acts inside a `contenteditable` (#148): an exact `quote` of its current
+ * text (its `occurrence`-th match, 0-based, default 0), a `[start,end)` character-offset range of
+ * that text, or a caret at its `start`/`end`.
+ */
+export type TextAnchor =
+  | { quote: string; occurrence?: number }
+  | { start: number; end: number }
+  | { at: "start" | "end" };
+
+/**
+ * What a rich-text edit does at its anchor: `replace` the anchored range with the value (typed with
+ * keyboard events), `insertBefore`/`insertAfter` it (caret placed, then typed), or `format` it (range
+ * selected, then the formatting shortcut pressed).
+ */
+export type TextEditAction = "replace" | "insertBefore" | "insertAfter" | "format";
+export type TextFormat = "bold" | "italic" | "underline";
+
+/** One rich-text edit, as the explore op performs it and a Recording replays it. */
+export interface TextEdit {
+  anchor: TextAnchor;
+  action: TextEditAction;
+  /** The text to type — required for `replace`/`insert*` (may be `""` for a deletion), absent for `format`. */
+  value?: string;
+  /** The formatting to toggle — required for `format`. */
+  format?: TextFormat;
+}
+
+/**
+ * Why an edit's parts do not fit together, or null (#148): `format` needs a `format`, no value and a
+ * RANGE anchor; `replace`/`insert*` need a value; a `{at}` caret anchor can only insert.
+ */
+export function textEditProblem(e: {
+  anchor: TextAnchor;
+  action: TextEditAction;
+  format?: TextFormat | undefined;
+  hasValue: boolean;
+}): string | null {
+  if (e.action === "format") {
+    if (e.format === undefined) return "editText format needs `format`";
+    if (e.hasValue) return "editText format takes no value";
+    if ("at" in e.anchor) return "editText format needs a range anchor (quote or offsets)";
+    return null;
+  }
+  if (e.format !== undefined) return `editText ${e.action} takes no format`;
+  if (!e.hasValue) return `editText ${e.action} needs a value`;
+  if (e.action === "replace" && "at" in e.anchor) return "editText replace needs a range anchor (quote or offsets)";
+  return null;
+}
 
 export type Step =
   | { kind: "navigate"; label?: string; url: string; expect: Assertion }
@@ -71,6 +180,22 @@ export type Step =
    */
   | { kind: "upload"; label?: string; target: TargetDescriptor; file: ValueOrVar; expect: Assertion }
   | { kind: "press"; label?: string; key: string; expect: Assertion }
+  /**
+   * A rich-text edit INSIDE a `contenteditable` (#148): place the caret/selection at `anchor` (an
+   * exact quote, offsets, or start/end — a quote no longer present fails closed, never degrades to
+   * replacing the whole element), then type `value` or press `format`'s shortcut. `value` follows
+   * `fill`'s `ValueOrVar` discipline.
+   */
+  | {
+      kind: "editText";
+      label?: string;
+      target: TargetDescriptor;
+      anchor: TextAnchor;
+      action: TextEditAction;
+      value?: ValueOrVar;
+      format?: TextFormat;
+      expect: Assertion;
+    }
   | { kind: "forEach"; label?: string; items: TargetDescriptor; as: string; steps: Step[] }
   | { kind: "assert"; label?: string; check: Assertion }
   | { kind: "handback"; label?: string; prompt: string; resume: Assertion; timeoutMs?: number };
@@ -198,6 +323,9 @@ export const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
     },
   );
 
+/** An HTML attribute name a visual-state check may read (`data-*`, `aria-*`, `class`…). */
+export const ATTR_NAME_RE = /^[A-Za-z_:][-\w:.]*$/;
+
 const RedactedValueSchema = z.discriminatedUnion("redacted", [
   z.object({ redacted: z.literal(true), length: z.number() }).strict(),
   z.object({ redacted: z.literal(false), value: z.string() }).strict(),
@@ -243,6 +371,73 @@ export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind"
       value: z.string(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("style"),
+      target: TargetDescriptorSchema,
+      property: z.enum(STYLE_PROPERTIES),
+      channel: z.enum(["alpha", "r", "g", "b", "px"]).optional(),
+      op: z.enum(["=", "!=", ">", ">=", "<", "<="]),
+      value: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("inViewport"),
+      target: TargetDescriptorSchema,
+      min: z.number().min(0).max(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("box"),
+      target: TargetDescriptorSchema,
+      minWidth: z.number().nonnegative().optional(),
+      maxWidth: z.number().nonnegative().optional(),
+      minHeight: z.number().nonnegative().optional(),
+      maxHeight: z.number().nonnegative().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("overlap"),
+      target: TargetDescriptorSchema,
+      other: TargetDescriptorSchema,
+      overlapping: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("attr"),
+      target: TargetDescriptorSchema,
+      name: z.string().regex(ATTR_NAME_RE),
+      value: z.string().optional(),
+      absent: z.boolean().optional(),
+    })
+    .strict()
+    .refine((a) => !(a.absent === true && a.value !== undefined), { message: "attr: `absent` and `value` are exclusive" }),
+  z
+    .object({
+      kind: z.literal("flashed"),
+      target: TargetDescriptorSchema,
+      className: z.string().regex(/^-?[A-Za-z_][\w-]*$/).optional(),
+      attr: z.string().regex(ATTR_NAME_RE).optional(),
+      animation: z.boolean().optional(),
+      withinMs: z.number().int().positive().optional(),
+    })
+    .strict()
+    .refine((a) => [a.className !== undefined, a.attr !== undefined, a.animation === true].filter(Boolean).length === 1, {
+      message: "flashed needs exactly one of className, attr, animation",
+    }),
+]);
+
+const TextAnchorSchema: z.ZodType<TextAnchor> = z.union([
+  z.object({ quote: z.string().min(1), occurrence: z.number().int().nonnegative().optional() }).strict(),
+  z
+    .object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() })
+    .strict()
+    .refine((a) => a.end >= a.start, { message: "anchor end must be >= start" }),
+  z.object({ at: z.enum(["start", "end"]) }).strict(),
 ]);
 
 /**
@@ -334,6 +529,22 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
       expect: AssertionSchema,
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("editText"),
+      label: z.string().optional(),
+      target: TargetDescriptorSchema,
+      anchor: TextAnchorSchema,
+      action: z.enum(["replace", "insertBefore", "insertAfter", "format"]),
+      value: ValueOrVarSchema.optional(),
+      format: z.enum(["bold", "italic", "underline"]).optional(),
+      expect: AssertionSchema,
+    })
+    .strict()
+    .superRefine((s, ctx) => {
+      const problem = textEditProblem({ anchor: s.anchor, action: s.action, format: s.format, hasValue: s.value !== undefined });
+      if (problem !== null) ctx.addIssue({ code: "custom", message: problem });
+    }),
   z
     .object({
       kind: z.literal("forEach"),

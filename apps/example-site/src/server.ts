@@ -180,5 +180,68 @@ export function buildServer(): FastifyInstance {
     );
   });
 
+  // Rich-text editor fixture (#148): three contenteditable prose blocks (persisted per server
+  // instance, so `reloadThen` proves an edit saved), `[data-heat]` highlight spans, and an SVG
+  // minimap whose cells scroll their block into view and flash it for 800 ms.
+  //   ?broken=heat    — the heat spans render with alpha 0 (text and count unchanged)
+  //   ?broken=minimap — a cell scrolls to the WRONG block and never flashes
+  const blocks = new Map<string, string>(EDITOR_BLOCKS);
+  app.get<{ Querystring: { broken?: string } }>("/editor-fixture", async (req, reply) => {
+    const broken = req.query.broken ?? "";
+    const heatAlpha = broken === "heat" ? "0" : "0.4";
+    const ids = [...blocks.keys()];
+    const cells = ids
+      .map(
+        (id, i) =>
+          `<rect data-cell="${i + 1}" data-target="${id}" role="button" aria-label="Jump to block ${i + 1}" x="0" y="${i * 40}" width="40" height="36" fill="#8ab"></rect>`,
+      )
+      .join("");
+    const prose = ids.map((id) => `<p id="${id}" class="block" contenteditable="true">${blocks.get(id) ?? ""}</p>`).join("\n");
+    reply.type("text/html").send(`<!doctype html><html><head><title>Editor fixture</title><style>
+body { font: 16px/1.5 sans-serif; margin: 0; padding: 16px 80px 16px 16px; }
+.block { margin: 0 0 150vh; padding: 8px; }
+[data-heat] { background-color: rgba(255, 200, 0, ${heatAlpha}); }
+.flash { outline: 3px solid orange; }
+#minimap { position: fixed; top: 10px; right: 10px; }
+</style></head><body><h1>Editor</h1>
+<svg id="minimap" width="40" height="${ids.length * 40}">${cells}</svg>
+${prose}
+<script>
+const broken = ${JSON.stringify(broken)};
+const ids = ${JSON.stringify(ids)};
+for (const p of document.querySelectorAll(".block")) {
+  p.addEventListener("input", () => {
+    fetch("/editor-fixture/blocks/" + p.id, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ html: p.innerHTML }), keepalive: true });
+  });
+}
+for (const cell of document.querySelectorAll("rect[data-cell]")) {
+  cell.addEventListener("click", () => {
+    let id = cell.getAttribute("data-target");
+    if (broken === "minimap") id = ids[(ids.indexOf(id) + 1) % ids.length];
+    const block = document.getElementById(id);
+    block.scrollIntoView({ block: "center" });
+    if (broken === "minimap") return;
+    block.classList.add("flash");
+    setTimeout(() => block.classList.remove("flash"), 800);
+  });
+}
+</script></body></html>`);
+  });
+  app.put<{ Params: { id: string }; Body: { html?: string } }>("/editor-fixture/blocks/:id", async (req, reply) => {
+    if (!blocks.has(req.params.id) || typeof req.body?.html !== "string") {
+      reply.code(400).send({ ok: false });
+      return;
+    }
+    blocks.set(req.params.id, req.body.html);
+    reply.send({ ok: true });
+  });
+
   return app;
 }
+
+/** The editor fixture's initial prose blocks (#148), by id. */
+export const EDITOR_BLOCKS: ReadonlyArray<readonly [string, string]> = [
+  ["b1", 'The draft opens with <span data-heat="3">three risky claims</span> and <span data-heat="1">a soft hedge</span>.'],
+  ["b2", "Paragraph two says the quick brown fox jumps over the lazy dog."],
+  ["b3", "The closing paragraph thanks the reader for their time."],
+];

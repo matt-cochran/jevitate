@@ -3,7 +3,18 @@ import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import type { Assertion, InvariantSpec, Recording, TargetDescriptor } from "@jevitate/recording";
+import {
+  AssertionSchema,
+  STYLE_CHANNELS,
+  STYLE_PROPERTIES,
+  type Assertion,
+  type CompareOp,
+  type InvariantSpec,
+  type Recording,
+  type StyleChannel,
+  type StyleProperty,
+  type TargetDescriptor,
+} from "@jevitate/recording";
 import type { InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
 import {
   runGoalBasedMission,
@@ -1193,6 +1204,18 @@ export interface ExploreCliDeps {
  *                                        renders `uppercase` still matches `|Approved`)
  *   count:<descriptor>|min=<n>,max=<n>
  *   valueEquals:<descriptor>|<value>   — a form control's VALUE (input, textarea, select), exactly
+ * and the visual-state kinds (#148), decided by code from fixed page reads:
+ *   style:<descriptor>|<prop><op><value>   — the COMPUTED style of EVERY match (at least one);
+ *                                        <prop> is an allowlisted CSS property, optionally one
+ *                                        channel of it: alpha(background-color)>0, px(outline-width)>=2;
+ *                                        <op> is = != > >= < <= (= compares colors as colors).
+ *                                        `styleMatches:` is an alias.
+ *   inViewport:<descriptor>[|min=<ratio>] — each match's visible fraction (0..1, default 0.5)
+ *   box:<descriptor>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n> — each match's size (px)
+ *   overlaps:<descriptor>|<descriptor2> / noOverlap:<descriptor>|<descriptor2> — the first matches' boxes
+ *   attr:<descriptor>|<name>=<value> | attr:<descriptor>|<name> (present) | attr:<descriptor>|!<name> (absent)
+ *   flashed:<descriptor>|class=<cls>|attr=<name>|animation [|withinMs=<n>] — a match GAINED the
+ *                                        class / attribute / an animation after the last user input
  * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS
  * selector starting with `[`, `#` or `.` (`[data-testid=x]` is read as `testId=x`). In
  * `textIncludes` / `valueEquals` the LAST `|` separates the descriptor from the text.
@@ -1233,9 +1256,131 @@ export function parseAssertionSpec(spec: string): Assertion {
       }
       return out;
     }
+    case "style":
+    case "styleMatches":
+    case "inViewport":
+    case "box":
+    case "overlaps":
+    case "noOverlap":
+    case "attr":
+    case "flashed":
+      return parseVisualSpec(kind, rest);
     default:
       throw new Error(`unsupported assertion kind ${JSON.stringify(kind)}`);
   }
+}
+
+/** A finite number from a spec, or a precise error. */
+function specNumber(kind: string, key: string, v: string | undefined): number {
+  const n = v === undefined || v.trim() === "" ? Number.NaN : Number(v);
+  if (!Number.isFinite(n)) throw new Error(`${kind}: ${key} must be a number, got ${JSON.stringify(v ?? "")}`);
+  return n;
+}
+
+/** `<descriptor>|<rest>` split at the FIRST `|`; `rest` required unless `optional`. */
+function splitDescriptor(kind: string, spec: string, shape: string, optional = false): [TargetDescriptor, string] {
+  const bar = spec.indexOf("|");
+  if (bar === -1 && !optional) throw new Error(`${kind} requires "${shape}"`);
+  return [parseDescriptorSpec(bar === -1 ? spec : spec.slice(0, bar)), bar === -1 ? "" : spec.slice(bar + 1)];
+}
+
+/**
+ * The visual-state assertion specs (#148) — see `parseAssertionSpec`. Validated through the
+ * recording `AssertionSchema` (the allowlisted properties, a closed set of ops/channels), so a typo
+ * fails here, before any browser work.
+ */
+function parseVisualSpec(kind: string, rest: string): Assertion {
+  let out: Assertion;
+  switch (kind) {
+    case "style":
+    case "styleMatches": {
+      // The descriptor ends at the LAST `|` (a style value never contains one).
+      const bar = rest.lastIndexOf("|");
+      if (bar === -1) throw new Error(`${kind} requires "<descriptor>|<prop><op><value>", e.g. ${kind}:[data-heat]|alpha(background-color)>0`);
+      const target = parseDescriptorSpec(rest.slice(0, bar));
+      const m = /^\s*(?:([a-z]+)\(\s*([a-z-]+)\s*\)|([a-z-]+))\s*(>=|<=|!=|=|>|<)\s*(.*)$/.exec(rest.slice(bar + 1));
+      if (m === null) throw new Error(`${kind}: expected <prop><op><value> (op = != > >= < <=), got ${JSON.stringify(rest.slice(bar + 1))}`);
+      const channel = m[1];
+      const property = m[2] ?? m[3] ?? "";
+      if (channel !== undefined && !(STYLE_CHANNELS as readonly string[]).includes(channel)) {
+        throw new Error(`${kind}: unknown channel ${JSON.stringify(channel)} (one of ${STYLE_CHANNELS.join(", ")})`);
+      }
+      if (!(STYLE_PROPERTIES as readonly string[]).includes(property)) {
+        throw new Error(`${kind}: property ${JSON.stringify(property)} is not allowlisted (one of ${STYLE_PROPERTIES.join(", ")})`);
+      }
+      out = {
+        kind: "style",
+        target,
+        property: property as StyleProperty,
+        ...(channel === undefined ? {} : { channel: channel as StyleChannel }),
+        op: m[4] as CompareOp,
+        value: (m[5] ?? "").trim(),
+      };
+      break;
+    }
+    case "inViewport": {
+      const [target, opts] = splitDescriptor(kind, rest, "<descriptor>[|min=<ratio>]", true);
+      out = { kind: "inViewport", target };
+      for (const pair of opts.split(",").filter((p) => p !== "")) {
+        const [k, v] = pair.split("=");
+        if (k !== "min") throw new Error(`inViewport: unknown option ${JSON.stringify(k)} (only min=<ratio>)`);
+        out = { ...out, min: specNumber(kind, "min", v) };
+      }
+      break;
+    }
+    case "box": {
+      const [target, opts] = splitDescriptor(kind, rest, "<descriptor>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n>");
+      const bounds: Record<string, number> = {};
+      for (const pair of opts.split(",").filter((p) => p !== "")) {
+        const [k, v] = pair.split("=");
+        if (k !== "minWidth" && k !== "maxWidth" && k !== "minHeight" && k !== "maxHeight") {
+          throw new Error(`box: unknown bound ${JSON.stringify(k)} (minWidth, maxWidth, minHeight, maxHeight)`);
+        }
+        bounds[k] = specNumber(kind, k, v);
+      }
+      if (Object.keys(bounds).length === 0) throw new Error("box needs at least one bound");
+      out = { kind: "box", target, ...bounds };
+      break;
+    }
+    case "overlaps":
+    case "noOverlap": {
+      const [target, other] = splitDescriptor(kind, rest, "<descriptor>|<descriptor2>");
+      out = { kind: "overlap", target, other: parseDescriptorSpec(other), overlapping: kind === "overlaps" };
+      break;
+    }
+    case "attr": {
+      const [target, spec] = splitDescriptor(kind, rest, "<descriptor>|<name>[=<value>] or <descriptor>|!<name>");
+      if (spec.startsWith("!")) out = { kind: "attr", target, name: spec.slice(1), absent: true };
+      else {
+        const eq = spec.indexOf("=");
+        out = eq === -1 ? { kind: "attr", target, name: spec } : { kind: "attr", target, name: spec.slice(0, eq), value: spec.slice(eq + 1) };
+      }
+      break;
+    }
+    case "flashed": {
+      const [target, opts] = splitDescriptor(kind, rest, "<descriptor>|class=<cls> (or attr=<name>, animation)[|withinMs=<n>]");
+      let f: Extract<Assertion, { kind: "flashed" }> = { kind: "flashed", target };
+      for (const part of opts.split("|").filter((p) => p !== "")) {
+        const eq = part.indexOf("=");
+        const k = eq === -1 ? part : part.slice(0, eq);
+        const v = eq === -1 ? "" : part.slice(eq + 1);
+        if (k === "class") f = { ...f, className: v };
+        else if (k === "attr") f = { ...f, attr: v };
+        else if (k === "animation" && eq === -1) f = { ...f, animation: true };
+        else if (k === "withinMs") f = { ...f, withinMs: specNumber(kind, "withinMs", v) };
+        else throw new Error(`flashed: unknown option ${JSON.stringify(part)} (class=<cls>, attr=<name>, animation, withinMs=<n>)`);
+      }
+      out = f;
+      break;
+    }
+    default:
+      throw new Error(`unsupported assertion kind ${JSON.stringify(kind)}`);
+  }
+  const parsed = AssertionSchema.safeParse(out);
+  if (!parsed.success) {
+    throw new Error(`invalid ${kind} spec: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+  return parsed.data;
 }
 
 const HTTP_METHOD = /^(?:[A-Za-z]+|\*)$/;

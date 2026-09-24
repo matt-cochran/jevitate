@@ -1,5 +1,5 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion, readAssertionText } from "@jevitate/interpreter";
+import { checkAssertion, installFlashRecorder, readAssertionEvidence, readAssertionText } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import { reloadPage } from "../act.js";
@@ -198,6 +198,11 @@ export async function runGoalBasedMission(
     throw new Error(`runGoalBasedMission: successWhen must be "held" or "final", got ${JSON.stringify(cfg.successWhen)}`);
   }
   const capture = needsNetwork ? monitorFor(page).startCapture() : null;
+  // A transient-state check (#148 `flashed`) needs the flash recorder BEFORE the triggering action:
+  // installed now, for every document the run loads.
+  if (checks.some((c) => (c.kind === "page" || c.kind === "reloadThen") && c.assertion.kind === "flashed")) {
+    await installFlashRecorder(page);
+  }
   try {
     return await adjudicated(cfg, checks, page, capture);
   } finally {
@@ -534,6 +539,13 @@ async function evaluateChecks(
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
+    // A visual-state check (#148) always says what it observed — the ratio, the computed values, the
+    // flash timing — pass or fail (bounded, redacted: it is page-derived).
+    const evidence = await readAssertionEvidence(actor, assertion).catch(() => null);
+    if (evidence !== null) {
+      const seen = redactText(evidence, cfg.secrets ?? []).slice(0, READ_TEXT_MAX_CHARS);
+      return { check: describeCheck(check), passed, detail: `${passed ? "held" : "did not hold"} ${when} (${seen})` };
+    }
     if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
     // #113 — a `textIncludes` mismatch is otherwise invisible ("did not hold" alone doesn't say
     // whether the text is wrong or just differently cased). What was actually read, bounded and
