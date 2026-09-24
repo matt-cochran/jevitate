@@ -27,6 +27,13 @@ export interface BuildReportOptions {
   readonly minConfidence?: number;
   /** Which quality grades are shown. Default `DEFAULT_QUALITY_POLICY` (actionable + relevant-minor). */
   readonly quality?: QualityPolicy;
+  /**
+   * What this analysis honestly could NOT see (#85), e.g. an offline `jevitate ux` run with no
+   * mission result/transcript to source blocked/disabled-target evidence from — the same evidence
+   * a live usability run sees via `Control.enabled`. Surfaced verbatim on the report, never
+   * silently omitted.
+   */
+  readonly evidenceCaveats?: readonly string[];
 }
 
 export interface UxReport {
@@ -52,6 +59,8 @@ export interface UxReport {
   /** Flagged per-screen occurrences before adjudication/dedupe/cutoff (volume accounting). */
   readonly rawOccurrences: number;
   readonly failed?: { readonly reason: string; readonly screenId?: string; readonly rubricItemId?: string };
+  /** What this analysis honestly could not see (see `BuildReportOptions.evidenceCaveats`). */
+  readonly evidenceCaveats?: readonly string[];
 }
 
 const SEVERITY_WEIGHT = { info: 1, minor: 2, major: 3 } as const;
@@ -90,6 +99,7 @@ function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
     "not-confirmed": 0,
     "below-min-confidence": 0,
     "quality-policy": 0,
+    "user-authored-content": 0,
   };
   const byRubricItem: Record<string, number> = {};
   const byRubricItemRoute: Record<string, number> = {};
@@ -120,6 +130,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
       suppressed: summarize([]),
       rawOccurrences: 0,
       failed: { reason: outcome.reason, screenId: outcome.screenId, rubricItemId: outcome.rubricItemId },
+      ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
     };
   }
 
@@ -158,7 +169,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
   }
   const ranked = kept.sort(compareRank);
   const suppressed = summarize([...(outcome.suppressed ?? []), ...below]);
-  const summary = `${coverageSummary(outcome.coverage)}; ${ranked.length} finding(s) at confidence ≥ ${minConfidence}; ${suppressed.total} suppressed (${Object.entries(
+  const summary = `${coverageSummary(outcome.coverage)}; ${ranked.length} finding(s) at finding-confidence ≥ ${minConfidence}; ${suppressed.total} suppressed (${Object.entries(
     suppressed.byReason,
   )
     .filter(([, n]) => n > 0)
@@ -169,8 +180,12 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     .sort((a, b) => b[1] - a[1])
     .map(([id, n]) => `${id} ${n}`)
     .join(", ");
+  // "finding-confidence" (not bare "confidence"): --min-confidence gates each finding's OWN
+  // confidence (violation/applicability/grounding), never its separate quality.confidence (the
+  // independent grader's confidence in the actionable/relevant-minor/... label) — the two read
+  // as one number if this says just "confidence" (issue #83 item 6).
   const headline =
-    `${ranked.length} finding(s) graded ${policy.show.join("/")} at confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
+    `${ranked.length} finding(s) graded ${policy.show.join("/")} at finding-confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
     (suppressed.total > 0 ? `; ${suppressed.total} suppressed (by rubric item: ${byItem})` : "; none suppressed");
   return {
     headline,
@@ -190,5 +205,6 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     qualityDistribution,
     suppressed,
     rawOccurrences: outcome.rawOccurrences ?? outcome.findings.length,
+    ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
   };
 }

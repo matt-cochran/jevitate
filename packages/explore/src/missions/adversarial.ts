@@ -47,6 +47,7 @@ import {
   type CoverageThresholds,
 } from "../adversarial/run-coverage.js";
 import { descriptorToLocator } from "@jevitate/recorder";
+import { seedRedirectReason } from "../seed-redirect.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -622,9 +623,28 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         message: seed.reason ?? "seed page did not render",
       });
     }
+    // The seed redirected to a login-like page — most often a lost/expired `--storage-state`
+    // session (#82). Checked BEFORE the general scope check below (which already catches ANY
+    // out-of-scope landing) so THIS specific, actionable cause gets its own reason; every other
+    // departure keeps the existing generic "left the target scope" message unchanged.
+    const redirect = seedRedirectReason(params.seedUrl, seed.snapshot.url);
+    if (redirect !== null && redirect.loginLike) {
+      transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "seed-load",
+        actOk: false,
+        reason: `${redirect.reason} (inconclusive)`,
+        snapshot: seed.snapshot,
+        timing: seed.timing,
+      });
+      return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
+    }
     if (!inScope(seed.snapshot.url)) {
-      // The start URL did not stay on the target (a redirect to a login page, another route): the
-      // run cannot test what it was asked to — it proves nothing, so it is never `clean`.
+      // The start URL did not stay on the target (another route, off-allowlist): the run cannot
+      // test what it was asked to — it proves nothing, so it is never `clean`.
       const message = `the start URL left the target scope (landed on ${redactUrl(seed.snapshot.url)})`;
       transcript.record({
         op: null,
@@ -725,8 +745,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         return;
       }
       if (s.op === "click") recorder.click(s.control.descriptor, at);
-      else if (s.op === "type") recorder.fill(s.control.descriptor, value ?? "", at);
-      else if (s.op === "select") recorder.select(s.control.descriptor, value ?? "", at);
+      else if (s.op === "type") {
+        // A password field's typed value is synthetic (never a real secret), but it is still kept
+        // out of the Recording — `{redacted:true}` with only its length, never the text itself.
+        const v = value ?? "";
+        recorder.fill(s.control.descriptor, s.redacted === true ? { redacted: true, length: v.length } : v, at);
+      } else if (s.op === "select") recorder.select(s.control.descriptor, value ?? "", at);
       else return;
       lastRecordedTarget = JSON.stringify(s.control.descriptor);
     };
@@ -854,6 +878,27 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 
       for (const s of episode.steps) {
         if (actions >= bounds.maxActions) break;
+        // A click on a control that is disabled RIGHT NOW is never attempted: it can never mutate
+        // anything, so it is a no-op, not an action — counted against no budget, and the episode
+        // moves on rather than spending its remaining steps (and the next loop turn's strategy pick)
+        // on a target that cannot be clicked. Checked live (not from the planning snapshot), because
+        // an earlier step in THIS episode may just have made it enabled (e.g. filling the last
+        // required field) — the same live truth `act()`'s own gate re-checks right before clicking.
+        if (s.op === "click" && s.control !== null && (await isDisabledNow(sessions.page, s.control))) {
+          transcript.record({
+            op: null,
+            control: s.control,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy,
+            actOk: false,
+            reason: joinReasons([s.note, "target disabled — no-op, choosing another action"]),
+            snapshot: stepSnap,
+            ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          });
+          stepTiming = undefined;
+          break;
+        }
         const at = now();
         const { result, value } = await execute(s);
         actions += 1;
@@ -877,6 +922,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           actOk: result.ok,
           snapshot: stepSnap,
           ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          ...(s.redacted === true ? { redacted: true } : {}),
         };
         stepTiming = undefined;
         const step = transcript.nextStep;
@@ -922,6 +968,22 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 function joinReasons(parts: ReadonlyArray<string | undefined>): string | undefined {
   const kept = parts.filter((p): p is string => p !== undefined && p !== "");
   return kept.length === 0 ? undefined : kept.join("; ");
+}
+
+/**
+ * A cheap, read-only LIVE check (never `act()`'s own gate — that one is a different agent's to
+ * change): resolves the control right now and reports whether it is currently disabled. False on
+ * anything else (not unique, detached, vanished) — that is `act()`'s gate's call to make, not
+ * this one's; this check only ever exists to SKIP an attempt it already knows is doomed.
+ */
+async function isDisabledNow(page: Page, control: Control): Promise<boolean> {
+  try {
+    const locator = descriptorToLocator(page, control.descriptor);
+    if ((await locator.count()) !== 1) return false;
+    return !(await locator.isEnabled());
+  } catch {
+    return false;
+  }
 }
 
 /** A native select's first enabled option other than the current one (null: none, or not a select). */

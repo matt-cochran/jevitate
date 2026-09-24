@@ -97,7 +97,7 @@ describe("buildReport", () => {
     expect(report.suppressed.byRubricItemRoute["minor-1 /route-minor-1"]).toBe(2);
     expect(report.suppressed.items.filter((i) => i.reason === "below-min-confidence").every((i) => i.confidence !== undefined)).toBe(true);
     expect(report.rawOccurrences).toBe(12);
-    expect(report.headline).toMatch(/^1 finding\(s\) graded actionable\/relevant-minor at confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/);
+    expect(report.headline).toMatch(/^1 finding\(s\) graded actionable\/relevant-minor at finding-confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/);
     expect(report.coverageSummary).toMatch(/3 suppressed/);
   });
 

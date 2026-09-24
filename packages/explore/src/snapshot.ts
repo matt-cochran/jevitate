@@ -54,6 +54,10 @@ export interface Control {
   readonly submits?: boolean;
   /** A link's resolved destination (`a[href]`), so a mission can tell where it leads without clicking. */
   readonly href?: string | null;
+  /** A checkbox/radio's checked state; `null`/absent for a control with no such state. */
+  readonly checked?: boolean | null;
+  /** The raw `aria-haspopup` value (e.g. `dialog`), or null — marks a control that discloses more UI. */
+  readonly ariaHasPopup?: string | null;
 }
 
 export interface Snapshot {
@@ -114,6 +118,8 @@ interface ControlFacts {
   readonly submits: boolean;
   /** A link's resolved `href`, or null. */
   readonly href: string | null;
+  /** The raw `aria-haspopup` attribute, or null — a disclosure signal (e.g. `dialog`). */
+  readonly ariaHasPopup: string | null;
 }
 
 /**
@@ -232,8 +238,26 @@ function readControlFacts(node: Node): ControlFacts {
   const submits =
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
   const href = tag === "a" ? (el as HTMLAnchorElement).href || null : null;
+  const ariaHasPopup = norm(el.getAttribute("aria-haspopup")).toLowerCase() || null;
 
-  return { tag, inputType, role, name, enabled, checked, autocomplete, valueBearing, visible, accept, options, selected, form, submits, href };
+  return {
+    tag,
+    inputType,
+    role,
+    name,
+    enabled,
+    checked,
+    autocomplete,
+    valueBearing,
+    visible,
+    accept,
+    options,
+    selected,
+    form,
+    submits,
+    href,
+    ariaHasPopup,
+  };
 }
 
 /** BROWSER CODE — reads a (non-secret, value-bearing) control's current value. */
@@ -337,6 +361,8 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         submits: facts.submits,
         // Only the path matters (scope checks); sensitive query values are masked like every URL.
         href: facts.href === null ? null : redactUrl(facts.href),
+        checked: facts.checked,
+        ariaHasPopup: facts.ariaHasPopup,
       });
       keptFacts.push(facts);
     } catch {

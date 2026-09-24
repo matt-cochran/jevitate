@@ -85,11 +85,20 @@ export class CoverageTracker {
     for (const f of detectForms(snapshot.controls, this.#inScope)) this.#forms.add(`${route}|${f.key}`);
   }
 
-  /** An action executed on the target page `url` (on `control`, when it had one). */
+  /**
+   * An action executed on the target page `url` (on `control`, when it had one). A control acted on
+   * successfully is always counted exercised — even one `observe()` never saw yet (e.g. it appeared
+   * mid-episode, after an earlier step in the SAME episode revealed it) — so `actionsOnTarget` and
+   * `controls.exercised` can never disagree about a control that really was acted on.
+   */
   acted(url: string, control: Control | null, submitsForm?: string): void {
     if (!this.#inScope(url)) return;
     this.#actions += 1;
-    if (control !== null) this.#exercised.add(controlKey(control));
+    if (control !== null) {
+      const key = controlKey(control);
+      this.#exercised.add(key);
+      if (isExercisable(control, this.#inScope)) this.#controls.add(key);
+    }
     if (submitsForm !== undefined) this.#submitted.add(`${routeOf(url)}|${submitsForm}`);
   }
 

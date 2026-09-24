@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
@@ -28,6 +28,9 @@ import {
   type StatusSpec,
   type SuccessCheck,
   type SuccessCheckResult,
+  type SuccessWhen,
+  type SecretField,
+  secretFieldSecrets,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -53,6 +56,7 @@ import {
 } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { readCliVersion } from "./version.js";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
@@ -76,11 +80,21 @@ export interface RunExplorationOptions {
   readonly successAssertion?: Assertion;
   /** More independent checks (`--success`, repeatable): page, reloadThen, requestMade, responseStatus. */
   readonly successChecks?: readonly SuccessCheck[];
+  /**
+   * When the page checks must hold (`--success-when`, #80): `final` (default) — on the final page;
+   * `held` — on the final page or together at any settled step. `reloadThen` is final-only.
+   */
+  readonly successWhen?: SuccessWhen;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /**
+   * Secret field bindings (CLI `--secret-field` / `--totp`, resolved from the environment): typed
+   * by code, never by the model; each value/seed is also a run secret (redacted everywhere).
+   */
+  readonly secretFields?: readonly SecretField[];
   /**
    * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
    * browser opens: a missing file throws `FixtureNotFoundError`.
@@ -98,6 +112,13 @@ export interface RunExplorationOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
@@ -123,10 +144,13 @@ function draftContext(
   journal: MissionJournal,
   secrets: readonly string[],
   browserVersion: string | undefined,
+  engine: EngineInfo,
 ): DraftContext {
   return {
     environment: currentEnvironment(origin, {
       jevitateVersion: readCliVersion(),
+      commit: engine.commit,
+      builtAt: engine.builtAt,
       ...(browserVersion === undefined ? {} : { browser: browserVersion }),
     }),
     recordingPath: journal.recordingPath,
@@ -149,6 +173,22 @@ function freshSessionOpener(
     const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [...allowlist]));
     return { page: session.page, actor, close: () => session.close() };
   };
+}
+
+/**
+ * Writes the browser context's live storageState (cookies + origin storage) to `file` when the
+ * caller asked for one (CLI `--save-storage-state`, #82) — so a rotating refresh token stays usable
+ * across runs instead of the `--storage-state` file it started from going stale on first use. The
+ * file holds live session credentials: written with mode 0600 (owner read/write only), and its
+ * contents are never logged. A no-op when `file` is undefined.
+ */
+async function persistStorageState(
+  session: { saveStorageState(file: string): Promise<void> },
+  file: string | undefined,
+): Promise<void> {
+  if (file === undefined) return;
+  await session.saveStorageState(file);
+  await chmod(file, 0o600);
 }
 
 function browserVersionOf(page: { context(): { browser(): { version(): string } | null } }): string | undefined {
@@ -199,6 +239,8 @@ export interface RunExplorationResult {
   readonly target: MissionTarget;
   /** The persisted typed result (`<recording>.result.json`). */
   readonly resultPath: string;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -206,6 +248,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well.
+  const bound = secretFieldSecrets(opts.secretFields);
+  const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -242,8 +287,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       startUrl: opts.url,
       ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
+      ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
       bounds: opts.bounds,
-      secrets: opts.secrets,
+      secrets,
+      ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       site: origin,
       fixture,
       ...conversationConfig(opts.conversation),
@@ -251,7 +298,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
     journal.writeRecording(mission.recording);
     journal.writeTranscript(mission.transcript);
-    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const engine = currentEngineInfo();
+    const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page), engine);
     const resultPath = resultPathFor(journal.recordingPath);
     const drafts: IssueDraft[] = [];
     if (mission.run.crash !== undefined) drafts.push(draftForCrash(mission.run.crash, mission.transcript, ctx));
@@ -294,6 +342,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording: mission.recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      engine,
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
     };
@@ -301,6 +350,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
     return result;
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -467,6 +517,13 @@ export interface RunCoverageMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
@@ -474,7 +531,7 @@ export interface RunCoverageMissionOptions {
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
@@ -492,6 +549,8 @@ export interface RunCoverageMissionResult {
   readonly recordingPaths: string[];
   /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -538,10 +597,19 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       recordingPaths.push(p);
     }
     journal.writeTranscript(result.transcript);
+    // A silent run that never proved anything (the seed redirected off-target, or the frontier
+    // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
+    // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
+    const bare = result.outcome === "crashed" ? "crashed" : result.outcome === "scope-unreachable" ? "inconclusive" : null;
+    const thin = bare === null && result.coverage.defects.length === 0 && !result.coverage.sufficiency.sufficient;
     const missionOutcome: MissionOutcome = combineOutcomes([
-      result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean",
+      bare ?? (thin ? "inconclusive" : result.coverage.defects.length > 0 ? "defects-found" : "clean"),
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
+    const coverageFailure: MissionFailure | undefined = thin
+      ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${result.coverage.sufficiency.shortfalls.join("; ")}` }
+      : undefined;
+    const failure = result.failure ?? coverageFailure;
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
@@ -557,12 +625,14 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       outcome: result.outcome,
       missionOutcome,
       exitCode,
-      ...(result.failure === undefined ? {} : { failure: result.failure }),
+      ...(failure === undefined ? {} : { failure }),
       recordingPaths,
       transcriptPath: journal.transcriptPath,
+      engine: currentEngineInfo(),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -591,6 +661,13 @@ export interface RunAdversarialCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
   /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
   readonly secrets?: readonly string[];
   /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
@@ -630,6 +707,8 @@ export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly transcriptPath: string;
   /** Process exit code for `outcome` (see `missionExitCode`). */
   readonly exitCode: number;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 };
 
 /**
@@ -685,7 +764,8 @@ export async function runAdversarialCliMission(
     journal.writeTranscript(outcome.transcript);
     const exitCode = missionExitCode(outcome.outcome);
     const resultPath = resultPathFor(journal.recordingPath);
-    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const engine = currentEngineInfo();
+    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page), engine);
     const drafts: IssueDraft[] = outcome.defects.map((d) =>
       draftForDefect(d, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${d.fingerprint}` }),
     );
@@ -713,9 +793,11 @@ export async function runAdversarialCliMission(
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      engine,
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -734,6 +816,8 @@ export interface RunFeatureCliMissionOptions {
   readonly capability: string;
   readonly routeGlobs: readonly string[];
   readonly headless?: boolean;
+  /** Step/action budget (CLI `--max-actions` / `--max-decisions`). */
+  readonly bounds?: Partial<Bounds>;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
@@ -744,12 +828,38 @@ export interface RunFeatureCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** Where the recordings, transcript and typed result are written. Default `~/.jevitate/recordings`. */
+  readonly outDir?: string;
+  /** ISO clock for output filenames. Default `Date.now()`. */
+  readonly nowIso?: () => string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
 }
 
-/** The feature mission's result plus its typed verdict and exit code. */
+/** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
 export type FeatureCliMissionResult = FeatureRunResult & {
+  /**
+   * `clean` only when the run actually exercised an in-scope, non-chrome
+   * control of the named capability (`coverage.inScopeActionsExercised > 0`).
+   * A run that touched nothing but global chrome and/or left `--route` scope
+   * on every attempt is `inconclusive` — never a fabricated `clean` (ticket
+   * #78's guardrail: a run that proved nothing is never `clean`).
+   */
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
+  /** One Recording per distinct discovered path (`feature-<stamp>-path-<n>.json`). */
+  readonly recordingPaths: string[];
+  /** The shared decision transcript (`feature-<stamp>.transcript.json`). */
+  readonly transcriptPath: string;
+  /** The persisted typed result (`feature-<stamp>.result.json`), readable via MCP `get_mission_result`. */
+  readonly resultPath: string;
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -766,6 +876,13 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await portFactory().open(launch);
+
+  // Persist recordings + transcript + a typed result, like the goal and
+  // coverage missions do (ticket #78 — previously nothing was written).
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const stamp = artifactStamp(iso);
+  const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -775,13 +892,52 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       seedUrl: opts.seedUrl,
       allowlist: opts.allowlist,
       scope,
+      bounds: opts.bounds,
+      onTranscriptEntry: journal.onTranscriptEntry,
     });
+
+    const recordingPaths: string[] = [];
+    for (let i = 0; i < result.recordings.length; i++) {
+      const p = join(outDir, `feature-${stamp}-path-${i}.json`);
+      await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
+      recordingPaths.push(p);
+    }
+    journal.writeTranscript(result.transcript);
+
+    // Honest outcome (ticket #78): a run that exercised nothing in-scope and
+    // non-chrome proved nothing about the named capability — `inconclusive`,
+    // never `clean`, whatever the loop's own stop reason was. Mirrors the
+    // adversarial mission's `insufficient-coverage` idiom.
+    const thin = result.outcome !== "crashed" && result.coverage.inScopeActionsExercised === 0;
+    const coverageFailure: MissionFailure | undefined = thin
+      ? {
+          kind: "insufficient-coverage",
+          message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${
+            opts.routeGlobs.join(", ") || "(none)"
+          }] — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
+        }
+      : undefined;
     const missionOutcome: MissionOutcome = combineOutcomes([
-      result.outcome === "crashed" ? "crashed" : "clean",
+      result.outcome === "crashed"
+        ? "crashed"
+        : result.outcome === "scope-unreachable" || thin
+          ? "inconclusive"
+          : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
-    return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
+    const exitCode = missionExitCode(missionOutcome);
+    const typed = {
+      ...result,
+      failure: result.failure ?? coverageFailure,
+      missionOutcome,
+      exitCode,
+      recordingPaths,
+      transcriptPath: journal.transcriptPath,
+      engine: currentEngineInfo(),
+    };
+    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -857,13 +1013,23 @@ export function parseAssertionSpec(spec: string): Assertion {
 
 const HTTP_METHOD = /^(?:[A-Za-z]+|\*)$/;
 
-/** `<METHOD> <path-glob>` — the request half of a network check. */
+/**
+ * `<METHOD> <path-glob>` — the request half of a network check. Two distinct
+ * failure modes get two distinct messages: a missing/malformed method (or no
+ * space at all) doesn't match the shape at all, while a present-but-unrooted
+ * path glob is the far more common mistake (issue #83) and deserves to say
+ * exactly what's wrong instead of re-printing the whole shape as if nothing
+ * was recognized.
+ */
 function parseRequestSpec(kind: string, text: string): { method: string; pathGlob: string } {
   const sp = text.indexOf(" ");
   const method = sp === -1 ? "" : text.slice(0, sp);
   const pathGlob = sp === -1 ? "" : text.slice(sp + 1).trim();
-  if (!HTTP_METHOD.test(method) || !pathGlob.startsWith("/")) {
+  if (!HTTP_METHOD.test(method) || pathGlob.length === 0) {
     throw new Error(`${kind} requires "<METHOD> <path-glob>", e.g. ${kind}:PUT /api/profile/*`);
+  }
+  if (!pathGlob.startsWith("/")) {
+    throw new Error(`${kind}: path glob must start with "/" (got ${JSON.stringify(pathGlob)})`);
   }
   return { method: method.toUpperCase(), pathGlob };
 }

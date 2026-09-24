@@ -65,6 +65,19 @@ jevitate --help                                       # everything else
 Autonomous runs are always bounded and restricted to origins you authorize;
 credentials are never sent to a model. See [SECURITY.md](./SECURITY.md).
 
+### Build identity
+
+`jevitate --version` prints the published version, plus the commit and build time whenever
+the build could determine them (`0.1.0 (commit d63c55b, built 2026-09-24T04:11:32.000Z)`) — a
+plain version number alone doesn't change between rebuilds of an `npm link`ed working tree, so
+two results from different builds in one dogfooding session were otherwise indistinguishable.
+When they can't be determined (no `.git`, `git` unavailable), the field reads `unknown` —
+never a fabricated commit or time.
+
+The same `{version, commit, builtAt}` (as `engine`) is on every mission's result — the
+persisted `*.result.json`, the `--json` envelope, and every issue draft's `## Environment`
+section — so a result on disk always says which build produced it.
+
 ### Mission outcomes and exit codes
 
 A mission never answers with a crash: every run ends in a typed outcome, and its
@@ -89,11 +102,87 @@ one carries its reproduction: the transcript steps that led to it and the
 Recording step to replay up to. To check a fix, replay the defect:
 
 ```bash
-jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp>
-# exit 0 fixed (signal absent) · 1 still reproduces · 2 inconclusive (replay could not reach the step)
+jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp> --replays 3
+# exit 0 fixed (signal absent on every replay) · 1 still reproduces · 2 inconclusive (replay could
+# not reach the step) · 4 intermittent (fired on some but not all replays — never reported as fixed)
 ```
 
-The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
+A single clean replay is not evidence of a fix (#74): an intermittent signal can simply not fire
+once. `verify-fix` replays the defect's repro `--replays` times (default 3), each in a fresh
+session; only absence across EVERY replay that reached the defect's step is `fixed`.
+
+The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same, always with the default replay count.
+
+#### Every `outcome`, `stop` and `missionOutcome` value
+
+The table above is the canonical `MissionOutcome` — every mission's typed verdict and the
+process exit code it maps to (`missionExitCode()`, `packages/domain/src/mission-outcome.ts`).
+Every mission's result also carries a `missionOutcome: MissionOutcome` (and `exitCode`) field —
+the canonical, exit-coded verdict from that table — so a caller that only cares "did this run
+prove something clean, or not" never needs to interpret a mission-specific `outcome`/`stop`
+below. Those mission-specific fields exist for diagnosis: why the run stopped, in that mission's
+own terms.
+
+**Goal mission (`--goal`) — its own `outcome: GoalBasedOutcome`, with its own exit codes
+(`goalExitCode()`, `packages/cli/src/mission-exit.ts`) instead of the generic table above:**
+
+| `outcome` | Exit code | Meaning |
+|---|---|---|
+| `succeeded` | 0 | the success assertion held |
+| `exhausted` | 1 | the action/decision budget ran out before the assertion held |
+| `blocked` | 1 | the model decided it could not proceed (e.g. no matching control) |
+| `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) |
+| `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
+| `hang` | 3 | the app under test hung, and it reproduced on replay |
+| `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+
+**Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
+the `outcome` above; not separately exit-coded):
+
+| `stop` | Meaning |
+|---|---|
+| `done` | the model decided the goal was complete |
+| `blocked` | the model decided it could not proceed |
+| `exhausted` | the action or decision budget ran out |
+| `no-progress` | the same state repeated with no forward movement (the no-progress detector) |
+| `hang` | the app under test hung |
+| `inconclusive` | a required decision round-trip stayed unavailable |
+| `crashed` | the engine failed |
+
+**Adversarial mission (`--strategy adversarial`) — `stop: AdversarialStop`**, why the hunt
+ended (its own top-level `outcome` is already the canonical `MissionOutcome` from the table
+above, so it needs no separate exit-code mapping):
+
+| `stop` | Meaning |
+|---|---|
+| `step-budget` | the max-actions budget ran out |
+| `action-budget` | the max-decisions budget ran out |
+| `time-budget` | the mission's time budget ran out |
+| `strategies-exhausted` | every misuse strategy was tried with nothing left to do |
+| `not-rendered` | the target page never rendered |
+| `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
+| `hang` | the app under test hung |
+| `crashed` | the engine failed |
+
+**Coverage mission (`--strategy coverage`) — its own `outcome`**, before it's folded into
+`missionOutcome`:
+
+| `outcome` | Meaning |
+|---|---|
+| `exhausted` | the state frontier was fully explored |
+| `cap` | the action budget ran out before the frontier was exhausted |
+| `crashed` | the engine failed |
+| `hang` | stopped at a hang it could not reset from |
+
+**Feature mission (`--feature`) — its own `outcome`**, same idea plus its own path cap:
+
+| `outcome` | Meaning |
+|---|---|
+| `exhausted` | the state frontier was fully explored |
+| `cap` | the action budget ran out |
+| `path-cap` | the max-discovered-paths budget ran out |
+| `crashed` | the engine failed |
+| `hang` | stopped at a hang it could not reset from |
 
 ### Success checks (goal mission)
 
@@ -117,7 +206,9 @@ In these specs:
   (`[data-testid=x]` is read as the test id).
 - The last `|` separates the descriptor from the text or value.
 - Path globs match the request path: `*` within one segment, `**` across segments.
-  A method of `*` matches any method.
+  A method of `*` matches any method. **The glob must start with `/`** (it matches the
+  request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
+  `path glob must start with "/" (got "*/Foo")`, not the generic shape error.
 - Network checks look only at the requests the run itself made. The reload that
   `reloadThen` performs is not counted.
 - The goal loop can also choose a `reload` step itself.
@@ -130,6 +221,40 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'requestMade:PUT /api/profile' --success 'responseStatus:PUT /api/profile=2xx' \
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
+
+### Authenticated missions
+
+`--secret <value>` **only redacts**: the value is kept out of every model call,
+transcript, Recording and issue draft, but it is never typed into a field.
+
+- **Start logged in (preferred).** Save a Playwright storageState once, for example
+  with `npx playwright codegen --save-storage=auth.json https://app.example.test/login`,
+  and pass `--storage-state auth.json`. The file holds live session cookies and
+  localStorage. It goes only to the browser, and artifacts record its path, never
+  its contents. `jevitate record` does not write a storageState.
+- **Rotating refresh tokens.** When the app rotates its refresh token on every use,
+  a saved state goes stale after the first run that refreshes it. Save a fresh state
+  before each mission (or each CI job), and do not share one file between parallel runs.
+- **Driving a login or signup form.** Bind a field to an environment variable, and
+  code types the value itself. The model only ever sees `«secret:VAR»`, and the
+  Recording records the fill as `{ redacted: true }`:
+
+  ```bash
+  APP_PASSWORD=… jevitate explore --url https://app.example.test/login \
+    --goal "log in as ada@example.com with the bound password" \
+    --secret-field 'label=Password=env:APP_PASSWORD' --success 'visible:testId=dashboard'
+  ```
+
+  A descriptor is `label=<text>`, `testId=<id>`, `type=<input type>` (for example
+  `type=password`), `id=<element id>` or `name=<name attribute>`.
+- **MFA (TOTP).** `--totp '<descriptor>=env:VAR'` takes a base32 TOTP seed (what
+  the app shows at enrolment). The 6-digit code is computed locally (RFC 6238,
+  SHA-1, 30 s) when the field is typed. The seed never reaches a model or disk.
+  For an app that forces enrolment on signup, a storageState saved after
+  enrolment avoids the flow entirely.
+
+The bound value and the seed are registered as run secrets, so the existing
+redaction seams scrub them everywhere.
 
 ### Adversarial scope, form misuse and coverage
 

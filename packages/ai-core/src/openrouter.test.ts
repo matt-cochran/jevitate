@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { OpenRouterGenerationGateway, envCredentialStore, MissingCredentialError, CredentialLeakError, openRouterProviderSettings, type OpenRouterCall } from "./index.js";
+import { OpenRouterGenerationGateway, envCredentialStore, MissingCredentialError, CredentialLeakError, FORM_VALUE_INSTRUCTIONS, openRouterProviderSettings, type OpenRouterCall } from "./index.js";
 
 const catalog = [{ id: "b/cheap-us", promptUsdPer1k: 0.1, completionUsdPer1k: 0.1, regions: ["US"], latencyClass: "fast" as const, capabilities: [] }];
 const constraints = { requireRegion: "US", maxPromptUsdPer1k: 1, requiredCapabilities: [] };
@@ -23,6 +23,19 @@ it("sends no key in the body, puts it only in the auth header, and records prove
   expect(res.output).toEqual({ text: "hi" });
   expect(res.provenance.model).toBe("b/cheap-us");
   expect(JSON.stringify(res.provenance)).not.toContain("sk-or-SECRET");
+});
+
+it("form.value carries the field-scoped instructions in the prompt body (promptVersion 3, #71)", async () => {
+  const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-SECRET" }, {});
+  let body: unknown;
+  const call: OpenRouterCall = async (args) => {
+    body = args.body;
+    return { object: { text: "ada@example.com" }, latencyMs: 1 };
+  };
+  const g = new OpenRouterGenerationGateway({ store, catalog, constraints, call });
+  const res = await g.generate("form.value", input);
+  expect(body).toMatchObject({ task: "form.value", promptVersion: "3", input: { instructions: FORM_VALUE_INSTRUCTIONS } });
+  expect(res.provenance.promptVersion).toBe("3");
 });
 
 it("throws when the model's returned object fails the task schema", async () => {
