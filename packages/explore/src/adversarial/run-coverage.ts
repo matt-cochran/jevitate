@@ -45,6 +45,14 @@ export interface StrategyCoverage {
 }
 
 export interface AdversarialCoverage {
+  /**
+   * `total` is deliberately NOT the raw count of controls a snapshot saw (`transcript[i].controlCount`,
+   * or the DOM's own interactive-element count) — it is the count of DISTINCT EXERCISABLE target
+   * controls observed across the run (`isExercisable`: enabled; not secret, file or session-ending;
+   * not a link out of scope), on in-scope pages only. A page can show far more raw controls than
+   * this (hidden/duplicated across steps, disabled, secret-like, out-of-scope links) — this ratio is
+   * never expected to equal a single step's `controlCount` (#121).
+   */
   readonly controls: { readonly total: number; readonly exercised: number; readonly ratio: number };
   readonly forms: { readonly found: number; readonly submitted: number };
   /** Actions executed on the target (any op). */
