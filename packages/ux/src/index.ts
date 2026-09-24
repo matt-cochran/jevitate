@@ -12,6 +12,7 @@ export * from "./recommend.js";
 export * from "./a11y.js";
 export * from "./report.js";
 export * from "./confidence.js";
+export * from "./calibration.js";
 export * from "./adjudicate.js";
 export * from "./specifics.js";
 export * from "./route.js";

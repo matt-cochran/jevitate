@@ -1,16 +1,24 @@
 #!/usr/bin/env node
-// grader-eval.mjs — validate the quality grader against HUMAN labels before trusting it.
+// grader-eval.mjs — validate the quality grader against HUMAN (or model) labels before trusting
+// it. See README.md for the corpus/labels directory format.
 //   legacy: the dogfood calibration CSV (pre-fix findings: rubric item × route, no observation),
 //           graded against the captured screen for that route + the journey's job.
-//   hand:   hand-labeled new findings (labels/<app>.json: [{key,label,note}]) vs the grader
-//           label recorded on the same finding in a run result.
+//   hand:   hand-labeled new findings vs the grader label recorded on the same finding in a run
+//           result, over a MULTI-APP labels directory, one subdirectory per app:
+//             labelsDir/<app>/<rater>.json   — 2+ files ⇒ inter-rater kappa is also reported
+//             labelsDir/<app>.json           — legacy flat single-rater file (still supported)
+//           Each rater file is `[{key, label, note}]` (issue #97: multiple rater label sets per
+//           finding, human or model). Reports, per app: inter-rater agreement (Cohen's kappa for
+//           2 raters, Fleiss' kappa for 3+), grader-vs-each-rater agreement, and the grader's
+//           "shown" (actionable/relevant-minor) precision/recall against the rater labels — plus
+//           the same rolled up across all apps.
 // Usage:
 //   node grader-eval.mjs legacy <corpus.json> <legacy-labels.json> [--repeat 1]
 //   node grader-eval.mjs hand <resultsDir> <tag> <labelsDir>
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { gradeCandidates, loadV1Rubric, redactEvidence } from "@jevitate/ux";
-import { agreement, f2, findingKey, LABELS, pct } from "./stats.mjs";
+import { agreement, f2, findingKey, interRaterAgreement, LABELS, pct, precisionRecall } from "./stats.mjs";
 
 const [mode, ...rest] = process.argv.slice(2);
 
@@ -21,6 +29,24 @@ function printAgreement(title, pairs) {
   console.log(`\n| human \\ grader | ${LABELS.join(" | ")} |\n|---|${LABELS.map(() => "---").join("|")}|`);
   for (const t of LABELS) console.log(`| ${t} | ${LABELS.map((p) => a.confusion[t][p]).join(" | ")} |`);
   return a;
+}
+
+/**
+ * PURE per-app evaluation (issue #97): given `raterSets` (`[{name, labels: [{key,label}]}, …]`,
+ * one or more raters loaded from `labels/<app>/*.json` or a legacy flat `labels/<app>.json`) and
+ * `graded` (`Map<findingKey, gradeLabel>`, the grader's own labels for that app/tag's run
+ * results), returns inter-rater agreement (when 2+ raters), grader-vs-each-rater agreement, and
+ * the grader's "shown" precision/recall against ALL rater labels pooled. No I/O — exported so the
+ * multi-app/multi-rater machinery is unit-testable without live gateways or a results directory.
+ */
+export function evaluateHandApp(app, raterSets, graded) {
+  const interRater = raterSets.length >= 2 ? interRaterAgreement(raterSets) : null;
+  const perRater = raterSets.map((rs) => {
+    const pairs = rs.labels.filter((l) => graded.has(l.key)).map((l) => ({ truth: l.label, pred: graded.get(l.key), id: l.key }));
+    return { name: rs.name, pairs, agreement: agreement(pairs) };
+  });
+  const pairs = perRater.flatMap((r) => r.pairs);
+  return { app, interRater, perRater, pairs, precisionRecall: precisionRecall(pairs) };
 }
 
 if (mode === "legacy") {
@@ -66,19 +92,48 @@ if (mode === "legacy") {
 } else if (mode === "hand") {
   const [resultsDir, tag, labelsDir] = rest;
   const files = (await readdir(resultsDir)).filter((f) => f.startsWith(`${tag}--`));
-  const labelFiles = (await readdir(labelsDir)).filter((f) => f.endsWith(".json"));
-  const all = [];
-  for (const lf of labelFiles) {
-    const app = lf.replace(/\.json$/, "");
-    const labels = JSON.parse(await readFile(join(labelsDir, lf), "utf8"));
+  const entries = await readdir(labelsDir, { withFileTypes: true });
+  const allPairs = [];
+  const perApp = [];
+  for (const entry of entries) {
+    let app, raterSets;
+    if (entry.isDirectory()) {
+      // Multi-app layout: labelsDir/<app>/<rater>.json, one or more raters per app.
+      app = entry.name;
+      const raterFiles = (await readdir(join(labelsDir, app))).filter((f) => f.endsWith(".json"));
+      raterSets = await Promise.all(
+        raterFiles.map(async (rf) => ({ name: rf.replace(/\.json$/, ""), labels: JSON.parse(await readFile(join(labelsDir, app, rf), "utf8")) })),
+      );
+    } else if (entry.name.endsWith(".json")) {
+      // Legacy flat layout: labelsDir/<app>.json, a single implicit rater.
+      app = entry.name.replace(/\.json$/, "");
+      raterSets = [{ name: "rater1", labels: JSON.parse(await readFile(join(labelsDir, entry.name), "utf8")) }];
+    } else {
+      continue;
+    }
     const graded = new Map();
     for (const f of files.filter((x) => x.split("--")[1] === app)) {
       const r = JSON.parse(await readFile(join(resultsDir, f), "utf8"));
       for (const x of r.report.findings) if (x.quality && !graded.has(findingKey(x))) graded.set(findingKey(x), x.quality.label);
     }
-    const pairs = labels.filter((l) => graded.has(l.key)).map((l) => ({ truth: l.label, pred: graded.get(l.key), id: l.key }));
-    all.push(...pairs);
-    printAgreement(`Grader vs hand labels — ${app}`, pairs);
+
+    console.log(`\n## ${app}`);
+    const evalApp = evaluateHandApp(app, raterSets, graded);
+    if (evalApp.interRater) {
+      const ia = evalApp.interRater;
+      console.log(`\nInter-rater agreement (${ia.method === "fleiss" ? "Fleiss'" : "Cohen's"} kappa, n=${ia.n} common finding(s), raters: ${ia.raters.join(", ")}): κ ${f2(ia.kappa)}`);
+      for (const p of ia.pairwise) console.log(`  ${p.a} vs ${p.b} (n=${p.n}): κ ${f2(p.kappa)}`);
+    } else {
+      console.log(`\nInter-rater agreement: only 1 rater set for ${app} — add labels/${app}/<rater2>.json (human or model) to compute kappa (issue #97).`);
+    }
+
+    for (const r of evalApp.perRater) printAgreement(`Grader vs ${r.name} — ${app}`, r.pairs);
+    const pr = evalApp.precisionRecall;
+    console.log(`\nGrader "shown" (actionable/relevant-minor) precision ${pct(pr.precision)}, recall ${pct(pr.recall)}, F1 ${f2(pr.f1)} (n=${pr.n}, tp=${pr.tp} fp=${pr.fp} fn=${pr.fn} tn=${pr.tn})`);
+    perApp.push({ app, pr });
+    allPairs.push(...evalApp.pairs);
   }
-  printAgreement("Grader vs hand labels — all apps", all);
+  printAgreement("Grader vs hand labels — all apps", allPairs);
+  console.log(`\nPer-app precision/recall of the grader's "shown" decision:\n| app | n | precision | recall | F1 |\n|---|---|---|---|---|`);
+  for (const { app, pr } of perApp) console.log(`| ${app} | ${pr.n} | ${pct(pr.precision)} | ${pct(pr.recall)} | ${f2(pr.f1)} |`);
 }
