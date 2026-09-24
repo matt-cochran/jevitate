@@ -73,6 +73,8 @@ export interface RunRecord {
   readonly missionOutcome?: string;
   readonly exitCode?: number;
   readonly observations: readonly FindingObservation[];
+  /** The run's persisted model `usage` object (#163), as written — summed by `jevitate report`. */
+  readonly usage?: Readonly<Record<string, unknown>>;
 }
 
 type Json = Record<string, unknown>;
@@ -462,6 +464,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(engine === undefined ? {} : { engine }),
     ...(str(result.targetBuild) === undefined ? {} : { targetBuild: str(result.targetBuild) }),
+    ...(isRecord(result.usage) ? { usage: result.usage } : {}),
   };
 }
 

@@ -1,5 +1,5 @@
 // judgment.ts — typed DRIVING decisions (Jev shape: Choice / Noul / Score)
-import type { UsageSink } from "./usage.js";
+import { FAKE_CALL_USAGE, type UsageSink } from "./usage.js";
 export interface ChoiceQuestion<T extends string> {
   kind: "choice";
   options: readonly T[];
@@ -48,7 +48,7 @@ export class FakeJudgmentGateway implements JudgmentPort {
       if (!a) throw new Error(`no scripted answer for question '${name}'`);
       out[name] = a;
     }
-    this.usage?.recordJudgment({ inputTokens: 0, outputTokens: 0 });
+    this.usage?.recordJudgment(FAKE_CALL_USAGE);
     return out;
   }
 }

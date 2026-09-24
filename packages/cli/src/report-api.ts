@@ -12,6 +12,7 @@ import {
   type FindingsDiff,
   type RunRecord,
 } from "@jevitate/findings";
+import { formatUsageLine, sumUsage, usageCountsFrom, type UsageAggregate } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
@@ -320,6 +321,11 @@ export interface ReportResult {
   readonly runs: readonly RunSummary[];
   readonly defects: readonly ConsolidatedDefect[];
   readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number };
+  /**
+   * Model usage summed over the reported runs (#163). Runs whose result carries no `usage` (they made
+   * no model call, or predate usage accounting) are counted in `unreportedRuns`, not priced.
+   */
+  readonly usage: UsageAggregate;
   readonly diff?: FindingsDiff;
   readonly baselineRuns?: readonly RunSummary[];
   readonly markdown: string;
@@ -359,12 +365,14 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     baselineRuns = resolveBaseline(opts.baseline, runs, { ...ctx, pool: scanRuns(dirs) });
     diff = diffRuns(baselineRuns, runs);
   }
-  const markdown = renderReportMarkdown({
-    title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}`,
-    runs,
-    defects,
-    ...(diff === undefined ? {} : { diff }),
-  });
+  const usage = usageOfRuns(runs);
+  const markdown =
+    renderReportMarkdown({
+      title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}`,
+      runs,
+      defects,
+      ...(diff === undefined ? {} : { diff }),
+    }) + usageMarkdown(usage);
   return {
     ...(targetLabel === undefined ? {} : { target: targetLabel }),
     ...(since === undefined ? {} : { since }),
@@ -375,10 +383,26 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
       advisory: defects.filter((d) => d.severity === "advisory").length,
       runs: runs.length,
     },
+    usage,
     ...(diff === undefined ? {} : { diff }),
     ...(baselineRuns === undefined ? {} : { baselineRuns: baselineRuns.map(summarizeRun) }),
     markdown,
   };
+}
+
+/** Sums the runs' persisted usage (#163). */
+export function usageOfRuns(runs: readonly RunRecord[]): UsageAggregate {
+  return sumUsage(
+    runs.map((r) => usageCountsFrom(r.usage)),
+    { unreported: "ignore" },
+  );
+}
+
+/** The report's cost section: the full total, flagged when partial. */
+export function usageMarkdown(u: UsageAggregate): string {
+  if (u.judgments + u.generations === 0) return "";
+  const unreported = u.unreportedRuns === undefined ? "" : ` (${u.unreportedRuns} run(s) carried no usage)`;
+  return `\n## Model cost\n\n${formatUsageLine(u)} over ${u.runs} run(s)${unreported}\n`;
 }
 
 /** `jevitate diff <runA> <runB>`: A is the baseline side, B the current side. */

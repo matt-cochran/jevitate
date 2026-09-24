@@ -73,7 +73,7 @@ import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
-import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult } from "./mission-journal.js";
+import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -392,6 +392,8 @@ const NO_TRANSCRIPT_CAVEAT =
  * a fabricated "clean" report.
  */
 export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReviewResult> {
+  // #163: this review's own share of a (possibly shared) tracker.
+  const runUsage = opts.usage?.scope();
   const minConfidence = resolveMinConfidence(
     opts.minConfidence,
     opts.env ?? process.env,
@@ -444,7 +446,8 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  return { report, reportPath, ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }) };
+  if (runUsage !== undefined) writeUsageSidecar(reportPath, runUsage);
+  return { report, reportPath, ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }) };
 }
 
 /** #134: the artifacts a run writes next to its Recording (`<stem>.recording.json`). */
@@ -775,11 +778,13 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
   // Recording — so the killed run's result names the real file, and reports the live step list,
   // the tokens spent so far and the screens already observed.
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
     partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
   });
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
@@ -997,7 +1002,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
       // always advisory, and a `server-log` defect here is treated the same way.
@@ -1018,7 +1023,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
       // Persisted like every other mission's typed result, so MCP `get_mission_result` can read it (#117).
-      return { ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable) };
+      return { ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable, runUsage) };
     }
     const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
@@ -1027,7 +1032,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
-    return { ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed) };
+    return { ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed, runUsage) };
   } finally {
     capture.detach();
     disarmKillSwitch();

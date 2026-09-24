@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { GenerationPort, JudgmentPort, UsageCounts, UsageTracker } from "@jevitate/ai-core";
+import { aggregateOf, formatUsageLine, type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageCounts, type UsageTracker } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import type { InvariantSpec } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
@@ -206,6 +206,12 @@ export interface CheckResult {
   readonly targetBuild?: string;
   readonly startedAt: string;
   readonly budget: BudgetReport;
+  /**
+   * Model usage summed over every item that ran (#163): calls, tokens, `jevUsd` + `generationUsd` =
+   * `totalUsd`, and `priced` (a `partial` total fails a `maxUsd` budget closed). Absent when no item
+   * needed a model gateway.
+   */
+  readonly usage?: UsageAggregate;
   readonly items: readonly CheckItemReport[];
   readonly findings: readonly CheckFinding[];
   readonly summary: {
@@ -226,6 +232,12 @@ export interface CheckResult {
 }
 
 // ── budget ───────────────────────────────────────────────────────────────────
+
+/** Why a spend is not measurable: what could not be priced. */
+function unmeasurable(usage: UsageCounts | undefined): string {
+  const missing = usage?.missing ?? [];
+  return `${usage?.priced === "none" ? "unpriced" : "only partially priced"}${missing.length === 0 ? "" : ` — missing: ${missing.join("; ")}`}`;
+}
 
 /** The suite's total budget. Exceeding any limit fails the check (fail closed). */
 export class BudgetMeter {
@@ -256,10 +268,15 @@ export class BudgetMeter {
     return (this.#now() - this.#start) / 60_000;
   }
 
-  /** The spend so far: 0 for fake gateways, the provider's reported cost, or undefined (not measurable). */
+  /**
+   * The spend so far: 0 when no model call was made (or the gateways are fakes), the FULL total
+   * (Jev + generation, #163) when every call was priced, else undefined — a partial total is not a
+   * measurable spend, so a `maxUsd` budget fails closed on it rather than passing on an undercount.
+   */
   usd(usage: UsageCounts | undefined): number | undefined {
-    if (usage === undefined || this.#costKnownZero || usage.judgments + usage.generations === 0) return usage?.usd ?? 0;
-    return usage.usd;
+    if (usage === undefined || usage.judgments + usage.generations === 0) return 0;
+    if (this.#costKnownZero) return usage.totalUsd ?? 0;
+    return usage.priced === "full" ? (usage.totalUsd ?? 0) : undefined;
   }
 
   /** Records an item's actions and re-checks every limit. Returns why the budget is now exceeded, if it is. */
@@ -274,7 +291,7 @@ export class BudgetMeter {
     }
     if (this.#exceeded === undefined && l.maxUsd !== undefined) {
       const usd = this.usd(usage);
-      if (usd === undefined) this.#exceeded = "usd budget set but the provider reported no cost for the model calls made (spend not measurable)";
+      if (usd === undefined) this.#exceeded = `usd budget set but the model spend is ${unmeasurable(usage)} (spend not measurable)`;
       else if (usd > l.maxUsd) this.#exceeded = `usd budget exceeded: $${usd.toFixed(4)} > $${l.maxUsd}`;
     }
     return this.#exceeded;
@@ -288,7 +305,7 @@ export class BudgetMeter {
     if (l.maxMinutes !== undefined && this.minutes() >= l.maxMinutes) return `time budget exhausted: ${l.maxMinutes} min`;
     if (l.maxUsd !== undefined) {
       const usd = this.usd(usage);
-      if (usd === undefined) return "usd budget set but spend is not measurable";
+      if (usd === undefined) return `usd budget set but the model spend is ${unmeasurable(usage)} (spend not measurable)`;
       if (usd >= l.maxUsd) return `usd budget exhausted: $${usd.toFixed(4)}/$${l.maxUsd}`;
     }
     return undefined;
@@ -912,6 +929,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       ...(d.reproduce === undefined ? {} : { reproduce: d.reproduce }),
     };
   });
+  const finalUsage = await usage();
+  const suiteUsage = finalUsage === undefined ? undefined : aggregateOf(finalUsage, executed.filter((e) => e.ex !== undefined).length);
   const result: CheckResult = {
     kind: "jevitate-check",
     suite: opts.suite.name,
@@ -921,7 +940,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     startedAt,
-    budget: meter.report(await usage(), exceeded),
+    budget: meter.report(finalUsage, exceeded),
+    ...(suiteUsage === undefined ? {} : { usage: suiteUsage }),
     items: itemReports,
     findings,
     summary: {
@@ -952,7 +972,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,
-    renderReportMarkdown({ title: `jevitate check: ${opts.suite.name} — ${result.verdict}`, runs, defects, ...(diff === undefined ? {} : { diff }) }),
+    renderReportMarkdown({ title: `jevitate check: ${opts.suite.name} — ${result.verdict}`, runs, defects, ...(diff === undefined ? {} : { diff }) }) +
+      (suiteUsage === undefined ? "" : `\n## Model cost\n\n${formatUsageLine(suiteUsage)}\n`),
     "utf8",
   );
   await writeFile(jsonPath, `${JSON.stringify({ v: 1, ok: true, data: result }, null, 2)}\n`, "utf8");
