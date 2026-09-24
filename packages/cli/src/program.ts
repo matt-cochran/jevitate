@@ -1545,12 +1545,20 @@ export function buildProgram(deps: CliDeps): Command {
             issueFiler,
             ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
             strategies: [
+              // Form-aware misuse around submitting (#64): most app pages are forms.
+              "double-submit",
+              "boundary-submit",
+              "edit-cancel-save",
+              "navigate-away-unsaved",
+              "act-while-pending",
+              // Coverage: act on every target control once.
+              "exercise-controls",
               "ordering-violation",
               "repeat-rapid",
               "boundary-input",
               "contradictory-actions",
               "nav-during-pending",
-              // Keep hunting on other routes after (and between) defects.
+              // Keep hunting on other routes (within the target's scope) after and between defects.
               "visit-route",
             ],
             judgment: advJudge,
