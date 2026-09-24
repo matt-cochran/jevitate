@@ -1,6 +1,7 @@
 import type { Assertion, TargetDescriptor } from "@jevitate/recording";
 import { matchGlob } from "./feature/capability-scope.js";
 import type { CapturedRequest } from "./page-monitor.js";
+import { classifyRequest } from "./timing.js";
 
 /**
  * The goal mission's INDEPENDENT success oracle (#65): one or more checks, ALL of which must hold.
@@ -95,6 +96,68 @@ function matching(requests: readonly CapturedRequest[], method: string, pathGlob
 }
 
 /**
+ * Requests worth counting/searching for a network check (#130c): the app's own traffic (API,
+ * document, or an otherwise-unclassified XHR/fetch) — never a static asset (script/style/font/image)
+ * or a dev server's module request (Vite's `/src/…`, `/@vite/…`, `/node_modules/…`). A run against a
+ * live dev server captures thousands of these; they would drown out both the "N requests captured"
+ * count and the near-miss search below.
+ */
+function relevant(requests: readonly CapturedRequest[]): CapturedRequest[] {
+  return requests.filter(
+    (r) => classifyRequest({ url: r.url, resourceType: r.resourceType ?? "", contentType: r.contentType ?? null }) !== "asset",
+  );
+}
+
+/** One path split into its non-empty segments. */
+function segments(path: string): string[] {
+  return path.split("/").filter((s) => s.length > 0);
+}
+
+/**
+ * Is `path` close enough to the literal shape of `pathGlob` to be the same endpoint, typo'd? Same
+ * segment count, and at most one segment differs (a wildcard segment always matches).
+ */
+function similarPath(path: string, pathGlob: string): boolean {
+  if (path === pathGlob) return true;
+  const a = segments(path);
+  const b = segments(pathGlob);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    const bi = b[i] ?? "";
+    if (bi.includes("*")) continue;
+    if (a[i] !== bi) diff += 1;
+  }
+  return diff <= 1;
+}
+
+/**
+ * A near-miss hint for a failed `requestMade`/`responseStatus` check (#130b): the most likely
+ * authoring mistake is a method or path typo, so this looks for requests that match the path with a
+ * DIFFERENT method, or match the method with a similar (one-segment-off) path — and reports the most
+ * frequent one seen, e.g. `saw POST /api/v1/tool/profile → 200 (1×)`. Null when nothing is close.
+ */
+function nearMissHint(requests: readonly CapturedRequest[], method: string, pathGlob: string): string | null {
+  const m = method.toUpperCase();
+  const pool = relevant(requests);
+  const samePathOtherMethod = m === "*" ? [] : pool.filter((r) => matchGlob(pathGlob, r.path) && r.method !== m);
+  const sameMethodSimilarPath = m === "*" ? [] : pool.filter((r) => r.method === m && similarPath(r.path, pathGlob) && !matchGlob(pathGlob, r.path));
+  const candidates = samePathOtherMethod.length > 0 ? samePathOtherMethod : sameMethodSimilarPath;
+  if (candidates.length === 0) return null;
+  const groups = new Map<string, { method: string; path: string; status: number | null; count: number }>();
+  for (const r of candidates) {
+    const key = `${r.method} ${r.path} ${r.status ?? "none"}`;
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, { method: r.method, path: r.path, status: r.status, count: 1 });
+    else g.count += 1;
+  }
+  const top = [...groups.values()].sort((a, b) => b.count - a.count)[0];
+  if (top === undefined) return null;
+  const statusText = top.status === null ? "no response" : String(top.status);
+  return `saw ${top.method} ${top.path} → ${statusText} (${top.count}×)`;
+}
+
+/**
  * Evaluates a network check over the captured requests (pure). `truncated` says the capture
  * dropped its oldest requests: a check that fails then says so, since the request may have been
  * among them.
@@ -108,10 +171,14 @@ export function evaluateNetworkCheck(
   const hits = matching(requests, check.method, check.pathGlob);
   const note = truncated ? " (the capture dropped its oldest requests)" : "";
   if (hits.length === 0) {
+    const captured = relevant(requests).length;
+    const hint = nearMissHint(requests, check.method, check.pathGlob);
     return {
       check: spec,
       passed: false,
-      detail: `no ${check.method.toUpperCase()} request matched ${check.pathGlob} (${requests.length} requests captured)${note}`,
+      detail: `no ${check.method.toUpperCase()} request matched ${check.pathGlob} (${captured} requests captured)${note}${
+        hint === null ? "" : `; ${hint}`
+      }`,
     };
   }
   if (check.kind === "requestMade") {

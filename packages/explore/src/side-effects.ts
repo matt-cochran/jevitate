@@ -51,6 +51,11 @@ interface Open {
   readonly capture: RequestCapture;
 }
 
+/** Whether the most recently closed click sent any request (#130a). */
+export interface LastClick {
+  readonly requestSent: boolean;
+}
+
 /** What the guard says about a proposed click. */
 export type RepeatVerdict =
   | { readonly refuse: false }
@@ -68,6 +73,8 @@ export class SideEffectGuard {
   readonly #monitor: PageMonitor;
   readonly #fired = new Map<string, Fired>();
   #open: Open | null = null;
+  /** Whether the most recently CLOSED click sent any request at all (#130a). */
+  #lastClick: LastClick | null = null;
 
   constructor(monitor: PageMonitor) {
     this.#monitor = monitor;
@@ -87,13 +94,23 @@ export class SideEffectGuard {
     this.#closeOpen();
   }
 
+  /**
+   * The most recently closed click (#130a): did it send ANY request (of any method), by the time its
+   * window closed? Null before any click has closed.
+   */
+  lastClick(): LastClick | null {
+    return this.#lastClick;
+  }
+
   #closeOpen(): void {
     const o = this.#open;
     if (o === null) return;
     this.#open = null;
     this.#monitor.stopCapture(o.capture);
-    const done: FiredWrite[] = o.capture
-      .requests()
+    const requests = o.capture.requests();
+    const inflightAny = this.#monitor.pending().some((r) => r.startedAt >= o.at);
+    this.#lastClick = { requestSent: requests.length > 0 || inflightAny };
+    const done: FiredWrite[] = requests
       .filter((r: CapturedRequest) => WRITE_METHODS.has(r.method.toUpperCase()))
       .map((r) => ({
         method: r.method.toUpperCase(),

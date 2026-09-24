@@ -2,12 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { CapturedRequest } from "./page-monitor.js";
 import { describeCheck, evaluateNetworkCheck } from "./success-checks.js";
 
-const req = (method: string, path: string, status: number | null, failed = false): CapturedRequest => ({
+const req = (
+  method: string,
+  path: string,
+  status: number | null,
+  failed = false,
+  extra: Partial<Pick<CapturedRequest, "resourceType" | "contentType">> = {},
+): CapturedRequest => ({
   method,
   path,
   url: `https://app.test${path}`,
   status,
   failed,
+  ...extra,
 });
 
 const RUN: CapturedRequest[] = [
@@ -33,13 +40,47 @@ describe("network success checks (#65)", () => {
     expect(evaluateNetworkCheck({ kind: "requestMade", method: "PATCH", pathGlob: "/api/profile/*" }, RUN)).toEqual({
       check: "requestMade:PATCH /api/profile/*",
       passed: false,
-      detail: "no PATCH request matched /api/profile/* (6 requests captured)",
+      // Near-miss hint (#130b): the same path went out under a different method.
+      detail: "no PATCH request matched /api/profile/* (6 requests captured); saw GET /api/profile/42 → 200 (1×)",
     });
     // Method and glob must BOTH match; `*` stays within one segment.
     expect(evaluateNetworkCheck({ kind: "requestMade", method: "GET", pathGlob: "/api/*" }, [req("GET", "/api/a/b", 200)]).passed).toBe(false);
     // A truncated capture says so when a check fails.
     expect(evaluateNetworkCheck({ kind: "requestMade", method: "PUT", pathGlob: "/x" }, [], true).detail).toContain(
       "dropped its oldest requests",
+    );
+  });
+
+  it("near-miss hint: same path, different method — the likely authoring typo (#130b)", () => {
+    const run: CapturedRequest[] = [req("POST", "/api/v1/tool/profile", 200)];
+    expect(evaluateNetworkCheck({ kind: "requestMade", method: "PUT", pathGlob: "/api/v1/tool/profile" }, run).detail).toBe(
+      "no PUT request matched /api/v1/tool/profile (1 requests captured); saw POST /api/v1/tool/profile → 200 (1×)",
+    );
+  });
+
+  it("near-miss hint: same method, one segment off — a path typo (#130b)", () => {
+    const run: CapturedRequest[] = [req("PUT", "/api/v1/tools/profile", 200)];
+    expect(evaluateNetworkCheck({ kind: "requestMade", method: "PUT", pathGlob: "/api/v1/tool/profile" }, run).detail).toContain(
+      "saw PUT /api/v1/tools/profile → 200 (1×)",
+    );
+  });
+
+  it("no near-miss hint when nothing is close", () => {
+    const run: CapturedRequest[] = [req("GET", "/unrelated/thing", 200)];
+    expect(evaluateNetworkCheck({ kind: "requestMade", method: "PUT", pathGlob: "/api/v1/tool/profile" }, run).detail).toBe(
+      "no PUT request matched /api/v1/tool/profile (1 requests captured)",
+    );
+  });
+
+  it("the captured count excludes static assets and Vite dev-server module requests (#130c)", () => {
+    const run: CapturedRequest[] = [
+      req("GET", "/src/main.tsx", 200, false, { resourceType: "script" }),
+      req("GET", "/@vite/client", 200, false, { resourceType: "script" }),
+      req("GET", "/assets/logo.png", 200, false, { resourceType: "image" }),
+      req("GET", "/api/profile/42", 200, false, { resourceType: "fetch", contentType: "application/json" }),
+    ];
+    expect(evaluateNetworkCheck({ kind: "requestMade", method: "PUT", pathGlob: "/api/profile/*" }, run).detail).toBe(
+      "no PUT request matched /api/profile/* (1 requests captured); saw GET /api/profile/42 → 200 (1×)",
     );
   });
 

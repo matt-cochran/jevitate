@@ -139,6 +139,10 @@ export interface CapturedRequest {
   readonly failed: boolean;
   /** See `CompletedRequest.abortedAfterResponse` (#73): `failed` fired after `status` was received. */
   readonly abortedAfterResponse?: boolean;
+  /** Playwright's resource type (`xhr`, `fetch`, `document`, `script`, …) — classifies asset vs API (#130c). */
+  readonly resourceType?: string;
+  /** The response's `content-type`, when known — also used to classify asset vs API (#130c). */
+  readonly contentType?: string | null;
 }
 
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
@@ -254,6 +258,8 @@ export class PageMonitor {
             status,
             failed,
             abortedAfterResponse,
+            resourceType: started.resourceType,
+            contentType,
           });
         }
       }
