@@ -180,7 +180,7 @@ export interface ExploreRun {
  * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
  * state is exactly their target state, never a stall.
  */
-const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit)\b/i;
+const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit|reload)\b/i;
 
 /** A control's identity across snapshots (indexes are per-snapshot only). */
 const keyOf = (c: Control): string => JSON.stringify(c.descriptor);
@@ -607,6 +607,30 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         continue;
       }
       idleSteps = 0;
+
+      if (decision.op === "reload") {
+        // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
+        // and it counts as an action. Returning to the state the page had is its point, never a stall.
+        if (!tracker.mayAct()) {
+          record(false, "action budget exhausted");
+          stop = "exhausted";
+          break;
+        }
+        const at = now();
+        const r = await act(cfg.actor, { op: "reload", control: null });
+        if (r.ok) {
+          recorder.navigate(page.url(), at);
+          track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
+          track.lastRecordedTarget = null;
+          tracker.countAction();
+          history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
+        } else {
+          history.push(`reload failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason ?? r.note);
+        lastActedOp = decision.op;
+        continue;
+      }
 
       // Target-requiring op with no valid target → fail-closed.
       if (control === null || decision.targetMissing) {
