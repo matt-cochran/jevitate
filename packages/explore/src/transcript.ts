@@ -98,6 +98,8 @@ export interface TranscriptReply {
   readonly received: boolean;
   readonly text: string;
   readonly waitedMs: number;
+  /** Why the reply wait ended (#93): the reply held still, the page went idle, or the ceiling passed. */
+  readonly endedBy?: "reply" | "idle" | "ceiling";
 }
 
 export interface TranscriptStep {
