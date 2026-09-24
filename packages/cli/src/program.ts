@@ -1295,6 +1295,14 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
+    .option(
+      "--reply-wait-ms <ms>",
+      "conversational pages: how long to wait for a reply after sending a message (goal and usability; default 60000)",
+    )
+    .option(
+      "--reply-max-chars <n>",
+      "conversational pages: cap on each generated chat message (goal and usability; default 300)",
+    )
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--out <dir>", "directory to write the emitted Recording")
@@ -1348,6 +1356,8 @@ export function buildProgram(deps: CliDeps): Command {
         storageState?: string;
         maxActions?: string;
         maxDecisions?: string;
+        replyWaitMs?: string;
+        replyMaxChars?: string;
         real?: boolean;
         fakeAi?: boolean;
         out?: string;
@@ -1355,6 +1365,18 @@ export function buildProgram(deps: CliDeps): Command {
       } & BrowserLaunchFlags>();
 
       const strategy = o.strategy ?? "goal";
+      const conversation = {
+        ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
+        ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
+      };
+      if (
+        (conversation.replyWaitMs !== undefined && !(Number.isInteger(conversation.replyWaitMs) && conversation.replyWaitMs > 0)) ||
+        (conversation.replyMaxChars !== undefined &&
+          !(Number.isInteger(conversation.replyMaxChars) && conversation.replyMaxChars >= 20 && conversation.replyMaxChars <= 2000))
+      ) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms must be a positive integer; --reply-max-chars an integer in 20..2000"));
+        return;
+      }
       const browser = browserLaunchFromFlags(o);
       // Issue filing: drafts are always written; filing needs --file-issues (or config) AND a repo.
       let filing: FilingConfig | undefined;
@@ -1582,6 +1604,7 @@ export function buildProgram(deps: CliDeps): Command {
             judge: uxJudge,
             gen: uxGen,
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
+            conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             fixture: o.fixture,
             outDir: o.out,
@@ -1683,6 +1706,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(filing === undefined ? {} : { filing }),
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
+          conversation,
         });
         const envelope = ok(result);
         if (o.json) {

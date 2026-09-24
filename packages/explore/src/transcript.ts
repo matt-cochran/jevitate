@@ -60,6 +60,17 @@ export interface TranscriptEntry {
    * network (owner ruling 6). A measurement, never a verdict.
    */
   readonly timing?: PageTiming;
+  /** For a message sent into a composer (`send`, or a typed field then its Send): the text sent. */
+  readonly message?: string;
+  /** The conversational reply awaited after the message was sent (redacted, bounded). */
+  readonly reply?: TranscriptReply;
+}
+
+/** What came back after a message was sent. */
+export interface TranscriptReply {
+  readonly received: boolean;
+  readonly text: string;
+  readonly waitedMs: number;
 }
 
 export interface TranscriptStep {
@@ -75,6 +86,8 @@ export interface TranscriptStep {
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
   /** The timing of the perception that produced `snapshot`. */
   readonly timing?: PageTiming;
+  readonly message?: string;
+  readonly reply?: TranscriptReply;
 }
 
 /**
@@ -110,6 +123,8 @@ export class TranscriptLog {
       controlCount: step.snapshot.controls.length,
       ...(step.judgments === undefined ? {} : { judgments: step.judgments }),
       ...(step.timing === undefined ? {} : { timing: transcriptTiming(step.timing, this.#secrets) }),
+      ...(step.message === undefined ? {} : { message: redactText(step.message, this.#secrets) }),
+      ...(step.reply === undefined ? {} : { reply: { ...step.reply, text: redactText(step.reply.text, this.#secrets) } }),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);

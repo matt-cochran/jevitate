@@ -219,6 +219,17 @@ export class RunRecorder {
     this.#append({ kind: "fill", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
 
+  /**
+   * Record a key press (a composer submitted with Enter). Replay presses it on the focused element —
+   * the field the preceding `fill` targeted. Provisional postcondition: that field is still attached
+   * or gone (a composer may unmount once it sends): trivially true, never a guess.
+   */
+  press(key: string, rawField: TargetDescriptor, atMs: number, durationMs = 0): void {
+    this.#ensureSegment("/");
+    const descriptor = this.#target(rawField);
+    this.#append({ kind: "press", key, expect: { kind: "count", target: { ...descriptor }, min: 0 } }, atMs, durationMs);
+  }
+
   /** Record a select. Same value discipline as `fill`. */
   select(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
