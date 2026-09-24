@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Recording } from "@jevitate/recording";
-import { hangOutcome, recordCoverageHang, reproduceHang, reproductionStatus, type HangAttempt, type HangFinding } from "./hang-repro.js";
+import { hangOutcome, recordCoverageHang, replayWouldRepeatWrite, reproduceHang, reproductionStatus, type HangAttempt, type HangFinding } from "./hang-repro.js";
 import type { HangSignal } from "./hang.js";
 import type { VerifySession } from "./verify-fix.js";
 
@@ -79,6 +79,33 @@ describe("reproduceHang — a replay that could not execute is not a non-reprodu
     });
     expect(r).toMatchObject({ attempts: 2, ran: 0, reproduced: 0, status: "inconclusive" });
     expect(r.runs.every((run) => !run.ran && run.detail.startsWith("could not open a fresh session: admission timed out"))).toBe(true);
+  });
+});
+
+describe("#153 — replayWouldRepeatWrite", () => {
+  const rec = (names: string[]): Recording => ({
+    version: "1.0.0",
+    site: "x",
+    pages: [
+      {
+        url: "http://x.test/",
+        steps: names.map((name) => ({ step: { kind: "click", target: { role: "button", name }, expect: { kind: "urlIncludes", text: "" } } })),
+      },
+    ],
+  }) as unknown as Recording;
+
+  it("flags the first paid/destructive click up to and including the hang step (1-based)", () => {
+    expect(replayWouldRepeatWrite(rec(["Open", "Run simulation (paid)"]), 1, undefined)).toEqual({ step: 2, control: "Run simulation (paid)", risk: "paid" });
+    expect(replayWouldRepeatWrite(rec(["Delete draft"]), 0, {})).toMatchObject({ step: 1, risk: "destructive" });
+  });
+  it("ignores steps after the hang step, plain clicks, and anything when the operator opts in", () => {
+    expect(replayWouldRepeatWrite(rec(["Open", "Buy now"]), 0, undefined)).toBeNull();
+    expect(replayWouldRepeatWrite(rec(["Open", "Next"]), 1, undefined)).toBeNull();
+    expect(replayWouldRepeatWrite(rec(["Buy now"]), 0, { hangReplayWrites: true })).toBeNull();
+  });
+  it("--allow-destructive lifts the run's refusal, never the replay's; --deny patterns count", () => {
+    expect(replayWouldRepeatWrite(rec(["Buy now"]), 0, { allowDestructive: true })).toMatchObject({ risk: "paid" });
+    expect(replayWouldRepeatWrite(rec(["Archive"]), 0, { deny: ["/^Archive/"] })).toMatchObject({ risk: "denied", control: "Archive" });
   });
 });
 

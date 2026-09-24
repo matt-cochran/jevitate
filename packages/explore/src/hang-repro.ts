@@ -9,6 +9,7 @@ import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
 import type { MissionOutcome } from "@jevitate/domain";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
+import { SafetyPolicy, controlRisk, type SafetyConfig } from "./safety.js";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
@@ -35,6 +36,55 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
  */
 
 export const DEFAULT_HANG_REPLAYS = 2;
+
+/**
+ * A recorded step a hang replay WITHHOLDS (#153): replaying it would re-send a paid or destructive
+ * write (a paid simulation, a charge, an email) on every fresh-context attempt. Decided by
+ * independent code — the #116 safety categories (paid / destructive) and the operator's `--deny`
+ * patterns over the recorded control — never by a model. A click on such a control is treated as
+ * the write it names: a replay cannot prove it would not fire one.
+ */
+export interface WithheldWrite {
+  /** 1-based position of the step in the Recording (flat, across pages). */
+  readonly step: number;
+  /** The recorded control's name. */
+  readonly control: string;
+  readonly risk: "paid" | "destructive" | "denied";
+}
+
+/** The inconclusive reason for a replay that was withheld. */
+export function withheldReason(w: WithheldWrite): string {
+  return `inconclusive: replay would repeat a paid/destructive write (step ${w.step}: "${w.control}", ${w.risk}); pass --hang-replay-writes to allow it`;
+}
+
+/**
+ * The first step, up to and INCLUDING `upTo` (flat index), whose replay would re-send a paid or
+ * destructive write — or null. Always null when the operator opted in (`safety.hangReplayWrites`).
+ * `allowDestructive` / a goal that asked for the action lift the ORIGINAL run's refusal, never the
+ * replay's: the run already sent that write once.
+ */
+export function replayWouldRepeatWrite(recording: Recording, upTo: number, safety: SafetyConfig | undefined): WithheldWrite | null {
+  if (safety?.hangReplayWrites === true) return null;
+  const deny = new SafetyPolicy({ ...(safety?.deny === undefined ? {} : { deny: safety.deny }), allowDestructive: true });
+  let i = 0;
+  for (const page of recording.pages) {
+    for (const recorded of page.steps) {
+      if (i > upTo) return null;
+      const step = recorded.step;
+      if (step.kind === "click") {
+        const t = step.target;
+        const name = (t.name ?? t.text ?? t.label ?? step.label ?? "").replace(/\s+/g, " ").trim();
+        if (name !== "") {
+          const r = controlRisk(name);
+          if (r !== null && (r.risk === "paid" || r.risk === "destructive")) return { step: i + 1, control: name, risk: r.risk };
+          if (deny.refuses({ name, role: t.role ?? "", descriptor: t }) !== null) return { step: i + 1, control: name, risk: "denied" };
+        }
+      }
+      i += 1;
+    }
+  }
+  return null;
+}
 /** How long a replayed page must stay stuck to count as the same no-progress hang (ms). */
 export const DEFAULT_STALL_MS = 8_000;
 
@@ -50,6 +100,8 @@ export interface HangAttempt {
    */
   readonly ran: boolean;
   readonly detail: string;
+  /** Set when the attempt was not run: its replay would repeat a paid/destructive write (#153). */
+  readonly withheld?: WithheldWrite;
 }
 
 export type ReproductionStatus = "reproduced" | "intermittent" | "inconclusive";
@@ -61,6 +113,8 @@ export interface HangReproduction {
   readonly reproduced: number;
   readonly status: ReproductionStatus;
   readonly runs: HangAttempt[];
+  /** Set when no replay ran because it would have repeated a paid/destructive write (#153). */
+  readonly withheld?: WithheldWrite;
 }
 
 /** The status rule (pure): any reproduction confirms; a run that ran clean is intermittent; else inconclusive. */
@@ -94,6 +148,11 @@ export interface ReproduceHangParams {
   readonly replayBoundMs?: number;
   /** Sleep seam for the stall window (default: a real timer). */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * The target's safety policy (#116/#153): replays never re-send a paid/destructive write unless
+   * `hangReplayWrites` opts in.
+   */
+  readonly safety?: SafetyConfig;
 }
 
 function firstLine(e: unknown): string {
@@ -104,6 +163,11 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
 
 /** One attempt: fresh session → replay → re-detect. Never throws. */
 export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangAttempt> {
+  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety);
+  if (withheld !== null) {
+    // Never replayed, so no evidence either way: not reproduced, not "fixed" — inconclusive.
+    return { reproduced: false, kind: null, replay: "failed", ran: false, detail: withheldReason(withheld), withheld };
+  }
   let session: VerifySession;
   try {
     session = await p.openSession();
@@ -202,6 +266,9 @@ export async function reproduceHang(p: ReproduceHangParams): Promise<HangReprodu
   // #154: 0 replays is the operator's "don't replay" (a replay could repeat a paid write): the hang
   // stays UNCONFIRMED — inconclusive, never a crash and never a non-reproduction.
   if (attempts === 0) return NOT_REPLAYED;
+  // #153: a replay that would re-send a paid/destructive write is not run at all (by default).
+  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety);
+  if (withheld !== null) return { attempts, ran: 0, reproduced: 0, status: "inconclusive", runs: [], withheld };
   const runs: HangAttempt[] = [];
   for (let i = 0; i < attempts; i++) runs.push(await replayAndDetectHang(p));
   return {
@@ -286,6 +353,8 @@ export async function recordCoverageHang(p: {
   readonly openSession?: () => Promise<VerifySession>;
   readonly attempts?: number;
   readonly perceive?: PerceiveOptions;
+  /** The target's safety policy: replays never re-send a paid/destructive write by default (#153). */
+  readonly safety?: SafetyConfig;
   /** Samples the host's resource pressure for the evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
 }): Promise<void> {
@@ -315,6 +384,7 @@ export async function recordCoverageHang(p: {
           openSession: p.openSession,
           ...(p.attempts === undefined ? {} : { attempts: p.attempts }),
           ...(p.perceive === undefined ? {} : { perceive: p.perceive }),
+          ...(p.safety === undefined ? {} : { safety: p.safety }),
         });
   const finding = hangFinding(hang, p.steps, index, reproduction);
   p.found.set(fingerprint, { ...finding, repro: { ...finding.repro, recording: p.recording } });

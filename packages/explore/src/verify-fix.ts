@@ -6,6 +6,7 @@ import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
 import type { HangSignal } from "./hang.js";
 import { replayAndDetectHang } from "./hang-repro.js";
+import type { SafetyConfig } from "./safety.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
@@ -77,6 +78,11 @@ export interface VerifyFixParams {
   readonly perceive?: PerceiveOptions;
   /** Stall window for a stalled-state `ui-no-progress` hang (ms). */
   readonly stallMs?: number;
+  /**
+   * The target's safety policy (#153): a hang replay never re-sends a paid/destructive write unless
+   * `hangReplayWrites` opts in — the verdict is then `inconclusive`, never `fixed`.
+   */
+  readonly safety?: SafetyConfig;
   /** How long a recorded target may take to appear on replay (ms). Default: the interpreter's. */
   readonly targetTimeoutMs?: number;
   /** Fresh-context replays for a non-hang defect signal (#74). Default `DEFAULT_VERIFY_REPLAYS`. */
@@ -178,11 +184,16 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
       openSession: params.openSession,
       ...(params.perceive === undefined ? {} : { perceive: params.perceive }),
       ...(params.stallMs === undefined ? {} : { stallMs: params.stallMs }),
+      ...(params.safety === undefined ? {} : { safety: params.safety }),
     });
     const replay: VerifyFixResult["replay"] =
       attempt.replay === "failed" ? { outcome: "failed", at: -1, error: attempt.detail } : { outcome: "completed" };
     if (attempt.reproduced) {
       return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}` };
+    }
+    if (attempt.withheld !== undefined) {
+      // #153: not replayed — the path re-sends a paid/destructive write. Never "fixed".
+      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay: { outcome: "failed", at: -1, error: "not replayed" }, reason: attempt.detail };
     }
     if (!attempt.ran) {
       // The attempt never ran (no session, or the replay failed before the step): no evidence.

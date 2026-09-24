@@ -69,6 +69,8 @@ export interface RunVerifyFixOptions {
   readonly invariantFiles?: readonly string[];
   /** Re-checking a `server-log` defect whose sources include a `cmd:` one needs this too (#142). */
   readonly allowLogCmd?: boolean;
+  /** `--hang-replay-writes` (#153): a hang's replay may re-send a paid/destructive write. */
+  readonly hangReplayWrites?: boolean;
   /**
    * Mission fixtures (#140/#144): every replay restores + re-runs the mission's own fixture (saved
    * with its result) so it starts from the same state. `fixtures` overrides the saved spec; the
@@ -427,6 +429,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         defectKind: finding.kind,
         ...(declared === undefined ? {} : { invariant: declared }),
         ...(finding.hang === undefined ? {} : { hang: finding.hang }),
+        // #153: never re-send a paid/destructive write unless the operator opted in.
+        safety: { ...(target.safety ?? {}), ...(opts.hangReplayWrites === true ? { hangReplayWrites: true } : {}) },
         ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
         ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
         ...(opts.replays === undefined ? {} : { replays: opts.replays }),

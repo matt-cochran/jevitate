@@ -568,6 +568,7 @@ async function runFeatureFrontier(
           recording: { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) },
           steps: [],
           found: hangs,
+          ...(params.safety === undefined ? {} : { safety: params.safety }),
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
           // Re-detected with the SAME perception bounds the mission used.

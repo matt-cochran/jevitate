@@ -12,7 +12,7 @@ import {
 } from "../success-checks.js";
 import { redactText } from "../redact.js";
 import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
-import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
+import { NOT_REPLAYED, hangFinding, reproduceHang, withheldReason, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
@@ -592,6 +592,7 @@ async function reproduceSeedHang(
           ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
         },
         ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
+        ...(cfg.safety === undefined ? {} : { safety: cfg.safety }),
       });
 }
 
@@ -609,7 +610,9 @@ function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reprodu
     finalUrl: run.finalUrl,
     hang: finding,
     reason:
-      reproduction.attempts === 0
+      reproduction.withheld !== undefined
+        ? `${finding.title} (${withheldReason(reproduction.withheld)})`
+        : reproduction.attempts === 0
         ? `${finding.title} (unconfirmed: not replayed)`
         : `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
   };

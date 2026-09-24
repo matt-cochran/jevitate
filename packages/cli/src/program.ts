@@ -1739,6 +1739,10 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
     .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)")
     .option(
+      "--hang-replay-writes",
+      "let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed)",
+    )
+    .option(
       "--settle-ignore <pattern>",
       "a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)",
       (v, prev: string[]) => [...prev, v],
@@ -1894,6 +1898,7 @@ export function buildProgram(deps: CliDeps): Command {
         allowDestructive?: boolean;
         allowWrites?: boolean;
         allowWrite: string[];
+        hangReplayWrites?: boolean;
         readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
@@ -2000,6 +2005,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
             ...(o.allowWrites === true ? { allowWrites: true } : {}),
             allowWrite: o.allowWrite,
+            ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
             ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
           });
         } catch (err) {
@@ -2582,6 +2588,10 @@ export function buildProgram(deps: CliDeps): Command {
       false,
     )
     .option(
+      "--hang-replay-writes",
+      "let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed)",
+    )
+    .option(
       "--secret <value>",
       "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
       (v, prev: string[]) => [...prev, v],
@@ -2598,6 +2608,7 @@ export function buildProgram(deps: CliDeps): Command {
           allowEmulationOverride?: boolean;
           invariants: string[];
           allowLogCmd?: boolean;
+          hangReplayWrites?: boolean;
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
@@ -2620,6 +2631,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
           ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
+          ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
           fixtureFlags: o,
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,

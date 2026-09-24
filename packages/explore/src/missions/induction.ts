@@ -745,6 +745,7 @@ async function runInductionFrontier(
           recording: withSeed(branch, params.seedUrl),
           steps: transcript.entries(),
           found: hangs,
+          ...(params.safety === undefined ? {} : { safety: params.safety }),
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
           // Re-detected with the SAME perception bounds the mission used.

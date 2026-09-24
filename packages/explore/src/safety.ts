@@ -54,6 +54,11 @@ export interface SafetyConfig {
    * (`--allow-write`, repeatable; `safety.allowWrites: [globs]` in targets.json). `**` spans segments.
    */
   readonly allowWriteRequests?: readonly string[];
+  /**
+   * Let hang replays (and verify-fix replays of a hang) re-send a paid/destructive write the original
+   * run sent (`--hang-replay-writes`, #153). Off by default: such a hang is reported inconclusive.
+   */
+  readonly hangReplayWrites?: boolean;
 }
 
 /** The built-in category a control's name falls into, with the words that matched, or null. */
