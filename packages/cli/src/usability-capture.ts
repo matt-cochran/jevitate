@@ -6,11 +6,15 @@
 //     the secret scan cannot run, no screenshot is written at all;
 //   - the REQUESTS the page made (fetch/xhr/document: method, endpoint, status, start/end), each
 //     attributed to the step whose action it followed;
-//   - per-screen facts the signal oracles need (url, signature, visible text, a busy indicator).
+//   - per-screen facts the signal oracles need (url, signature, visible text, a busy indicator,
+//     the page heading — #131);
+//   - per write request, a one-way PAYLOAD DIGEST (#131 duplicate create): volatile keys dropped,
+//     never for a body holding a secret or a credential-named field, and never the body itself.
 //
 // Everything stored here is redacted (redactUrl + the run's secrets) before it is kept; nothing
 // here ever reaches a model. The capture is advisory: a failure to screenshot or to read the page
 // never affects the run.
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Locator, Page, Request } from "playwright";
@@ -65,7 +69,7 @@ function boundFieldLocator(page: Page, f: SecretField): Locator {
  * reports whether a busy/progress/status indicator is on screen. The secrets are handed to the
  * browser that already holds them (it rendered or was typed them); they never leave it.
  */
-function scanPage(args: { secrets: readonly string[]; attr: string }): { marked: number; busy: boolean } {
+function scanPage(args: { secrets: readonly string[]; attr: string }): { marked: number; busy: boolean; heading: string } {
   let marked = 0;
   if (args.secrets.length > 0) {
     const holds = (s: string | null | undefined): boolean => !!s && args.secrets.some((x) => s.includes(x));
@@ -86,7 +90,54 @@ function scanPage(args: { secrets: readonly string[]; attr: string }): { marked:
   const busy =
     document.querySelector('[aria-busy="true"], [role="progressbar"], progress, .spinner, [class*="spinner" i], [class*="loading" i]') !== null ||
     Array.from(document.querySelectorAll('[role="status"], [aria-live]')).some((el) => (el.textContent ?? "").trim().length > 0);
-  return { marked, busy };
+  const h1 = document.querySelector('h1, [role="heading"][aria-level="1"]') as HTMLElement | null;
+  const heading = ((h1?.innerText ?? h1?.textContent ?? "").trim() || document.title || "").replace(/\s+/g, " ").slice(0, 200);
+  return { marked, busy, heading };
+}
+
+/** Body keys that change between two submissions of the same thing (ids, timestamps, nonces). */
+const VOLATILE_KEY = /^(id|_id|uuid|guid|key|nonce|timestamp|ts|time|date|created_?at|updated_?at|client_?id|request_?id|idempotency_?key|trace_?id|csrf.*|xsrf.*)$/i;
+/** A body with a field named like a credential is never digested. */
+const CREDENTIAL_KEY = /pass|secret|token|otp|totp|pin|cvc|cvv|card|auth|session|cookie/i;
+const MAX_DIGEST_BODY = 64_000;
+
+class CredentialBody extends Error {}
+
+function canonical(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonical);
+  if (v !== null && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+      if (CREDENTIAL_KEY.test(k)) throw new CredentialBody();
+      if (VOLATILE_KEY.test(k)) continue;
+      out[k] = canonical((v as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return v;
+}
+
+/**
+ * A one-way digest of a write request's body (#131): two creates with the same digest sent the
+ * same payload. `undefined` — no digest — for a body that is absent, too large, not JSON or form
+ * data, or holds a secret or a credential-named field. The body itself is never kept.
+ */
+export function payloadDigest(method: string, endpoint: string, body: string | null, secrets: readonly string[]): string | undefined {
+  if (body === null || body.length === 0 || body.length > MAX_DIGEST_BODY) return undefined;
+  if (secrets.some((x) => x.length > 0 && body.includes(x))) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    if (!/^[^=&\s]+=[^&]*(&[^=&\s]+=[^&]*)*$/.test(body)) return undefined;
+    value = Object.fromEntries(new URLSearchParams(body));
+  }
+  try {
+    const canon = JSON.stringify(canonical(value));
+    return createHash("sha256").update(`${method.toUpperCase()} ${endpoint}\n${canon}`).digest("hex").slice(0, 32);
+  } catch {
+    return undefined; // a credential-named field: never digested
+  }
 }
 
 function unmark(attr: string): void {
@@ -114,6 +165,17 @@ interface LiveRequest {
   status: number | null;
   failed?: boolean;
   step: number;
+  payloadKey?: string;
+}
+
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function postDataOf(r: Request): string | null {
+  try {
+    return r.postData();
+  } catch {
+    return null;
+  }
 }
 
 export class UsabilityCapture {
@@ -144,16 +206,19 @@ export class UsabilityCapture {
 
   readonly #onRequest = (r: Request): void => {
     if (!KEPT_TYPES.has(r.resourceType())) return;
+    const endpoint = this.#redact(endpointOf(r.method(), r.url()));
+    const payloadKey = WRITE_METHODS.has(r.method().toUpperCase()) ? payloadDigest(r.method(), endpoint, postDataOf(r), this.#opts.secrets) : undefined;
     const rec: LiveRequest = {
       id: this.#requests.length,
       method: r.method(),
-      endpoint: this.#redact(endpointOf(r.method(), r.url())),
+      endpoint,
       url: this.#redact(redactUrl(r.url())),
       resourceType: r.resourceType(),
       startedAt: this.#now(),
       endedAt: null,
       status: null,
       step: this.#step,
+      ...(payloadKey === undefined ? {} : { payloadKey }),
     };
     this.#requests.push(rec);
     this.#live.set(r, rec);
@@ -205,10 +270,11 @@ export class UsabilityCapture {
     const index = this.#screens.length;
     const { page, secrets } = this.#opts;
     let busy = false;
+    let heading = "";
     let shot: string | null = null;
     let scanned = false;
     try {
-      ({ busy } = await withTimeout(page.evaluate(scanPage, { secrets: [...secrets], attr: MASK_ATTR }), SCREENSHOT_TIMEOUT_MS));
+      ({ busy, heading } = await withTimeout(page.evaluate(scanPage, { secrets: [...secrets], attr: MASK_ATTR }), SCREENSHOT_TIMEOUT_MS));
       scanned = true;
     } catch {
       scanned = false; // cannot prove where a secret is ⇒ no screenshot (fail-closed)
@@ -239,6 +305,7 @@ export class UsabilityCapture {
       visibleText: this.#redact(visibleText),
       busy,
       ...(shot === null ? {} : { screenshot: shot }),
+      ...(heading.length === 0 ? {} : { heading: this.#redact(heading) }),
     });
     return shot;
   }
@@ -269,6 +336,10 @@ export class UsabilityCapture {
       url: e.url,
       ...(e.descriptor === undefined ? {} : { descriptor: e.descriptor }),
       ...(e.reason === undefined ? {} : { reason: e.reason }),
+      // #131: the transcript's own (already redacted) value/message/reply — redacted again here.
+      ...(e.value === undefined ? {} : { value: this.#redact(e.value) }),
+      ...(e.message === undefined ? {} : { message: this.#redact(e.message) }),
+      ...(e.reply === undefined || !e.reply.received ? {} : { reply: this.#redact(e.reply.text) }),
     }));
     const requests: SignalRequest[] = this.#requests.map((r) => ({ ...r }));
     return { steps, requests, screens: [...this.#screens], endedAt: this.#now(), typedValues };
