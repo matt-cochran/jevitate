@@ -81,6 +81,7 @@ import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetCon
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
+import { registerReportCommands } from "./report-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { currentEngineInfo } from "./engine.js";
 import {
@@ -2578,6 +2579,9 @@ export function buildProgram(deps: CliDeps): Command {
     });
 
   registerAiCommands(program, deps);
+
+  // #138 / #139 — baseline diff and the consolidated defect report (own file).
+  registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
 
   return program;
 }
