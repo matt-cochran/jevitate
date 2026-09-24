@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
+import { appendFileSync } from "node:fs";
 import { SEED_THREADS } from "./data.js";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
@@ -54,6 +55,48 @@ export function buildServer(): FastifyInstance {
   // even though Chromium logs it to the console as "Failed to load resource".
   app.get("/adversarial/notfound", async (_req, reply) => {
     reply.code(404).send("not found");
+  });
+
+  // Additive fixture for @jevitate/cli's backend log correlation (#142): each route returns 200
+  // immediately (the browser/mission sees nothing wrong) and appends a backend log line to
+  // $EXAMPLE_SITE_LOG, if set — a test points --log-source at that file. Namespaced under
+  // /server-log-mission to stay clear of other fixtures edited in parallel.
+  app.get("/server-log-mission/warn", async (_req, reply) => {
+    const logFile = process.env.EXAMPLE_SITE_LOG;
+    if (logFile !== undefined) {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({ level: "warn", time: new Date().toISOString(), message: "Not Authorized for feature AllOrganizations_View" })}\n`,
+      );
+    }
+    reply.send({ ok: true });
+  });
+
+  // The error line embeds a fixture "secret" value (a fake bearer token) so a test can assert the
+  // run's `--secret` redaction reaches server-log evidence too, never just page/model-facing text.
+  app.get("/server-log-mission/error", async (_req, reply) => {
+    const logFile = process.env.EXAMPLE_SITE_LOG;
+    if (logFile !== undefined) {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({
+          level: "error",
+          time: new Date().toISOString(),
+          message: "GetActiveRatePlanForOffer failed for token tok_live_FIXTURE_SECRET_42: no resolvable active subscription tier yet",
+        })}\n`,
+      );
+    }
+    reply.send({ ok: true });
+  });
+
+  // Two buttons, nothing else clickable (deterministic control order for a scripted test): the
+  // first hits /server-log-mission/warn, the second /server-log-mission/error, each updating
+  // #status so a --success check can require BOTH to have fired.
+  app.get("/server-log-mission/page", async (_req, reply) => {
+    reply.type("text/html").send(`<!doctype html><html><body><h1>Server log mission</h1>
+<button data-testid="warn-btn" onclick="fetch('/server-log-mission/warn').then(()=>{document.querySelector('[data-testid=status]').textContent+=' warn-done'})">Trigger warn</button>
+<button data-testid="error-btn" onclick="fetch('/server-log-mission/error').then(()=>{document.querySelector('[data-testid=status]').textContent+=' error-done'})">Trigger error</button>
+<div data-testid="status"></div></body></html>`);
   });
 
   app.get<{ Params: { id: string } }>("/thread/:id", async (req, reply) => {

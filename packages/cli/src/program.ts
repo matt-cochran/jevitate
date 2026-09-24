@@ -139,7 +139,11 @@ import {
   parseSuccessSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
+  type ServerLogOptions,
 } from "./explore-api.js";
+import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
+import { parseLogDefectSpecs } from "./log-correlation.js";
+import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
 import {
@@ -1652,6 +1656,27 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--log-source <spec>",
+      "backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--allow-log-cmd",
+      "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
+      false,
+    )
+    .option(
+      "--log-defect <level|/regex/>",
+      "backend log lines matching this (repeatable) become a server-log defect: a level (error|warn|info|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--server-log-drain-ms <ms>",
+      "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
+    )
+    .option(
       "--repeat <n>",
       "run the mission N times, one after another, each in a fresh browser context, and vote (#141): findings seen in fewer than --min-agreement runs are reported as flaky, not counted",
     )
@@ -1680,6 +1705,10 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
+        logSource: string[];
+        allowLogCmd?: boolean;
+        logDefect: string[];
+        serverLogDrainMs?: string;
         repeat?: string;
         minAgreement?: string;
         persona: string[];
@@ -1859,6 +1888,31 @@ export function buildProgram(deps: CliDeps): Command {
         ...(invariants === undefined ? {} : { invariants }),
         ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
       };
+      // Backend log sources (#142): validated (spec shape, --allow-log-cmd gate, matcher regexes)
+      // BEFORE any browser opens — the same fail-closed discipline as --invariants above. Supported
+      // on every strategy, INCLUDING usability (#142 follow-up): lines attach to usability steps the
+      // same way, though a UX run's own outcome stays advisory (a server-log defect is still reported,
+      // never gates the exit code — the same rule as every other UX finding).
+      let serverLog: ServerLogOptions | undefined;
+      if (o.logSource.length > 0 || o.logDefect.length > 0) {
+        try {
+          const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
+          const logDefect = parseLogDefectSpecs(o.logDefect);
+          serverLog = {
+            sources,
+            logDefect,
+            allowLogCmd: o.allowLogCmd ?? false,
+            ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
+          };
+        } catch (err) {
+          if (err instanceof LogSourceSpecError || err instanceof LogSpecError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          throw err;
+        }
+      }
+      const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
@@ -1945,6 +1999,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           const envelope = ok(result);
           if (o.json) {
@@ -2025,6 +2080,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -2094,6 +2150,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
@@ -2144,6 +2201,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
             ...(target?.safety === undefined ? {} : { safety: target.safety }),
           });
           emitJson(program, ok(result));
@@ -2261,6 +2319,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
           ...withInvariants,
+          ...withServerLog,
           ...(fx === undefined ? {} : { fixtures: fx }),
         });
         const envelope = ok(result);
@@ -2306,6 +2365,11 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--allow-log-cmd",
+      "re-checking a server-log defect whose --log-source includes cmd:<command> needs this too (operator-declared only)",
+      false,
+    )
+    .option(
       "--secret <value>",
       "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
       (v, prev: string[]) => [...prev, v],
@@ -2320,6 +2384,7 @@ export function buildProgram(deps: CliDeps): Command {
           storageState?: string;
           replays?: string;
           invariants: string[];
+          allowLogCmd?: boolean;
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
@@ -2333,6 +2398,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
+          ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
           fixtureFlags: o,
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
@@ -2842,6 +2908,10 @@ export function buildProgram(deps: CliDeps): Command {
       }
       const queue = new FsMissionQueueStore(o.dir ?? resolveDataDir(["missions", "queue"]));
       const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
+      // #142 follow-up: ~/.jevitate/targets.json's per-origin logSources/logDefect/allowLogCmd — a
+      // queued mission never carries its own (never an MCP argument); this is the operator's only
+      // way to declare one for a mission drained here.
+      const targetConfigs = loadTargetsFile(deps.explore?.targetsConfigPath);
       const execute =
         deps.missions?.execute ??
         realQueuedMissionExecutor({
@@ -2849,6 +2919,7 @@ export function buildProgram(deps: CliDeps): Command {
           gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
+          targets: targetConfigs,
         });
       const drainOnce = () =>
         drainMissionQueue({
