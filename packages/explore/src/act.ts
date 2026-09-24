@@ -5,7 +5,7 @@ import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
-import { occluderOf } from "./occlusion.js";
+import { occluderOf, srOnlyLabelOf } from "./occlusion.js";
 import { monitorFor } from "./page-monitor.js";
 import { isSubmitControl } from "./conversation.js";
 
@@ -213,6 +213,31 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
 }
 
 /**
+ * What a `click` on `control` actually clicks (#90). A visually-hidden (sr-only) input is activated
+ * the way a user does it — through its visible `<label>` (the gate has already probed occlusion at
+ * that label: ./occlusion.ts); one with no visible label cannot be clicked by a user at all and is
+ * refused up front, never left to wait out an actionability timeout. Anything else is clicked as is.
+ */
+async function clickTargetFor(actor: Actor, control: Control): Promise<{ target: Target } | { reason: string }> {
+  const page = actor.ability(BrowseTheWebToken).session.page;
+  const own = targetFor(control.descriptor);
+  if (control.tag !== "input") return { target: own };
+  const locator = descriptorToLocator(page, control.descriptor);
+  const via = await locator.evaluate(srOnlyLabelOf, undefined, { timeout: GATE_TIMEOUT_MS }).catch(() => null);
+  if (via === null) return { target: own };
+  if ("none" in via) return { reason: "target not actionable: visually-hidden input with no visible label to click" };
+  const name = `label of ${describe(control.descriptor)}`;
+  if ("wrap" in via) {
+    return {
+      target: Target.named(name).locatedBy((p) => descriptorToLocator(p, control.descriptor).locator("xpath=ancestor::label[1]")),
+    };
+  }
+  const id = via.for;
+  const nth = via.nth;
+  return { target: Target.named(name).locatedBy((p) => p.locator(`label[for=${JSON.stringify(id)}]`).nth(nth)) };
+}
+
+/**
  * The `upload` counterpart of `gate`. File inputs are routinely visually
  * hidden behind a styled label/dropzone (`opacity:0`, 1px, off-screen), so
  * requiring visibility would reject nearly every real upload control — and
@@ -250,8 +275,21 @@ async function attempt(action: () => Promise<void>): Promise<ActResult> {
     return { ok: true, mutated: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return { ok: false, mutated: false, reason: `action failed: ${message.split("\n")[0]}` };
+    return { ok: false, mutated: false, reason: `action failed: ${failureLine(message)}` };
   }
+}
+
+/**
+ * The first line of an automation error — plus, when Playwright's log says another element took the
+ * click ("<div class=overlay> intercepts pointer events"), that line too: it names what covered the
+ * target, so the history says why and the strategy does not retry the same target blind (#90).
+ */
+export function failureLine(message: string): string {
+  const lines = message.split("\n");
+  const first = lines[0] ?? message;
+  const intercept = lines.map((l) => l.trim().replace(/^-\s*/, "")).find((l) => /intercepts pointer events/.test(l));
+  if (intercept === undefined || first.includes(intercept)) return first;
+  return `${first} (${intercept.replace(/\s+from\s+<.*?>\s+subtree/, "").slice(0, 200)})`;
 }
 
 /** BROWSER CODE — tree distance between two elements (through their lowest common ancestor). */
@@ -312,8 +350,9 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (args.control === null) return { ok: false, mutated: false, reason: "click needs a target" };
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
-      const descriptor = args.control.descriptor;
-      return dispatch(() => Click.on(targetFor(descriptor), { timeout: CLICK_TIMEOUT_MS }).performAs(actor));
+      const via = await clickTargetFor(actor, args.control);
+      if ("reason" in via) return { ok: false, mutated: false, reason: via.reason };
+      return dispatch(() => Click.on(via.target, { timeout: CLICK_TIMEOUT_MS }).performAs(actor));
     }
     case "type": {
       if (args.control === null) return { ok: false, mutated: false, reason: "type needs a target" };
@@ -390,6 +429,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
     case "reload":
       return reloadPage(page);
     case "done":
+    case "report":
     case "blocked": {
       // No action — these are loop-terminal signals, not mutations.
       return { ok: true, mutated: false };

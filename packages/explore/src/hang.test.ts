@@ -31,4 +31,19 @@ describe("classifyHang — the pure, clock-free hang rule (owner ruling 7)", () 
     expect(a).not.toBe(c);
     expect(a).toMatch(/^[0-9a-f]{16}$/);
   });
+
+  it("#87: a ui-no-progress hang's fingerprint is the offending ELEMENT, not the route — the same global widget on many routes is ONE identity", () => {
+    const onRouteA = hangFingerprint({ kind: "ui-no-progress", route: "/contacts", pending: [], element: '[data-testid=global-progress]' });
+    const onRouteB = hangFingerprint({ kind: "ui-no-progress", route: "/companies", pending: [], element: '[data-testid=global-progress]' });
+    const differentElement = hangFingerprint({ kind: "ui-no-progress", route: "/contacts", pending: [], element: 'role=spinner <div>' });
+    expect(onRouteA).toBe(onRouteB);
+    expect(onRouteA).not.toBe(differentElement);
+    expect(onRouteA).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("#87: a ui-no-progress hang with no identifiable element falls back to route identity", () => {
+    const a = hangFingerprint({ kind: "ui-no-progress", route: "/import", pending: [] });
+    const b = hangFingerprint({ kind: "ui-no-progress", route: "/export", pending: [] });
+    expect(a).not.toBe(b);
+  });
 });

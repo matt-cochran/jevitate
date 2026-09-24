@@ -53,6 +53,26 @@ describe("TranscriptLog — the shared, redacting decision transcript", () => {
     expect(e.judgments).toEqual({ looksBroken: { value: false, probability: 0.1 } });
   });
 
+  it("(#98) records a step's typed value, redacted — and never a password field's, even synthetic", () => {
+    const field: Control = { ...control, descriptor: { role: "textbox", name: "Note" }, role: "textbox", name: "Note", tag: "input", inputType: "text", summary: 'textbox "Note"' };
+    const log = new TranscriptLog(["hunter2"]);
+    const typed = log.record({ op: "type", control: field, confidence: 0.9, chosenBy: "model", actOk: true, snapshot: snap, value: "pay hunter2 now" });
+    expect(typed.value).toBe(`pay ${REDACTION_MASK} now`);
+    const pw = log.record({
+      op: "type",
+      control: { ...field, inputType: "password" },
+      confidence: 0.9,
+      chosenBy: "model",
+      actOk: true,
+      snapshot: snap,
+      value: "synthetic-pw",
+    });
+    expect(pw.value).toBe(REDACTION_MASK);
+    expect(JSON.stringify(log.entries())).not.toContain("synthetic-pw");
+    const click = log.record({ op: "click", control, confidence: 0.9, chosenBy: "model", actOk: true, snapshot: snap });
+    expect(click).not.toHaveProperty("value");
+  });
+
   it("entries() is a copy — callers cannot rewrite history", () => {
     const log = new TranscriptLog();
     log.record({ op: "wait", control: null, confidence: 0.5, chosenBy: "model", actOk: true, snapshot: snap });

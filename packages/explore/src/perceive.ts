@@ -214,6 +214,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
           url: redactUrl(page.url()),
           pending: evidence,
           lastState: { signature: snap.signature, controls: snap.controls.map((c) => c.summary) },
+          ...(stuckBusy === null ? {} : { element: stuckBusy }),
         };
 
   if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing, hang };

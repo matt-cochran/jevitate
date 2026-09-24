@@ -21,6 +21,7 @@ import {
   type AuthoringRecording,
   type ColumnClass,
   type PostdocDecision,
+  type InvariantSpec,
 } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
 import {
@@ -34,6 +35,7 @@ import {
   openRouterProviderSettings,
   JevJudgmentGateway,
   realJevClientCall,
+  UsageTracker,
   type JudgmentPort,
   type GenerationPort,
   type Answer,
@@ -42,6 +44,7 @@ import {
   type CatalogModel,
   type ModelConstraints,
   type OpenRouterCall,
+  type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import {
@@ -71,6 +74,7 @@ import {
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { InvariantsFileError, loadInvariantFiles } from "./invariants-file.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -1343,9 +1347,13 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
-      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial beyond the start URL's route",
+      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial/coverage/exploratory beyond the start URL's route",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
+    )
+    .option(
+      "--scope <mode>",
+      "--strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs",
     )
     .option(
       "--allow <origin>",
@@ -1361,13 +1369,13 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--secret-field <binding>",
-      "goal strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
+      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
     .option(
       "--totp <binding>",
-      "goal strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
+      "goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1389,7 +1397,13 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option(
       "--reply-wait-ms <ms>",
-      "conversational pages: how long to wait for a reply after sending a message (goal and usability; default 60000)",
+      "conversational pages: how long to keep waiting for a reply while the page shows no sign of working on one " +
+        "(goal and usability; default 60000). While a request the message started is in flight, a busy indicator shows, " +
+        "or the reply is still growing, the wait continues up to --reply-ceiling-ms",
+    )
+    .option(
+      "--reply-ceiling-ms <ms>",
+      "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
     )
     .option(
       "--reply-max-chars <n>",
@@ -1432,6 +1446,12 @@ export function buildProgram(deps: CliDeps): Command {
       "--no-require-form-submit",
       "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
     )
+    .option(
+      "--invariants <file>",
+      "app-declared invariants JSON (repeatable; goal, coverage, exploratory, adversarial, --feature): checked around every action, a violation is a defect (exit 1). Validated before any browser opens; probes are GET/HEAD on an --allow origin only",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--json", "emit a JSON envelope")
     .addHelpText(
       "after",
@@ -1448,6 +1468,7 @@ export function buildProgram(deps: CliDeps): Command {
     .addHelpText("after", EXPLORE_OUTCOME_HELP)
     .action(async function (this: Command) {
       const o = this.opts<{
+        invariants: string[];
         minControlCoverage?: string;
         requireFormSubmit: boolean;
         fileIssues?: boolean;
@@ -1468,6 +1489,7 @@ export function buildProgram(deps: CliDeps): Command {
         successWhen?: string;
         feature?: string;
         route: string[];
+        scope?: string;
         allow: string[];
         secret: string[];
         secretField: string[];
@@ -1478,6 +1500,7 @@ export function buildProgram(deps: CliDeps): Command {
         maxActions?: string;
         maxDecisions?: string;
         replyWaitMs?: string;
+        replyCeilingMs?: string;
         replyMaxChars?: string;
         real?: boolean;
         fakeAi?: boolean;
@@ -1488,14 +1511,17 @@ export function buildProgram(deps: CliDeps): Command {
       const strategy = o.strategy ?? "goal";
       const conversation = {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
+        ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
         ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
       };
       if (
         (conversation.replyWaitMs !== undefined && !(Number.isInteger(conversation.replyWaitMs) && conversation.replyWaitMs > 0)) ||
+        (conversation.replyCeilingMs !== undefined &&
+          !(Number.isInteger(conversation.replyCeilingMs) && conversation.replyCeilingMs > 0)) ||
         (conversation.replyMaxChars !== undefined &&
           !(Number.isInteger(conversation.replyMaxChars) && conversation.replyMaxChars >= 20 && conversation.replyMaxChars <= 2000))
       ) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms must be a positive integer; --reply-max-chars an integer in 20..2000"));
+        emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms and --reply-ceiling-ms must be positive integers; --reply-max-chars an integer in 20..2000"));
         return;
       }
       const browser = browserLaunchFromFlags(o);
@@ -1554,11 +1580,29 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
+      // App-declared invariants (#86): validated (schema, observables, probe origins) BEFORE any browser.
+      let invariants: InvariantSpec | undefined;
+      if (o.invariants.length > 0) {
+        if (strategy === "usability" && o.feature === undefined) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--invariants is not supported with --strategy usability"));
+          return;
+        }
+        if (o.url !== undefined) {
+          try {
+            invariants = loadInvariantFiles(o.invariants, { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url });
+          } catch (err) {
+            if (!(err instanceof InvariantsFileError)) throw err;
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+        }
+      }
+      const withInvariants = invariants === undefined ? {} : { invariants };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
-        if (o.feature !== undefined || strategy !== "goal") {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal"));
+        if (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability")) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal or usability"));
           return;
         }
         try {
@@ -1581,15 +1625,23 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_EXPLORE_ARGS", "--url is required"));
           return;
         }
+        if (o.scope !== undefined && o.scope !== "app") {
+          emitJson(program, fail("E_EXPLORE_ARGS", `--scope must be "app" (got ${JSON.stringify(o.scope)})`));
+          return;
+        }
         const covAllowlist = resolveExploreAllowlist(o.url, o.allow);
         const covBounds: Record<string, number> = {};
         if (o.maxActions !== undefined) covBounds.maxActions = Number(o.maxActions);
         if (o.maxDecisions !== undefined) covBounds.maxDecisions = Number(o.maxDecisions);
+        // Scope containment (#89, reusing #64's model): the start URL's route plus --route globs;
+        // --scope app (or --route '/**') widens it to the whole app.
+        const covRouteGlobs = [...o.route, ...(o.scope === "app" ? ["/**"] : [])];
 
         let covJudge: JudgmentPort;
         let covGen: GenerationPort;
+        let covUsage: UsageTracker;
         try {
-          ({ judge: covJudge, gen: covGen } = await buildExploreGateways(deps, {
+          ({ judge: covJudge, gen: covGen, usage: covUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
           }));
@@ -1609,12 +1661,15 @@ export function buildProgram(deps: CliDeps): Command {
             allowlist: covAllowlist,
             judge: covJudge,
             gen: covGen,
+            usage: covUsage,
             bounds: Object.keys(covBounds).length > 0 ? covBounds : undefined,
+            ...(covRouteGlobs.length > 0 ? { routeGlobs: covRouteGlobs } : {}),
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+            ...withInvariants,
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1645,8 +1700,9 @@ export function buildProgram(deps: CliDeps): Command {
         const advAllowlist = resolveExploreAllowlist(o.url, o.allow);
         let advJudge: JudgmentPort;
         let advGen: GenerationPort;
+        let advUsage: UsageTracker;
         try {
-          ({ judge: advJudge, gen: advGen } = await buildExploreGateways(deps, {
+          ({ judge: advJudge, gen: advGen, usage: advUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
           }));
@@ -1677,6 +1733,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(target === undefined ? {} : { target }),
             seedUrl: o.url,
             allowlist: advAllowlist,
+            usage: advUsage,
             ...(o.route.length > 0 ? { routeGlobs: o.route } : {}),
             coverageThresholds,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
@@ -1708,6 +1765,7 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+            ...withInvariants,
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1742,8 +1800,9 @@ export function buildProgram(deps: CliDeps): Command {
         if (o.maxDecisions !== undefined) uxBounds.maxDecisions = Number(o.maxDecisions);
         let uxJudge: JudgmentPort;
         let uxGen: GenerationPort;
+        let uxUsage: UsageTracker;
         try {
-          ({ judge: uxJudge, gen: uxGen } = await buildExploreGateways(deps, {
+          ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
           }));
@@ -1764,11 +1823,13 @@ export function buildProgram(deps: CliDeps): Command {
             appContext: { appClass: o.appClass, job: o.goal },
             judge: uxJudge,
             gen: uxGen,
+            usage: uxUsage,
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
             ...(o.show !== undefined ? { show: o.show } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
+            ...(secretFields.length > 0 ? { secretFields } : {}),
             fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
@@ -1817,6 +1878,7 @@ export function buildProgram(deps: CliDeps): Command {
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+            ...withInvariants,
           });
           emitJson(program, ok(result));
           process.exitCode = result.exitCode;
@@ -1853,8 +1915,9 @@ export function buildProgram(deps: CliDeps): Command {
 
       let judge: JudgmentPort;
       let gen: GenerationPort;
+      let usage: UsageTracker;
       try {
-        ({ judge, gen } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -1874,6 +1937,7 @@ export function buildProgram(deps: CliDeps): Command {
           allowlist,
           judge,
           gen,
+          usage,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
@@ -1887,6 +1951,7 @@ export function buildProgram(deps: CliDeps): Command {
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
+          ...withInvariants,
         });
         const envelope = ok(result);
         if (o.json) {
@@ -1919,10 +1984,16 @@ export function buildProgram(deps: CliDeps): Command {
     .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
     .option("--storage-state <file>", "override the storageState the mission ran with")
     .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
+    .option(
+      "--invariants <file>",
+      "re-check a declared-invariant defect with these invariant files (repeatable) instead of the spec saved with the mission",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<
-        { result: string; fingerprint: string; storageState?: string; replays?: string; json?: boolean } & BrowserLaunchFlags
+        { result: string; fingerprint: string; storageState?: string; replays?: string; invariants: string[]; json?: boolean } & BrowserLaunchFlags
       >();
       try {
         const report = await runVerifyFix({
@@ -1931,6 +2002,7 @@ export function buildProgram(deps: CliDeps): Command {
           fingerprint: o.fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
+          ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });
@@ -2465,8 +2537,9 @@ export function buildProgram(deps: CliDeps): Command {
       }
       let uxJudge: JudgmentPort;
       let uxGen: GenerationPort;
+      let uxUsage: UsageTracker;
       try {
-        ({ judge: uxJudge, gen: uxGen } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -2485,6 +2558,7 @@ export function buildProgram(deps: CliDeps): Command {
           },
           judge: uxJudge,
           gen: uxGen,
+          usage: uxUsage,
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
           outDir: o.out,
@@ -2526,9 +2600,13 @@ const DEFAULT_EXPLORE_CONSTRAINTS: ModelConstraints = { requiredCapabilities: []
 async function buildExploreGateways(
   deps: CliDeps,
   opts: { real: boolean; fakeAi: boolean },
-): Promise<{ judge: JudgmentPort; gen: GenerationPort }> {
+): Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }> {
+  // #100: ONE tracker per invocation, handed to whichever gateways are built below — real (counted
+  // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
+  // without a key). Injected gateways (tests) get an empty tracker: they have no real seam to count.
+  const usage = new UsageTracker();
   if (deps.explore?.judge && deps.explore?.gen) {
-    return { judge: deps.explore.judge, gen: deps.explore.gen };
+    return { judge: deps.explore.judge, gen: deps.explore.gen, usage };
   }
   const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
   if (opts.real) {
@@ -2538,15 +2616,15 @@ async function buildExploreGateways(
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,
       constraints: DEFAULT_EXPLORE_CONSTRAINTS,
-      call: await realOpenRouterCall(),
+      call: await realOpenRouterCall(usage),
     });
-    const judge = new JevJudgmentGateway(store, await realJevClientCall());
+    const judge = new JevJudgmentGateway(store, await realJevClientCall(undefined, usage));
     // Transient model/network failures are retried with exponential backoff + jitter (≈16s), then
     // fail typed; validation/auth errors fail at once (owner ruling 4).
-    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen) };
+    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen), usage };
   }
   if (opts.fakeAi) {
-    return { judge: fakeDoneJudge(), gen: new FakeGenerationGateway() };
+    return { judge: fakeDoneJudge(usage), gen: new FakeGenerationGateway(undefined, usage), usage };
   }
   throw new GatewaySelectionError(
     "no gateway selected — pass --real for live Jev+OpenRouter (after `jevitate ai setup`), or --fake-ai for a deterministic pipeline smoke",
@@ -2556,9 +2634,10 @@ async function buildExploreGateways(
 /**
  * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It answers EVERY
  * question it is asked (whatever the mission names it): a choice picks `done` when offered (else
- * fails closed), a noul answers "no", a score answers 0.
+ * fails closed), a noul answers "no", a score answers 0. `usage` (#100) is optional: when supplied,
+ * every call reports 1 judgment at 0 tokens.
  */
-export function fakeDoneJudge(): JudgmentPort {
+export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
   return {
     async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
       const out: Record<string, Answer> = {};
@@ -2580,23 +2659,39 @@ export function fakeDoneJudge(): JudgmentPort {
           }
         }
       }
+      usage?.recordJudgment({ inputTokens: 0, outputTokens: 0 });
       return out;
     },
   };
 }
 
-/** Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`. */
-async function realOpenRouterCall(): Promise<OpenRouterCall> {
+/**
+ * Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`.
+ * `usage` (#100) is an optional sink: when supplied, every call (including a retry — this is the
+ * innermost seam `RetryingGenerationPort` re-invokes on each attempt) reports one generation with
+ * the provider's own token counts, plus `usd` ONLY when OpenRouter's usage-accounting reports a
+ * cost (never estimated). Usage accounting must never itself break a generation call, so a missing
+ * or malformed `providerMetadata` counts as 0 tokens / no cost rather than throwing.
+ */
+async function realOpenRouterCall(usage?: UsageSink): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   return async ({ model, schema, body, authHeader, temperature }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
-    const { object } = await generateObject({
+    const { object, usage: tokenUsage, providerMetadata } = await generateObject({
       model: openrouter(model),
       schema,
       prompt: JSON.stringify(body),
+      // Asks OpenRouter to include usage accounting (incl. `cost`) in providerMetadata.openrouter.usage.
+      providerOptions: { openrouter: { usage: { include: true } } },
       ...(temperature === undefined ? {} : { temperature }),
+    });
+    const openrouterUsage = (providerMetadata as { openrouter?: { usage?: { cost?: number } } } | undefined)?.openrouter?.usage;
+    usage?.recordGeneration({
+      inputTokens: tokenUsage.inputTokens ?? 0,
+      outputTokens: tokenUsage.outputTokens ?? 0,
+      ...(typeof openrouterUsage?.cost === "number" ? { usd: openrouterUsage.cost } : {}),
     });
     return { object, latencyMs: Date.now() - start };
   };

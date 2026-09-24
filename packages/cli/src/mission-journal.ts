@@ -17,9 +17,15 @@ import { transcriptPathFor } from "./transcript-file.js";
 export class MissionJournal {
   readonly transcriptPath: string;
 
-  /** `recordingPath` is the run's Recording file; the transcript goes to `<recording>.transcript.json`. */
-  constructor(readonly recordingPath: string) {
-    this.transcriptPath = transcriptPathFor(recordingPath);
+  /**
+   * `recordingPath` is the run's Recording file; the transcript goes to `<recording>.transcript.json`
+   * unless `transcriptPath` names another file (a usability run keys both off its report).
+   */
+  constructor(
+    readonly recordingPath: string,
+    transcriptPath: string = transcriptPathFor(recordingPath),
+  ) {
+    this.transcriptPath = transcriptPath;
     mkdirSync(dirname(recordingPath), { recursive: true });
   }
 

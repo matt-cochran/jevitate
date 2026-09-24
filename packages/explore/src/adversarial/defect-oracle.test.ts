@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
 import { startServer } from "@jevitate/example-site";
-import { PageSignalCollector } from "./defect-oracle.js";
+import { isAdvisoryConsoleError, PageSignalCollector } from "./defect-oracle.js";
 
 let site: { url: string; close(): Promise<void> };
 let browser: Browser;
@@ -119,5 +119,93 @@ describe("PageSignalCollector", () => {
     } finally {
       await p.close();
     }
+  });
+}, 120_000);
+
+// #88: correlating a console-error line with the captured network response it followed — 5xx is
+// still a defect, 4xx is advisory (reported, never a defect), and no captured response at all
+// (never a request) leaves the console error a defect, as before.
+const CORRELATION_PAGE = `<!doctype html><html><body>
+  <button id="e403" type="button">403</button>
+  <button id="e500" type="button">500</button>
+  <button id="none" type="button">None</button>
+  <script>
+    document.getElementById("e403").addEventListener("click", async () => {
+      const r = await fetch("/api/billing");
+      console.error("ManageBillingToolApi.request failed: {message: Response returned an error code", r.status);
+    });
+    document.getElementById("e500").addEventListener("click", async () => {
+      const r = await fetch("/api/boom");
+      console.error("ManageProfileToolApi.request failed: {message: server error", r.status);
+    });
+    document.getElementById("none").addEventListener("click", () => {
+      console.error("synthetic-standalone-error, no request behind it");
+    });
+  </script>
+</body></html>`;
+
+let corrServer: Server;
+let corrOrigin: string;
+
+describe("#88 — a console error correlated with a captured network response", () => {
+  beforeAll(async () => {
+    corrServer = createServer((req, res) => {
+      switch ((req.url ?? "").split("?")[0]) {
+        case "/api/billing":
+          res.writeHead(403, { "content-type": "application/json" }).end("{}");
+          return;
+        case "/api/boom":
+          res.writeHead(500, { "content-type": "application/json" }).end("{}");
+          return;
+        default:
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(CORRELATION_PAGE);
+      }
+    });
+    await new Promise<void>((resolve) => corrServer.listen(0, "127.0.0.1", resolve));
+    const addr = corrServer.address();
+    if (addr === null || typeof addr === "string") throw new Error("no port");
+    corrOrigin = `http://127.0.0.1:${(addr satisfies AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve) => corrServer.close(() => resolve()));
+  });
+
+  test("a console error after a 403 is advisory, not a defect", async () => {
+    const collector = new PageSignalCollector(page);
+    await page.goto(corrOrigin);
+    await page.click("#e403");
+    await page.waitForTimeout(200);
+    const signals = collector.drain();
+    const err = signals.find((s) => s.kind === "console-error" && s.detail.includes("ManageBillingToolApi"));
+    expect(err).toBeDefined();
+    expect(err !== undefined && isAdvisoryConsoleError(err)).toBe(true);
+    expect(err?.kind === "console-error" ? err.correlatedStatus : undefined).toBe(403);
+  });
+
+  test("a console error after a 500 is a defect (never advisory) — and the 500 itself gates too", async () => {
+    const collector = new PageSignalCollector(page);
+    await page.goto(corrOrigin);
+    await page.click("#e500");
+    await page.waitForTimeout(200);
+    const signals = collector.drain();
+    const err = signals.find((s) => s.kind === "console-error" && s.detail.includes("ManageProfileToolApi"));
+    expect(err).toBeDefined();
+    expect(err !== undefined && isAdvisoryConsoleError(err)).toBe(false);
+    expect(signals.some((s) => s.kind === "http-5xx" && s.status === 500)).toBe(true);
+  });
+
+  test("a console error with no request behind it stays a defect (uncorrelated)", async () => {
+    const collector = new PageSignalCollector(page);
+    await page.goto(corrOrigin);
+    // Past the correlation window since the page's own (unrelated) navigation response: this error
+    // genuinely has no request near it, not just none caused by the click.
+    await page.waitForTimeout(2_200);
+    await page.click("#none");
+    await page.waitForTimeout(200);
+    const signals = collector.drain();
+    const err = signals.find((s) => s.kind === "console-error" && s.detail.includes("synthetic-standalone-error"));
+    expect(err).toBeDefined();
+    expect(err !== undefined && isAdvisoryConsoleError(err)).toBe(false);
+    expect(err?.kind === "console-error" ? err.correlatedStatus : undefined).toBeUndefined();
   });
 }, 120_000);

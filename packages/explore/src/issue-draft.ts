@@ -208,8 +208,12 @@ export function draftForHang(hang: HangFinding, ctx: DraftContext): IssueDraft {
     jevitateCodeRoots(),
   );
   const r = hang.reproduction;
+  const otherRoutes = hang.routes.filter((route) => route !== hang.route);
   const summary = [
     `jevitate observed a **hang** (\`${hang.hangKind}\`) on \`${hang.route}\`: ${hang.signal.detail}.`,
+    // Same offending element, met again elsewhere (#87): one finding, every route it hangs on — no
+    // extra replay budget was spent confirming it again.
+    ...(otherRoutes.length === 0 ? [] : [`Also seen on: ${otherRoutes.map((route) => `\`${route}\``).join(", ")}.`]),
     `Reproduced **${r.reproduced}/${r.attempts}** in fresh browser contexts (${r.status}; ${r.ran} of the replays ran — a replay that could not run is no evidence either way). Fingerprint \`${hang.fingerprint}\`.`,
   ].join("\n\n");
   const repro = [

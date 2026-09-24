@@ -6,6 +6,7 @@
 // shape mirrors explore's snapshot control so an offline builder can populate it
 // from a Recording and a live hook can populate it from a Snapshot.
 import type { TargetDescriptor } from "@jevitate/recording";
+import type { SignalEvidence } from "./signals.js";
 
 /** Calibration context — REQUIRED on every analysis (Global Constraint #5). */
 export interface AppContext {
@@ -14,7 +15,8 @@ export interface AppContext {
   readonly job?: string;
 }
 
-export type Tier = "semantic" | "behavioral" | "objective-a11y";
+/** `signal`: a mechanical oracle over the run's own measurements (signals.ts) — never a model. */
+export type Tier = "semantic" | "behavioral" | "objective-a11y" | "signal";
 
 /** A model-facing interactive control (role/name/state summary — never a raw value). */
 export interface Control {
@@ -224,6 +226,8 @@ export interface UxFinding {
    */
   readonly quality?: { readonly label: "actionable" | "relevant-minor" | "generic" | "wrong"; readonly confidence: number };
   readonly predictedAttention?: PredictedAttention;
+  /** A `signal`-tier finding's verifiable evidence: the step(s), request(s), text and screenshot. */
+  readonly signal?: SignalEvidence;
 }
 
 /** What `makeFinding` needs to resolve refs — anything carrying a ref set. */
