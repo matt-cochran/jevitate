@@ -40,6 +40,8 @@ export interface Control {
   readonly tag: string;
   readonly inputType: string | null;
   readonly enabled: boolean;
+  /** A native `<select>`'s selectable option labels (what a `select` may choose from). */
+  readonly options?: readonly string[];
   /** Model-facing one-liner (role/name/state). Never a raw secret value. */
   readonly summary: string;
 }
@@ -92,6 +94,10 @@ interface ControlFacts {
   readonly visible: boolean;
   /** A file input's `accept` filter (e.g. `image/*`); null for every other control. */
   readonly accept: string | null;
+  /** A `<select>`'s enabled, non-placeholder option labels; null for every other control. */
+  readonly options: string[] | null;
+  /** A `<select>`'s selected option label; null for every other control. */
+  readonly selected: string | null;
 }
 
 /**
@@ -152,17 +158,24 @@ function readControlFacts(node: Node): ControlFacts {
   const ariaLabel = norm(el.getAttribute("aria-label"));
   let labelText = "";
   const labels = (el as unknown as { labels?: NodeListOf<HTMLLabelElement> }).labels;
-  if (labels && labels.length > 0) labelText = norm(labels[0]!.textContent);
+  // A label that WRAPS a select also "contains" every option's text: strip the control's own text.
+  const ownText = tag === "select" ? norm(el.textContent) : "";
+  const labelOf = (l: Element): string => {
+    const t = norm(l.textContent);
+    return ownText !== "" && l.contains(el) ? norm(t.replace(ownText, " ")) : t;
+  };
+  if (labels && labels.length > 0) labelText = labelOf(labels[0]!);
   else {
     const owner = el.closest("label");
-    if (owner) labelText = norm(owner.textContent);
+    if (owner) labelText = labelOf(owner);
   }
   const placeholder = norm(el.getAttribute("placeholder"));
   const buttonish = inputType === "button" || inputType === "submit" || inputType === "reset";
   const nameCandidates = [
     ariaLabel,
     labelText,
-    norm(el.textContent),
+    // A select's own text is every option label run together — never its name.
+    tag === "select" ? "" : norm(el.textContent),
     placeholder,
     buttonish ? norm((el as HTMLInputElement).value) : "",
   ];
@@ -179,7 +192,20 @@ function readControlFacts(node: Node): ControlFacts {
 
   const accept = inputType === "file" ? norm(el.getAttribute("accept")) : null;
 
-  return { tag, inputType, role, name, enabled, checked, autocomplete, valueBearing, visible, accept };
+  let options: string[] | null = null;
+  let selected: string | null = null;
+  if (tag === "select") {
+    const sel = el as HTMLSelectElement;
+    options = Array.from(sel.options)
+      .filter((o) => !o.disabled && o.value !== "")
+      .map((o) => norm(o.label || o.text).slice(0, 200))
+      .filter((o) => o !== "")
+      .slice(0, 100);
+    const cur = sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : undefined;
+    selected = cur === undefined ? null : norm(cur.label || cur.text);
+  }
+
+  return { tag, inputType, role, name, enabled, checked, autocomplete, valueBearing, visible, accept, options, selected };
 }
 
 /** BROWSER CODE — reads a (non-secret, value-bearing) control's current value. */
@@ -200,6 +226,11 @@ function summarize(facts: DescribedFacts): string {
   if (facts.checked === false) bits.push("unchecked");
   if (facts.value !== null && facts.value !== "") bits.push(`value="${facts.value}"`);
   if (facts.accept !== null && facts.accept !== "") bits.push(`accept=${facts.accept}`);
+  if (facts.selected !== null && facts.selected !== "") bits.push(`selected="${facts.selected}"`);
+  if (facts.options !== null && facts.options.length > 0) {
+    const shown = facts.options.slice(0, 12).map((o) => `"${o}"`).join(" | ");
+    bits.push(`options: ${shown}${facts.options.length > 12 ? ` | …${facts.options.length - 12} more` : ""}`);
+  }
   return bits.length > 0 ? `${head} (${bits.join(", ")})` : head;
 }
 
@@ -224,6 +255,7 @@ function computeSignature(
       enabled: f.enabled,
       checked: f.checked,
       value: f.value,
+      selected: f.selected,
     })),
   });
 }
@@ -271,6 +303,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         tag: facts.tag,
         inputType: facts.inputType,
         enabled: facts.enabled,
+        ...(facts.options === null ? {} : { options: facts.options }),
         summary: summarize(facts),
       });
       keptFacts.push(facts);

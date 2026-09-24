@@ -14,6 +14,7 @@ import type { Control } from "./snapshot.js";
 export type Op =
   | "click"
   | "type"
+  | "send"
   | "select"
   | "upload"
   | "scroll_up"
@@ -25,6 +26,7 @@ export type Op =
 export const OPS: readonly Op[] = [
   "click",
   "type",
+  "send",
   "select",
   "upload",
   "scroll_up",
@@ -34,11 +36,16 @@ export const OPS: readonly Op[] = [
   "blocked",
 ];
 
-/** The ops that act on a chosen control. */
-export type TargetOp = "click" | "type" | "select" | "upload";
+/**
+ * The ops that act on a chosen control. `send` = type a message into a text field AND submit it
+ * (Enter, else the field's Send/Submit control) — one action, so a chat composer is never left
+ * holding typed text the app never receives. It is never a control's `affordedOp`; the goal loop
+ * offers it alongside `type` for message-shaped fields (see `sendable`).
+ */
+export type TargetOp = "click" | "type" | "send" | "select" | "upload";
 
 /** The ops that require a chosen control; every other op is target-free. */
-export const OPS_NEEDING_TARGET: ReadonlySet<Op> = new Set<Op>(["click", "type", "select", "upload"]);
+export const OPS_NEEDING_TARGET: ReadonlySet<Op> = new Set<Op>(["click", "type", "send", "select", "upload"]);
 
 /** Text-entry `<input>` types: typing is their interaction. Anything else (checkbox, radio, range, color…) is clicked. */
 const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
@@ -74,6 +81,28 @@ export function affordedOp(c: Pick<Control, "tag" | "inputType" | "role">): Targ
   return "click";
 }
 
+/** Free-text input types a message can be written into (not passwords, numbers, dates, emails…). */
+const MESSAGE_INPUT_TYPES: ReadonlySet<string> = new Set(["", "text", "search"]);
+
+/**
+ * True when a control can take a typed-and-submitted message (`send`): a message-shaped (see
+ * `MESSAGE_FIELD`) textarea, free-text input, or `textbox` role (contenteditable composers).
+ * Structured and form fields are never offered it.
+ */
+export function sendable(c: Pick<Control, "tag" | "inputType" | "role" | "enabled" | "name">): boolean {
+  if (!c.enabled || !MESSAGE_FIELD.test(c.name)) return false;
+  if (c.tag === "textarea") return true;
+  if (c.tag === "input") return MESSAGE_INPUT_TYPES.has(c.inputType ?? "");
+  return c.role === "textbox";
+}
+
+/**
+ * A field whose text is a message to someone (a chat/inquiry composer: "Type a reply", "Ask…",
+ * "Start a new inquiry"), not a form value ("Rationale", "Your name"). Only these are offered `send`
+ * and written by `chat.reply` — a form field keeps `type` + its form's own submit.
+ */
+export const MESSAGE_FIELD = /\b(reply|message|ask|chat|inquiry|prompt|say|talk|conversation)\b/i;
+
 /** One complete action on the current page: an op plus (for target ops) its control. */
 export type CandidateAction =
   | { readonly id: string; readonly op: TargetOp; readonly control: Control; readonly description: string }
@@ -88,12 +117,14 @@ export const TARGET_FREE_ACTIONS: ReadonlyArray<{ readonly op: Exclude<Op, Targe
   { op: "blocked", description: "the goal cannot be advanced from here" },
 ];
 
-function describeAction(op: TargetOp, summary: string): string {
+export function describeAction(op: TargetOp, summary: string): string {
   switch (op) {
     case "upload":
       return `upload the mission's file into ${summary}`;
     case "type":
       return `type into ${summary}`;
+    case "send":
+      return `type a message into ${summary} and submit it (Enter / its Send button)`;
     case "select":
       return `choose an option in ${summary}`;
     case "click":
@@ -111,7 +142,7 @@ export function candidateId(op: TargetOp, control: Pick<Control, "index">): stri
 }
 
 export interface TargetCandidateOptions {
-  /** The target ops this mission may issue. Default: all four. */
+  /** The target ops this mission may issue. Default: every afforded op (never `send`). */
   readonly ops?: ReadonlySet<TargetOp>;
   /** Skip disabled controls (they can never be acted on). Default false. */
   readonly enabledOnly?: boolean;
@@ -135,4 +166,19 @@ export function targetCandidates(
     out.push({ id: candidateId(op, control), op, control, description: describeAction(op, control.summary) });
   }
   return out;
+}
+
+/**
+ * The `send` actions a page affords: one per message-shaped field (see `sendable`). Offered by the
+ * goal loop next to `type`, so "write a message and send it" is a single choice.
+ */
+export function sendCandidates(controls: readonly Control[]): Array<Extract<CandidateAction, { op: TargetOp }>> {
+  return controls
+    .filter((c) => affordedOp(c) === "type" && sendable(c))
+    .map((control) => ({
+      id: candidateId("send", control),
+      op: "send" as const,
+      control,
+      description: describeAction("send", control.summary),
+    }));
 }

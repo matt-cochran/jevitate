@@ -70,6 +70,13 @@ mission and reading the result honestly.
   Recording is a precise repro of how far Jev got, but it is not success. A
   goal-based run is success only when `outcome` is `succeeded`; adversarial CI
   gates on `outcome === "defect"`; a coverage run gates on discovered defects.
+- `runOutcome` (goal) / `outcome` (usability) is the run's own account:
+  `completed` only when the goal's success condition was observably met, else
+  `incomplete` with the reason (budget, stuck detector, a rejected `done`, hang,
+  crash). Quote the reason; never read an `incomplete` run as done.
+- Chat pages: messages are typed AND sent (`send`), each reply is awaited
+  (`--reply-wait-ms`, default 60000) and recorded in the transcript (`message`,
+  `reply`); generated messages are capped by `--reply-max-chars` (default 300).
 - A successful goal-based Recording is a candidate to hand to `jevitate-record`
   for postdoc review, or to author directly via `explore-author-journey` —
   say so when it succeeds.

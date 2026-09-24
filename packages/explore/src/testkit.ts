@@ -84,7 +84,19 @@ export class ScriptedJudge implements JudgmentPort {
       return q?.kind === "choice" ? q.options : [];
     });
   }
+  /**
+   * The answer to every noul question (the goal-completion check a proposed `done` triggers):
+   * P(yes). Default 0.9 — a scripted `done` is grounded unless a test says otherwise.
+   */
+  goalMetProbability = 0.9;
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
+    if (!("action" in args.questions)) {
+      const out: Record<string, Answer> = {};
+      for (const [name, q] of Object.entries(args.questions)) {
+        if (q.kind === "noul") out[name] = { kind: "noul", value: this.goalMetProbability >= 0.5, probability: this.goalMetProbability };
+      }
+      return out;
+    }
     this.calls.push(args);
     const cur = this.seq[Math.min(this.#i, this.seq.length - 1)];
     this.#i += 1;

@@ -151,7 +151,7 @@ describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
 
 describe("jevitate explore — --fake-ai smoke answers the candidate-action question", () => {
   it(
-    "the fake judge proposes done (advisory), the oracle adjudicates, and the transcript is written",
+    "the fake judge proposes done (advisory), the oracle refuses it, and the transcript is written",
     async () => {
       const outDir = await mkdtemp(join(tmpdir(), "jevitate-explore-fake-"));
       const lines: string[] = [];
@@ -177,11 +177,15 @@ describe("jevitate explore — --fake-ai smoke answers the candidate-action ques
         );
         const parsed = JSON.parse(lines.join(""));
         expect(parsed.ok).toBe(true);
-        expect(parsed.data.stop).toBe("done");
+        // The fake judge only ever proposes done; the oracle (never Jev) refuses it each time, so the
+        // run ends incomplete with the reason — not a silent early stop.
+        expect(parsed.data.stop).toBe("blocked");
         expect(parsed.data.assertionPassed).toBe(false);
+        expect(parsed.data.runOutcome.status).toBe("incomplete");
+        expect(parsed.data.runOutcome.reason).toMatch(/proposed done 3 times, but the success condition is not met/);
         const transcript = await readTranscript(parsed.data.transcriptPath);
-        expect(transcript).toHaveLength(1);
-        expect(transcript[0]?.op).toBe("done");
+        expect(transcript).toHaveLength(3);
+        expect(transcript.every((e) => e.op === "done" && e.actOk === false)).toBe(true);
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }

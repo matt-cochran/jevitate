@@ -6,6 +6,7 @@ import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { occluderOf } from "./occlusion.js";
 import { monitorFor } from "./page-monitor.js";
+import { isSubmitControl } from "./conversation.js";
 
 /**
  * act: execute one decided op against the live page, GATED.
@@ -36,7 +37,15 @@ export interface ActArgs {
    * mission/loop (validated to exist at mission start), NEVER by the model.
    */
   readonly fixture?: string | null;
+  /**
+   * The snapshot's controls — for `send`, the pool its Send/Submit control is chosen from (the one
+   * nearest the field in the DOM), so a click is always on a control the snapshot described.
+   */
+  readonly candidates?: readonly Control[];
 }
+
+/** How a `send` submitted its message. */
+export type SubmittedVia = { readonly kind: "click"; readonly control: Control } | { readonly kind: "enter" };
 
 export interface ActResult {
   /** True when the op executed successfully (gate passed, action ran). */
@@ -45,10 +54,14 @@ export interface ActResult {
   readonly mutated: boolean;
   /** Why the gate/op failed, when `ok` is false. */
   readonly reason?: string;
+  /** For `send`: how the typed message was submitted. */
+  readonly submittedVia?: SubmittedVia;
 }
 
 /** How long a `wait` op yields for async settling. Bounded; never a postcondition. */
 const WAIT_MS = 250;
+/** Bound (ms) on selecting an option. */
+const SELECT_TIMEOUT_MS = 5_000;
 /** Pixels a scroll op moves. */
 const SCROLL_PX = 600;
 
@@ -128,6 +141,50 @@ async function attempt(action: () => Promise<void>): Promise<ActResult> {
   }
 }
 
+/** BROWSER CODE — tree distance between two elements (through their lowest common ancestor). */
+function treeDistance(a: Element, b: Element): number {
+  const up = (el: Element): Element[] => {
+    const out: Element[] = [];
+    for (let cur: Element | null = el; cur !== null; cur = cur.parentElement) out.push(cur);
+    return out;
+  };
+  const pa = up(a);
+  const pb = up(b);
+  for (let i = 0; i < pa.length; i++) {
+    const j = pb.indexOf(pa[i] as Element);
+    if (j >= 0) return i + j;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+/** Composer and Send control further apart than this in the DOM tree are not one composer. */
+const MAX_SUBMIT_DISTANCE = 12;
+
+/**
+ * The composer's own submit control: among the snapshot's Send/Submit-named controls, the one
+ * nearest the field in the DOM (within `MAX_SUBMIT_DISTANCE`). Enabled-ness is checked live, AFTER
+ * typing — a Send button is commonly disabled until the composer has text.
+ */
+async function submitControlFor(actor: Actor, field: Control, pool: readonly Control[]): Promise<Control | null> {
+  const page = actor.ability(BrowseTheWebToken).session.page;
+  const fieldHandle = await descriptorToLocator(page, field.descriptor).elementHandle({ timeout: 1_000 }).catch(() => null);
+  if (fieldHandle === null) return null;
+  let best: { control: Control; distance: number } | null = null;
+  try {
+    for (const c of pool) {
+      if (c.index === field.index || !isSubmitControl(c)) continue;
+      const loc = descriptorToLocator(page, c.descriptor);
+      if ((await loc.count().catch(() => 0)) !== 1) continue;
+      const distance = await loc.evaluate(treeDistance, fieldHandle).catch(() => Number.MAX_SAFE_INTEGER);
+      if (distance > MAX_SUBMIT_DISTANCE) continue;
+      if (best === null || distance < best.distance) best = { control: c, distance };
+    }
+  } finally {
+    await fieldHandle.dispose().catch(() => undefined);
+  }
+  return best?.control ?? null;
+}
+
 export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
   const page = actor.ability(BrowseTheWebToken).session.page;
   // A page-changing action that passed its gate starts a transition: the next perception measures
@@ -156,6 +213,32 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       const descriptor = args.control.descriptor;
       return dispatch(() => Enter.theText(text).into(targetFor(descriptor)).performAs(actor));
     }
+    case "send": {
+      // Type the message AND submit it — a composer left holding text is a message never sent.
+      if (args.control === null) return { ok: false, mutated: false, reason: "send needs a target" };
+      if (args.value === null || args.value === undefined) {
+        return { ok: false, mutated: false, reason: "send has no value (fail-closed)" };
+      }
+      const bad = await gate(actor, args.control);
+      if (bad !== null) return { ok: false, mutated: false, reason: bad };
+      const text = args.value;
+      const field = args.control;
+      const pool = args.candidates ?? [];
+      let via: SubmittedVia = { kind: "enter" };
+      const r = await dispatch(async () => {
+        await Enter.theText(text).into(targetFor(field.descriptor)).performAs(actor);
+        // Prefer the composer's own Send control (Enter in a textarea usually inserts a newline);
+        // with none, Enter submits a single-line field or its form.
+        const submit = await submitControlFor(actor, field, pool);
+        if (submit !== null && (await gate(actor, submit)) === null) {
+          await Click.on(targetFor(submit.descriptor)).performAs(actor);
+          via = { kind: "click", control: submit };
+          return;
+        }
+        await descriptorToLocator(page, field.descriptor).press("Enter");
+      });
+      return r.ok ? { ...r, submittedVia: via } : r;
+    }
     case "select": {
       if (args.control === null) return { ok: false, mutated: false, reason: "select needs a target" };
       if (args.value === null || args.value === undefined) {
@@ -166,7 +249,8 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       const option = args.value;
       const descriptor = args.control.descriptor;
       return dispatch(async () => {
-        await descriptorToLocator(page, descriptor).selectOption(option);
+        // Bounded: an option that is not there fails in seconds, not Playwright's 30s default.
+        await descriptorToLocator(page, descriptor).selectOption(option, { timeout: SELECT_TIMEOUT_MS });
       });
     }
     case "upload": {

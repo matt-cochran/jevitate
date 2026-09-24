@@ -23,8 +23,10 @@ import {
   type CapabilityScope,
   type FeatureRunResult,
   type TranscriptEntry,
+  type RunOutcome,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
+import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import {
   combineOutcomes,
   type FilingConfig,
@@ -99,6 +101,8 @@ export interface RunExplorationOptions {
   readonly issueFiler?: () => IssueFilerPort;
   /** Fresh-context replays that confirm a hang (default 2). */
   readonly hangReplays?: number;
+  /** Conversational pages: the reply wait (ms) and the cap (chars) on each generated message. */
+  readonly conversation?: ConversationOptions;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -150,6 +154,11 @@ function browserVersionOf(page: { context(): { browser(): { version(): string } 
 
 export interface RunExplorationResult {
   readonly outcome: GoalBasedOutcome;
+  /**
+   * Did the loop complete its goal (`completed`, verified by the success assertion), or why not
+   * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
+   */
+  readonly runOutcome: RunOutcome;
   readonly assertionPassed: boolean;
   readonly stop: StopReason;
   readonly finalUrl: string;
@@ -225,6 +234,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       secrets: opts.secrets,
       site: origin,
       fixture,
+      ...conversationConfig(opts.conversation),
     });
 
     journal.writeRecording(mission.recording);
@@ -253,6 +263,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       issues,
       timing: mission.run.timing,
       outcome: mission.outcome,
+      runOutcome: mission.run.outcome,
       assertionPassed: mission.assertionPassed,
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,

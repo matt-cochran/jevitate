@@ -69,6 +69,12 @@ class CapturingJudge implements JudgmentPort {
   }): Promise<Record<string, Answer>> {
     this.payloads.push(JSON.stringify(args));
     this.states.push(args.state);
+    // The goal-completion check a proposed `done` triggers (it carries the visible page text): yes.
+    if (!("action" in args.questions)) {
+      const out: Record<string, Answer> = {};
+      for (const name of Object.keys(args.questions)) out[name] = { kind: "noul", value: true, probability: 0.9 };
+      return out;
+    }
     this.#calls += 1;
     if (this.#calls > 1) return { action: { kind: "choice", value: "done", confidence: 0.9 } };
     const line = args.state.controls.find((c) => /^\[\d+\] button/.test(c));
@@ -105,7 +111,9 @@ describe("secret canary — nothing reaches Jev or the Recording", () => {
       );
 
       // The loop really ran: a click was recorded and the page navigated.
-      expect(judge.payloads.length).toBe(2);
+      // click, done, and the goal-completion check grounding that done (visible page text included).
+      expect(judge.payloads.length).toBe(3);
+      expect(judge.states[2]!.controls.some((c) => c.startsWith("VISIBLE PAGE TEXT") && c.includes(REDACTION_MASK))).toBe(true);
       const steps: Step[] = run.recording.pages.flatMap((p) => p.steps.map((s) => s.step));
       expect(steps.map((s) => s.kind)).toContain("click");
 
