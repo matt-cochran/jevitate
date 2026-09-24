@@ -164,6 +164,25 @@ interface Occurrence {
 
 const ATTENTION_NOTE = "Inferred from semantic/visual hierarchy — not eye-tracking or gaze data.";
 
+const MIN_TYPED_VALUE_CHARS = 3;
+
+/**
+ * Does any of `quotes`/`controlLabels` (an accepted adjudication's grounding evidence) match a
+ * value the run itself typed (#85)? Bidirectional substring match (normalized): a typed piece
+ * title quoted verbatim, or truncated/expanded slightly by the model, still counts. Returns the
+ * first matching typed value, or `undefined`.
+ */
+function matchingTypedValue(quotes: readonly string[], controlLabels: readonly string[], typedValues: readonly string[]): string | undefined {
+  const candidates = [...quotes, ...controlLabels].map(normalizeText).filter((c) => c.length >= MIN_TYPED_VALUE_CHARS);
+  if (candidates.length === 0) return undefined;
+  for (const raw of typedValues) {
+    const typed = normalizeText(raw);
+    if (typed.length < MIN_TYPED_VALUE_CHARS) continue;
+    if (candidates.some((c) => c.includes(typed) || typed.includes(c))) return raw;
+  }
+  return undefined;
+}
+
 export class UxAnalyzer {
   constructor(private readonly deps: UxAnalyzerDeps) {}
 
@@ -298,6 +317,22 @@ export class UxAnalyzer {
             if (verdict.kind === "suppressed") {
               suppressed.push({ rubricItemId: f.entry.id, route, screenId: screen.screenId, reason: verdict.reason, detail: verdict.detail });
               continue;
+            }
+            // #85: a vocabulary/jargon-sensitive entry (nielsen-2) whose grounding evidence turns
+            // out to be something the RUN ITSELF typed (a piece title, user-generated content
+            // echoed back) is a false positive on the user's own words — suppressed, not reported.
+            if (f.entry.vocabularySensitive) {
+              const matched = matchingTypedValue(verdict.quotes, verdict.controls, redacted.typedValues);
+              if (matched) {
+                suppressed.push({
+                  rubricItemId: f.entry.id,
+                  route,
+                  screenId: screen.screenId,
+                  reason: "user-authored-content",
+                  detail: `quoted/cited text matches a value this run itself typed: ${JSON.stringify(matched.slice(0, 80))}`,
+                });
+                continue;
+              }
             }
             const identity = verdict.controlKeys.length > 0 ? verdict.controlKeys.join("+") : `text:${verdict.quotes.map((q) => q.toLowerCase()).sort().join("+")}`;
             occurrences.push({

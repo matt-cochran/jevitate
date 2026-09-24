@@ -112,15 +112,94 @@ function stepTarget(step: Recording["pages"][number]["steps"][number]["step"]): 
 }
 
 /**
+ * Values the run itself typed or selected — a Recording's own `fill`/`select` steps whose value
+ * was NOT redacted (a secret field's value is always `{redacted:true}` and never surfaces here).
+ * #85 item 1: feeds the vocabulary/jargon tier (nielsen-2) so a quote/label that is really the
+ * user's own content (e.g. a piece title echoed back onto a card) is not mistaken for app copy.
+ */
+export function extractTypedValues(recording: Recording): string[] {
+  const values: string[] = [];
+  for (const page of recording.pages) {
+    for (const rs of page.steps) {
+      const step = rs.step;
+      if ((step.kind === "fill" || step.kind === "select") && !("var" in step.value) && !step.value.redacted) {
+        values.push(step.value.value);
+      }
+    }
+  }
+  return [...new Set(values)];
+}
+
+/**
+ * The minimal shape of a mission transcript entry `recordingToEvidence` needs — duck-typed against
+ * `@jevitate/explore`'s `TranscriptEntry` (this file already imports plenty from there; kept
+ * separate so `recordingToEvidence` itself stays decoupled from the live explore-control shape).
+ */
+export interface MissionTranscriptEntryLike {
+  readonly op?: string | null;
+  readonly actOk: boolean;
+  readonly reason?: string;
+  readonly url: string;
+  readonly descriptor?: TargetDescriptor;
+}
+
+const ACTIONABLE_OPS = new Set(["click", "type", "select"]);
+
+/**
+ * Blocked/disabled-target controls derived from a mission transcript (#85 item 2), grouped by the
+ * page url they were observed on. A failed action is never recorded as a Recording step (see #81:
+ * `RunRecorder` records only successful actions), so this is the only source that gives offline
+ * `jevitate ux` the same evidence a LIVE usability run sees for free via `Control.enabled` on its
+ * snapshot — e.g. a "Pay" button that stayed disabled.
+ */
+function blockedControlsByUrl(transcript: readonly MissionTranscriptEntryLike[], startIndex: number): Map<string, UxControl[]> {
+  const byUrl = new Map<string, UxControl[]>();
+  const seen = new Set<string>();
+  let idx = startIndex;
+  for (const t of transcript) {
+    if (t.actOk || t.descriptor === undefined || !t.op || !ACTIONABLE_OPS.has(t.op)) continue;
+    const key = `${t.url}|${JSON.stringify(t.descriptor)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const d = t.descriptor;
+    const list = byUrl.get(t.url) ?? [];
+    list.push({
+      index: idx++,
+      role: d.role ?? "",
+      name: d.name ?? d.testId ?? d.text ?? "",
+      tag: "",
+      inputType: null,
+      enabled: false,
+      summary: `${descriptorSummary(d)} (blocked: ${t.reason ?? "action did not succeed"})`,
+      descriptor: d,
+    });
+    byUrl.set(t.url, list);
+  }
+  return byUrl;
+}
+
+/**
  * A saved Recording → per-page UxEvidence. A Recording is deterministic and
  * thin: it carries the CONTROLS the user touched (via each step's descriptor)
  * and the page url, but NOT the full visible text or a11y geometry. So offline
  * analysis is honestly partial — items needing `visibleText`/`a11yFacts` Skip,
  * and coverage reports it. (The live mode carries the rich per-screen snapshot.)
+ *
+ * `missionTranscript` (#85 item 2, optional) adds blocked/disabled-target controls the Recording
+ * itself cannot carry, on whichever screen(s) share the blocked action's url — the same evidence a
+ * live usability run gets from its snapshot. `typedValues` (every screen's own #85 item 1 input)
+ * is always derived from the Recording, with or without a transcript.
  */
-export function recordingToEvidence(recording: Recording, appContext: AppContext, job?: string): UxEvidence[] {
+export function recordingToEvidence(
+  recording: Recording,
+  appContext: AppContext,
+  job?: string,
+  missionTranscript?: readonly MissionTranscriptEntryLike[],
+): UxEvidence[] {
   const screens: UxEvidence[] = [];
   const history: ScreenRef[] = [];
+  const typedValues = extractTypedValues(recording);
+  const blockedByUrl = blockedControlsByUrl(missionTranscript ?? [], recording.pages.reduce((n, p) => n + p.steps.length, 0) + 1000);
   for (let i = 0; i < recording.pages.length; i++) {
     const page = recording.pages[i];
     const controls: UxControl[] = [];
@@ -143,6 +222,7 @@ export function recordingToEvidence(recording: Recording, appContext: AppContext
         descriptor: d,
       });
     }
+    for (const blocked of blockedByUrl.get(page.url) ?? []) controls.push(blocked);
     const screenId = `${page.url}#${i}`;
     screens.push({
       screenId,
@@ -154,6 +234,7 @@ export function recordingToEvidence(recording: Recording, appContext: AppContext
       history: [...history],
       behavior: emptyBehavior(),
       a11yFacts: { controls: [] },
+      ...(typedValues.length > 0 ? { typedValues } : {}),
     });
     history.push({ screenId, url: page.url });
   }
@@ -189,12 +270,24 @@ export interface RunUxReviewOptions {
   /** Where to write the report. Default `~/.jevitate/ux-reports`. */
   readonly outDir?: string;
   readonly nowIso?: () => string;
+  /**
+   * The source run's mission transcript (#85 item 2) — from `--result`'s `<recording>.result.json`
+   * (`result.transcript`), or the sibling `<recording>.transcript.json` directly. Gives offline
+   * analysis the same blocked/disabled-target evidence a live usability run sees. Absent, the
+   * report says so (`report.evidenceCaveats`) rather than silently seeing less.
+   */
+  readonly missionTranscript?: readonly MissionTranscriptEntryLike[];
+  /** Why `missionTranscript` is absent (e.g. no `--result` given, or the file could not be read) — becomes a report caveat. */
+  readonly missionTranscriptUnavailable?: string;
 }
 
 export interface RunUxReviewResult {
   readonly report: UxReport;
   readonly reportPath: string;
 }
+
+const NO_TRANSCRIPT_CAVEAT =
+  "blocked/disabled-target evidence not available: this offline pass has no mission transcript, so a dead end like a button that never enables cannot be seen (pass --result <mission-result.json>, as written by `jevitate explore`, to include it — the same evidence a live usability run sees).";
 
 /**
  * Offline UX review. FAIL-FAST: an analyzer `failed` outcome throws
@@ -205,7 +298,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
   const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
-  const screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job);
+  const screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job, opts.missionTranscript);
   const outcome = await analyzer.analyze({
     screens,
     rubric: loadV1Rubric(),
@@ -216,7 +309,8 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   if (outcome.kind === "failed") {
     throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
   }
-  const report = buildReport(outcome, { minConfidence, quality });
+  const evidenceCaveats = opts.missionTranscript === undefined ? [opts.missionTranscriptUnavailable ?? NO_TRANSCRIPT_CAVEAT] : [];
+  const report = buildReport(outcome, { minConfidence, quality, evidenceCaveats });
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
   await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -371,9 +465,14 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       },
     });
 
+    // #85 item 1: the live run's own typed values (from its emitted Recording's fill/select
+    // steps — never a secret), so the vocabulary/jargon tier can tell the app's own copy apart
+    // from user-authored content it merely echoed back (same mechanism as the offline pass).
+    const typedValues = extractTypedValues(run.recording);
+    const screens = typedValues.length > 0 ? collected.map((ev) => ({ ...ev, typedValues })) : collected;
     const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
     const outcome = await analyzer.analyze({
-      screens: collected,
+      screens,
       rubric: loadV1Rubric(),
       appContext: opts.appContext,
       secrets: opts.secrets,

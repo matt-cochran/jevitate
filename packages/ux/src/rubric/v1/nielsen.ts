@@ -32,6 +32,10 @@ export const NIELSEN: readonly RubricEntry[] = [
     citation: NNG,
     tier: "semantic",
     requiredEvidence: ["controls", "visibleText"],
+    // #85: a "jargon" finding whose evidence turns out to be something the run itself typed (a
+    // piece title, user-generated content echoed back) is a false positive on the user's own
+    // words, not the app's copy — suppressed rather than reported.
+    vocabularySensitive: true,
     questions: [
       {
         id: "real-world-language",
