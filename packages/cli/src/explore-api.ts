@@ -734,6 +734,8 @@ export interface RunFeatureCliMissionOptions {
   readonly capability: string;
   readonly routeGlobs: readonly string[];
   readonly headless?: boolean;
+  /** Step/action budget (CLI `--max-actions` / `--max-decisions`). */
+  readonly bounds?: Partial<Bounds>;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
@@ -744,12 +746,29 @@ export interface RunFeatureCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** Where the recordings, transcript and typed result are written. Default `~/.jevitate/recordings`. */
+  readonly outDir?: string;
+  /** ISO clock for output filenames. Default `Date.now()`. */
+  readonly nowIso?: () => string;
 }
 
-/** The feature mission's result plus its typed verdict and exit code. */
+/** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
 export type FeatureCliMissionResult = FeatureRunResult & {
+  /**
+   * `clean` only when the run actually exercised an in-scope, non-chrome
+   * control of the named capability (`coverage.inScopeActionsExercised > 0`).
+   * A run that touched nothing but global chrome and/or left `--route` scope
+   * on every attempt is `inconclusive` — never a fabricated `clean` (ticket
+   * #78's guardrail: a run that proved nothing is never `clean`).
+   */
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
+  /** One Recording per distinct discovered path (`feature-<stamp>-path-<n>.json`). */
+  readonly recordingPaths: string[];
+  /** The shared decision transcript (`feature-<stamp>.transcript.json`). */
+  readonly transcriptPath: string;
+  /** The persisted typed result (`feature-<stamp>.result.json`), readable via MCP `get_mission_result`. */
+  readonly resultPath: string;
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -766,6 +785,13 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await portFactory().open(launch);
+
+  // Persist recordings + transcript + a typed result, like the goal and
+  // coverage missions do (ticket #78 — previously nothing was written).
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const stamp = artifactStamp(iso);
+  const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -775,12 +801,45 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       seedUrl: opts.seedUrl,
       allowlist: opts.allowlist,
       scope,
+      bounds: opts.bounds,
+      onTranscriptEntry: journal.onTranscriptEntry,
     });
+
+    const recordingPaths: string[] = [];
+    for (let i = 0; i < result.recordings.length; i++) {
+      const p = join(outDir, `feature-${stamp}-path-${i}.json`);
+      await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
+      recordingPaths.push(p);
+    }
+    journal.writeTranscript(result.transcript);
+
+    // Honest outcome (ticket #78): a run that exercised nothing in-scope and
+    // non-chrome proved nothing about the named capability — `inconclusive`,
+    // never `clean`, whatever the loop's own stop reason was. Mirrors the
+    // adversarial mission's `insufficient-coverage` idiom.
+    const thin = result.outcome !== "crashed" && result.coverage.inScopeActionsExercised === 0;
+    const coverageFailure: MissionFailure | undefined = thin
+      ? {
+          kind: "insufficient-coverage",
+          message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${
+            opts.routeGlobs.join(", ") || "(none)"
+          }] — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
+        }
+      : undefined;
     const missionOutcome: MissionOutcome = combineOutcomes([
-      result.outcome === "crashed" ? "crashed" : "clean",
+      result.outcome === "crashed" ? "crashed" : thin ? "inconclusive" : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
-    return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
+    const exitCode = missionExitCode(missionOutcome);
+    const typed = {
+      ...result,
+      failure: result.failure ?? coverageFailure,
+      missionOutcome,
+      exitCode,
+      recordingPaths,
+      transcriptPath: journal.transcriptPath,
+    };
+    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
     await closeQuietly(session);
   }

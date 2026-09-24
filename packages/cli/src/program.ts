@@ -1702,12 +1702,18 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
         const featAllowlist = resolveExploreAllowlist(o.url, o.allow);
+        const featBounds: Record<string, number> = {};
+        if (o.maxActions !== undefined) featBounds.maxActions = Number(o.maxActions);
+        if (o.maxDecisions !== undefined) featBounds.maxDecisions = Number(o.maxDecisions);
         try {
           const result = await runFeatureCliMission({
             seedUrl: o.url,
             allowlist: featAllowlist,
             capability: o.feature,
             routeGlobs: o.route ?? [],
+            bounds: Object.keys(featBounds).length > 0 ? featBounds : undefined,
+            outDir: o.out,
+            browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
