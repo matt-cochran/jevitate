@@ -28,6 +28,7 @@ import {
   UxAnalyzer,
   a11yChecks,
   buildReport,
+  calibrationCaveat,
   loadV1Rubric,
   resolveMinConfidence,
   resolveQualityPolicy,
@@ -39,7 +40,7 @@ import {
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { loadUxMinConfidence, loadUxShow } from "./ux-config.js";
+import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
@@ -295,7 +296,12 @@ const NO_TRANSCRIPT_CAVEAT =
  * a fabricated "clean" report.
  */
 export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReviewResult> {
-  const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
+  const minConfidence = resolveMinConfidence(
+    opts.minConfidence,
+    opts.env ?? process.env,
+    loadUxMinConfidence(opts.configPath),
+    loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
+  );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
   const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
   const screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job, opts.missionTranscript);
@@ -310,7 +316,8 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
     throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
   }
   const evidenceCaveats = opts.missionTranscript === undefined ? [opts.missionTranscriptUnavailable ?? NO_TRANSCRIPT_CAVEAT] : [];
-  const report = buildReport(outcome, { minConfidence, quality, evidenceCaveats });
+  const calibrationCaveats = [calibrationCaveat(opts.appContext.appClass)];
+  const report = buildReport(outcome, { minConfidence, quality, evidenceCaveats, calibrationCaveats });
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
   await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -408,7 +415,12 @@ export interface RunUsabilityMissionResult {
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Validate the cutoff before a browser opens — a bad value fails fast, never mid-run.
-  const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
+  const minConfidence = resolveMinConfidence(
+    opts.minConfidence,
+    opts.env ?? process.env,
+    loadUxMinConfidence(opts.configPath),
+    loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
+  );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
@@ -504,7 +516,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
     }
-    const report = buildReport(outcome, { minConfidence, quality });
+    const report = buildReport(outcome, { minConfidence, quality, calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)] });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     return { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
   } finally {

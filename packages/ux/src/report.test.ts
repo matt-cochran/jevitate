@@ -132,4 +132,41 @@ describe("buildReport", () => {
     expect(report.coverageComplete).toBe(false);
     expect(report.failed?.reason).toBe("jev down");
   });
+
+  describe("calibrationCaveats (issue #97 guardrail)", () => {
+    const outcome: AnalysisOutcome = { kind: "analyzed", findings: [finding("major-1", "major", 0.9)], coverage: fullCoverage };
+
+    it("an uncalibrated-target caveat is surfaced both in the headline AND report.calibrationCaveats", () => {
+      const report = buildReport(outcome, {
+        minConfidence: 0,
+        calibrationCaveats: ['app class "admin-tool" is outside the grader\'s calibration corpus — UNVERIFIED for this target'],
+      });
+      expect(report.calibrationCaveats).toEqual(['app class "admin-tool" is outside the grader\'s calibration corpus — UNVERIFIED for this target']);
+      expect(report.headline).toMatch(/CALIBRATION/);
+      expect(report.headline).toMatch(/admin-tool/);
+      expect(report.headline).toMatch(/UNVERIFIED/);
+    });
+
+    it("a failed outcome still carries the calibration caveat in its headline", () => {
+      const report = buildReport(
+        { kind: "failed", reason: "jev down", screenId: "s1", rubricItemId: "major-1" },
+        { calibrationCaveats: ["no app class was given — UNVERIFIED"] },
+      );
+      expect(report.calibrationCaveats).toEqual(["no app class was given — UNVERIFIED"]);
+      expect(report.headline).toMatch(/CALIBRATION/);
+      expect(report.headline).toMatch(/no app class was given/);
+    });
+
+    it("omitting calibrationCaveats (or passing empty ones) never adds a spurious guardrail marker", () => {
+      expect(buildReport(outcome, { minConfidence: 0 }).calibrationCaveats).toBeUndefined();
+      expect(buildReport(outcome, { minConfidence: 0 }).headline).not.toMatch(/CALIBRATION/);
+      expect(buildReport(outcome, { minConfidence: 0, calibrationCaveats: [] }).calibrationCaveats).toBeUndefined();
+      expect(buildReport(outcome, { minConfidence: 0, calibrationCaveats: [""] }).calibrationCaveats).toBeUndefined();
+    });
+
+    it("multiple caveats are all folded into the headline, joined", () => {
+      const report = buildReport(outcome, { minConfidence: 0, calibrationCaveats: ["caveat one", "caveat two"] });
+      expect(report.headline).toMatch(/caveat one \| caveat two/);
+    });
+  });
 });
