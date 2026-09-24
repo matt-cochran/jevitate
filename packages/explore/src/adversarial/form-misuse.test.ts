@@ -71,9 +71,15 @@ describe("detectForms", () => {
     expect(detectForms([button("Save", { submits: true })])).toEqual([]);
   });
 
-  it("never treats a password field as a misuse target", () => {
+  it("treats a password field as a misuse target (#76): typed with a synthetic value, never read", () => {
     const pw = control({ name: "Password", role: "textbox", tag: "input", inputType: "password", form: "form#profile" });
     const forms = detectForms([pw, button("Save", { submits: true })]);
+    expect(forms[0]?.fields.map((f) => f.name)).toEqual(["Password"]);
+  });
+
+  it("still excludes a secret-like field by NAME that is not a password input (API token, SSN…)", () => {
+    const token = control({ name: "API token", role: "textbox", tag: "input", inputType: "text", form: "form#profile" });
+    const forms = detectForms([token, button("Save", { submits: true })]);
     expect(forms).toEqual([]);
   });
 });
@@ -145,6 +151,95 @@ describe("planMisuseEpisode — form-aware strategies", () => {
   it("finds nothing on a page without a form", () => {
     const page = [control({ name: "Home", role: "link", tag: "a", href: "http://app.test/home" })];
     expect(planMisuseEpisode(ctx(page))).toBeNull();
+  });
+
+  it("types a synthetic, redacted value into a password field (#76)", () => {
+    const controls = [
+      field("Email"),
+      control({ name: "Password", role: "textbox", tag: "input", inputType: "password", form: "form#profile" }),
+      button("Sign up", { submits: true }),
+    ];
+    const exercised = new Set([controlKey(controls[0] as Control)]);
+    const ep = planMisuseEpisode(ctx(controls, { exercised }));
+    const typed = ep?.steps[0];
+    expect(typed?.control?.name).toBe("Password");
+    expect(typed?.redacted).toBe(true);
+    expect(typeof typed?.fillText).toBe("string");
+    // The other (non-password) field's step is never marked redacted.
+    expect(planMisuseEpisode(ctx(controls))?.steps[0]?.redacted).toBeUndefined();
+  });
+});
+
+describe("planMisuseEpisode — disclosure controls open forms behind a modal trigger (#76)", () => {
+  it("opens a 'Create new key' button when the page has no form of its own", () => {
+    const page = [
+      button("Create new key", { form: null }),
+      button("Revoke", { form: null }),
+    ];
+    const ep = planMisuseEpisode(ctx(page));
+    expect(ep?.steps).toEqual([
+      expect.objectContaining({ op: "click", control: expect.objectContaining({ name: "Create new key" }), settle: true }),
+    ]);
+  });
+
+  it("opens a control with aria-haspopup=dialog even when its name doesn't match create/new/add/edit", () => {
+    const page = [control({ name: "Options", role: "button", tag: "button", form: null, ariaHasPopup: "dialog" })];
+    const ep = planMisuseEpisode(ctx(page, { strategy: "boundary-submit" }));
+    expect(ep?.steps[0]?.control?.name).toBe("Options");
+  });
+
+  it("falls back to disclosure even when the page has a DIFFERENT form, if this strategy found nothing there", () => {
+    // edit-cancel-save finds nothing on PROFILE's form (no Cancel here) — the page also has an
+    // unopened disclosure control (a dialog trigger elsewhere on the page): open THAT instead of
+    // giving up, since it may reveal more to work with.
+    const noCancel = PROFILE().filter((c) => c.name !== "Cancel");
+    const withDisclosure = [...noCancel, button("Add item", { form: null })];
+    const ep = planMisuseEpisode(ctx(withDisclosure, { strategy: "edit-cancel-save" }));
+    expect(ep?.steps[0]?.control?.name).toBe("Add item");
+  });
+
+  it("still finds nothing when neither this strategy nor any disclosure control applies", () => {
+    const noCancel = PROFILE().filter((c) => c.name !== "Cancel");
+    expect(planMisuseEpisode(ctx(noCancel, { strategy: "edit-cancel-save" }))).toBeNull();
+  });
+
+  it("a dialog's own form is exercised once opened (simulated as the next perception)", () => {
+    const dialogForm = [
+      field("Name", "form@0"),
+      button("Create", { form: "form@0", submits: true }),
+    ];
+    const [form] = detectForms(dialogForm);
+    expect(form?.fields.map((f) => f.name)).toEqual(["Name"]);
+    expect(form?.submit.name).toBe("Create");
+  });
+});
+
+describe("planMisuseEpisode — a checkbox is set once, never toggled back off (#76)", () => {
+  const checkbox = (checked: boolean): Control =>
+    control({ name: "I agree to the terms", role: "checkbox", tag: "input", inputType: "checkbox", form: "form#profile", checked });
+
+  it("checks an unchecked required checkbox before a submit strategy", () => {
+    const controls = [field("Email"), checkbox(false), button("Sign up", { submits: true })];
+    const ep = planMisuseEpisode(ctx(controls, { strategy: "boundary-submit" }));
+    expect(ep?.steps.map((s) => [s.op, s.control?.name ?? null])).toEqual([
+      ["click", "I agree to the terms"],
+      ["type", "Email"],
+      ["click", "Sign up"],
+    ]);
+  });
+
+  it("does not re-click an already-checked checkbox ahead of a submit", () => {
+    const controls = [field("Email"), checkbox(true), button("Sign up", { submits: true })];
+    const ep = planMisuseEpisode(ctx(controls, { strategy: "boundary-submit" }));
+    expect(ep?.steps.map((s) => s.op)).toEqual(["type", "click"]);
+  });
+
+  it("exercise-controls never clicks an already-checked checkbox (would toggle it back off)", () => {
+    const controls = [checkbox(true), button("Sign up", { submits: true })];
+    const ep = planMisuseEpisode(ctx(controls, { strategy: "exercise-controls" }));
+    // Nothing else to exercise but the checked checkbox: exercise-controls finds nothing rather than
+    // undoing it — the checkbox stays in the state that enables submit.
+    expect(ep?.steps[0]?.control?.name).toBe("Sign up");
   });
 });
 
