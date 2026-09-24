@@ -527,6 +527,12 @@ export interface RunCoverageMissionOptions {
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
+  /**
+   * Extra in-scope route globs (CLI `--route`, #89 — reuses #64's adversarial/feature scope model).
+   * The seed URL's own route is always in scope; these add to it. Pass `["/**"]` (CLI `--scope app`)
+   * to widen containment to the whole app.
+   */
+  readonly routeGlobs?: readonly string[];
 }
 
 export interface RunCoverageMissionResult {
@@ -588,6 +594,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       allowlist: opts.allowlist,
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
+      ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
     });
 
     const recordingPaths: string[] = [];

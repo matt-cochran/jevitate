@@ -59,7 +59,7 @@ describe("runInductionMission — single state", () => {
 });
 
 describe("runInductionMission — branching", () => {
-  test("discovers both thread states from /inbox and exercises both transitions", async () => {
+  test("exercises both thread links from /inbox; the prefixed thread ids template to ONE state (#95)", async () => {
     const result = await runInductionMission({
       page,
       actor,
@@ -67,13 +67,16 @@ describe("runInductionMission — branching", () => {
       generation: new FakeGenerationGateway(),
       seedUrl: `${site.url}/inbox`,
       allowlist: [site.url],
+      // /thread/* is a SIBLING route of /inbox, not under it: #89 scopes the frontier to the seed's
+      // own route by default, so this deliberately cross-route discovery test widens the scope.
+      routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
-    // inbox + thread-t-1 + thread-t-2 = 3 distinct states. The thread ids ("t-1",
-    // "t-2") are NOT id-normalized by urlTemplate (they contain a letter), so the
-    // two threads template to distinct states — exactly the coverage the mission
-    // should find.
-    expect(result.coverage.statesVisited).toBe(3);
+    // inbox + thread-:id = 2 distinct states. `/thread/t-1` and `/thread/t-2` are PREFIXED ids
+    // (a literal "t-" prefix + a numeric suffix): #95 templates the suffix, so both collapse to
+    // the same `/thread/t-:id` state — the mission still exercises BOTH links (both transitions
+    // land), it just correctly recognizes the second as an already-visited state, not a new one.
+    expect(result.coverage.statesVisited).toBe(2);
     expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
     expect(result.recordings.length).toBeGreaterThanOrEqual(2);
   }, 30_000);
@@ -91,6 +94,9 @@ describe("runInductionMission — cycles", () => {
       generation: new FakeGenerationGateway(),
       seedUrl: `${site.url}/exploratory-testing/cycle-a`,
       allowlist: [site.url],
+      // cycle-b is a SIBLING of cycle-a, not under it: widen scope for this deliberately
+      // cross-route cycle-detection test (#89 scopes to the seed's own route by default).
+      routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
     expect(result.coverage.statesVisited).toBe(2);
@@ -112,6 +118,9 @@ describe("runInductionMission — defect judgment is advisory only", () => {
       generation: new FakeGenerationGateway(),
       seedUrl: `${site.url}/inbox`,
       allowlist: [site.url],
+      // /thread/* is a sibling route: widen scope so this test still reaches it (#89 default-scopes
+      // the frontier to the seed's own route).
+      routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
     expect(result.coverage.defects.length).toBeGreaterThan(0);
@@ -149,6 +158,59 @@ describe("runInductionMission — a lost --storage-state session (#82)", () => {
     } finally {
       await unauthSession.close();
     }
+  }, 30_000);
+});
+
+describe("runInductionMission — scope containment (#89, reusing #64's scope model)", () => {
+  test("a coverage run started at area-a explores area-a's own states, records area-b as a departure, and never expands it", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/coverage-scope/area-a`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    // area-a + area-a/detail: exactly the in-scope target — area-b never counts as coverage.
+    expect(result.coverage.statesVisited).toBe(2);
+    expect(result.coverage.scope.outOfScopeTransitions).toBeGreaterThan(0);
+    expect(result.coverage.scope.departures.some((d) => d.url.includes("/coverage-scope/area-b"))).toBe(true);
+    // Area B's own control was never exercised: its state was recorded, never expanded.
+    expect(result.transcript.some((e) => e.target?.includes("Area B action") === true)).toBe(false);
+    // Area A's own in-scope detail action WAS exercised.
+    expect(result.transcript.some((e) => e.target?.includes("Detail action") === true && e.actOk)).toBe(true);
+  }, 30_000);
+
+  test("--route '/**' widens the scope, so area-b IS explored", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/coverage-scope/area-a`,
+      allowlist: [site.url],
+      routeGlobs: ["/**"],
+    });
+    expect(result.outcome).toBe("exhausted");
+    expect(result.coverage.scope.outOfScopeTransitions).toBe(0);
+    expect(result.transcript.some((e) => e.target?.includes("Area B action") === true && e.actOk)).toBe(true);
+  }, 30_000);
+});
+
+describe("runInductionMission — route templating collapses prefixed ids to one state (#95)", () => {
+  test("three /coverage-templating/items/item-<n> instances count as ONE route state", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/coverage-templating/items`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    // The items hub + ONE templated item-:id state = 2, never 4 (hub + 3 separate item states).
+    expect(result.coverage.statesVisited).toBe(2);
   }, 30_000);
 });
 

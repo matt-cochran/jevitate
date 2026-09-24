@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
-import type { Answer, GenerationPort, JudgmentPort } from "@jevitate/ai-core";
+import { redactUrl, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
 import {
   assertAuthorizedExploreTarget,
   perceive,
@@ -40,6 +40,7 @@ import {
   type CoverageSufficiencyThresholds,
 } from "../coverage/sufficiency.js";
 import { seedRedirectReason } from "../seed-redirect.js";
+import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
@@ -75,6 +76,26 @@ export interface DefectRecord {
   readonly recording: Recording;
 }
 
+/** One transition whose result landed outside the mission's target scope (#89) — recorded, never
+ *  expanded: its controls are never enqueued, so the frontier never wanders past it. */
+export interface CoverageScopeDeparture {
+  /** The state the departing action was performed FROM. */
+  readonly fromFingerprint: string;
+  /** The (redacted) URL it landed on. */
+  readonly url: string;
+  /** What was acted on (control name or op). */
+  readonly action: string;
+}
+
+/** Where the frontier was allowed to expand, and how often a transition left it (#89, reusing #64's
+ *  scope model). Out-of-scope states never count toward `statesVisited`/coverage. */
+export interface CoverageScope {
+  readonly routeGlobs: string[];
+  readonly outOfScopeTransitions: number;
+  /** The first departures (up to 50), in order. */
+  readonly departures: CoverageScopeDeparture[];
+}
+
 export interface CoverageReport {
   readonly statesVisited: number;
   readonly transitionsExercised: number;
@@ -85,6 +106,8 @@ export interface CoverageReport {
   /** What the run exercised vs. its thresholds, and whether silence here may read as `clean` (#75,
    *  mirroring the adversarial coverage thresholds from #69). */
   readonly sufficiency: CoverageSufficiency;
+  /** The mission's target scope and every departure from it (#89). */
+  readonly scope: CoverageScope;
 }
 
 export interface InductionRunResult {
@@ -136,6 +159,12 @@ export interface InductionMissionParams {
   /** How much of the target a run must exercise before "found nothing" may be reported `clean`
    *  (#75). Default `DEFAULT_COVERAGE_SUFFICIENCY_THRESHOLDS`. */
   readonly sufficiencyThresholds?: Partial<CoverageSufficiencyThresholds>;
+  /**
+   * Extra in-scope route globs (CLI `--route`, #64/#89 — the same glob syntax the adversarial and
+   * feature missions use). The scope is always the seed URL's route and everything under it; these
+   * add to it. Pass `["/**"]` (CLI `--scope app`) to widen containment to the whole app.
+   */
+  readonly routeGlobs?: readonly string[];
 }
 
 /**
@@ -255,6 +284,16 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   let nonNavActionsExercised = 0;
   const sufficiencyThresholds = resolveCoverageSufficiencyThresholds(params.sufficiencyThresholds);
 
+  // Scope containment (#89, reusing #64's implementation): the frontier is scoped to the seed's
+  // own route (and everything under it) plus the caller's `--route` globs. A transition landing
+  // outside it is recorded as a departure but never expanded — never enqueued, never counted as
+  // coverage — so the run stays prioritized on its target instead of wandering the whole app.
+  const routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
+  const inScope = scopePredicate(params.allowlist, routeGlobs);
+  const departures: CoverageScopeDeparture[] = [];
+  const MAX_LISTED_DEPARTURES = 50;
+  let outOfScopeTransitions = 0;
+
   const report = (frontierExhausted: boolean): CoverageReport => ({
     statesVisited: visited.size,
     transitionsExercised,
@@ -262,6 +301,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     defects,
     failedActions,
     sufficiency: assessCoverageSufficiency({ actions, failedActions, nonNavActionsExercised }, sufficiencyThresholds),
+    scope: { routeGlobs, outOfScopeTransitions, departures: departures.slice(0, MAX_LISTED_DEPARTURES) },
   });
 
   try {
@@ -421,6 +461,30 @@ export async function runInductionMission(params: InductionMissionParams): Promi
         }
         await monitorFor(sessions.page).instrument();
         currentFingerprint = ""; // the next item is reached afresh from the seed
+        continue;
+      }
+
+      // Scope containment (#89, reusing #64's scope model): a transition that landed outside the
+      // target is recorded (a departure) but never expanded — its controls are never enqueued, and
+      // it is never judged, so the frontier stays prioritized on the in-scope target instead of
+      // wandering into the rest of the app. The next frontier pop (necessarily sourced from an
+      // in-scope state, since only those are ever enqueued) resets and replays back into scope.
+      if (!inScope(snap.url)) {
+        outOfScopeTransitions += 1;
+        const landed = redactUrl(snap.url);
+        departures.push({ fromFingerprint: currentFingerprint, url: landed, action: liveControl.name || item.op });
+        transcript.record({
+          op: item.op,
+          control: liveControl,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "coverage-frontier",
+          actOk: true,
+          reason: `left the target scope (landed on ${landed}); not expanded`,
+          snapshot: decidedOn,
+          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
+        });
+        currentFingerprint = newFingerprint;
         continue;
       }
 

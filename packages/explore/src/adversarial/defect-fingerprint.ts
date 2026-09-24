@@ -20,11 +20,23 @@ const NUMERIC = /^\d+$/;
 const HEXISH = /^[0-9a-f]{12,}$/i;
 /** A long opaque token that mixes letters and digits (e.g. an object id or a hash). */
 const OPAQUE = /^(?=.*\d)(?=.*[a-z])[a-z0-9_-]{16,}$/i;
+/** A literal prefix (kept) followed by `-` and a UUID suffix — `candidate-<uuid>` → `candidate-:id`
+ *  (#95). Checked before `PREFIXED_ID_SUFFIX` so a uuid's own internal dashes never split wrong. */
+const PREFIXED_UUID = /^(.+-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+/** A literal prefix (kept) followed by `-` and a short numeric/hex id — `item-42` → `item-:id`; below
+ *  `OPAQUE`'s 16-char floor, so this is what catches the SHORT prefixed ids that floor misses. */
+const PREFIXED_ID_SUFFIX = /^(.+-)([0-9]+|[0-9a-f-]{8,})$/i;
 
-/** One path segment → `:id` when it is an identifier rather than a route word. */
+/** One path segment → `:id` when it is an identifier rather than a route word; `prefix-<id>` → `prefix-:id`
+ *  so a resource id with a literal prefix collapses to ONE route without losing the prefix (#95:
+ *  `/decisions/candidate-<uuid-a>` and `/decisions/candidate-<uuid-b>` both normalize identically). */
 function normalizeSegment(seg: string): string {
   if (seg === "") return seg;
   if (NUMERIC.test(seg) || UUID.test(seg) || HEXISH.test(seg) || OPAQUE.test(seg)) return ":id";
+  const uuidSuffix = PREFIXED_UUID.exec(seg);
+  if (uuidSuffix) return `${uuidSuffix[1]}:id`;
+  const idSuffix = PREFIXED_ID_SUFFIX.exec(seg);
+  if (idSuffix) return `${idSuffix[1]}:id`;
   return seg;
 }
 

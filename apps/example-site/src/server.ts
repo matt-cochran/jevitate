@@ -130,5 +130,55 @@ export function buildServer(): FastifyInstance {
     reply.type("text/html").send(`<!doctype html><html><body>${featureMissionChrome()}</body></html>`);
   });
 
+  // Additive fixture for the coverage/exploratory mission's scope containment (#89, reusing #64's
+  // scope model): area-a links to an in-scope sub-page AND to an out-of-scope area-b. A coverage
+  // run started at /coverage-scope/area-a must explore area-a and its own detail page, record
+  // area-b as a departure, and never expand area-b's own states unless the scope is explicitly
+  // widened (--route '/**' or --scope app). Namespaced under /coverage-scope/* to stay clear of
+  // other fixtures.
+  app.get("/coverage-scope/area-a", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Area A</h1>` +
+        `<a href="/coverage-scope/area-a/detail">Detail</a> ` +
+        `<a href="/coverage-scope/area-b">Go to Area B</a>` +
+        `</body></html>`,
+    );
+  });
+  // Buttons here are inert (no onclick): a mutating label would fingerprint as a SECOND state
+  // (before/after click), which is correct behavior elsewhere but would obscure this fixture's
+  // single concern — scope containment — under an unrelated state count.
+  app.get("/coverage-scope/area-a/detail", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Area A detail</h1><button>Detail action</button></body></html>`,
+    );
+  });
+  app.get("/coverage-scope/area-b", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Area B</h1><button>Area B action</button></body></html>`,
+    );
+  });
+
+  // Additive fixture for route templating (#95): three item pages under a PREFIXED id
+  // (item-1/item-2/item-3), identical apart from the id in the path and a text node (never a
+  // control). The coverage mission's state fingerprint (`urlTemplate`) must collapse all three
+  // into ONE `/coverage-templating/items/item-:id` state, not three.
+  app.get("/coverage-templating/items", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Items</h1>` +
+        `<a href="/coverage-templating/items/item-1">Item 1</a> ` +
+        `<a href="/coverage-templating/items/item-2">Item 2</a> ` +
+        `<a href="/coverage-templating/items/item-3">Item 3</a>` +
+        `</body></html>`,
+    );
+  });
+  // The button is inert (no onclick): a mutating label would fingerprint as a second state
+  // per item id, obscuring the templating collapse this fixture exists to prove.
+  app.get<{ Params: { id: string } }>("/coverage-templating/items/:id", async (req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Item</h1><p data-testid="item-id">${esc(req.params.id)}</p>` +
+        `<button>Mark reviewed</button></body></html>`,
+    );
+  });
+
   return app;
 }
