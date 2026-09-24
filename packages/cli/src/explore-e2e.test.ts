@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -265,6 +265,62 @@ describe("shared decision transcript — every model-deciding strategy writes on
       }
     },
     180_000,
+  );
+
+  it(
+    "coverage: a seed that redirects to /login (a lost --storage-state session) is inconclusive, never clean (#82)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-cov-redirect-"));
+      try {
+        // No --storage-state: a fresh, unauthenticated context, exactly like a lost/expired session.
+        const result = await runCoverageMission({
+          url: `${site.url}/inbox`,
+          allowlist: [site.url],
+          judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+          gen: new FakeGenerationGateway(),
+          outDir,
+        });
+        expect(result.outcome).toBe("scope-unreachable");
+        expect(result.missionOutcome).toBe("inconclusive");
+        expect(result.exitCode).toBe(2);
+        expect(result.failure).toEqual({
+          kind: "target-unreachable",
+          message: "seed /inbox redirected to /login — the --storage-state session is not authenticated",
+        });
+        expect(result.coverage.statesVisited).toBe(0);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "coverage: --save-storage-state writes the context's storageState at the end, mode 0600 (#82)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-cov-save-state-"));
+      const saveTo = join(outDir, "state.json");
+      try {
+        const result = await runCoverageMission({
+          url: `${site.url}/whoami`,
+          allowlist: [site.url],
+          judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+          gen: new FakeGenerationGateway(),
+          outDir,
+          saveStorageState: saveTo,
+        });
+        expect(result.outcome).toBe("exhausted");
+        const written = JSON.parse(await readFile(saveTo, "utf8"));
+        expect(written).toHaveProperty("cookies");
+        expect(written).toHaveProperty("origins");
+        // Owner read/write only — the file holds live session credentials.
+        const mode = (await stat(saveTo)).mode & 0o777;
+        expect(mode).toBe(0o600);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
   );
 });
 

@@ -1379,6 +1379,12 @@ export function buildProgram(deps: CliDeps): Command {
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
     )
+    .option(
+      "--save-storage-state <file>",
+      "write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. " +
+        "Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, " +
+        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run.",
+    )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option(
@@ -1468,6 +1474,7 @@ export function buildProgram(deps: CliDeps): Command {
         totp: string[];
         fixture?: string;
         storageState?: string;
+        saveStorageState?: string;
         maxActions?: string;
         maxDecisions?: string;
         replyWaitMs?: string;
@@ -1607,6 +1614,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1699,6 +1707,7 @@ export function buildProgram(deps: CliDeps): Command {
             browser,
             outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1807,6 +1816,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           });
           emitJson(program, ok(result));
           process.exitCode = result.exitCode;
@@ -1872,6 +1882,7 @@ export function buildProgram(deps: CliDeps): Command {
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           ...(filing === undefined ? {} : { filing }),
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),

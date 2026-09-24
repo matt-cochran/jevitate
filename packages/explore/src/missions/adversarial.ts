@@ -47,6 +47,7 @@ import {
   type CoverageThresholds,
 } from "../adversarial/run-coverage.js";
 import { descriptorToLocator } from "@jevitate/recorder";
+import { seedRedirectReason } from "../seed-redirect.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -622,9 +623,28 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         message: seed.reason ?? "seed page did not render",
       });
     }
+    // The seed redirected to a login-like page — most often a lost/expired `--storage-state`
+    // session (#82). Checked BEFORE the general scope check below (which already catches ANY
+    // out-of-scope landing) so THIS specific, actionable cause gets its own reason; every other
+    // departure keeps the existing generic "left the target scope" message unchanged.
+    const redirect = seedRedirectReason(params.seedUrl, seed.snapshot.url);
+    if (redirect !== null && redirect.loginLike) {
+      transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "seed-load",
+        actOk: false,
+        reason: `${redirect.reason} (inconclusive)`,
+        snapshot: seed.snapshot,
+        timing: seed.timing,
+      });
+      return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
+    }
     if (!inScope(seed.snapshot.url)) {
-      // The start URL did not stay on the target (a redirect to a login page, another route): the
-      // run cannot test what it was asked to — it proves nothing, so it is never `clean`.
+      // The start URL did not stay on the target (another route, off-allowlist): the run cannot
+      // test what it was asked to — it proves nothing, so it is never `clean`.
       const message = `the start URL left the target scope (landed on ${redactUrl(seed.snapshot.url)})`;
       transcript.record({
         op: null,

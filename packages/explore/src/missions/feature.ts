@@ -32,6 +32,7 @@ import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
+import { seedRedirectReason } from "../seed-redirect.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -86,8 +87,10 @@ export interface FeatureRunResult {
   /**
    * `crashed`: the engine failed; the paths discovered up to the failure are still returned.
    * `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session).
+   * `scope-unreachable`: the seed redirected elsewhere (e.g. a lost `--storage-state` session
+   * bounced to a login page) — the run never got to test the capability it was asked to (#82).
    */
-  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang";
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang" | "scope-unreachable";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   hangs: HangFinding[];
   /** Why the run crashed — present only for `crashed`. */
@@ -264,6 +267,11 @@ export async function runFeatureMission(params: {
     await monitorFor(sessions.page).instrument();
     await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await snapshotNow();
+
+    // The seed redirected elsewhere — most often a lost/expired `--storage-state` session bounced
+    // to a login page (#82): the run cannot exercise the capability it was asked to.
+    const redirect = seedRedirectReason(params.seedUrl, snap.url);
+    if (redirect !== null) return endRun("scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
     chrome.observe(pathnameOf(snap.url), snap.controls);
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
