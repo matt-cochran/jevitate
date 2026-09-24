@@ -769,7 +769,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
-            secrets: cfg.secrets,
+            secrets,
             options: control.options,
           }));
         } catch (e) {
@@ -807,17 +807,29 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // The generator supplies the text/option (never the model's choice head). It is a HELPER:
         // when it is unavailable the step fails (recorded, visible to the model) and the run goes on.
         let text: string | null;
+        let rejected: string | undefined;
         try {
-          ({ text } = await fillHelper.valueFor({
+          ({ text, rejected } = await fillHelper.valueFor({
             fieldLabel: control.name || control.summary,
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
-            secrets: cfg.secrets,
+            secrets,
+            // A text field's value is field-scoped and checked before it is typed (#71).
+            ...(decision.op === "type" ? { field: { tag: control.tag, inputType: control.inputType } } : {}),
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
           history.push(`${decision.op} skipped: ${reason}`);
+          record(false, reason);
+          lastActedOp = decision.op;
+          continue;
+        }
+        if (rejected !== undefined) {
+          // Not a value for this one field (an essay, a JSON map, a `Label:` echo…): a failed act the
+          // model sees in its history, never typed.
+          const reason = `typed value rejected: ${rejected}`;
+          history.push(`type into ${control.name} failed: ${reason} — the value must be only what goes in this one field`);
           record(false, reason);
           lastActedOp = decision.op;
           continue;
