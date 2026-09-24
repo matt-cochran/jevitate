@@ -286,12 +286,34 @@ async function connectCodeOf(response: Response): Promise<string | null> {
   }
 }
 
-/** The first number in a text (`"≈ 1,240 credits"` → 1240, `"-5"` → -5); null when there is none. */
+/** A Unicode minus (U+2212) or a dash (U+2012–U+2015), normalized to ASCII `-` when read as a sign. */
+const MINUS_LIKE_RE = /[−‒–—―]/g;
+/**
+ * A number token: an optional leading sign (ASCII `-` or a Unicode minus/dash) followed by digits
+ * (with `,` thousands separators) and an optional decimal. The sign is consumed only when it is
+ * `(?<!\d)` — NOT glued to a preceding digit — and `(?=\d)` — glued to the FOLLOWING digit, no space.
+ * That keeps a range's dash a separator, never a sign: `"30–90"` (dash touches the `0` before it) and
+ * `"3 – 7"` (a space before the `7`) both read as two plain numbers, while `"−40"` (dash at the very
+ * start, glued to the `4`) reads as one negative number (#156).
+ */
+const NUMBER_TOKEN_RE = /(?:(?<!\d)[−‒–—―-](?=\d))?\d[\d,]*(?:\.\d+)?/g;
+
+/**
+ * Every number in a text, left to right (`"≈ 30–90 credits"` → `[30, 90]`; `"−40 credits"` → `[-40]`;
+ * `"1,234.5"` → `[1234.5]`) — #156's parser behind `DomObservable.number`.
+ */
+export function parseNumbers(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(NUMBER_TOKEN_RE)) {
+    const n = Number(m[0].replace(MINUS_LIKE_RE, "-").replace(/,/g, ""));
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
+
+/** The first number in a text (`number: true`); null when there is none. */
 export function parseFirstNumber(text: string): number | null {
-  const m = /-?\d[\d,]*(\.\d+)?/.exec(text);
-  if (m === null) return null;
-  const n = Number(m[0].replace(/,/g, ""));
-  return Number.isFinite(n) ? n : null;
+  return parseNumbers(text)[0] ?? null;
 }
 
 function pageOf(actor: Actor): Page {
@@ -514,7 +536,9 @@ export class InvariantMonitor {
       this.#tally.set(c.decl.id, tally);
       tally.checked += 1;
       const verdict = await this.#evaluate(c, page, actor, action, before, after, pageUrl);
-      if (c.decl.settle !== undefined && verdict !== "held") polled = true;
+      // #151: settle only ever polls on a decided violation (below), so "unknown" never went
+      // through the loop — the before-snapshot next action rearms from is still fresh for it.
+      if (c.decl.settle !== undefined && verdict !== "held" && verdict !== "unknown") polled = true;
       if (verdict === "held") {
         tally.held += 1;
         held.push(c.decl.id);
@@ -853,14 +877,17 @@ export class InvariantMonitor {
     });
     let result = evaluateInvariantExpression(ast, env(after));
     let settledForMs: number | undefined;
-    if (result !== true && decl.settle !== undefined) {
+    // #151: re-poll ONLY a decided violation (result === false) — never an UNKNOWN. An observable
+    // that is legitimately absent (`optional: true`) must not stall every action for the whole
+    // `withinMs` window; UNKNOWN is reported at once (fail-closed: still never a pass).
+    if (result === false && decl.settle !== undefined) {
       // Eventual consistency: re-check until it holds or the window closes. Only the observables this
       // invariant reads are re-read.
       const now = this.#opts.now ?? Date.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
       const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
-      while (result !== true && now() - start < decl.settle.withinMs) {
+      while (result === false && now() - start < decl.settle.withinMs) {
         await sleep(page, Math.min(poll, Math.max(0, decl.settle.withinMs - (now() - start))));
         after = await this.#snapshot(page, new Set(c.afterNames));
         result = evaluateInvariantExpression(ast, env(after));
@@ -984,9 +1011,14 @@ export class InvariantMonitor {
       const first = locator.first();
       const raw = d.read === "value" ? await first.inputValue({ timeout: DOM_TIMEOUT_MS }) : await first.innerText({ timeout: DOM_TIMEOUT_MS });
       const text = raw.trim();
-      if (d.number === true) {
-        const n = parseFirstNumber(text);
-        return { value: n === null ? missing : n };
+      if (d.number !== undefined && d.number !== false) {
+        const nums = parseNumbers(text);
+        // #156: "all" is a LIST observable (#147/#148) — a scalar consumer (like #150's
+        // `BudgetMonitor`) already treats a list as unreadable, same as a `[*]` network/probe read.
+        if (d.number === "all") return nums.length === 0 ? { value: missing } : { value: nums };
+        const idx = d.number === true ? 0 : d.number.index;
+        const n = nums.at(idx);
+        return { value: n === undefined ? missing : n };
       }
       return { value: this.#clip(text) };
     }

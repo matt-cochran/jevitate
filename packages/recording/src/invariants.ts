@@ -82,8 +82,15 @@ export interface DomObservable {
    * state (#148) — see `DomRead`.
    */
   read?: DomRead;
-  /** Parse the first number out of what was read (`"≈ 1,240 credits"` → 1240). */
-  number?: boolean;
+  /**
+   * Parse the number(s) out of what was read (`"≈ 1,240 credits"` → 1240; a Unicode minus U+2212 and
+   * thousands separators are handled). `true` reads the FIRST number (index 0, the default); `{
+   * index }` reads the number at that 0-based position (negative counts from the end, so `-1` is the
+   * LAST) — e.g. `"≈ 30–90 credits"` with `{ index: 1 }` reads 90, a range's upper bound; `"all"`
+   * reads every number as a LIST observable (#147/#148's list-valued reads) — a scalar consumer (like
+   * #150's `BudgetMonitor`) treats it as unreadable, same as a `[*]` network/probe read.
+   */
+  number?: boolean | "all" | { readonly index: number };
   /** When the element is absent the value is `null` (instead of "could not be read"). */
   optional?: boolean;
 }
@@ -735,7 +742,7 @@ const DomObservableSchema = z
         z.object({ attr: z.string().regex(ATTR_NAME_RE) }).strict(),
       ])
       .optional(),
-    number: z.boolean().optional(),
+    number: z.union([z.boolean(), z.literal("all"), z.object({ index: z.number().int() }).strict()]).optional(),
     optional: z.boolean().optional(),
   })
   .strict()

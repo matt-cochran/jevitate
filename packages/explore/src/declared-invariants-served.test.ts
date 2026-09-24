@@ -179,6 +179,96 @@ describe("declared invariants around an action (#86)", () => {
   );
 
   it(
+    "#151: settle re-polls a violation, but an UNKNOWN result is reported at once — never the whole withinMs window",
+    async () => {
+      const s = await openSession();
+      try {
+        // A legitimately-absent observable (like a header chip on a page it isn't on): unknown from
+        // the first read, and stays unknown — this must never poll out a multi-second window.
+        const unknownSpec = validateInvariantSpec(
+          {
+            observe: { chip: { dom: { selector: "#not-on-this-page", number: true } } },
+            invariants: [{ id: "u", require: "delta(chip) <= 0", settle: { withinMs: 20_000, pollMs: 1_000 } }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const unknownMonitor = new InvariantMonitor(unknownSpec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        const start = Date.now();
+        const r = await clickImport(s.actor, unknownMonitor, s.page);
+        const elapsedMs = Date.now() - start;
+        expect(r).toEqual({ violations: [], unknown: ["u"], held: [] });
+        expect(unknownMonitor.report()).toEqual([{ id: "u", checked: 1, held: 0, violated: 0, unknown: 1 }]);
+        // Was waiting out the full 20s `withinMs` before the fix; a real click+read is well under 5s.
+        expect(elapsedMs).toBeLessThan(5_000);
+
+        // A DECIDED violation still polls across the window (settle keeps working for its real job).
+        const violatedSpec = validateInvariantSpec(
+          {
+            observe: { balance: { dom: { selector: "[data-testid=credit-balance]", number: true } } },
+            invariants: [{ id: "no-drop", require: "delta(balance) >= 0", settle: { withinMs: 5_000, pollMs: 1_000 } }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        let fakeNow = 0;
+        let sleepCalls = 0;
+        const violatedMonitor = new InvariantMonitor(violatedSpec, {
+          allowlist: [origin],
+          baseUrl: `${origin}/app`,
+          now: () => fakeNow,
+          sleep: async (_page, ms) => {
+            sleepCalls += 1;
+            fakeNow += ms;
+          },
+        });
+        const v = await clickImport(s.actor, violatedMonitor, s.page);
+        expect(v.violations).toHaveLength(1);
+        expect(v.violations[0]?.settledForMs).toBe(5_000);
+        expect(sleepCalls).toBe(5); // pollMs(1000) × 5 to close a 5000ms window — it really did re-poll
+      } finally {
+        await s.close();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "#156: number picks which one — {index} reads a range's bound (negative counts from the end); \"all\" is list-valued",
+    async () => {
+      const s = await openSession();
+      try {
+        await s.page.goto(`${origin}/app`);
+        await s.page.evaluate(() => {
+          const p = document.createElement("p");
+          p.setAttribute("data-testid", "estimate-range");
+          p.textContent = "≈ 30–90 credits"; // "≈ 30–90 credits" — a Unicode en-dash range
+          document.body.appendChild(p);
+        });
+        const spec = validateInvariantSpec(
+          {
+            observe: {
+              low: { dom: { selector: "[data-testid=estimate-range]", number: true } },
+              high: { dom: { selector: "[data-testid=estimate-range]", number: { index: 1 } } },
+              last: { dom: { selector: "[data-testid=estimate-range]", number: { index: -1 } } },
+              spread: { dom: { selector: "[data-testid=estimate-range]", number: "all" } },
+            },
+            invariants: [{ id: "noop", require: "low <= high" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const monitor = new InvariantMonitor(spec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        expect(await monitor.readObservable(s.page, "low")).toMatchObject({ value: 30, unreadable: false });
+        expect(await monitor.readObservable(s.page, "high")).toMatchObject({ value: 90, unreadable: false });
+        expect(await monitor.readObservable(s.page, "last")).toMatchObject({ value: 90, unreadable: false });
+        // A list is never a valid scalar here (same as a `[*]` network/probe read) — #147/#148/#150.
+        expect(await monitor.readObservable(s.page, "spread")).toMatchObject({ unreadable: true });
+      } finally {
+        await s.close();
+      }
+    },
+    30_000,
+  );
+
+  it(
     "probes are GET-only with the session's own cookie, never off the allowlist, and their bodies never reach a finding",
     async () => {
       const s = await openSession();
