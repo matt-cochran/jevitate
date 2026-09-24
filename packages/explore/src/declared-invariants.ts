@@ -514,7 +514,9 @@ export class InvariantMonitor {
       this.#tally.set(c.decl.id, tally);
       tally.checked += 1;
       const verdict = await this.#evaluate(c, page, actor, action, before, after, pageUrl);
-      if (c.decl.settle !== undefined && verdict !== "held") polled = true;
+      // #151: settle only ever polls on a decided violation (below), so "unknown" never went
+      // through the loop — the before-snapshot next action rearms from is still fresh for it.
+      if (c.decl.settle !== undefined && verdict !== "held" && verdict !== "unknown") polled = true;
       if (verdict === "held") {
         tally.held += 1;
         held.push(c.decl.id);
@@ -853,14 +855,17 @@ export class InvariantMonitor {
     });
     let result = evaluateInvariantExpression(ast, env(after));
     let settledForMs: number | undefined;
-    if (result !== true && decl.settle !== undefined) {
+    // #151: re-poll ONLY a decided violation (result === false) — never an UNKNOWN. An observable
+    // that is legitimately absent (`optional: true`) must not stall every action for the whole
+    // `withinMs` window; UNKNOWN is reported at once (fail-closed: still never a pass).
+    if (result === false && decl.settle !== undefined) {
       // Eventual consistency: re-check until it holds or the window closes. Only the observables this
       // invariant reads are re-read.
       const now = this.#opts.now ?? Date.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
       const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
-      while (result !== true && now() - start < decl.settle.withinMs) {
+      while (result === false && now() - start < decl.settle.withinMs) {
         await sleep(page, Math.min(poll, Math.max(0, decl.settle.withinMs - (now() - start))));
         after = await this.#snapshot(page, new Set(c.afterNames));
         result = evaluateInvariantExpression(ast, env(after));

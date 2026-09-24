@@ -415,8 +415,10 @@ pass: it is counted in the result's `invariants` report.
 
 The expression language is small: `before(x)`, `after(x)` (or just `x`), `delta(x)`,
 `+ - * /`, `== != < <= > >=`, `&&`, `||`, `->` (implication), `null`, `true` and `false`.
-`settle` re-checks a violated `require` until it holds or `withinMs` passes, and only
-then counts the violation.
+`settle` re-checks a **violated** `require` until it holds or `withinMs` passes, and only
+then counts the violation. An **unknown** result (an observable that could not be read —
+e.g. legitimately absent, `optional: true`) is never re-polled: it is reported at once, so
+an absent observable never stalls an action for the whole `withinMs` window.
 
 **Refusals and results.** A file that does not validate is refused before any browser
 opens, with the path of the problem, e.g. `inv.json: invariants[2].require: unknown observable "balanse"`.
