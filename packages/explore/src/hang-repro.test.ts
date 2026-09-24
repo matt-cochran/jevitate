@@ -81,3 +81,35 @@ describe("reproduceHang — a replay that could not execute is not a non-reprodu
     expect(r.runs.every((run) => !run.ran && run.detail.startsWith("could not open a fresh session: admission timed out"))).toBe(true);
   });
 });
+
+describe("#154 — attempts 0 means \"don't replay\": unconfirmed, never a crash", () => {
+  it("returns inconclusive with 0 attempts and never opens a session", async () => {
+    let opens = 0;
+    const r = await reproduceHang({
+      recording: { version: "1.0.0", site: "x", pages: [] },
+      recordingStepIndex: 0,
+      hang,
+      attempts: 0,
+      openSession: async () => {
+        opens += 1;
+        throw new Error("must not open");
+      },
+    });
+    expect(r).toMatchObject({ attempts: 0, ran: 0, reproduced: 0, status: "inconclusive", runs: [] });
+    expect(hangOutcome(r.status)).toBe("inconclusive"); // never clean, never an unproven "hang"
+    expect(opens).toBe(0);
+  });
+
+  it("still refuses a negative or fractional count", async () => {
+    const base = {
+      recording: { version: "1.0.0", site: "x", pages: [] } as Recording,
+      recordingStepIndex: 0,
+      hang,
+      openSession: async (): Promise<VerifySession> => {
+        throw new Error("x");
+      },
+    };
+    await expect(reproduceHang({ ...base, attempts: -1 })).rejects.toThrow(/non-negative integer/);
+    await expect(reproduceHang({ ...base, attempts: 1.5 })).rejects.toThrow(/non-negative integer/);
+  });
+});

@@ -608,7 +608,10 @@ function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reprodu
     transcript: run.transcript,
     finalUrl: run.finalUrl,
     hang: finding,
-    reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
+    reason:
+      reproduction.attempts === 0
+        ? `${finding.title} (unconfirmed: not replayed)`
+        : `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
   };
 }
 

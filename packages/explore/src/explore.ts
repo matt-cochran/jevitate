@@ -78,6 +78,7 @@ import {
   isEmptyStatus,
   readInProgressStatus,
   readPageStatus,
+  readWorkingStatus,
   statusDelta,
   type PageStatus,
 } from "./status.js";
@@ -502,6 +503,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       recordIndex: number;
       /** Did ANY page state never seen before appear since this action? (then it made progress) */
       sawNewState: boolean;
+      /** A LINK click: the route it was clicked on (null for any other action) — #153. */
+      linkFromRoute?: string | null;
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
@@ -535,17 +538,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   let jobWaitedMs = 0;
+  /**
+   * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
+   * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
+   */
+  let hangWorkWaitedMs = 0;
   const noteMutation = (
     label: string,
     descriptor: unknown,
     before: string,
     at: number,
     input?: { readonly field: string; readonly value: string },
+    linkFromRoute: string | null = null,
   ): void => {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
-    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
   };
@@ -619,6 +628,35 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
       );
       track.lastRecordedTarget = null;
+
+      // Long-running legitimate work is not a hang (#153): a page that shows an in-progress status
+      // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
+      // determinate progress bar) is WORKING. Code waits it out, bounded by the job-wait budget;
+      // past the budget the hang stands. A main thread that does not answer is never "working".
+      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < jobWaitMs) {
+        const working = await readWorkingStatus(page);
+        if (working !== null) {
+          const w = await waitOutJob(page, Math.min(jobWaitMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS));
+          // The perception's own wait counts too: the budget bounds the whole time spent believing it.
+          hangWorkWaitedMs += w.waitedMs + perception.settle.waitedMs;
+          const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          history.push(note);
+          transcript.record({
+            op: "wait",
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "hang-check",
+            actOk: true,
+            reason: note,
+            snapshot: snap,
+            timing: perception.timing,
+          });
+          continue;
+        }
+      }
 
       // A hang is its own first-class stop (owner ruling 7) — detected by perception's rule.
       if (perception.hang !== null) {
@@ -718,6 +756,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           !m.sawNewState &&
           snap.signature !== m.before &&
           m.seenBefore.has(snap.signature) &&
+          // A link that navigated to ANOTHER route already visited is ordinary navigation, not an
+          // in-place action that silently undid itself (#153): the stall rule is for in-place actions.
+          !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&
           !EXPECTED_RETURN.test(m.label) &&
           !ignoreNoProgress(m.label) &&
           !ignoreNoProgress(hangRoute(snap.url))
@@ -1608,7 +1649,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let message: string | undefined;
         if (r.ok) {
           recorder.click(control.descriptor, at);
-          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null);
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
           // What was typed has now been submitted (a form's button): an add-another flow's next
