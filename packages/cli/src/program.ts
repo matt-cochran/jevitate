@@ -142,6 +142,7 @@ import {
 } from "./explore-api.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
+import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import {
   discoverRecordingSidecars,
   loadRecordingSidecars,
@@ -1560,6 +1561,14 @@ export function buildProgram(deps: CliDeps): Command {
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
     )
     .option(
+      "--actor <name=storageState>",
+      "multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, " +
+        "from its own storageState); every other actor is an observer in its OWN fresh context that only runs the " +
+        "--invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state",
+      (v: string, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--save-storage-state <file>",
       "write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. " +
         "Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, " +
@@ -1680,6 +1689,7 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
+        actor: string[];
         repeat?: string;
         minAgreement?: string;
         persona: string[];
@@ -1833,6 +1843,27 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
+      // Multi-actor missions (#147): the first --actor is the primary, the rest are observers.
+      let actors: MissionActors | null;
+      try {
+        actors = resolveMissionActors(o.actor);
+      } catch (err) {
+        if (!(err instanceof MultiRunArgsError)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      if (actors !== null) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--actor is supported only with --strategy goal"));
+          return;
+        }
+        if (o.storageState !== undefined) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--storage-state cannot be combined with --actor (the first --actor is the primary's session)"));
+          return;
+        }
+      }
+      // The primary's session: its --actor state, else --storage-state.
+      const primaryStorageState = actors?.primary.storageState ?? o.storageState;
       // App-declared invariants (#86): validated (schema, observables, probe origins) BEFORE any browser.
       let invariants: InvariantSpec | undefined;
       // #135: authFrom.secret refs (env:VAR), resolved from the environment HERE — the one place this
@@ -1845,14 +1876,28 @@ export function buildProgram(deps: CliDeps): Command {
         }
         if (o.url !== undefined) {
           try {
-            const loaded = loadInvariantFiles(o.invariants, { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url });
+            const loaded = loadInvariantFiles(o.invariants, {
+              allowlist: resolveExploreAllowlist(o.url, o.allow),
+              baseUrl: o.url,
+              observers: actors?.observers.map((a) => a.name) ?? [],
+            });
             invariants = loaded;
             invariantAuthTokens = loaded === undefined ? undefined : resolveInvariantAuthTokens(loaded, process.env);
+            checkActorsAgainstSpec(actors, loaded);
           } catch (err) {
+            if (err instanceof MultiRunArgsError) {
+              emitJson(program, fail(err.code, err.message));
+              return;
+            }
             if (!(err instanceof InvariantsFileError)) throw err;
             emitJson(program, fail(err.code, err.message));
             return;
           }
+        }
+        // #147: captures and cross-actor checks run in the goal loop only — never silently skipped elsewhere.
+        if (invariants?.capture !== undefined && (o.feature !== undefined || strategy !== "goal")) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "invariants with capture (cross-actor checks) are supported only with --strategy goal"));
+          return;
         }
       }
       const withInvariants = {
@@ -2185,7 +2230,7 @@ export function buildProgram(deps: CliDeps): Command {
         fx = buildMissionFixtures(o, {
           allowlist,
           baseUrl: o.url.replace(SETUP_REF, "0"),
-          ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
+          ...(primaryStorageState === undefined ? {} : { storageState: primaryStorageState }),
           secretFields,
           secrets: o.secret,
           ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
@@ -2254,8 +2299,9 @@ export function buildProgram(deps: CliDeps): Command {
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
-          ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(primaryStorageState !== undefined ? { storageState: primaryStorageState } : {}),
           ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+          ...(actors === null ? {} : { actors }),
           ...(filing === undefined ? {} : { filing }),
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),

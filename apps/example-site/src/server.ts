@@ -2,14 +2,21 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
 import { SEED_THREADS } from "./data.js";
+import { registerTenancy, type TenancyOptions } from "./tenancy.js";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const authed = (req: { cookies: Record<string, string | undefined> }) => req.cookies.sid === "ok";
 
-export function buildServer(): FastifyInstance {
+export interface ServerOptions {
+  /** The `/tenancy/*` two-tenant fixture (#147); the object is kept, so `leaky` can be flipped at runtime. */
+  readonly tenancy?: TenancyOptions;
+}
+
+export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   const app = Fastify();
   app.register(cookie);
   app.register(formbody);
+  registerTenancy(app, opts.tenancy);
 
   app.get("/login", async (_req, reply) => {
     reply.type("text/html").send(`<!doctype html><html><body><h1>Sign in</h1>

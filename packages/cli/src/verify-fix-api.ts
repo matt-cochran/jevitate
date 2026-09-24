@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording } from "@jevitate/recording";
 import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { buildMissionFixtures, type FixtureFlags } from "./fixture-cli.js";
+import { observerSessions } from "./mission-actors.js";
 import {
   FixtureSpecError,
   fixtureReplayOpener,
@@ -119,9 +120,22 @@ function asHangSignal(v: unknown): HangSignal | null {
   return v as unknown as HangSignal;
 }
 
+/** #147: a persisted actor — its name, role and storageState PATH (never its contents). */
+export interface PersistedActor {
+  readonly name: string;
+  readonly storageStatePath: string;
+  readonly role: "primary" | "observer";
+}
+
 export interface PersistedMission {
   readonly recording: Recording | null;
-  readonly target: { readonly seedUrl: string; readonly allowlist: string[]; readonly storageStatePath?: string };
+  readonly target: {
+    readonly seedUrl: string;
+    readonly allowlist: string[];
+    readonly storageStatePath?: string;
+    /** #147: the mission's actors (`--actor`), when it had any. */
+    readonly actors?: readonly PersistedActor[];
+  };
   readonly findings: PersistedFinding[];
   /** The declared-invariant spec the mission evaluated (#86), when it had one and it still validates. */
   readonly invariantSpec?: InvariantSpec;
@@ -197,6 +211,13 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   // A persisted spec that no longer validates is dropped: its defects are then inconclusive, never fixed.
   const spec = result.invariantSpec === undefined ? undefined : InvariantSpecSchema.safeParse(result.invariantSpec);
   const fixtures = asPersistedFixtures(result.fixtures);
+  const actors = Array.isArray(target.actors)
+    ? target.actors.flatMap((a): PersistedActor[] =>
+        isRecord(a) && typeof a.name === "string" && typeof a.storageStatePath === "string" && (a.role === "primary" || a.role === "observer")
+          ? [{ name: a.name, storageStatePath: a.storageStatePath, role: a.role }]
+          : [],
+      )
+    : [];
   return {
     ...(spec?.success === true ? { invariantSpec: spec.data } : {}),
     ...(fixtures === undefined ? {} : { fixtures }),
@@ -205,6 +226,7 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
       seedUrl: target.seedUrl,
       allowlist: target.allowlist.filter((a): a is string => typeof a === "string"),
       ...(typeof target.storageStatePath === "string" ? { storageStatePath: target.storageStatePath } : {}),
+      ...(actors.length === 0 ? {} : { actors }),
     },
     findings,
   };
@@ -255,8 +277,13 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   // #135: authFrom.secret refs (env:VAR), resolved from the environment HERE — the one place this
   // package reads process.env for invariants — never inside @jevitate/explore or @jevitate/recording.
   let invariantAuthTokens: Map<string, string> | undefined;
+  // #147: a cross-actor defect is re-checked from the SAME observers, each in a fresh context per replay.
+  const observers = (mission.target.actors ?? []).filter((a) => a.role === "observer");
+  for (const o of observers) {
+    if (!existsSync(o.storageStatePath)) throw new VerifyFixInputError(`actor ${o.name}: storage state not found: ${o.storageStatePath}`);
+  }
   try {
-    const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl };
+    const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl, observers: observers.map((o) => o.name) };
     invariantSpec =
       opts.invariantFiles !== undefined && opts.invariantFiles.length > 0
         ? loadInvariantFiles(opts.invariantFiles, bounds)
@@ -268,6 +295,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
   }
   const authTokenValues = [...(invariantAuthTokens?.values() ?? [])];
+  const primaryActor = mission.target.actors?.find((a) => a.role === "primary")?.name;
   const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues]);
   const declared =
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
@@ -277,6 +305,17 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
           allowlist: mission.target.allowlist,
           baseUrl: mission.target.seedUrl,
           ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { authTokens: invariantAuthTokens }),
+          ...(observers.length === 0
+            ? {}
+            : {
+                openObservers: () =>
+                  observerSessions(
+                    portFactory,
+                    { headless: true, allowedOrigins: [...mission.target.allowlist], baseUrl: origin, ...opts.browser },
+                    observers.map((o) => ({ name: o.name, storageState: o.storageStatePath })),
+                  ),
+              }),
+          ...(primaryActor === undefined ? {} : { primaryActor }),
         }
       : undefined;
   const openSession = async () => {

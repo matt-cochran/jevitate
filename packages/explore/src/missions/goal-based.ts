@@ -18,6 +18,7 @@ import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantDefectLog,
   InvariantMonitor,
+  type ObserverSessions,
   recordingStepCount,
   type InvariantAction,
   type InvariantDefect,
@@ -95,6 +96,14 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
    * by the CLI dispatch from the environment (this package never reads `process.env`).
    */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * #147: the observer actors' own sessions (fresh contexts, never driven by the model) that the
+   * spec's cross-actor invariants check from. A cross-actor invariant left undecided (nothing
+   * captured, the observer's session lost) keeps a passing run from being `succeeded`.
+   */
+  readonly observers?: ObserverSessions;
+  /** #147: the primary actor's name (the owner in a cross-actor finding). */
+  readonly primaryActor?: string;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -240,6 +249,8 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     baseUrl: cfg.startUrl,
     ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
     ...(cfg.invariantAuthTokens === undefined ? {} : { authTokens: cfg.invariantAuthTokens }),
+    ...(cfg.observers === undefined ? {} : { observers: cfg.observers }),
+    ...(cfg.primaryActor === undefined ? {} : { primaryActor: cfg.primaryActor }),
   });
   monitor.attach(page);
   const log = new InvariantDefectLog();
@@ -270,13 +281,24 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     settled,
     finish: async (run) => {
       // Never on a broken or hung page: an unresponsive page proves nothing either way.
-      if (pending === null || run.stop === "crashed" || run.stop === "hang") return;
-      await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
-      await settled().catch(() => undefined);
+      if (run.stop === "crashed" || run.stop === "hang") return;
+      if (pending !== null) {
+        await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
+        await settled().catch(() => undefined);
+      }
+      // #147: a resource the LAST action created is still checked from the observers.
+      const cross = await monitor.settleCrossActor(cfg.actor).catch(() => null);
+      for (const v of cross?.violations ?? []) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
     },
     fold: (result) => {
       const invariantDefects = log.defects();
       const invariants = monitor.report();
+      // #147 fail closed: a cross-actor invariant that never decided cannot let the run read as clean.
+      const undecided = monitor.undecidedCrossActor();
+      if (invariantDefects.length === 0 && undecided.length > 0 && result.outcome === "succeeded") {
+        const why = `cross-actor invariant(s) undecided: ${undecided.map((u) => `${u.id} (${u.reason})`).join("; ")}`;
+        return { ...result, outcome: "inconclusive", reason: why, invariantDefects, invariants };
+      }
       if (invariantDefects.length === 0) return { ...result, invariantDefects, invariants };
       // A violated invariant is a hard defect: it overrides a pass or a plain miss — never a broken
       // run or a hang, whose own verdict is more severe (the defects are still reported).

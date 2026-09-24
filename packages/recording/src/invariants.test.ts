@@ -3,11 +3,16 @@ import {
   InvariantSpecError,
   UNKNOWN,
   evaluateInvariantExpression,
+  invariantActors,
   invariantAuthSecretRefs,
+  invariantGate,
+  invariantObserver,
   mergeInvariantSpecs,
   parseInvariantExpression,
   parseJsonPath,
   readJsonPath,
+  readJsonPathList,
+  substituteCaptureRefs,
   validateInvariantSpec,
   type EvalValue,
 } from "./invariants.js";
@@ -131,7 +136,7 @@ describe("invariant spec schema (#86)", () => {
     expect(refusal({ observe: { balance: { dom: { number: true } } }, invariants: [{ id: "a", require: "balance > 0" }] }).join()).toMatch(
       /observe\.balance\.dom\.selector: exactly one of selector or target/,
     );
-    expect(refusal({ invariants: [{ id: "a" }] }).join()).toMatch(/exactly one of require, never or always/);
+    expect(refusal({ invariants: [{ id: "a" }] }).join()).toMatch(/exactly one of require, never, always or deniedAs/);
     expect(refusal({ invariants: [] }).join()).toMatch(/invariants/);
     expect(refusal({ invariants: [{ id: "a", never: { pageText: "/(/" } }] }).join()).toMatch(/invalid regex/);
     expect(refusal({ invariants: [{ id: "../x", never: { pageText: "boom" } }] }).join()).toMatch(/invariants\[0\]\.id/);
@@ -204,5 +209,118 @@ describe("JSON path subset", () => {
     expect(() => parseJsonPath("$..credits")).toThrow();
     expect(() => parseJsonPath("$[?(@.x)]")).toThrow();
     expect(() => parseJsonPath("entries")).toThrow();
+  });
+});
+
+describe("multi-actor specs (#147): captures, observers, cross-actor checks", () => {
+  const OBS = { ...ALLOW, observers: ["intruder"] };
+  const denied = {
+    actor: "intruder",
+    open: "${capture.pieceUrl}",
+    expect: {
+      documentStatus: [403, 404],
+      appResponses: { url: "**/GetWorkspace", status: [404], connectCode: ["not_found", "permission_denied"] },
+      orVisible: "/not found|isn't available/i",
+    },
+  };
+  const cross = {
+    capture: {
+      pieceId: { network: { url: "**/WorkspaceService/CreateWorkspace", json: "$.workspace.id" } },
+      pieceUrl: { url: { after: { control: { name: "/Create|Save/i" } }, route: "/w/*" } },
+      pieceDom: { dom: { selector: "[data-created]", read: "attr:data-id", after: { op: ["click"] } } },
+    },
+    observe: {
+      intruderList: { probe: { as: "intruder", get: "/v1/workspaces?limit=100", json: "$.items[*].id" } },
+      intruderGet: { probe: { as: "intruder", get: "/v1/workspaces/${capture.pieceId}" } },
+    },
+    invariants: [
+      { id: "not-listed-cross-tenant", when: { after: "capture.pieceId" }, require: "!contains(intruderList, pieceId)" },
+      { id: "not-readable-cross-tenant", when: { after: "capture.pieceId" }, require: "intruderGet == 404 || intruderGet == 403" },
+      { id: "not-openable-cross-tenant", when: { after: "capture.pieceUrl" }, deniedAs: denied },
+    ],
+  };
+  const withDenied = (d: object): unknown => ({ ...cross, invariants: [{ id: "x", when: { after: "capture.pieceUrl" }, deniedAs: d }] });
+
+  it("accepts the issue's design with a registered observer", () => {
+    const spec = validateInvariantSpec(cross, OBS);
+    expect(spec.capture?.pieceId).toBeDefined();
+    expect(invariantActors(spec)).toEqual(["intruder"]);
+    expect(spec.invariants.map((i) => invariantGate(i))).toEqual(["pieceId", "pieceId", "pieceUrl"]);
+    expect(spec.invariants.map((i) => invariantObserver(spec, i))).toEqual(["intruder", "intruder", "intruder"]);
+  });
+
+  it("refuses an actor that is not a registered observer (or any actor with none registered)", () => {
+    expect(refusal(cross, ALLOW).join("\n")).toMatch(/actor "intruder" is not registered/);
+    expect(refusal(cross, { ...ALLOW, observers: ["b"] }).join("\n")).toMatch(/actor "intruder" is not a registered observer \(have: b\)/);
+  });
+
+  it("refuses an observer's observable read around every action, and a deniedAs with no capture gate", () => {
+    const p1 = refusal({ ...cross, invariants: [{ id: "x", require: "intruderList == 0" }] }, OBS);
+    expect(p1.join("\n")).toMatch(/invariants\[0\]\.when: "intruderList" is read as another actor/);
+    const p2 = refusal({ ...cross, invariants: [{ id: "x", deniedAs: denied }] }, OBS);
+    expect(p2.join("\n")).toMatch(/deniedAs needs when\.after/);
+  });
+
+  it("refuses unknown captures, a gate with other when keys, and a capture that could set an origin", () => {
+    const unknownGate = refusal({ ...cross, invariants: [{ id: "x", when: { after: "capture.nope" }, require: "!contains(intruderList, pieceId)" }] }, OBS);
+    expect(unknownGate.join("\n")).toMatch(/invariants\[0\]\.when\.after: unknown capture "nope"/);
+    const unknownRef = refusal({ ...cross, observe: { ...cross.observe, bad: { probe: { as: "intruder", get: "/v1/${capture.ghost}" } } } }, OBS);
+    expect(unknownRef.join("\n")).toMatch(/observe\.bad\.probe: unknown capture "ghost"/);
+    const mixed = refusal(
+      { ...cross, invariants: [{ id: "x", when: { after: "capture.pieceId", op: ["click"] }, require: "!contains(intruderList, pieceId)" }] },
+      OBS,
+    );
+    expect(mixed.join("\n")).toMatch(/when takes no other key/);
+    // Only a url capture (the primary's own, authorized page URL) may start a URL.
+    expect(refusal(withDenied({ ...denied, open: "${capture.pieceId}/x" }), OBS).join("\n")).toMatch(/only a url capture may start a URL/);
+    expect(refusal(withDenied({ ...denied, open: "http://evil.test/${capture.pieceId}" }), OBS).join("\n")).toMatch(
+      /deniedAs\.open: origin http:\/\/evil\.test is not an authorized origin/,
+    );
+  });
+
+  it("refuses malformed captures and denial expectations; a probe stays GET/HEAD as another actor too", () => {
+    const twoKinds = refusal({ ...cross, capture: { ...cross.capture, both: { network: { url: "**", json: "$.id" }, url: { after: { op: ["click"] } } } } }, OBS);
+    expect(twoKinds.join("\n")).toMatch(/capture\.both: a capture is exactly one of network, dom or url/);
+    const emptyAfter = refusal({ ...cross, capture: { ...cross.capture, pieceUrl: { url: { after: {} } } } }, OBS);
+    expect(emptyAfter.join("\n")).toMatch(/after names at least one of control, route or op/);
+    expect(refusal(withDenied({ actor: "intruder", open: "/w/1", expect: {} }), OBS).join("\n")).toMatch(/expect names at least one of/);
+    expect(
+      refusal(withDenied({ actor: "intruder", open: "/w/1", expect: { appResponses: { url: "**", connectCode: ["NotFound"] } } }), OBS).join("\n"),
+    ).toMatch(/Connect code is snake_case/);
+    expect(refusal({ ...cross, observe: { ...cross.observe, w: { probe: { as: "intruder", post: "/v1/x" } } } }, OBS).join("\n")).toMatch(/Unrecognized key/);
+  });
+
+  it("merges captures, refusing one declared differently in two files", () => {
+    const a = validateInvariantSpec(cross, OBS);
+    const b = validateInvariantSpec({ capture: { pieceId: { network: { url: "**/other", json: "$.id" } } }, invariants: [{ id: "y", never: { pageText: "x" } }] }, OBS);
+    expect(() => mergeInvariantSpecs([a, b])).toThrow(/capture\.pieceId: declared differently/);
+  });
+
+  it("! and contains(): Kleene-safe, ids compared as text, a list never compared with ==", () => {
+    const run = (src: string, vals: Record<string, EvalValue>) =>
+      evaluateInvariantExpression(parseInvariantExpression(src), { before: (n) => (n in vals ? (vals[n] as EvalValue) : UNKNOWN), after: (n) => (n in vals ? (vals[n] as EvalValue) : UNKNOWN) });
+    expect(run("!contains(l, id)", { l: ["item-1", "item-2"], id: "item-3" })).toBe(true);
+    expect(run("!contains(l, id)", { l: ["item-1", 42], id: "42" })).toBe(false);
+    expect(run("contains(t, id)", { t: "owner of item-9", id: "item-9" })).toBe(true);
+    expect(run("!contains(l, id)", { l: null, id: "x" })).toBe(true);
+    expect(run("!contains(l, id)", { id: "x" })).toBe(UNKNOWN);
+    expect(run("l == 2", { l: [1, 2] })).toBe(UNKNOWN);
+    expect(run("!(a > 1)", { a: 0 })).toBe(true);
+    expect(() => parseInvariantExpression("contains(a)")).toThrow();
+  });
+
+  it("[*] JSON paths fan out into a list of scalars; read as one value they are its size", () => {
+    const body = { items: [{ id: "a" }, { id: 2 }, { nope: 1 }], empty: [] };
+    expect(readJsonPathList(body, parseJsonPath("$.items[*].id"))).toEqual(["a", 2]);
+    expect(readJsonPathList(body, parseJsonPath("$.empty[*].id"))).toEqual([]);
+    expect(readJsonPathList(body, parseJsonPath("$.missing[*].id"))).toBeUndefined();
+    expect(readJsonPath(body, parseJsonPath("$.items[*].id"))).toBe(2);
+  });
+
+  it("substitutes capture refs: URL-encoded inside a path, raw when the whole template, null when unbound", () => {
+    const v: Record<string, string> = { id: "a/b?c", url: "http://app.test/w/1" };
+    expect(substituteCaptureRefs("/v1/w/${capture.id}", (n) => v[n])).toBe("/v1/w/a%2Fb%3Fc");
+    expect(substituteCaptureRefs("${capture.url}", (n) => v[n])).toBe("http://app.test/w/1");
+    expect(substituteCaptureRefs("/v1/${capture.gone}", (n) => v[n])).toBeNull();
   });
 });
