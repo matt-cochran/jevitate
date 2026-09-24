@@ -11,6 +11,8 @@ export * from "./actions.js";
 export * from "./transcript.js";
 export * from "./decide.js";
 export * from "./fill.js";
+export * from "./secret-fields.js";
+export * from "./totp.js";
 export * from "./act.js";
 export * from "./fixture.js";
 export * from "./record.js";

@@ -24,6 +24,15 @@ import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } fr
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalMet } from "./decide.js";
 import { FillHelper, capMessage, chatReply, matchOption } from "./fill.js";
+import {
+  type SecretField,
+  boundSecretField,
+  maskSecretFields,
+  secretFieldContext,
+  secretFieldSecrets,
+  secretFieldValue,
+  secretPlaceholder,
+} from "./secret-fields.js";
 import { act } from "./act.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
@@ -101,6 +110,11 @@ export interface ExploreConfig {
   readonly startUrl: string;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /**
+   * Secret field bindings (#72): a `type` on a matching control is typed by code with the bound
+   * value (or TOTP code); the model sees only a placeholder, the Recording `{ redacted: true }`.
+   */
+  readonly secretFields?: readonly SecretField[];
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;
@@ -213,7 +227,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   // Mission fixture: validated before any navigation/decision (fail fast).
   const fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture);
 
-  const secrets = cfg.secrets ?? [];
+  // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
+  const secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
+  const secretContext = secretFieldContext(cfg.secretFields);
+  const missionContext =
+    secretContext === null ? cfg.missionContext : cfg.missionContext ? `${cfg.missionContext}; ${secretContext}` : secretContext;
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
@@ -344,7 +362,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // offer an occluded control (see `perceive`).
       const perception = await perceive(page, perceiveOpts);
       timings.push(perception.timing);
-      const snap = perception.snapshot;
+      // A bound secret field shows the model its placeholder only (#72).
+      const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
       {
         const m = track.lastMutation;
         if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
@@ -505,7 +524,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           goal: cfg.goal,
           snapshot: snap,
           history,
-          missionContext: cfg.missionContext,
+          missionContext,
           secrets,
           // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
           // model had kept re-choosing it after a successful attach instead of proceeding).
@@ -730,6 +749,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       const at = now();
 
+      // A bound secret field (#72): code types the real value (a TOTP code is computed now); the model,
+      // history and transcript see only the placeholder, the Recording `{ redacted: true }`.
+      const bound = decision.op === "type" ? boundSecretField(control, cfg.secretFields) : null;
+      if (bound !== null) {
+        const value = secretFieldValue(bound, at);
+        const placeholder = secretPlaceholder(bound);
+        const r = await act(cfg.actor, { op: "type", control, value });
+        if (r.ok) {
+          recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at);
+          tracker.countAction();
+          history.push(`typed ${placeholder} into ${control.name} (bound secret, typed by code)`);
+        } else {
+          history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
+        }
+        record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder));
+        lastActedOp = decision.op;
+        continue;
+      }
+
       // The repeated-type anti-pattern (independent code): typing again into a field that holds text
       // this run typed and never sent overwrites it and still delivers nothing. Submit instead, and
       // count it as a stuck signal.
@@ -855,7 +894,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
-            secrets: cfg.secrets,
+            secrets,
             options: control.options,
           }));
         } catch (e) {
@@ -895,17 +934,29 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // The generator supplies the text/option (never the model's choice head). It is a HELPER:
         // when it is unavailable the step fails (recorded, visible to the model) and the run goes on.
         let text: string | null;
+        let rejected: string | undefined;
         try {
-          ({ text } = await fillHelper.valueFor({
+          ({ text, rejected } = await fillHelper.valueFor({
             fieldLabel: control.name || control.summary,
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
-            secrets: cfg.secrets,
+            secrets,
+            // A text field's value is field-scoped and checked before it is typed (#71).
+            ...(decision.op === "type" ? { field: { tag: control.tag, inputType: control.inputType } } : {}),
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
           history.push(`${decision.op} skipped: ${reason}`);
+          record(false, reason);
+          lastActedOp = decision.op;
+          continue;
+        }
+        if (rejected !== undefined) {
+          // Not a value for this one field (an essay, a JSON map, a `Label:` echo…): a failed act the
+          // model sees in its history, never typed.
+          const reason = `typed value rejected: ${rejected}`;
+          history.push(`type into ${control.name} failed: ${reason} — the value must be only what goes in this one field`);
           record(false, reason);
           lastActedOp = decision.op;
           continue;

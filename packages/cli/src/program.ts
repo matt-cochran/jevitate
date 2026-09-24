@@ -48,7 +48,10 @@ import {
   FixtureNotFoundError,
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
+  parseSecretField,
+  SecretFieldSpecError,
   type CoverageThresholds,
+  type SecretField,
   type SuccessCheck,
 } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
@@ -1314,7 +1317,19 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--secret <value>",
-      "a secret/PII value to keep out of every model call (repeatable)",
+      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--secret-field <binding>",
+      "goal strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--totp <binding>",
+      "goal strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1374,6 +1389,18 @@ export function buildProgram(deps: CliDeps): Command {
       "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
     )
     .option("--json", "emit a JSON envelope")
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Authenticated missions:",
+        "  --secret only REDACTS a value; it is never typed. Prefer starting logged in: save a Playwright",
+        "  storageState once (e.g. `npx playwright codegen --save-storage=auth.json <url>`) and pass",
+        "  --storage-state auth.json. To drive a login/signup form, bind fields to environment variables:",
+        "  --secret-field 'label=Password=env:APP_PASSWORD' and, for MFA, --totp 'label=Code=env:APP_TOTP_SEED'.",
+        "  See 'Authenticated missions' in the README.",
+      ].join("\n"),
+    )
     .action(async function (this: Command) {
       const o = this.opts<{
         minControlCoverage?: string;
@@ -1398,6 +1425,8 @@ export function buildProgram(deps: CliDeps): Command {
         route: string[];
         allow: string[];
         secret: string[];
+        secretField: string[];
+        totp: string[];
         fixture?: string;
         storageState?: string;
         maxActions?: string;
@@ -1478,6 +1507,24 @@ export function buildProgram(deps: CliDeps): Command {
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
+      }
+      // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
+      let secretFields: SecretField[] = [];
+      if (o.secretField.length > 0 || o.totp.length > 0) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal"));
+          return;
+        }
+        try {
+          secretFields = [
+            ...o.secretField.map((s) => parseSecretField(s, "value", process.env)),
+            ...o.totp.map((s) => parseSecretField(s, "totp", process.env)),
+          ];
+        } catch (err) {
+          if (!(err instanceof SecretFieldSpecError)) throw err;
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
       }
 
       // Additive coverage/exploratory strategy: proof-by-induction state coverage.
@@ -1774,6 +1821,7 @@ export function buildProgram(deps: CliDeps): Command {
           gen,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
+          ...(secretFields.length > 0 ? { secretFields } : {}),
           fixture: o.fixture,
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,

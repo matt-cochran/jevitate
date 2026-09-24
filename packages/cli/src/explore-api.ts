@@ -29,6 +29,8 @@ import {
   type SuccessCheck,
   type SuccessCheckResult,
   type SuccessWhen,
+  type SecretField,
+  secretFieldSecrets,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -87,6 +89,11 @@ export interface RunExplorationOptions {
   readonly gen: GenerationPort;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
+  /**
+   * Secret field bindings (CLI `--secret-field` / `--totp`, resolved from the environment): typed
+   * by code, never by the model; each value/seed is also a run secret (redacted everywhere).
+   */
+  readonly secretFields?: readonly SecretField[];
   /**
    * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
    * browser opens: a missing file throws `FixtureNotFoundError`.
@@ -212,6 +219,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well.
+  const bound = secretFieldSecrets(opts.secretFields);
+  const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -250,7 +260,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
       bounds: opts.bounds,
-      secrets: opts.secrets,
+      secrets,
+      ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       site: origin,
       fixture,
       ...conversationConfig(opts.conversation),
@@ -258,7 +269,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
     journal.writeRecording(mission.recording);
     journal.writeTranscript(mission.transcript);
-    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page));
     const resultPath = resultPathFor(journal.recordingPath);
     const drafts: IssueDraft[] = [];
     if (mission.run.crash !== undefined) drafts.push(draftForCrash(mission.run.crash, mission.transcript, ctx));
