@@ -65,6 +65,173 @@ jevitate --help                                       # everything else
 Autonomous runs are always bounded and restricted to origins you authorize;
 credentials are never sent to a model. See [SECURITY.md](./SECURITY.md).
 
+### Mission outcomes and exit codes
+
+A mission never answers with a crash: every run ends in a typed outcome, and its
+transcript and Recording are flushed to disk step by step, so they survive even
+a run that dies mid-way. A run that could not do its work is never reported as
+clean.
+
+| Outcome | Exit code | Meaning |
+|---|---|---|
+| `clean` | 0 | the run finished its budget and found nothing (goal mission: the success assertion held) |
+| `defects-found` | 1 | at least one confirmed defect (goal mission: the success assertion did not hold) |
+| `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash) |
+| `hang` | 3 | the app under test hung, and the hang reproduced on replay |
+| `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+
+The MCP tool `get_mission_result` returns the same status and code for a
+finished run; a broken run comes back as an error result.
+
+The adversarial mission keeps hunting after a defect until its step, action or
+time budget runs out. Defects are deduplicated by a stable fingerprint, and each
+one carries its reproduction: the transcript steps that led to it and the
+Recording step to replay up to. To check a fix, replay the defect:
+
+```bash
+jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp>
+# exit 0 fixed (signal absent) · 1 still reproduces · 2 inconclusive (replay could not reach the step)
+```
+
+The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
+
+### Hangs
+
+A hung app is its own finding (`hang`), never folded into "no progress" or a
+timeout. jevitate distinguishes four kinds: the page never settles within the
+ceiling; the main thread does not answer a trivial probe; a request stays pending
+past its bound on a page that cannot be used; or the UI makes no progress after an
+action while the page is still alive (a busy indicator that never ends, or an
+action that silently puts the page back in an earlier state). The evidence is
+recorded: pending requests, the last page state, timings and the JS heap. The
+steps that led to the hang are then replayed in fresh browser contexts
+(`--hang-replays`, default 2). If any replay hangs again, it is a confirmed
+`hang`. If none did but at least one replay ran all the way, it is
+`intermittent`. If no replay could run at all (the fresh session could not
+open, or the replay failed before it reached the step), it is `inconclusive`:
+a replay that never ran is not evidence that the hang went away. The evidence
+from every attempt is kept. The
+exploring missions (adversarial, coverage and feature) then keep hunting: they
+reset to a known state (a fresh page at the start URL), skip the hung route, and
+go on within budget. A repeated hang counts as another occurrence of the same
+finding. Findings made after a reset carry their own Recording, so they replay
+from the start URL and never through the hang. The goal mission still ends at a
+hang, because the hang blocks its goal.
+`verify-fix` works on a hang too: it passes only if the replay now settles within
+the bound.
+
+#### When is a page "settled"?
+
+No request in flight and no *structural* DOM change (nodes added or removed, or an
+attribute that changes what can be acted on) for 500ms, within a 15s ceiling.
+These do not count:
+
+- long-lived connections: WebSocket, EventSource, and any response streamed as
+  `text/event-stream`;
+- requests the target marks as background (`settle.ignoreRequests`);
+- auto-detected long-polls: a request pending longer than `settle.longPollMs`
+  (default 5000) while the page is otherwise interactive (a control is rendered
+  and no busy indicator shows);
+- text-only updates of existing nodes (a clock, a live counter) and inline-style
+  animation.
+
+Configure a target in `~/.jevitate/targets.json`, keyed by origin (or per run
+with `--settle-ignore`, `--long-poll-ms` and `--ignore-no-progress`):
+
+```json
+{ "https://app.example.test": {
+    "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000 },
+    "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] } } }
+```
+
+`*` matches any run of characters. A pattern containing `://` is matched against
+the full URL; any other pattern is matched against the path and query.
+
+#### Known limits of the hang heuristics
+
+- A request that runs longer than `longPollMs` on an interactive page is treated
+  as background, so a genuinely stuck request on a page that still shows
+  controls is not reported as `request-pending`. It can still surface as
+  `ui-no-progress` if the UI shows a busy indicator.
+- DOM churn that keeps adding or removing nodes more often than every 500ms (an
+  infinite feed, a JS animation that rebuilds nodes) never settles and reads as
+  `never-settled`. Declare it or treat such routes carefully.
+- Stalled-state `ui-no-progress` means an action sent the page back to a state it
+  had already shown, no new state appeared, and it stayed there for 8s. Actions
+  named like "Back", "Cancel", "Close" or "Undo" are exempt. Any other UI that
+  returns to an earlier state by design needs `hangs.ignoreNoProgress`.
+- Busy indicators are recognised by `aria-busy="true"`, an indeterminate
+  `role="progressbar"`, or a spinner class name. Custom spinners without these are
+  not seen.
+- A hang is confirmed only if it reproduces on every replay. A deterministic
+  false positive of any kind above would therefore reproduce too.
+
+### Page timing
+
+Every transcript step (and the Recording step before it) records how the page
+reached its state: Navigation Timing (TTFB, DOMContentLoaded, load) for a new
+document, action-to-settled time for an in-place transition, the page's
+requests (count, and the slowest ones with their redacted, normalized endpoint,
+status and duration), and LCP where the browser exposes it. Each run's result
+carries a `timing` summary keyed by normalized route (`navigation /contacts/:id`)
+and endpoint pattern (`GET /api/contacts/:id`), with p50 and max, plus the
+slowest pages. Requests are classified as `api`, `document` or `asset`:
+- `api` is XHR or fetch that returns data (JSON or other non-HTML), or any path
+  under a configured `timing.apiPrefixes` / `--api-prefix`.
+- `asset` covers scripts, styles, fonts, images and media, including a dev
+  server's modules such as Vite's `/src/…`, `/@vite/…` and `/node_modules/…`.
+
+`slowestEndpoints` ranks the API only, and `slowestAssets` ranks the assets. The
+full per-endpoint data keeps both. These are measurements, not verdicts: a slow page
+is never a defect by itself.
+
+### Replay finds the recorded element exactly
+
+A replay (a Journey, `verify-fix`, a hang reproduction) never clicks a guess:
+
+- It uses a stable anchor captured at record time when there is one: a test id,
+  or a non-generated, document-unique `id` or `name` attribute. It stores
+  identifiers only, never a field's value.
+- Otherwise it matches the recorded role and accessible name, label or text
+  **exactly**, never by substring or prefix, so "Stuck report" is never
+  "Stuck report again". Among elements with the same name, it uses the recorded
+  index. If the number of such elements changed since recording, the step fails
+  instead of clicking whatever element now sits at that index.
+- A target that is missing, or that cannot be told apart from others, fails the
+  step with a typed `replay-target-not-found` or `ambiguous` result.
+  `verify-fix` reports that as `inconclusive`, never as `fixed`.
+
+Older recordings without anchors or recorded counts still replay, by exact
+name plus index.
+
+### Crashes and issue drafts
+
+Every crash records the steps up to it, the error and stack, the page/browser
+crash signals and the page's JS heap per step. It is attributed from that
+evidence: to jevitate (an own-code stack frame and no page/browser crash signal),
+to the system under test (page or browser crash, renderer OOM, unbounded heap
+growth, a hang), or as uncertain (filed to both). The host's own resource
+pressure is sampled at detection time (the same sample admission control takes:
+PSI, cgroup and meminfo on Linux/WSL, a portable fallback elsewhere) and is part
+of the evidence. If the host was over a threshold, an unresponsive main thread
+or a navigation timeout is attributed as uncertain ("host under resource
+pressure"), not to the app. Each defect and crash gets a
+ready-to-file, redacted Markdown draft in `<recording>.issues/<fingerprint>.md`.
+
+Filing is off by default. It needs `--file-issues` (or `"enabled": true`) and a
+repo: engine findings go to `--jevitate-repo` (default `matt-cochran/jevitate`);
+findings in the app under test go to the repo configured for that target, with
+`--issue-repo` or `~/.jevitate/filing.json`:
+
+```json
+{ "enabled": false, "targets": { "https://app.example.test": { "repo": "acme/app" } } }
+```
+
+Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API with
+`GITHUB_TOKEN` from jevitate's credential store. Before it opens an issue, it
+searches for an open issue carrying the same fingerprint marker and comments on
+that one instead.
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`

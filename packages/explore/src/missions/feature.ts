@@ -12,7 +12,9 @@ import {
 } from "@jevitate/recording";
 import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
-import { snapshot, type Control, type Snapshot } from "../snapshot.js";
+import type { Control, Snapshot } from "../snapshot.js";
+import { perceive } from "../perceive.js";
+import { targetCandidates, type TargetOp } from "../actions.js";
 import { act } from "../act.js";
 import { toPath } from "../record.js";
 import { stateFingerprint, actionKey, type FrontierOp } from "../feature/fingerprint.js";
@@ -20,6 +22,14 @@ import { Frontier } from "../feature/frontier.js";
 import { reachFrontierState } from "../feature/reach.js";
 import { isInScope, type CapabilityScope } from "../feature/capability-scope.js";
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
+import type { MissionFailure } from "@jevitate/domain";
+import type { SettleConfig } from "../settle-config.js";
+import type { HangSignal } from "../hang.js";
+import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import { MissionSessions } from "../mission-session.js";
+import type { VerifySession } from "../verify-fix.js";
+import { CrashWatch, describeFailure } from "../mission-failure.js";
+import { monitorFor } from "../page-monitor.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -62,19 +72,34 @@ export interface FeatureCoverage {
 }
 
 export interface FeatureRunResult {
-  outcome: "exhausted" | "cap" | "path-cap";
+  /**
+   * `crashed`: the engine failed; the paths discovered up to the failure are still returned.
+   * `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session).
+   */
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang";
+  /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
+  hangs: HangFinding[];
+  /** Why the run crashed — present only for `crashed`. */
+  failure?: MissionFailure;
   coverage: FeatureCoverage;
   recordings: Recording[];
 }
 
 const TIMING: StepTiming = { atMs: 0, durationMs: 0, gapBeforeMs: 0 };
 
-function candidateOpsFor(control: Control): FrontierOp[] {
-  const r = control.role;
-  if (r === "textbox" || r === "searchbox" || r === "spinbutton") return ["type"];
-  if (r === "combobox") return ["select"];
-  if (r === "button" || r === "link" || r === "checkbox" || r === "radio") return ["click"];
-  return [];
+/** The ops the feature frontier issues — never `upload` (the mission carries no fixture). */
+const FRONTIER_OPS: ReadonlySet<TargetOp> = new Set<TargetOp>(["click", "type", "select"]);
+
+/**
+ * The frontier candidates a state offers, by the SHARED affordance mapping (`affordedOp`,
+ * ./actions.ts) — the same op the goal loop would use on each control.
+ */
+function frontierCandidates(controls: readonly Control[]): Array<{ control: Control; op: FrontierOp }> {
+  const out: Array<{ control: Control; op: FrontierOp }> = [];
+  for (const c of targetCandidates(controls, { ops: FRONTIER_OPS })) {
+    if (c.op === "click" || c.op === "type" || c.op === "select") out.push({ control: c.control, op: c.op });
+  }
+  return out;
 }
 
 function seedRecording(seedUrl: string, site: string): Recording {
@@ -102,7 +127,10 @@ function extendRecording(
   navigatedToPath: string | null,
 ): Recording {
   const pages: PageSegment[] = structuredClone(prefix.pages);
-  const last = pages[pages.length - 1]!;
+  // A feature path always starts with its seed navigate segment (`seedRecording`); a prefix with no
+  // page segment is not a path this mission produced, so it is rejected rather than guessed at.
+  const last = pages.at(-1);
+  if (last === undefined) throw new Error("extendRecording: path prefix has no page segment");
   const expect: Assertion =
     navigatedToPath !== null ? { kind: "urlIncludes", text: navigatedToPath } : { kind: "visible", target: { ...descriptor } };
 
@@ -125,6 +153,15 @@ export async function runFeatureMission(params: {
   bounds?: Partial<Bounds>;
   maxDepth?: number;
   maxPaths?: number;
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS` — the shared settle rule
+   *  recognises a control-free leaf state in about the quiet window, so no shorter coverage bound is needed. */
+  renderWaitMs?: number;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  settle?: SettleConfig;
+  /** Opens a FRESH browser session: reproduces a hang and resets to it after one. */
+  openFreshSession?: () => Promise<VerifySession>;
+  /** Fresh-context replays that confirm a hang. Default 2. */
+  hangReplays?: number;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
@@ -133,88 +170,138 @@ export async function runFeatureMission(params: {
   const maxPaths = params.maxPaths ?? 20;
   const site = new URL(params.seedUrl).origin;
 
-  const snapshotNow = (): Promise<Snapshot> => snapshot(params.page, { maxCandidates: bounds.maxCandidates });
+  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
+  const hangs = new Map<string, HangFinding>();
+  /** The hang the latest perception saw (a holder: it is set inside the perception closure). */
+  const seenHang: { last: HangSignal | null } = { last: null };
 
-  await params.actor.attemptsTo(Navigate.to(params.seedUrl));
-  let snap = await snapshotNow();
-  let currentFingerprint = stateFingerprint(snap);
+  // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
+  // still-rendering frame — including right after a reset-and-replay.
+  const snapshotNow = async (): Promise<Snapshot> => {
+    const p = await perceive(sessions.page, {
+      maxCandidates: bounds.maxCandidates,
+      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+    });
+    seenHang.last = p.hang;
+    return p.snapshot;
+  };
 
-  const visited = new Set<string>([currentFingerprint]);
+  let crashWatch = new CrashWatch(sessions.page);
+  sessions.onReset((page) => {
+    crashWatch = new CrashWatch(page);
+  });
+  const visited = new Set<string>();
   const boundaryEdges: string[] = [];
   const leaves = new Map<string, Recording>();
   const extended = new Set<string>();
-  const frontier = new Frontier();
-
-  const seedRec = seedRecording(params.seedUrl, site);
-  leaves.set(currentFingerprint, seedRec);
-  for (const control of snap.controls) {
-    for (const op of candidateOpsFor(control)) {
-      frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
-    }
-  }
-
-  let actions = 0;
   let transitionsExercised = 0;
   let pathsDiscovered = 1; // the seed state counts as the first path
 
-  const endRun = (outcome: FeatureRunResult["outcome"]): FeatureRunResult => ({
+  const endRun = (outcome: FeatureRunResult["outcome"], failure?: MissionFailure): FeatureRunResult => ({
     outcome,
+    ...(failure === undefined ? {} : { failure }),
     coverage: { pathsDiscovered, statesExercised: visited.size, transitionsExercised, boundaryEdges },
     recordings: [...leaves.entries()].filter(([fp]) => !extended.has(fp)).map(([, r]) => r),
+    hangs: [...hangs.values()],
   });
 
-  while (!frontier.isExhausted()) {
-    if (actions >= bounds.maxActions) return endRun("cap");
-    if (pathsDiscovered >= maxPaths) return endRun("path-cap");
+  try {
+    await monitorFor(sessions.page).instrument();
+    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
+    let snap = await snapshotNow();
+    let currentFingerprint = stateFingerprint(snap);
+    visited.add(currentFingerprint);
+    const frontier = new Frontier();
 
-    const item = frontier.popPreferring(currentFingerprint)!;
-    const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
-    if (depth >= maxDepth) continue;
-
-    if (item.fromFingerprint !== currentFingerprint) {
-      const reached = await reachFrontierState({ actor: params.actor, item, snapshotNow });
-      if (!reached.ok) continue;
-      snap = reached.snapshot;
-      currentFingerprint = item.fromFingerprint;
+    const seedRec = seedRecording(params.seedUrl, site);
+    leaves.set(currentFingerprint, seedRec);
+    for (const { control, op } of frontierCandidates(snap.controls)) {
+      frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
     }
 
-    // Boundary-value stimulation on type; a secret-like field yields NO
-    // candidate and is skipped entirely (guardrail #3 — never synthesized).
-    const fillText = item.op === "type" && !isSecretLike(item.control) ? boundaryValueCandidates(item.control)[0] : undefined;
-    if (item.op === "type" && fillText === undefined) continue;
+    let actions = 0;
 
-    const beforeUrl = snap.url;
-    const result = await act(params.actor, { op: item.op, control: item.control, value: fillText ?? null });
-    actions += 1;
-    if (!result.ok) continue;
+    while (!frontier.isExhausted()) {
+      if (actions >= bounds.maxActions) return endRun("cap");
+      if (pathsDiscovered >= maxPaths) return endRun("path-cap");
 
-    snap = await snapshotNow();
-    const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
-    const newFingerprint = stateFingerprint(snap);
-    const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
-    transitionsExercised += 1;
-    extended.add(item.fromFingerprint);
+      const item = frontier.popPreferring(currentFingerprint);
+      if (item === undefined) break;
+      const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
+      if (depth >= maxDepth) continue;
 
-    if (!isInScope(snap.url, params.scope)) {
-      // Out of scope — recorded as a boundary edge, never expanded (guardrail #4).
-      boundaryEdges.push(snap.url);
-      leaves.set(newFingerprint, branch);
-      currentFingerprint = newFingerprint;
-      continue;
-    }
+      if (item.fromFingerprint !== currentFingerprint) {
+        const reached = await reachFrontierState({ actor: sessions.actor, item, snapshotNow });
+        if (!reached.ok) continue;
+        snap = reached.snapshot;
+        currentFingerprint = item.fromFingerprint;
+      }
 
-    if (!visited.has(newFingerprint)) {
-      visited.add(newFingerprint);
-      leaves.set(newFingerprint, branch);
-      pathsDiscovered += 1;
-      for (const control of snap.controls) {
-        for (const op of candidateOpsFor(control)) {
+      // Boundary-value stimulation on type; a secret-like field yields NO
+      // candidate and is skipped entirely (guardrail #3 — never synthesized).
+      const fillText = item.op === "type" && !isSecretLike(item.control) ? boundaryValueCandidates(item.control)[0] : undefined;
+      if (item.op === "type" && fillText === undefined) continue;
+
+      const beforeUrl = snap.url;
+      const result = await act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null });
+      actions += 1;
+      if (!result.ok) continue;
+
+      snap = await snapshotNow();
+      const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
+      const newFingerprint = stateFingerprint(snap);
+      const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
+      transitionsExercised += 1;
+      extended.add(item.fromFingerprint);
+
+      // A hang: record it (reproduced from the path that led here), reset to a known state and keep
+      // exploring the rest of the frontier. The hung state is never expanded.
+      const hang = seenHang.last;
+      if (hang !== null) {
+        await recordCoverageHang({
+          hang,
+          recording: { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) },
+          steps: [],
+          found: hangs,
+          ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
+          ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+          // Re-detected with the SAME perception bounds the mission used.
+          perceive: {
+            ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+            ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+          },
+        });
+        if (!(await sessions.reset(hang))) return endRun("hang");
+        await monitorFor(sessions.page).instrument();
+        currentFingerprint = ""; // the next item is reached afresh from the seed
+        continue;
+      }
+
+      if (!isInScope(snap.url, params.scope)) {
+        // Out of scope — recorded as a boundary edge, never expanded (guardrail #4).
+        boundaryEdges.push(snap.url);
+        leaves.set(newFingerprint, branch);
+        currentFingerprint = newFingerprint;
+        continue;
+      }
+
+      if (!visited.has(newFingerprint)) {
+        visited.add(newFingerprint);
+        leaves.set(newFingerprint, branch);
+        pathsDiscovered += 1;
+        for (const { control, op } of frontierCandidates(snap.controls)) {
           frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
         }
       }
+      currentFingerprint = newFingerprint;
     }
-    currentFingerprint = newFingerprint;
-  }
 
-  return endRun("exhausted");
+    return endRun("exhausted");
+  } catch (e) {
+    // Engine failure: a typed `crashed` result carrying every path discovered so far.
+    return endRun("crashed", describeFailure(e, crashWatch.signals()));
+  } finally {
+    await sessions.closeOwned();
+  }
 }

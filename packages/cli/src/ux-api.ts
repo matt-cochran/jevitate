@@ -21,6 +21,7 @@ import {
   type Snapshot,
   type Control as ExploreControl,
   type Bounds,
+  type TimingSummary,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
@@ -34,6 +35,10 @@ import {
   type UxReport,
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
+import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
+import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
+import { missionExitCode } from "./mission-exit.js";
+import type { TargetConfig } from "./target-config.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -229,15 +234,31 @@ export interface RunUsabilityMissionOptions {
    */
   readonly storageState?: string;
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
   /** Test seam: extract a page's visible text. Default reads the live page. */
   readonly extractText?: (session: { page: { evaluate: (fn: () => string) => Promise<string> } }) => Promise<string>;
 }
 
 export interface RunUsabilityMissionResult {
-  readonly report: UxReport;
-  readonly reportPath: string;
+  /** The UX report; `null` when the analysis was unavailable (see `analysisUnavailable`). */
+  readonly report: UxReport | null;
+  readonly reportPath: string | null;
   readonly stop: string;
   readonly screensObserved: number;
+  /** The explore loop's decision transcript, written next to the report. */
+  readonly transcriptPath: string;
+  /**
+   * The typed verdict. UX findings are advisory, so a completed review is `clean`; a run whose
+   * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced.
+   */
+  readonly missionOutcome: MissionOutcome;
+  readonly exitCode: number;
+  readonly failure?: MissionFailure;
+  /** Why the analysis could not be produced (the run's evidence is still kept). */
+  readonly analysisUnavailable?: string;
+  /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
+  readonly timing: TimingSummary;
 }
 
 /**
@@ -265,9 +286,19 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     opts.extractText ??
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
       s.page.evaluate(() => (typeof document !== "undefined" && document.body ? document.body.innerText : "")));
+  const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
+  await mkdir(outDir, { recursive: true });
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const reportPath = join(outDir, `usability-${artifactStamp(iso)}.json`);
+  // Crash-safe: the transcript is flushed after every step (next to where the report will go).
+  const journal = new MissionJournal(reportPath);
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
+      ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      onTranscriptEntry: journal.onTranscriptEntry,
       actor,
       judge: opts.judge,
       gen: opts.gen,
@@ -301,17 +332,34 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       secrets: opts.secrets,
       judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
     });
+    journal.writeTranscript(run.transcript);
+    const runOutcome: MissionOutcome =
+      run.stop === "crashed" ? "crashed" : run.stop === "inconclusive" ? "inconclusive" : "clean";
+    const base = {
+      timing: run.timing,
+      stop: run.stop,
+      screensObserved: collected.length,
+      transcriptPath: journal.transcriptPath,
+      ...(run.failure === undefined ? {} : { failure: run.failure }),
+    };
     if (outcome.kind === "failed") {
-      throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
+      // The analysis is the review's product: without it the review is inconclusive (never a
+      // fabricated clean report) — but the run's transcript is kept, and this is a typed result.
+      const why = new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId).message;
+      const missionOutcome: MissionOutcome = runOutcome === "clean" ? "inconclusive" : runOutcome;
+      return {
+        ...base,
+        report: null,
+        reportPath: null,
+        missionOutcome,
+        exitCode: missionExitCode(missionOutcome),
+        analysisUnavailable: why,
+      };
     }
     const report = buildReport(outcome);
-    const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
-    await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const reportPath = join(outDir, `usability-${iso.replace(/[:.]/g, "-")}.json`);
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    return { report, reportPath, stop: run.stop, screensObserved: collected.length };
+    return { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }

@@ -1,6 +1,7 @@
 import { open, rename, rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
+import { flushIfDurable } from "./durability.js";
 
 /**
  * Atomic write the FsMissionQueueStore pattern lacks (verified: every Fs*Store
@@ -18,7 +19,7 @@ export async function writeFileAtomic(path: string, data: string, mode = 0o600):
     const handle = await open(tmp, "wx", mode);
     try {
       await handle.writeFile(data);
-      await handle.sync();
+      await flushIfDurable(handle);
     } finally {
       await handle.close();
     }

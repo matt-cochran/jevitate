@@ -1,5 +1,6 @@
 import type { ElementHandle, Locator, Page } from "playwright";
 import type { TargetDescriptor } from "@jevitate/recording";
+import { anchorLocator, rungLocator } from "@jevitate/interpreter";
 
 /**
  * Node-side descriptor computation (RxD design §5c, "Descriptor computed
@@ -427,17 +428,10 @@ export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
 // === Validation ===
 
 /**
- * Resolves a descriptor to a `Locator` exactly the way `@jevitate/interpreter`'s
- * `descriptorToTarget` will at replay time (same rung order, same Playwright
- * APIs), so a descriptor proven here is a descriptor that replays.
- *
- * This duplicates ~15 lines of the interpreter rather than importing it:
- * `@jevitate/recorder`'s intended dependencies are `@jevitate/recording`,
- * `@jevitate/playwright`, `@jevitate/screenplay` and `playwright`, and reaching into
- * `@jevitate/interpreter` would add an edge outside that graph — recorder and
- * interpreter are meant to meet only through the recording schema. The two
- * must be changed together; the ladder order is fixed by the design spec
- * (§4/§8), which is what actually keeps them in step.
+ * Resolves a descriptor to a `Locator` exactly the way `@jevitate/interpreter`
+ * does at replay time: the SAME `rungLocator` (exact name/label/text matching,
+ * never substring) plus `ordinal`, so a descriptor proven here is a descriptor
+ * that replays.
  *
  * Exported alongside `resolvesToSameElement` so a caller that builds its own
  * candidates (see `buildCandidates`) can validate them the same way
@@ -445,7 +439,7 @@ export function buildCandidates(facts: ElementFacts): DescriptorCandidate[] {
  * drifting from it.
  */
 export function descriptorToLocator(page: Page, d: TargetDescriptor): Locator {
-  const base = baseLocator(page, d);
+  const base = rungLocator(page, d);
   // `ordinal` narrows an otherwise-ambiguous rung to the nth match (see
   // `findOrdinalAmong`/`validateCandidates` below). `.nth()` always yields a
   // locator whose `count()` is 0 or 1, which is exactly what
@@ -453,16 +447,9 @@ export function descriptorToLocator(page: Page, d: TargetDescriptor): Locator {
   return d.ordinal !== undefined ? base.nth(d.ordinal) : base;
 }
 
-function baseLocator(page: Page, d: TargetDescriptor): Locator {
-  if (d.testId !== undefined) return page.getByTestId(d.testId);
-  if (d.role !== undefined && d.name !== undefined) {
-    return page.getByRole(d.role as Parameters<Page["getByRole"]>[0], { name: d.name });
-  }
-  if (d.label !== undefined) return page.getByLabel(d.label);
-  if (d.text !== undefined) return page.getByText(d.text);
-  if (d.css !== undefined) return page.locator(d.css);
-  throw new Error(`TargetDescriptor has no usable selector: ${JSON.stringify(d)}`);
-}
+// The rung and anchor locators are the INTERPRETER's (one definition of how a recorded target is
+// found again), so a descriptor validated here is exactly the one replay resolves.
+export { rungLocator, anchorLocator };
 
 /**
  * True when `locator` resolves to exactly the node `handle` points at.
@@ -539,7 +526,7 @@ export async function findOrdinalAmong(
   page: Page,
   descriptor: TargetDescriptor,
   handle: ElementHandle<Node>,
-): Promise<number | null> {
+): Promise<{ ordinal: number; candidates: number } | null> {
   const base = descriptorToLocator(page, descriptor);
   let count: number;
   try {
@@ -550,9 +537,38 @@ export async function findOrdinalAmong(
   if (count <= 1) return null;
 
   for (let i = 0; i < count; i++) {
-    if (await resolvesToSameElement(page, base.nth(i), handle)) return i;
+    if (await resolvesToSameElement(page, base.nth(i), handle)) return { ordinal: i, candidates: count };
   }
   return null;
+}
+
+/**
+ * The stable attribute anchor for `handle`, if it has one: a non-generated `id` (else `name`
+ * attribute) that is document-unique AND resolves to this very element. Identifiers only — the
+ * element's value is never read.
+ */
+export async function findAnchor(
+  page: Page,
+  handle: ElementHandle<Node>,
+): Promise<TargetDescriptor["anchor"] | undefined> {
+  let attrs: { id: string | null; name: string | null };
+  try {
+    attrs = await handle.evaluate((node) => {
+      const el = node as Element;
+      return { id: el.getAttribute("id"), name: el.getAttribute("name") };
+    });
+  } catch {
+    return undefined;
+  }
+  for (const anchor of [
+    attrs.id !== null && attrs.id !== "" && !looksGenerated(attrs.id) ? { id: attrs.id } : null,
+    attrs.name !== null && attrs.name !== "" && !looksGenerated(attrs.name) ? { name: attrs.name } : null,
+  ]) {
+    if (anchor === null) continue;
+    const locator = anchorLocator(page, anchor);
+    if (locator !== null && (await resolvesToSameElement(page, locator, handle))) return anchor;
+  }
+  return undefined;
 }
 
 /**
@@ -586,9 +602,9 @@ export async function validateCandidates(
     }
     if (candidate.rung === "css") continue;
 
-    const ordinal = await findOrdinalAmong(page, candidate.descriptor, handle);
-    if (ordinal === null) continue;
-    const refined: TargetDescriptor = { ...candidate.descriptor, ordinal };
+    const found = await findOrdinalAmong(page, candidate.descriptor, handle);
+    if (found === null) continue;
+    const refined: TargetDescriptor = { ...candidate.descriptor, ordinal: found.ordinal, candidates: found.candidates };
     if (await resolvesToSameElement(page, descriptorToLocator(page, refined), handle)) {
       passing.push({
         rung: candidate.rung,
@@ -596,6 +612,13 @@ export async function validateCandidates(
         stability: CAPPED_STABILITY[candidate.stability],
       });
     }
+  }
+  // The winning descriptor also carries a stable attribute anchor when the element has one (a
+  // test id IS the anchor already). Replay prefers it and falls back to the rung (exact + nth).
+  const primary = passing[0];
+  if (primary !== undefined && primary.rung !== "testId") {
+    const anchor = await findAnchor(page, handle);
+    if (anchor !== undefined) passing[0] = { ...primary, descriptor: { ...primary.descriptor, anchor } };
   }
   return passing;
 }

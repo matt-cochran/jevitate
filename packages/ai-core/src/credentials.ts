@@ -1,4 +1,11 @@
-export type CredentialKey = "OPENROUTER_API_KEY" | "TYPESAFE_API_KEY";
+/**
+ * Every credential jevitate holds. `GITHUB_TOKEN` is used ONLY by the issue filer's REST fallback
+ * (never by a model gateway); it is guarded by the same never-to-model check as the model keys.
+ */
+export type CredentialKey = "OPENROUTER_API_KEY" | "TYPESAFE_API_KEY" | "GITHUB_TOKEN";
+
+/** All credential keys, for the guards that must check every one. */
+export const ALL_CREDENTIAL_KEYS: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "GITHUB_TOKEN"];
 export type Feature = "generation" | "judgment";
 
 /** feature → the keys it strictly requires. No feature maps to "no key". */

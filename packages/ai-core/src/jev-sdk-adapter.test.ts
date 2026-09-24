@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { choice, noul, score } from "@typesafe-ai/sdk";
-import type { Question } from "@jevitate/ai-core";
+import type { Question } from "./judgment.js";
 import {
   JevResponseError,
   apiKeyFromAuthHeader,
   fromSdkAnswers,
+  realJevClientCall,
   toSdkQuestions,
 } from "./jev-sdk-adapter.js";
 
@@ -29,6 +30,67 @@ describe("toSdkQuestions", () => {
     expect(sdk.op).toEqual(choice("op", { click: null, type: null, done: null }));
     expect(sdk.stuck).toEqual(noul("stuck"));
     expect(sdk.progress).toEqual(score("progress", ["low", "high"]));
+  });
+
+  test("a choice's descriptions become SDK criteria and its instructions the SDK instructions (contract)", () => {
+    const described: Record<string, Question> = {
+      action: {
+        kind: "choice",
+        options: ["click:0", "type:1", "done"],
+        descriptions: { "click:0": 'click button "Sign in"', "type:1": 'type into textbox "Username"' },
+        instructions: "Which single action best advances the goal?",
+      },
+    };
+    const sdk = toSdkQuestions(described);
+    expect(sdk.action).toEqual(
+      choice("Which single action best advances the goal?", {
+        "click:0": 'click button "Sign in"',
+        "type:1": 'type into textbox "Username"',
+        done: null, // an undescribed option stays a bare criterion
+      }),
+    );
+  });
+});
+
+describe("realJevClientCall — the lazy live seam (SDK loader injected)", () => {
+  test("constructs the client with the bare key and round-trips through the adapter", async () => {
+    const seen: { apiKey?: string; questions?: unknown } = {};
+    const fakeSdk = {
+      TypeSafeClient: class {
+        constructor(config: { apiKey: string }) {
+          seen.apiKey = config.apiKey;
+        }
+        async systemOne(req: { questions: unknown }): Promise<{ answers: unknown }> {
+          seen.questions = req.questions;
+          return { answers: { op: { type: "choice", choice: "done", confidence: 0.7 } } };
+        }
+      },
+    };
+    const call = await realJevClientCall(async () => fakeSdk);
+    const answers = await call({
+      state: { goal: "g", url: "u", controls: [], history: [] },
+      questions: { op: { kind: "choice", options: ["click", "done"] } },
+      authHeader: "Bearer sk-test",
+    });
+    expect(seen.apiKey).toBe("sk-test");
+    expect(seen.questions).toEqual({ op: choice("op", { click: null, done: null }) });
+    expect(answers).toEqual({ op: { kind: "choice", value: "done", confidence: 0.7 } });
+  });
+
+  test("fails closed with an install hint when the SDK cannot be loaded", async () => {
+    await expect(realJevClientCall(async () => Promise.reject(new Error("MODULE_NOT_FOUND")))).rejects.toThrow(
+      /requires @typesafe-ai\/sdk/,
+    );
+  });
+
+  test("fails closed on an SDK without TypeSafeClient (unsupported version)", async () => {
+    await expect(realJevClientCall(async () => ({ createClient: () => undefined }))).rejects.toThrow(
+      /unsupported SDK version/,
+    );
+  });
+
+  test("the default loader resolves the installed SDK", async () => {
+    await expect(realJevClientCall()).resolves.toBeTypeOf("function");
   });
 });
 

@@ -15,6 +15,9 @@ import {
   facadeApproveAction,
   facadeCancelCommand,
   facadeGetSiteHealth,
+  isMissionResultId,
+  missionStatus,
+  parseMissionOutcome,
   type AiGenerateTextArgs,
   type AiGenerateTextResult,
 } from "@jevitate/mcp-facade";
@@ -26,13 +29,17 @@ import {
 } from "@jevitate/missions";
 import { FsInboxStore } from "@jevitate/inbox";
 import {
+  ALL_CREDENTIAL_KEYS,
   envCredentialStore,
   type CredentialStore,
   type GenerationPort,
   type SetupRequiredResult,
 } from "@jevitate/ai-core";
 import { safeRunPolicy } from "@jevitate/domain";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { runVerifyFix, type VerifyFixReport } from "./verify-fix-api.js";
 
 /**
  * The MCP stdio server behind `jevitate mcp`. It exposes ONLY the tools in
@@ -118,6 +125,16 @@ export interface McpApiDeps {
    * returns a typed `setup_required` result instead of calling the model.
    */
   aiGenerateText?: (args: AiGenerateTextArgs) => Promise<AiGenerateTextResult | SetupRequiredResult>;
+  /**
+   * Directory holding mission artifacts (`~/.jevitate/recordings` in production): the typed
+   * `<id>.result.json` files `get_mission_result` reads. A missing dir is a config refusal.
+   */
+  recordingsDir?: string;
+  /**
+   * Test seam. Defaults to `runVerifyFix` over `<recordingsDir>/<id>.result.json`: replays the
+   * finding's repro in a fresh browser (authorized against the mission's own allowlist).
+   */
+  verifyFix?: (args: { resultPath: string; fingerprint: string }) => Promise<VerifyFixReport>;
 }
 
 const ALLOWED = new Set<string>(ALLOWED_TOOLS);
@@ -151,7 +168,7 @@ function errorResult(value: unknown): McpToolResult {
  *  key-free; this is belt-and-braces on top of the gateway's outbound guard. */
 function redactCredentials(message: string, store: CredentialStore): string {
   let out = message;
-  for (const key of ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"] as const) {
+  for (const key of ALL_CREDENTIAL_KEYS) {
     const value = store.read(key);
     if (value) out = out.split(value).join("***REDACTED***");
   }
@@ -259,7 +276,80 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   };
   const queueCommonRequired = ["run", "journey", "step", "reason", "agent"];
 
+  // get_mission_result: reads a persisted typed mission result by ID only (the artifact stem the
+  // CLI wrote) — never a caller-supplied path. The status carries the CLI exit code, and a run that
+  // itself broke (inconclusive/crashed) is an MCP error result, so it can never read as a pass.
+  const getMissionResult = async (args: Record<string, unknown>): Promise<McpToolResult> => {
+    if (!deps.recordingsDir) {
+      return errorResult({ error: "not_configured", message: "get_mission_result requires recordingsDir" });
+    }
+    if (!isMissionResultId(args.id)) {
+      return errorResult({ error: "invalid_args", message: "get_mission_result requires a mission result 'id'" });
+    }
+    let raw: string;
+    try {
+      raw = await readFile(join(deps.recordingsDir, `${args.id}.result.json`), "utf8");
+    } catch {
+      return errorResult({ error: "not_found", id: args.id });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return errorResult({ error: "corrupt_result", id: args.id });
+    }
+    const outcome =
+      parsed !== null && typeof parsed === "object" && "missionOutcome" in parsed
+        ? parseMissionOutcome((parsed as { missionOutcome: unknown }).missionOutcome)
+        : null;
+    if (outcome === null) {
+      return errorResult({ error: "corrupt_result", id: args.id });
+    }
+    const status = missionStatus(outcome);
+    const body = { id: args.id, ...status, result: (parsed as { result?: unknown }).result ?? null };
+    return status.isError ? errorResult(body) : jsonResult(body);
+  };
+
+  // verify_fix: replays a persisted finding by (result id, fingerprint) — never a caller-supplied
+  // recording or path (invariant #5 analogue). Passes only if the defect signal is absent; an
+  // unreachable replay is `inconclusive` and returned as an error result, never as "fixed".
+  const verifyFixImpl = deps.verifyFix ?? ((a: { resultPath: string; fingerprint: string }) => runVerifyFix(a));
+  const verifyFixTool = async (args: Record<string, unknown>): Promise<McpToolResult> => {
+    if (!deps.recordingsDir) {
+      return errorResult({ error: "not_configured", message: "verify_fix requires recordingsDir" });
+    }
+    if (!isMissionResultId(args.id) || typeof args.fingerprint !== "string" || !/^[0-9a-f]{16}$/.test(args.fingerprint)) {
+      return errorResult({ error: "invalid_args", message: "verify_fix requires a mission result 'id' and a 16-hex 'fingerprint'" });
+    }
+    try {
+      const report = await verifyFixImpl({
+        resultPath: join(deps.recordingsDir, `${args.id}.result.json`),
+        fingerprint: args.fingerprint,
+      });
+      const body = { id: args.id, status: report.verdict, ...report };
+      return report.verdict === "inconclusive" ? errorResult(body) : jsonResult(body);
+    } catch (err) {
+      return errorResult({ error: "verify_fix_refused", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   const wired: Record<string, Omit<McpTool, "name">> = {
+    verify_fix: {
+      description:
+        "Replay a finding's reproduction (by mission result id + fingerprint) in a fresh browser. status: fixed (signal absent) | still-reproduces | inconclusive (replay could not reach the step — never a pass).",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, fingerprint: { type: "string" } },
+        required: ["id", "fingerprint"],
+      },
+      handler: verifyFixTool,
+    },
+    get_mission_result: {
+      description:
+        "Read a finished mission's TYPED result by id (e.g. adversarial-2026-09-23T00-00-00-000Z): status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      handler: getMissionResult,
+    },
     find_capabilities: {
       description: "Find promoted Journeys (capabilities) whose metadata matches a query.",
       inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },

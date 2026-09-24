@@ -326,3 +326,37 @@ describe("mcp-api inbox tool wiring", () => {
     expect(result.content[0].text).not.toContain("not_implemented");
   });
 });
+
+describe("mcp-api get_mission_result — the typed mission verdict over MCP (owner ruling 1)", () => {
+  const call = async (deps: McpApiDeps, args: Record<string, unknown>) => {
+    const tool = buildMcpTools(deps).find((t) => t.name === "get_mission_result");
+    if (tool === undefined) throw new Error("get_mission_result not served");
+    const r = await tool.handler(args);
+    return { isError: r.isError === true, body: JSON.parse(r.content[0]?.text ?? "null") as Record<string, unknown> };
+  };
+
+  it("returns the persisted status with the CLI exit code; a broken run is an MCP error, never a pass", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-mcp-results-"));
+    const { writeMissionResult } = await import("./mission-journal.js");
+    writeMissionResult(join(dir, "adversarial-2026-09-23T00-00-00-000Z.json"), "defects-found", 1, { defects: [1] });
+    writeMissionResult(join(dir, "adversarial-2026-09-23T00-00-00-001Z.json"), "crashed", 2, { failure: "x" });
+
+    const found = await call({ ...baseDeps, recordingsDir: dir }, { id: "adversarial-2026-09-23T00-00-00-000Z" });
+    expect(found.isError).toBe(false);
+    expect(found.body).toMatchObject({ status: "defects-found", exitCode: 1, isError: false, result: { defects: [1] } });
+
+    const crashed = await call({ ...baseDeps, recordingsDir: dir }, { id: "adversarial-2026-09-23T00-00-00-001Z" });
+    expect(crashed.isError).toBe(true);
+    expect(crashed.body).toMatchObject({ status: "crashed", exitCode: 2, isError: true });
+  });
+
+  it("accepts an id only — never a path — and reports unknown ids as not_found", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-mcp-results-"));
+    const traversal = await call({ ...baseDeps, recordingsDir: dir }, { id: "../../etc/passwd" });
+    expect(traversal).toMatchObject({ isError: true, body: { error: "invalid_args" } });
+    const missing = await call({ ...baseDeps, recordingsDir: dir }, { id: "coverage-2026-09-23T00-00-00-000Z" });
+    expect(missing).toMatchObject({ isError: true, body: { error: "not_found" } });
+    const unconfigured = await call(baseDeps, { id: "coverage-2026-09-23T00-00-00-000Z" });
+    expect(unconfigured).toMatchObject({ isError: true, body: { error: "not_configured" } });
+  });
+});

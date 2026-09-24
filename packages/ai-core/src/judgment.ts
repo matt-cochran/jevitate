@@ -1,5 +1,12 @@
 // judgment.ts — typed DRIVING decisions (Jev shape: Choice / Noul / Score)
-export interface ChoiceQuestion<T extends string> { kind: "choice"; options: readonly T[] }
+export interface ChoiceQuestion<T extends string> {
+  kind: "choice";
+  options: readonly T[];
+  /** Optional human-readable meaning per option (e.g. a control's role/name), shown to the model. */
+  descriptions?: Readonly<Partial<Record<T, string>>>;
+  /** What the question asks, in plain language. Defaults to the question's name. */
+  instructions?: string;
+}
 export interface NoulQuestion { kind: "noul" }          // boolean-ish judgment
 export interface ScoreQuestion { kind: "score" }         // 0..1
 export type Question = ChoiceQuestion<string> | NoulQuestion | ScoreQuestion;
