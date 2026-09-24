@@ -122,6 +122,17 @@ export interface MissionRequest {
    * authorized against the resolved target in `enqueueMission`.
    */
   invariants?: InvariantSpec;
+  /**
+   * Per-mission viewport/device emulation (#149), mutually exclusive with `device`. Validated here
+   * (positive integer width/height); threaded into the runner's `EmulationSpec` at dispatch.
+   */
+  viewport?: { width: number; height: number };
+  /**
+   * A Playwright `devices` registry name (#149), mutually exclusive with `viewport`. Validated
+   * against the registry at dispatch (an unknown name is refused before any browser opens) — this
+   * schema only enforces the string shape and the mutual exclusivity.
+   */
+  device?: string;
 }
 
 /**
@@ -135,8 +146,12 @@ function strategyShapeIssues(req: {
   feature?: string;
   route?: string;
   successAssertion?: Assertion;
+  viewport?: { width: number; height: number };
+  device?: string;
 }): string[] {
   const issues: string[] = [];
+  // #149: mutually exclusive, whatever the strategy.
+  if (req.viewport !== undefined && req.device !== undefined) issues.push("viewport and device are mutually exclusive; pass exactly one");
   if (req.strategy === "goal-based") {
     if ([req.goal, req.feature, req.route].filter((v) => v !== undefined).length !== 1) {
       issues.push("exactly one of goal, feature, or route is required");
@@ -164,6 +179,8 @@ const MissionRequestFields = {
   successAssertion: AssertionSchema.optional(),
   strategy: z.enum(MISSION_STRATEGIES),
   invariants: InvariantSpecSchema.optional(),
+  viewport: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict().optional(),
+  device: z.string().min(1).optional(),
 };
 
 export const MissionRequestSchema: z.ZodType<MissionRequest> = z

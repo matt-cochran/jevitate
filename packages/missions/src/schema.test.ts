@@ -145,6 +145,41 @@ describe("MissionRequestSchema", () => {
       MissionRequestSchema.parse({ ...baseRequest, budget: { bogus: 1 } }),
     ).toThrow();
   });
+
+  describe("viewport/device emulation (#149)", () => {
+    it("accepts a coverage request with a viewport, or with a device name", () => {
+      expect(() =>
+        MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", viewport: { width: 375, height: 812 } }),
+      ).not.toThrow();
+      expect(() =>
+        MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", device: "iPhone 13" }),
+      ).not.toThrow();
+    });
+
+    it("rejects viewport and device together (mutually exclusive)", () => {
+      expect(() =>
+        MissionRequestSchema.parse({
+          target: "demo-shop",
+          strategy: "coverage",
+          viewport: { width: 375, height: 812 },
+          device: "iPhone 13",
+        }),
+      ).toThrow();
+    });
+
+    it("rejects a non-positive or non-integer viewport dimension", () => {
+      expect(() =>
+        MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", viewport: { width: 0, height: 812 } }),
+      ).toThrow();
+      expect(() =>
+        MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", viewport: { width: 375.5, height: 812 } }),
+      ).toThrow();
+    });
+
+    it("rejects an empty device name", () => {
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", device: "" })).toThrow();
+    });
+  });
 });
 
 function withoutGoalFeatureRoute<T extends Record<string, unknown>>(req: T): Omit<T, "goal" | "feature" | "route"> {

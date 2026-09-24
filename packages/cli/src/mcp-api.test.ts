@@ -188,6 +188,39 @@ describe("mcp-api queue_exploration wiring", () => {
     const queue = new FsMissionQueueStore(queueDir);
     expect(await queue.list()).toHaveLength(0);
   });
+
+  it("#149: accepts an optional viewport or device (mutually exclusive), enqueued over the real store", async () => {
+    const targetsDir = mkdtempSync(join(tmpdir(), "mcp-tgt-"));
+    const queueDir = mkdtempSync(join(tmpdir(), "mcp-q-"));
+    const targets = new MissionTargetRegistry(new FsMissionTargetStore(targetsDir));
+    await targets.put(mkTarget("demo-shop", true));
+    const tools = buildMcpTools({ ...baseDeps, missionTargetsDir: targetsDir, missionQueueDir: queueDir });
+    const tool = tools.find((t) => t.name === "queue_exploration")!;
+    const result = await tool.handler({ target: "demo-shop", strategy: "coverage", device: "iPhone 13" });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    const queue = new FsMissionQueueStore(queueDir);
+    const queued = await queue.get(parsed.missionId);
+    expect(queued?.device).toBe("iPhone 13");
+  });
+
+  it("#149: refuses viewport and device together (mutually exclusive) — never a fake queued success", async () => {
+    const targetsDir = mkdtempSync(join(tmpdir(), "mcp-tgt-"));
+    const queueDir = mkdtempSync(join(tmpdir(), "mcp-q-"));
+    const targets = new MissionTargetRegistry(new FsMissionTargetStore(targetsDir));
+    await targets.put(mkTarget("demo-shop", true));
+    const tools = buildMcpTools({ ...baseDeps, missionTargetsDir: targetsDir, missionQueueDir: queueDir });
+    const tool = tools.find((t) => t.name === "queue_exploration")!;
+    const result = await tool.handler({
+      target: "demo-shop",
+      strategy: "coverage",
+      viewport: { width: 375, height: 812 },
+      device: "iPhone 13",
+    });
+    expect(result.isError).toBe(true);
+    const queue = new FsMissionQueueStore(queueDir);
+    expect(await queue.list()).toHaveLength(0);
+  });
 });
 
 describe("mcp-api ai_generate_text wiring", () => {
