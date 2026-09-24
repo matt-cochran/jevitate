@@ -14,8 +14,16 @@ import { visibleBusyIndicator } from "./hang.js";
  * message — then proposed `done`.
  */
 
-/** Default ceiling (ms) on waiting for a conversational reply after a message is sent. */
+/**
+ * Default IDLE patience (ms) of a reply wait: how long it keeps waiting while the page shows no sign
+ * of working on a reply (no request in flight, no busy indicator, no reply text growing). While the
+ * page IS working, the wait continues up to `REPLY_CEILING_MS` (#93: LLM turns routinely take 60–100s).
+ */
 export const REPLY_WAIT_MS = 60_000;
+/** Default hard ceiling (ms) on one reply wait, however busy the page stays. */
+export const REPLY_CEILING_MS = 180_000;
+/** A request that started this long before the reply wait began still counts as the send's own. */
+const SEND_REQUEST_SLACK_MS = 5_000;
 /** A reply is complete once the page has been quiet (no DOM mutation, no request) this long. */
 export const REPLY_QUIET_MS = 1_000;
 /** New text shorter than this (after filtering the echoed message and busy text) is not a reply. */
@@ -112,6 +120,11 @@ export interface ReplyResult {
   /** The reply text (bounded); partial text when the ceiling passed mid-reply, "" when none. */
   readonly text: string;
   readonly waitedMs: number;
+  /**
+   * Why the wait ended: the reply arrived and held still, the page went idle for the idle patience
+   * with no reply, or the hard ceiling passed while the page was still working.
+   */
+  readonly endedBy?: "reply" | "idle" | "ceiling";
 }
 
 /** BROWSER CODE — the page's visible text. */
@@ -127,44 +140,85 @@ export async function readPageText(page: Page): Promise<string> {
 /**
  * Waits for the conversational reply to a message just sent: new page text (not the echoed message,
  * not busy text) that then holds still for the quiet window with no request in flight and no busy
- * indicator. Bounded by `timeoutMs` — separate from (and longer than) the 15s render wait, because a
- * reply can be a slow LLM call. Never throws; a missing reply is reported, not guessed.
+ * indicator. Never throws; a missing reply is reported, not guessed.
+ *
+ * ADAPTIVE (#93) — observe until idle, not a fixed wall clock: the wait continues while the page is
+ * visibly working on the reply — a request the send started still in flight, a busy indicator or
+ * "pending" status, or the reply text still growing (streaming) — up to the hard `ceilingMs`. It
+ * ends early, with no reply, once the page has shown NO such activity for `timeoutMs` (the idle
+ * patience). A slow LLM turn (60–100s) is therefore awaited in full, while a page that is doing
+ * nothing is not waited on for minutes.
  */
 export async function waitForReply(
   page: Page,
-  opts: { readonly baseline: string; readonly sent: string; readonly timeoutMs?: number; readonly quietMs?: number; readonly pollMs?: number },
+  opts: {
+    readonly baseline: string;
+    readonly sent: string;
+    /** Idle patience (ms): give up after this long with no sign of activity. Default `REPLY_WAIT_MS`. */
+    readonly timeoutMs?: number;
+    /** Hard ceiling (ms), however busy the page stays. Default `REPLY_CEILING_MS` (never below `timeoutMs`). */
+    readonly ceilingMs?: number;
+    readonly quietMs?: number;
+    readonly pollMs?: number;
+  },
 ): Promise<ReplyResult> {
-  const timeoutMs = opts.timeoutMs ?? REPLY_WAIT_MS;
+  const idleMs = opts.timeoutMs ?? REPLY_WAIT_MS;
+  const ceilingMs = Math.max(idleMs, opts.ceilingMs ?? REPLY_CEILING_MS);
   const quietMs = opts.quietMs ?? REPLY_QUIET_MS;
   const pollMs = opts.pollMs ?? 250;
+  const monitor = monitorFor(page);
   const started = Date.now();
-  const remaining = (): number => timeoutMs - (Date.now() - started);
+  const remaining = (): number => ceilingMs - (Date.now() - started);
+  let lastActivity = started;
+  /** The new text as last read, and since when it has held still (a streaming reply keeps growing). */
   let latest = "";
-  while (remaining() > 0) {
+  let latestSince = started;
+  const result = (received: boolean, endedBy: ReplyResult["endedBy"]): ReplyResult => ({
+    received,
+    text: latest.slice(0, REPLY_KEEP_CHARS),
+    waitedMs: Date.now() - started,
+    endedBy,
+  });
+  for (;;) {
+    if (remaining() <= 0) return result(false, "ceiling");
     const text = await readPageText(page);
-    latest = newPageText(opts.baseline, text, opts.sent);
+    const fresh = newPageText(opts.baseline, text, opts.sent);
+    const t = Date.now();
+    if (fresh !== latest) {
+      latest = fresh;
+      latestSince = t;
+      lastActivity = t;
+    }
     const busy =
       (await page.evaluate(visibleBusyIndicator).catch(() => null)) ??
       (pendingStatusShown(opts.baseline, text) ? "pending status" : null);
+    // The send's own work still in flight (the LLM call, a job it started) — not an unrelated
+    // long-poll the page had open before the message was sent.
+    const inFlight = monitor.pending().some((r) => r.startedAt >= started - SEND_REQUEST_SLACK_MS);
+    if (busy !== null || inFlight) lastActivity = Date.now();
     if (isReply(latest) && busy === null) {
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.
-      await monitorFor(page)
-        .waitSettled({ quietMs, ceilingMs: Math.max(1, Math.min(remaining(), 15_000)) })
-        .catch(() => undefined);
+      await monitor.waitSettled({ quietMs, ceilingMs: Math.max(1, Math.min(remaining(), 15_000)) }).catch(() => undefined);
       const againText = await readPageText(page);
       const again = newPageText(opts.baseline, againText, opts.sent);
       const stillBusy =
         (await page.evaluate(visibleBusyIndicator).catch(() => null)) ??
         (pendingStatusShown(opts.baseline, againText) ? "pending status" : null);
-      if (again === latest && stillBusy === null) {
-        return { received: true, text: latest.slice(0, REPLY_KEEP_CHARS), waitedMs: Date.now() - started };
+      if (again === latest && stillBusy === null && Date.now() - latestSince >= quietMs) return result(true, "reply");
+      if (again !== latest) {
+        latest = again;
+        latestSince = Date.now();
+        lastActivity = latestSince;
       }
-      latest = again;
+      if (stillBusy !== null) lastActivity = Date.now();
+      // Text-only streaming does not hold the settle wait open: pace the re-reads, never spin.
+      await page.waitForTimeout(Math.max(1, Math.min(pollMs, remaining()))).catch(() => undefined);
       continue;
     }
-    await page.waitForTimeout(Math.max(1, Math.min(pollMs, remaining()))).catch(() => undefined);
+    if (Date.now() - lastActivity >= idleMs) return result(false, "idle");
+    const nap = Math.min(pollMs, remaining(), idleMs - (Date.now() - lastActivity));
+    await page.waitForTimeout(Math.max(1, nap)).catch(() => undefined);
   }
-  return { received: false, text: latest.slice(0, REPLY_KEEP_CHARS), waitedMs: Date.now() - started };
 }
 
 /**

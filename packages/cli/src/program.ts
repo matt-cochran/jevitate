@@ -1389,7 +1389,13 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option(
       "--reply-wait-ms <ms>",
-      "conversational pages: how long to wait for a reply after sending a message (goal and usability; default 60000)",
+      "conversational pages: how long to keep waiting for a reply while the page shows no sign of working on one " +
+        "(goal and usability; default 60000). While a request the message started is in flight, a busy indicator shows, " +
+        "or the reply is still growing, the wait continues up to --reply-ceiling-ms",
+    )
+    .option(
+      "--reply-ceiling-ms <ms>",
+      "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
     )
     .option(
       "--reply-max-chars <n>",
@@ -1478,6 +1484,7 @@ export function buildProgram(deps: CliDeps): Command {
         maxActions?: string;
         maxDecisions?: string;
         replyWaitMs?: string;
+        replyCeilingMs?: string;
         replyMaxChars?: string;
         real?: boolean;
         fakeAi?: boolean;
@@ -1488,14 +1495,17 @@ export function buildProgram(deps: CliDeps): Command {
       const strategy = o.strategy ?? "goal";
       const conversation = {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
+        ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
         ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
       };
       if (
         (conversation.replyWaitMs !== undefined && !(Number.isInteger(conversation.replyWaitMs) && conversation.replyWaitMs > 0)) ||
+        (conversation.replyCeilingMs !== undefined &&
+          !(Number.isInteger(conversation.replyCeilingMs) && conversation.replyCeilingMs > 0)) ||
         (conversation.replyMaxChars !== undefined &&
           !(Number.isInteger(conversation.replyMaxChars) && conversation.replyMaxChars >= 20 && conversation.replyMaxChars <= 2000))
       ) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms must be a positive integer; --reply-max-chars an integer in 20..2000"));
+        emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms and --reply-ceiling-ms must be positive integers; --reply-max-chars an integer in 20..2000"));
         return;
       }
       const browser = browserLaunchFromFlags(o);
