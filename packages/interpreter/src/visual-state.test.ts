@@ -60,6 +60,7 @@ const PAGE = `<!doctype html><html><head><style>
   #over { position: absolute; left: 60px; top: 40px; width: 20px; height: 20px; }
   #apart { position: absolute; left: 300px; top: 10px; width: 20px; height: 20px; }
   #below { position: absolute; left: 0; top: 5000px; width: 20px; height: 20px; }
+  #go { position: absolute; left: 10px; top: 200px; }
   .hl { background-color: rgba(255, 200, 0, 0.4); }
   .hl.off { background-color: rgba(255, 200, 0, 0); }
 </style></head><body>
