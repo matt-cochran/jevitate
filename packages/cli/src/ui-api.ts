@@ -414,6 +414,10 @@ export async function startUiServer(deps: StartUiServerDeps): Promise<UiServerHa
 
   async function close(): Promise<void> {
     clearInterval(sweepTimer);
+    // Drop keep-alive sockets now, not when the client next times them out: the UI server binds a
+    // fixed default port, so a client's pooled socket to a closed server would otherwise be reused
+    // against the next server on that port and fail with "other side closed".
+    server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });

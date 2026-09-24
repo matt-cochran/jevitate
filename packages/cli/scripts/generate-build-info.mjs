@@ -15,8 +15,8 @@
 // comment in build.mjs and the matching .gitignore entry).
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outFile = join(here, "..", "src", "build-info.generated.ts");
@@ -56,7 +56,9 @@ export const GENERATED_BUILT_AT: string = ${JSON.stringify(builtAt)};
 }
 
 // Run directly, e.g. as the package.json "build" pre-step: `node scripts/generate-build-info.mjs`.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compared as URLs via pathToFileURL: a hand-built `file://${argv[1]}` never matches on Windows
+// (`file:///C:/…` vs `file://C:\…`), which silently skipped the write and broke `tsc`.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const { commit, builtAt } = writeBuildInfoModule();
   console.log(`generated build-info -> ${outFile} (commit ${commit}, builtAt ${builtAt})`);
 }
