@@ -5,9 +5,11 @@
 // generic / wrong, grounded in the finding, its cited evidence and the screen the user saw.
 // The grade is ADVISORY: it is recorded on the finding, and a code-side policy
 // (`QualityPolicy`, applied in report.ts) decides what is shown; everything else goes to the
-// suppressed summary with counts. One batched request per screen-state.
+// suppressed summary with counts. By default (#133) the policy shows every grade: an
+// uncalibrated grader labels findings, it does not hide them. One batched request per screen-state.
 import type { Answer, JudgmentPort, Question } from "@jevitate/ai-core";
 import type { RedactedEvidence } from "./redact.js";
+import { graderMayFilterByDefault } from "./calibration.js";
 import { buildState } from "./judge.js";
 import { QUALITY_LABELS, UX_PROMPTS, type QualityLabel, type UxPrompts } from "./prompts.js";
 
@@ -28,12 +30,30 @@ export interface GradeCandidate {
   readonly quotes: readonly string[];
 }
 
-/** Which grades are shown. Default: actionable + relevant-minor (generic/wrong are suppressed, counted). */
+/**
+ * Which grades are shown. #133: the grader is not calibrated (calibration.ts), so by DEFAULT it
+ * filters nothing — every finding is shown with its grade. Filtering is an explicit opt-in
+ * (`--show actionable,relevant-minor`, `JEVITATE_UX_SHOW`, config `ux.show`), and the default only
+ * narrows for an app class whose calibration evidence clears `GRADER_FILTER_KAPPA_GATE`.
+ */
 export interface QualityPolicy {
   readonly show: readonly QualityLabel[];
 }
-export const DEFAULT_QUALITY_POLICY: QualityPolicy = { show: ["actionable", "relevant-minor"] };
+/** Every grade shown (the grade is displayed on each finding, never used to hide it). */
+export const DEFAULT_QUALITY_POLICY: QualityPolicy = { show: [...QUALITY_LABELS] };
+/** The filter the grader was designed for — applied by default only where calibration backs it. */
+export const CALIBRATED_QUALITY_POLICY: QualityPolicy = { show: ["actionable", "relevant-minor"] };
 export const QUALITY_SHOW_ENV = "JEVITATE_UX_SHOW";
+
+/** Does this policy hide any grade (i.e. does the grader decide what is seen)? */
+export function policyFilters(policy: QualityPolicy): boolean {
+  return QUALITY_LABELS.some((l) => !policy.show.includes(l));
+}
+
+/** The default for an app class: no filtering until its calibration clears the κ gate (#133). */
+export function defaultQualityPolicy(appClass?: string): QualityPolicy {
+  return graderMayFilterByDefault(appClass) ? CALIBRATED_QUALITY_POLICY : DEFAULT_QUALITY_POLICY;
+}
 
 export class QualityPolicyError extends Error {
   readonly code = "E_UX_QUALITY_POLICY" as const;
@@ -48,17 +68,18 @@ export function parseQualityPolicy(raw: string | readonly string[], source: stri
   return { show: [...new Set(parts)] as QualityLabel[] };
 }
 
-/** Precedence: flag > `JEVITATE_UX_SHOW` > config `ux.show` > `DEFAULT_QUALITY_POLICY`. */
+/** Precedence: flag > `JEVITATE_UX_SHOW` > config `ux.show` > `defaultQualityPolicy(appClass)` (#133: all grades). */
 export function resolveQualityPolicy(
   flag: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
   configValue?: readonly string[],
+  appClass?: string,
 ): QualityPolicy {
   if (flag !== undefined) return parseQualityPolicy(flag, "--show");
   const fromEnv = env[QUALITY_SHOW_ENV];
   if (fromEnv !== undefined) return parseQualityPolicy(fromEnv, QUALITY_SHOW_ENV);
   if (configValue !== undefined) return parseQualityPolicy(configValue, "config ux.show");
-  return DEFAULT_QUALITY_POLICY;
+  return defaultQualityPolicy(appClass);
 }
 
 const MAX_FIELD = 600;
