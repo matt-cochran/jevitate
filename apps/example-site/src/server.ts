@@ -230,6 +230,42 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
     );
   });
 
+  // Additive fixture for per-mission viewport/device emulation + the horizontal-overflow hard
+  // signal (#149). Three pages, same table markup, different layout:
+  //  - /responsive/ok: fluid (max-width: 100%) — never overflows, at any viewport.
+  //  - /responsive/overflow: a table[data-testid=wide] with min-width:600px and NO scroll wrapper —
+  //    overflows the page itself at a narrow (375px) viewport; ~225px of it, matching the
+  //    acceptance criterion (600 - 375 = 225).
+  //  - /responsive/contained: the SAME wide table, but inside an overflow-x:auto wrapper — the
+  //    overflow is contained in a scroll container, never page-level, so it must never fire.
+  // Each page also carries one inert (no onclick) button: the adversarial mission's seed-load gate
+  // requires at least one rendered control to proceed past "nothing to misuse" — a mutating button
+  // would fingerprint as a second state, obscuring these fixtures' single concern (#149).
+  const responsiveStyle = "<style>body{margin:0;padding:8px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px}</style>";
+  const wideTable = (testId: string) =>
+    `<table data-testid="${esc(testId)}" style="min-width:600px"><thead><tr><th>Key</th><th>Name</th><th>Created</th></tr></thead>` +
+    `<tbody><tr><td>k_live_1</td><td>Production key</td><td>2026-01-01</td></tr></tbody></table>`;
+
+  app.get("/responsive/ok", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${responsiveStyle}<h1>Responsive OK</h1>` +
+        `<table data-testid="fluid" style="max-width:100%;width:100%"><thead><tr><th>Key</th><th>Name</th></tr></thead>` +
+        `<tbody><tr><td>k_live_1</td><td>Production key</td></tr></tbody></table><button type="button">Acknowledge</button></body></html>`,
+    );
+  });
+  app.get("/responsive/overflow", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${responsiveStyle}<h1>Responsive overflow</h1>${wideTable("wide")}<button type="button">Acknowledge</button></body></html>`,
+    );
+  });
+  app.get("/responsive/contained", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${responsiveStyle}<h1>Responsive contained</h1>` +
+        `<div data-testid="scroll-wrapper" style="overflow-x:auto;max-width:100%">${wideTable("wide-contained")}</div>` +
+        `<button type="button">Acknowledge</button></body></html>`,
+    );
+  });
+
   // Rich-text editor fixture (#148): three contenteditable prose blocks (persisted per server
   // instance, so `reloadThen` proves an edit saved), `[data-heat]` highlight spans, and an SVG
   // minimap whose cells scroll their block into view and flash it for 800 ms.

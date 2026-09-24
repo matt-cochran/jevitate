@@ -1,7 +1,7 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import {
   AssertionSchema,
@@ -11,6 +11,7 @@ import {
   type CompareOp,
   type InvariantSpec,
   type Recording,
+  type RecordingEmulation,
   type StyleChannel,
   type StyleProperty,
   type TargetDescriptor,
@@ -195,11 +196,44 @@ export interface RunExplorationOptions {
    */
   readonly fixtures?: MissionFixtures;
   /**
+   * Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`,
+   * mutually exclusive). An unknown device name (or both given together) is refused BEFORE any
+   * browser opens (`PlaywrightBrowserPort.open`'s `resolveEmulation`). Recorded on the Recording,
+   * so replay/verify-fix reproduce under the SAME device by default.
+   */
+  readonly emulation?: EmulationSpec;
+  /**
    * #147: the mission's actors (`--actor`). The primary's storageState seeds the mission session
    * (it must equal `storageState` when both are given); each observer gets its own fresh context,
    * opened only when a declared cross-actor check needs it, never driven by the model.
    */
   readonly actors?: MissionActors;
+}
+
+/**
+ * Overflow/emulation CLI flags shared by every strategy (#149): `emulation` is validated and
+ * resolved by `PlaywrightBrowserPort.open` itself (an unknown device or --viewport+--device
+ * together refuses BEFORE any browser opens); `overflow` gates and configures the horizontal-
+ * overflow hard signal (coverage only, for now).
+ */
+export interface OverflowFlags {
+  readonly checkOverflow?: boolean;
+  readonly toleranceCss?: number;
+  readonly ignoreSelectors?: readonly string[];
+}
+
+/** The viewport/device emulation actually applied to a session — recorded on the Recording (#149). */
+function recordingEmulation(
+  resolved: { viewport: { width: number; height: number }; device?: string; deviceScaleFactor?: number; isMobile?: boolean; hasTouch?: boolean } | undefined,
+): RecordingEmulation | undefined {
+  if (resolved === undefined) return undefined;
+  return {
+    viewport: resolved.viewport,
+    ...(resolved.device === undefined ? {} : { device: resolved.device }),
+    ...(resolved.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: resolved.deviceScaleFactor }),
+    ...(resolved.isMobile === undefined ? {} : { isMobile: resolved.isMobile }),
+    ...(resolved.hasTouch === undefined ? {} : { hasTouch: resolved.hasTouch }),
+  };
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -373,6 +407,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const fx = opts.fixtures;
   const missionFixture = fx === undefined ? undefined : { record: fx.record(), persisted: fx.persisted() };
 
+  // #149: refused BEFORE any browser opens (an unknown --device, or --viewport + --device together).
+  const resolvedEmulation = resolveEmulation(opts.emulation);
   if (opts.actors !== undefined && opts.storageState !== undefined && resolvePath(opts.storageState) !== opts.actors.primary.storageState) {
     throw new Error("runExploration: storageState must be the primary actor's own");
   }
@@ -384,6 +420,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(primaryState !== undefined ? { storageState: primaryState } : {}),
   };
   const session = await port.open(launch);
@@ -456,8 +493,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // The mission (and its hang replays) is done: restore now, so the persisted log includes it. The
     // caller restores again on every exit path (a no-op once restored).
     await fx?.restore();
-    const recording: Recording =
-      missionFixture === undefined ? mission.recording : { ...mission.recording, fixture: recordingFixture(missionFixture.record) };
+    const recording: Recording = {
+      ...mission.recording,
+      ...(missionFixture === undefined ? {} : { fixture: recordingFixture(missionFixture.record) }),
+      ...(resolvedEmulation === undefined ? {} : { emulation: recordingEmulation(resolvedEmulation) }),
+    };
     // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
     // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1); an unreadable
@@ -742,6 +782,10 @@ export interface RunCoverageMissionOptions {
   readonly strategy?: "coverage" | "exploratory";
   /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
   readonly stallTimeoutMs?: number;
+  /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
+  readonly emulation?: EmulationSpec;
+  /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
+  readonly overflow?: OverflowFlags;
 }
 
 export interface RunCoverageMissionResult {
@@ -785,6 +829,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
 
+  // #149: refused BEFORE any browser opens.
+  const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const launch = {
@@ -792,6 +838,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await port.open(launch);
@@ -836,13 +883,25 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
+      overflow: {
+        ...(opts.overflow?.checkOverflow === undefined ? {} : { checkOverflow: opts.overflow.checkOverflow }),
+        ...(opts.overflow?.toleranceCss === undefined ? {} : { toleranceCss: opts.overflow.toleranceCss }),
+        ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+        ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+      },
     });
 
+    // #149: every repro Recording (per-state, and each defect's own) is stamped with the emulation
+    // it was found under, so `verify-fix` replays it under the SAME device by default.
+    const emu = recordingEmulation(resolvedEmulation);
+    const withEmu = (r: Recording): Recording => (emu === undefined ? r : { ...r, emulation: emu });
+    const stampedDefects = result.coverage.defects.map((d) => ({ ...d, recording: withEmu(d.recording) }));
+    const stampedCoverage = { ...result.coverage, defects: stampedDefects };
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
-      await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
+      await writeFile(p, `${JSON.stringify(withEmu(result.recordings[i]!), null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
     journal.writeTranscript(serverLogRun?.transcript ?? result.transcript);
@@ -850,7 +909,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
-    const found = result.coverage.defects.length + (result.invariantDefects?.length ?? 0);
+    const found = stampedDefects.length + (result.invariantDefects?.length ?? 0);
     // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
     // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
     // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
@@ -887,7 +946,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       timing: result.timing,
-      coverage: result.coverage,
+      coverage: stampedCoverage,
       outcome: result.outcome,
       missionOutcome,
       exitCode,
@@ -989,6 +1048,10 @@ export interface RunAdversarialCliMissionOptions {
   readonly serverLog?: ServerLogOptions;
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
+  readonly emulation?: EmulationSpec;
+  /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
+  readonly overflow?: OverflowFlags;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -1035,6 +1098,8 @@ export async function runAdversarialCliMission(
 ): Promise<AdversarialCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
+  // #149: refused BEFORE any browser opens.
+  const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const launch = {
@@ -1042,6 +1107,7 @@ export async function runAdversarialCliMission(
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await port.open(launch);
@@ -1088,6 +1154,12 @@ export async function runAdversarialCliMission(
       onRecording: journal.onRecording,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      overflow: {
+        ...(opts.overflow?.checkOverflow === undefined ? {} : { checkOverflow: opts.overflow.checkOverflow }),
+        ...(opts.overflow?.toleranceCss === undefined ? {} : { toleranceCss: opts.overflow.toleranceCss }),
+        ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+        ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+      },
     });
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(outcome.transcript);
     // `AdversarialOutcome.transcript` is a mutable `TranscriptEntry[]`; the correlated array only
@@ -1118,6 +1190,9 @@ export async function runAdversarialCliMission(
     );
     const result = {
       ...outcome,
+      // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
+      recording:
+        resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
       outcome: missionOutcome,
       transcript,
       recordingPath: journal.recordingPath,
@@ -1192,6 +1267,8 @@ export interface RunFeatureCliMissionOptions {
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /** The shared safety policy (#116: `--deny`, `--allow-destructive`, `--read-rpc`). */
   readonly safety?: SafetyConfig;
+  /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
+  readonly emulation?: EmulationSpec;
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
@@ -1229,12 +1306,15 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
 
+  // #149: refused BEFORE any browser opens.
+  resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const launch = {
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await portFactory().open(launch);

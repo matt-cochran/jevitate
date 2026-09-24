@@ -82,6 +82,14 @@ describe("mission queue runner (#117)", () => {
     expect(counts()).toEqual({ gatewayCalls: 0, browserOpens: 0 });
   });
 
+  it("#149: an unknown queued mission.device is refused BEFORE any browser opens or gateways are built", async () => {
+    const { execute, counts } = executor();
+    await expect(
+      execute({ mission: mission({ strategy: "feature", feature: "billing", device: "Nokia 9000" }), target, allowlist }),
+    ).rejects.toThrow(/nokia 9000/i);
+    expect(counts()).toEqual({ gatewayCalls: 0, browserOpens: 0 });
+  });
+
   it("a mission killed mid-run is recorded done-with-its-partial-result in the same synchronous turn, never left running", async () => {
     const root = mkdtempSync(join(tmpdir(), "jev-drain-kill-"));
     const queue = new FsMissionQueueStore(join(root, "queue"));

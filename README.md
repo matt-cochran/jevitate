@@ -626,6 +626,38 @@ cookie/localStorage file). **No `jevitate` command consumes one yet** — there 
 `--profile` flag would point a browser session at, not a currently wired
 authentication path. Use `--storage-state` (above) for authenticated runs today.
 
+### Viewport and device emulation
+
+By default every mission opens its browser context at **Playwright's own default
+viewport (1280x720, desktop, no touch)** — nothing narrower is emulated unless
+you ask for it. Two mutually exclusive flags override that, on `explore` (every
+strategy), `journey run`, `load run`, `source run`, `verify-fix` and
+`regression capture`/`regression run`:
+
+- `--viewport <W>x<H>` — an exact viewport size, e.g. `--viewport 375x812`.
+- `--device "<name>"` — a device from Playwright's own built-in `devices`
+  registry, e.g. `--device "iPhone 13"`. This also sets `deviceScaleFactor`,
+  `isMobile`, `hasTouch` and the device's user agent string — never an
+  arbitrary caller-supplied UA (emulation cannot be used to impersonate an
+  unregistered client). An unknown device name is refused **before any
+  browser opens**, listing the closest registered names.
+
+The chosen emulation is recorded on the mission's Recording. `verify-fix`,
+`regression capture` and `regression run` replay under that **same recorded
+emulation by default** — a defect found at 375px never silently "verifies
+fixed" at a desktop width. An explicit `--viewport`/`--device` on `verify-fix`
+that differs from the finding's own recorded emulation is refused (fails
+closed) unless you pass `--allow-emulation-override`.
+
+A built-in hard signal, the horizontal-overflow check
+(`document.scrollingElement.scrollWidth > window.innerWidth`), runs by default
+whenever the emulated viewport is narrower than 1024px, or always with
+`--check-overflow` (`--strategy coverage`/`exploratory`). It is pure DOM
+geometry — never a model judgment — and is attributed to the widest offending
+element (excluded: content inside a scroll container, an intentionally
+off-screen `position: fixed` element, and the sr-only/clipped idiom).
+`--ignore-overflow <selector>` (repeatable) excludes an intentional case.
+
 ### Stateful and conversational runs: sequential only, one tenant at a time
 
 A conversational or otherwise stateful journey (the goal loop, or any run that

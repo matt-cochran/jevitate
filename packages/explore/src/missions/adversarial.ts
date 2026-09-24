@@ -30,6 +30,7 @@ import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../cras
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
 import { isAdvisoryConsoleError, PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
+import { detectOverflow, shouldCheckOverflow } from "../overflow.js";
 import {
   advisoryTitle,
   defectTitle,
@@ -279,6 +280,21 @@ export interface AdversarialMissionParams {
    * there is one). Below them a silent run is `inconclusive`, with its coverage attached.
    */
   readonly coverageThresholds?: Partial<CoverageThresholds>;
+  /**
+   * Horizontal-overflow hard signal (#149): checked once per adjudicated step and, when it fires,
+   * folded into that step's hard signals as a `DefectSignal` — a hard defect (guardrail #4), never a
+   * Jev judgment. Runs by default only when the emulated viewport is narrower than 1024px, or always
+   * when `checkOverflow` is set (CLI `--check-overflow`). Mirrors `induction.ts`'s `overflow` param.
+   */
+  readonly overflow?: {
+    readonly checkOverflow?: boolean;
+    readonly toleranceCss?: number;
+    /** `--ignore-overflow <selector>` (repeatable): intentional overflow, never a defect. */
+    readonly ignoreSelectors?: readonly string[];
+    /** The device name (`--device`), recorded on a finding for context. */
+    readonly device?: string;
+    readonly secrets?: readonly string[];
+  };
 }
 
 /** One time the run left its target scope (and was reset to the start URL). */
@@ -639,6 +655,32 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       defects.size > 0 ? "defects-found" : "inconclusive",
       ...[...hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
     ]);
+  /**
+   * Horizontal-overflow hard signal (#149) for the CURRENT step, as a `DefectSignal` — pure DOM
+   * geometry (`overflow.ts`'s `detectOverflow`), never a Jev judgment. Folded into `hardSignals`
+   * alongside the console/network signals; dedup across occurrences is the same fingerprint-keyed
+   * `fold()` every other hard signal already goes through.
+   */
+  const overflowSignal = async (): Promise<DefectSignal | null> => {
+    const vp = sessions.page.viewportSize();
+    if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return null;
+    const finding = await detectOverflow(sessions.page, {
+      viewport: vp ?? { width: 1280, height: 720 },
+      ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
+      ...(params.overflow?.toleranceCss === undefined ? {} : { toleranceCss: params.overflow.toleranceCss }),
+      ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
+      ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
+    });
+    if (finding === null) return null;
+    return {
+      kind: "horizontal-overflow",
+      detail: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
+      overflowPx: finding.overflowPx,
+      route: finding.route,
+      url: finding.url,
+      descriptor: finding.element.descriptor,
+    };
+  };
 
   /**
    * The independent oracle for one step: drains the hard signals and checks the user invariants —
@@ -653,6 +695,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
     const hardSignals = collector.drain();
+    const overflow = await overflowSignal();
+    if (overflow !== null) hardSignals.push(overflow);
     const url = redactUrl(sessions.page.url());
     const route = normalizeRoute(url);
     const findings: StepFinding[] = [];

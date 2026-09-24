@@ -1,6 +1,6 @@
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
@@ -42,6 +42,10 @@ export interface RunJourneyLoadTestOptions {
    * the report.
    */
   storageState?: string;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  browser?: BrowserLaunchOptions;
+  /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`) — applied to EVERY pool member's session. */
+  emulation?: EmulationSpec;
 }
 
 /**
@@ -93,6 +97,8 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
         headless: true,
         allowedOrigins: [journey.recording.site],
         baseUrl: journey.recording.site,
+        ...opts.browser,
+        ...opts.emulation,
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       });
       const actor = CastActor.named(`load-actor-${actorIndex}`).whoCan(

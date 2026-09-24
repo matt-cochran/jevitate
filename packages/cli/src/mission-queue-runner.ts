@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { GenerationPort, JudgmentPort, UsageTracker } from "@jevitate/ai-core";
 import { validateInvariantSpec } from "@jevitate/recording";
-import type { BrowserPort, BrowserLaunchOptions } from "@jevitate/playwright";
+import { resolveEmulation, type BrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import {
   targetAllowlist,
   type DrainableMissionQueueStore,
@@ -224,6 +224,19 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     const routeGlobs = mission.route === undefined ? [] : [mission.route];
     const serverLog = serverLogFromTargetConfig(opts.targets, target.baseUrl);
     const withServerLog = serverLog === undefined ? {} : { serverLog };
+    // #149: per-mission viewport/device emulation. `MissionRequestSchema` already refused an
+    // unknown --device / viewport+device together at enqueue time; `resolveEmulation` here is a
+    // second, defense-in-depth check — refused BEFORE any browser opens — since a device could in
+    // principle have been dropped from Playwright's registry between enqueue and drain.
+    const missionEmulation: EmulationSpec | undefined =
+      mission.viewport === undefined && mission.device === undefined
+        ? undefined
+        : {
+            ...(mission.viewport === undefined ? {} : { viewport: mission.viewport }),
+            ...(mission.device === undefined ? {} : { device: mission.device }),
+          };
+    if (missionEmulation !== undefined) resolveEmulation(missionEmulation);
+    const withEmulation = missionEmulation === undefined ? {} : { emulation: missionEmulation };
     if (mission.strategy === "feature" || (mission.strategy === "goal-based" && mission.feature !== undefined)) {
       const r = await runFeatureCliMission({
         ...common,
@@ -234,6 +247,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...invariants,
         ...withServerLog,
+        ...withEmulation,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -253,6 +267,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
         ...withServerLog,
+        ...withEmulation,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -269,6 +284,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
         ...withServerLog,
+        ...withEmulation,
       });
       return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
     }
@@ -284,6 +300,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
       bounds,
       ...invariants,
       ...withServerLog,
+      ...withEmulation,
     });
     return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
   };

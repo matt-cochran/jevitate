@@ -198,6 +198,7 @@ import {
   type GhPort,
 } from "@jevitate/sources";
 import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
+import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
 export interface RecordCliDeps {
@@ -345,12 +346,17 @@ function resolveApprovedBy(deps: CliDeps): string {
  * this once per reproduce/minimize attempt — a Playwright session cannot be
  * reused after a run — so callers must close each one it hands back.
  */
-async function makeRealBrowserActor(site: string, storageState?: string): Promise<{ actor: Actor; close: () => Promise<void> }> {
+async function makeRealBrowserActor(
+  site: string,
+  storageState?: string,
+  emulation?: EmulationSpec,
+): Promise<{ actor: Actor; close: () => Promise<void> }> {
   const port = new PlaywrightBrowserPort();
   const session = await port.open({
     headless: true,
     allowedOrigins: [site],
     baseUrl: site,
+    ...emulation,
     ...(storageState !== undefined ? { storageState } : {}),
   });
   const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
@@ -392,6 +398,43 @@ function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOptions | u
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
   };
   return Object.keys(launch).length > 0 ? launch : undefined;
+}
+
+/** Raw commander values of the shared `--viewport`/`--device` emulation flags (#149). */
+interface EmulationFlags {
+  viewport?: string;
+  device?: string;
+}
+
+/**
+ * Adds the shared `--viewport <W>x<H>` / `--device "<name>"` flags (#149) to a browser-driving
+ * command — mutually exclusive, on `explore`, `journey run`, `load run`, `source run`, `verify-fix`
+ * and `regression capture`/`run`. Absent both: Playwright's default (desktop) viewport, documented
+ * in each command's `--help`.
+ */
+function withEmulationFlags(cmd: Command): Command {
+  return cmd
+    .option("--viewport <WxH>", "emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)")
+    .option(
+      "--device <name>",
+      'emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)',
+    );
+}
+
+/**
+ * The `EmulationSpec` for the parsed flags, or `undefined` when neither was given (Playwright's own
+ * default viewport applies). Refused HERE, before any browser opens, when both are given —
+ * `resolveEmulation` (an unknown `--device`, or both together) is also re-checked wherever the spec
+ * is finally used, so every call path fails closed the same way.
+ */
+function emulationFromFlags(o: EmulationFlags): EmulationSpec | undefined {
+  const spec: EmulationSpec = {
+    ...(o.viewport !== undefined ? { viewport: parseViewport(o.viewport) } : {}),
+    ...(o.device !== undefined ? { device: o.device } : {}),
+  };
+  if (Object.keys(spec).length === 0) return undefined;
+  resolveEmulation(spec); // throws UnknownDeviceError / ConflictingEmulationError before any browser opens
+  return spec;
 }
 
 /**
@@ -958,7 +1001,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  withFixtureFlags(journey.command("run <id>"))
+  withEmulationFlags(withFixtureFlags(journey.command("run <id>")))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -977,7 +1020,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const fixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState, selfHeal, real, fakeAi, json } = this.opts<{
+      const { dir, param, storageState, selfHeal, real, fakeAi, json, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -985,10 +1028,17 @@ export function buildProgram(deps: CliDeps): Command {
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
-      }>();
+      } & EmulationFlags>();
 
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let journeyRunEmulation: EmulationSpec | undefined;
+      try {
+        journeyRunEmulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
 
@@ -1033,6 +1083,7 @@ export function buildProgram(deps: CliDeps): Command {
           policy,
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
           fixtures: (site) => {
@@ -1338,8 +1389,7 @@ export function buildProgram(deps: CliDeps): Command {
   // run` stays the LOCAL FsJourneyStore path; keeping remote runs here keeps the
   // two trust boundaries visibly separate. The run NEVER bypasses a gate: every
   // refusal below is a typed error thrown by `resolveForRun` BEFORE any browser.
-  source
-    .command("run <name> <journeyId>")
+  withEmulationFlags(source.command("run <name> <journeyId>"))
     .description("run a Journey from a trusted remote source through the run-gate")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1348,13 +1398,20 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string, journeyId: string) {
-      const { param, storageState, json } = this.opts<{
+      const { param, storageState, json, ...emulationFlags } = this.opts<{
         param: Record<string, string>;
         storageState?: string;
         json?: boolean;
-      }>();
+      } & EmulationFlags>();
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_SOURCE_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let sourceRunEmulation: EmulationSpec | undefined;
+      try {
+        sourceRunEmulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_SOURCE_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {
@@ -1366,6 +1423,7 @@ export function buildProgram(deps: CliDeps): Command {
           sourceName: name,
           journeyId,
           params: param,
+          ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
         }));
         const envelope = ok(result);
@@ -1405,8 +1463,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   const load = program.command("load");
 
-  load
-    .command("run <journeyId>")
+  withEmulationFlags(load.command("run <journeyId>"))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
@@ -1428,7 +1485,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState, json } = this.opts<{
+      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState, json, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         authorizedOrigin: string[];
@@ -1437,7 +1494,7 @@ export function buildProgram(deps: CliDeps): Command {
         seed: string;
         storageState?: string;
         json?: boolean;
-      }>();
+      } & EmulationFlags>();
       if (authorizedOrigin.length === 0) {
         emitJson(
           program,
@@ -1447,6 +1504,13 @@ export function buildProgram(deps: CliDeps): Command {
       }
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_LOAD_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let loadRunEmulation: EmulationSpec | undefined;
+      try {
+        loadRunEmulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_LOAD_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {
@@ -1459,6 +1523,7 @@ export function buildProgram(deps: CliDeps): Command {
           seed: Number(seed),
           authorizedOrigins: authorizedOrigin,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
         }).then((r) => withEngine(r));
         const envelope = ok(report);
@@ -1479,11 +1544,13 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  withFixtureFlags(
-    withBrowserLaunchFlags(
-      program
-        .command("explore")
-        .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+  withEmulationFlags(
+    withFixtureFlags(
+      withBrowserLaunchFlags(
+        program
+          .command("explore")
+          .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+      ),
     ),
   )
     .option("--url <url>", "target URL (must be an authorized origin)")
@@ -1703,6 +1770,18 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--personas <file>", "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\"}]}")
+    .option(
+      "--check-overflow",
+      "check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
+        "(a defect), adversarial (a defect) or usability (a signal finding). " +
+        "On by default whenever --viewport/--device emulates a viewport narrower than 1024px",
+    )
+    .option(
+      "--ignore-overflow <selector>",
+      "a CSS selector (repeatable) whose overflow is intentional — excluded from the horizontal-overflow signal, like --ignore-no-progress",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--json", "emit a JSON envelope")
     .addHelpText(
       "after",
@@ -1714,6 +1793,18 @@ export function buildProgram(deps: CliDeps): Command {
         "  --storage-state auth.json. To drive a login/signup form, bind fields to environment variables:",
         "  --secret-field 'label=Password=env:APP_PASSWORD' and, for MFA, --totp 'label=Code=env:APP_TOTP_SEED'.",
         "  See 'Authenticated missions' in the README.",
+      ].join("\n"),
+    )
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Viewport/device emulation (#149):",
+        "  Default: Playwright's own default viewport (1280x720, desktop, no touch) — nothing narrower",
+        "  unless --viewport or --device is given (mutually exclusive). --device validates against",
+        "  Playwright's built-in devices registry (viewport + scale + mobile/touch + UA); an unknown",
+        "  name is refused before any browser opens. The emulation is recorded on the Recording, so",
+        "  verify-fix/regression replay reproduce under the SAME device by default.",
       ].join("\n"),
     )
     .addHelpText("after", EXPLORE_OUTCOME_HELP)
@@ -1770,8 +1861,10 @@ export function buildProgram(deps: CliDeps): Command {
         real?: boolean;
         fakeAi?: boolean;
         out?: string;
+        checkOverflow?: boolean;
+        ignoreOverflow: string[];
         json?: boolean;
-      } & BrowserLaunchFlags & FixtureFlags>();
+      } & BrowserLaunchFlags & FixtureFlags & EmulationFlags>();
 
       const strategy = o.strategy ?? "goal";
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
@@ -1820,6 +1913,15 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
       const browser = browserLaunchFromFlags(o);
+      // #149: refused BEFORE any browser opens (an unknown --device, or --viewport + --device together).
+      let emulation: EmulationSpec | undefined;
+      try {
+        emulation = emulationFromFlags(o);
+      } catch (err) {
+        emitJson(program, fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      const overflow = { checkOverflow: o.checkOverflow ?? false, ignoreSelectors: o.ignoreOverflow };
       // Issue filing: drafts are always written; filing needs --file-issues (or config) AND a repo.
       let filing: FilingConfig | undefined;
       if (o.url !== undefined) {
@@ -2043,6 +2145,8 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(emulation === undefined ? {} : { emulation }),
+            overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
@@ -2123,6 +2227,8 @@ export function buildProgram(deps: CliDeps): Command {
             generation: advGen,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(emulation === undefined ? {} : { emulation }),
+            overflow,
             outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
@@ -2196,6 +2302,8 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(emulation === undefined ? {} : { emulation }),
+            overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...withServerLog,
             ...withInvariants,
@@ -2248,6 +2356,7 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(emulation === undefined ? {} : { emulation }),
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
@@ -2362,6 +2471,7 @@ export function buildProgram(deps: CliDeps): Command {
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
+          ...(emulation === undefined ? {} : { emulation }),
           ...(primaryStorageState !== undefined ? { storageState: primaryStorageState } : {}),
           ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           ...(actors === null ? {} : { actors }),
@@ -2398,17 +2508,23 @@ export function buildProgram(deps: CliDeps): Command {
   // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
   // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
   // 4 intermittent (fired on some but not all replays — never reported as fixed).
-  withFixtureFlags(
-    withBrowserLaunchFlags(
-      program
-        .command("verify-fix")
-        .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
+  withEmulationFlags(
+    withFixtureFlags(
+      withBrowserLaunchFlags(
+        program
+          .command("verify-fix")
+          .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
+      ),
     ),
   )
     .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
     .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
     .option("--storage-state <file>", "override the storageState the mission ran with")
     .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
+    .option(
+      "--allow-emulation-override",
+      "replay at --viewport/--device even though it differs from the finding's recorded emulation (#149); default: refused (fails closed)",
+    )
     .option(
       "--invariants <file>",
       "re-check a declared-invariant defect with these invariant files (repeatable) instead of the spec saved with the mission",
@@ -2434,13 +2550,22 @@ export function buildProgram(deps: CliDeps): Command {
           fingerprint: string;
           storageState?: string;
           replays?: string;
+          allowEmulationOverride?: boolean;
           invariants: string[];
           allowLogCmd?: boolean;
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
-          FixtureFlags
+          FixtureFlags &
+          EmulationFlags
       >();
+      let verifyFixEmulation: EmulationSpec | undefined;
+      try {
+        verifyFixEmulation = emulationFromFlags(o);
+      } catch (err) {
+        emitJson(program, fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       try {
         const report = await runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
@@ -2454,6 +2579,8 @@ export function buildProgram(deps: CliDeps): Command {
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
+          ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
+          ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });
         emitJson(program, ok(withEngine(report)));
         process.exitCode = report.exitCode;
@@ -2663,7 +2790,7 @@ export function buildProgram(deps: CliDeps): Command {
   // `runRegressionCapture`.
   const regression = program.command("regression");
 
-  withFixtureFlags(regression.command("capture"))
+  withEmulationFlags(withFixtureFlags(regression.command("capture")))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
@@ -2693,10 +2820,17 @@ export function buildProgram(deps: CliDeps): Command {
         fingerprint?: string;
         storageState?: string;
         json?: boolean;
-      } & FixtureFlags>();
+      } & FixtureFlags & EmulationFlags>();
       const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = flags;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let captureEmulationFlag: EmulationSpec | undefined;
+      try {
+        captureEmulationFlag = emulationFromFlags(flags);
+      } catch (err) {
+        emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       const opened: Array<() => Promise<void>> = [];
@@ -2704,6 +2838,14 @@ export function buildProgram(deps: CliDeps): Command {
       try {
         const raw = JSON.parse(await readFile(from, "utf8"));
         const recording = RecordingSchema.parse(raw);
+        // #149: --viewport/--device, else the Recording's OWN emulation (reproduces under the same device).
+        const captureEmulation: EmulationSpec | undefined =
+          captureEmulationFlag ??
+          (recording.emulation === undefined
+            ? undefined
+            : recording.emulation.device !== undefined
+              ? { device: recording.emulation.device }
+              : { viewport: recording.emulation.viewport });
         // #144: every reproduce/minimize replay restores the fixture state the Recording started from.
         fx = regressionFixtures(
           flags,
@@ -2723,7 +2865,7 @@ export function buildProgram(deps: CliDeps): Command {
           fingerprint,
           makeActor: async () => {
             await replayFixture?.reset();
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation);
             opened.push(close);
             if (replayFixture !== undefined) {
               rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
@@ -2751,29 +2893,45 @@ export function buildProgram(deps: CliDeps): Command {
   // `regression capture` wrote — a step-oracle, network-check, or declared-invariant one) and
   // reports "reproduces" or "fixed". The one CLI/MCP surface `loadRegressions`/`replayRegression`
   // (`@jevitate/regression`) previously had none of.
-  regression
-    .command("run")
+  withEmulationFlags(regression.command("run"))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)")
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, attempts, storageState, json } = this.opts<{ dir?: string; attempts?: string; storageState?: string; json?: boolean }>();
+      const { dir, attempts, storageState, json, ...emulationFlags } = this.opts<
+        { dir?: string; attempts?: string; storageState?: string; json?: boolean } & EmulationFlags
+      >();
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let runEmulationFlag: EmulationSpec | undefined;
+      try {
+        runEmulationFlag = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       const regressionsDir = resolveRegressionsDir(dir);
       const opened: Array<() => Promise<void>> = [];
       try {
         const recording = RecordingSchema.parse(JSON.parse(await readFile(join(regressionsDir, `${id}.recording.json`), "utf8")));
+        // #149: --viewport/--device, else the committed Recording's OWN emulation.
+        const runEmulation: EmulationSpec | undefined =
+          runEmulationFlag ??
+          (recording.emulation === undefined
+            ? undefined
+            : recording.emulation.device !== undefined
+              ? { device: recording.emulation.device }
+              : { viewport: recording.emulation.viewport });
         const report = await runRegressionRun({
           id,
           regressionsDir,
           ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
           makeActor: async () => {
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation);
             opened.push(close);
             return actor;
           },

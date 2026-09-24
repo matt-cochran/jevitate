@@ -1,6 +1,6 @@
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams, type Journey } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult, type SelfHealer } from "@jevitate/runtime";
@@ -54,6 +54,8 @@ export interface RunJourneyProgrammaticallyOptions {
   browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   browser?: BrowserLaunchOptions;
+  /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
+  emulation?: EmulationSpec;
 }
 
 /**
@@ -126,6 +128,7 @@ export async function runJourneyProgrammatically(
       allowedOrigins: [journey.recording.site],
       baseUrl: journey.recording.site,
       ...opts.browser,
+      ...opts.emulation,
       ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
     });
     try {

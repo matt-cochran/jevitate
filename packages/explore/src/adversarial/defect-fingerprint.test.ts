@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  defectTitle,
   groupStepSignals,
   invariantFingerprint,
   isResourceLoadEcho,
@@ -100,5 +101,44 @@ describe("groupStepSignals — one broken call is one defect", () => {
     const pageErr: DefectSignal = { kind: "page-error", detail: "TypeError: x is undefined", pageUrl: "http://a.test/" };
     expect(groupStepSignals([http("http://a.test/api"), pageErr])?.primary).toBe(pageErr);
     expect(groupStepSignals([])).toBeNull();
+  });
+
+  it("#149: a horizontal-overflow signal is grouped (lowest priority — a co-occurring crash/network signal wins)", () => {
+    const overflow: DefectSignal = {
+      kind: "horizontal-overflow",
+      detail: "horizontal-overflow: [data-testid=wide] overflows the 375px viewport by 225px at /settings/api-keys",
+      overflowPx: 225,
+      route: "/settings/api-keys",
+      url: "http://a.test/settings/api-keys",
+      descriptor: "[data-testid=wide]",
+    };
+    expect(groupStepSignals([overflow])?.primary).toBe(overflow);
+    expect(groupStepSignals([overflow])?.fingerprint).toBe(signalFingerprint(overflow));
+    expect(groupStepSignals([http("http://a.test/api"), overflow])?.primary.kind).toBe("http-5xx");
+  });
+
+  it("#149: a horizontal-overflow fingerprint is stable across occurrences (route + descriptor), independent of overflowPx/url", () => {
+    const a: DefectSignal = {
+      kind: "horizontal-overflow",
+      detail: "d1",
+      overflowPx: 225,
+      route: "/settings/api-keys",
+      url: "http://a.test/settings/api-keys?x=1",
+      descriptor: "[data-testid=wide]",
+    };
+    const b: DefectSignal = { ...a, detail: "d2", overflowPx: 230, url: "http://a.test/settings/api-keys?x=2" };
+    expect(signalFingerprint(a)).toBe(signalFingerprint(b));
+  });
+
+  it("#149: defectTitle names the route, element and overflow amount", () => {
+    const overflow: DefectSignal = {
+      kind: "horizontal-overflow",
+      detail: "d",
+      overflowPx: 225,
+      route: "/settings/api-keys",
+      url: "http://a.test/settings/api-keys",
+      descriptor: "[data-testid=wide]",
+    };
+    expect(defectTitle(overflow)).toBe("Horizontal overflow on /settings/api-keys: [data-testid=wide] (225px)");
   });
 });

@@ -126,7 +126,15 @@ export type SignalKind =
   | "repeated-reply"
   | "duplicate-create"
   | "failed-submit"
-  | "url-mismatch";
+  | "url-mismatch"
+  /**
+   * Horizontal page overflow (#149): pure DOM geometry
+   * (`@jevitate/explore`'s `detectOverflow`), computed live during the run — unlike every other
+   * signal kind here, it is never derived from the captured request/screen/step timeline, since it
+   * needs the live page. `runUsabilityMission` (ux-api.ts) constructs it directly with
+   * `makeSignalFinding` and merges it in alongside `detectSignals`'s output.
+   */
+  | "horizontal-overflow";
 
 /** The evidence a signal finding cites — what a reader checks to verify it. */
 export interface SignalEvidence {
@@ -165,6 +173,7 @@ export const SIGNAL_RULES: Readonly<
   "duplicate-create": { id: "signal-duplicate-create", principle: "Error prevention", citation: NNG, severity: "major" },
   "failed-submit": { id: "signal-failed-submit", principle: "Help users recognize, diagnose, and recover from errors", citation: NNG, severity: "major" },
   "url-mismatch": { id: "signal-url-mismatch", principle: "Consistency and standards", citation: NNG, severity: "minor" },
+  "horizontal-overflow": { id: "signal-horizontal-overflow", principle: "Flexibility and efficiency of use", citation: NNG, severity: "major" },
 };
 
 export class SignalFindingError extends Error {

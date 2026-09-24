@@ -264,6 +264,12 @@ export interface Recording {
    * values the run's navigations carry. Absent for a run without fixtures.
    */
   fixture?: RecordingFixture;
+  /**
+   * The viewport/device emulation the run opened its browser context with (#149), additive: absent
+   * means Playwright's own default viewport. Recorded so replay/verify-fix/regression reproduce the
+   * SAME device by default — a 375px defect never "verifies fixed" at a desktop width.
+   */
+  emulation?: RecordingEmulation;
   pages: PageSegment[];
 }
 
@@ -271,6 +277,15 @@ export interface RecordingFixture {
   identity: string;
   specHash: string;
   outputs?: Record<string, string>;
+}
+
+export interface RecordingEmulation {
+  viewport: { width: number; height: number };
+  /** The Playwright `devices` registry name (`--device`), when the run used one instead of a bare `--viewport`. */
+  device?: string;
+  deviceScaleFactor?: number;
+  isMobile?: boolean;
+  hasTouch?: boolean;
 }
 
 // === Zod Schemas ===
@@ -633,6 +648,16 @@ export const RecordingSchema: ZodType<Recording> = z.object({
   retro: z.string().optional(),
   fixture: z
     .object({ identity: z.string(), specHash: z.string(), outputs: z.record(z.string(), z.string()).optional() })
+    .strict()
+    .optional(),
+  emulation: z
+    .object({
+      viewport: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
+      device: z.string().optional(),
+      deviceScaleFactor: z.number().positive().optional(),
+      isMobile: z.boolean().optional(),
+      hasTouch: z.boolean().optional(),
+    })
     .strict()
     .optional(),
   pages: z.array(PageSegmentSchema),
