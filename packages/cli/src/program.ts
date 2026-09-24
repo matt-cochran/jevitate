@@ -90,6 +90,8 @@ import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetCon
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
+import { registerCheckCommand } from "./check-cli.js";
+import { registerReportCommands } from "./report-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
@@ -2944,6 +2946,20 @@ export function buildProgram(deps: CliDeps): Command {
     });
 
   registerAiCommands(program, deps);
+
+  // #137 / #138 / #139 — CI gate, baseline diff and the consolidated defect report (own files).
+  registerCheckCommand(
+    program,
+    {
+      buildGateways: (sel) => buildExploreGateways(deps, sel),
+      journeysDir: resolveJourneysDir(deps),
+      ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
+      ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+      browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
+    },
+    withBrowserLaunchFlags,
+  );
+  registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
 
   return program;
 }
