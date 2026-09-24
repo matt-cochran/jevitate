@@ -84,6 +84,11 @@ export interface TranscriptEntry {
   readonly signature: string;
   /** Interactive controls perceived on the page when this step was decided. */
   readonly controlCount: number;
+  /**
+   * Those controls' identities (`role "name"`, redacted, first {@link TRANSCRIPT_CONTROL_CAP}) — additive
+   * (#143): what a persona could see, so a persona matrix can diff controls visible to one role only.
+   */
+  readonly controls?: readonly string[];
   /** Advisory model judgments made at this step, by question name (e.g. `looksBroken`). */
   readonly judgments?: Readonly<Record<string, TranscriptJudgment>>;
   /**
@@ -159,6 +164,15 @@ export interface TranscriptStep {
  */
 export type TranscriptListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
 
+/** How many control identities one transcript entry keeps (#143). */
+export const TRANSCRIPT_CONTROL_CAP = 100;
+
+/** A control's identity as a person reads it: `button "Save"` (role alone when it has no name). */
+function controlLabel(c: Control): string {
+  const name = c.name.trim().replace(/\s+/g, " ").slice(0, 80);
+  return name === "" ? c.role : `${c.role} ${JSON.stringify(name)}`;
+}
+
 function isPasswordControl(c: Control | null): boolean {
   return c !== null && (c.inputType ?? "").toLowerCase() === "password";
 }
@@ -187,6 +201,7 @@ export class TranscriptLog {
       url: redactText(redactUrl(step.snapshot.url), this.#secrets),
       signature: step.snapshot.signature,
       controlCount: step.snapshot.controls.length,
+      controls: step.snapshot.controls.slice(0, TRANSCRIPT_CONTROL_CAP).map((c) => redactText(controlLabel(c), this.#secrets)),
       ...(step.judgments === undefined ? {} : { judgments: step.judgments }),
       ...(step.timing === undefined ? {} : { timing: transcriptTiming(step.timing, this.#secrets) }),
       ...(step.message === undefined ? {} : { message: redactText(step.message, this.#secrets) }),

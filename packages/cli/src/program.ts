@@ -119,7 +119,16 @@ import {
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
-import { discoverRecordingSidecars, loadRecordingSidecars, runUsabilityMission, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
+import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
+import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
+import {
+  discoverRecordingSidecars,
+  loadRecordingSidecars,
+  runUsabilityMission,
+  runUxReview,
+  UxAnalysisFailedError,
+  type MissionTranscriptEntryLike,
+} from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
@@ -1593,6 +1602,18 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--repeat <n>",
+      "run the mission N times, one after another, each in a fresh browser context, and vote (#141): findings seen in fewer than --min-agreement runs are reported as flaky, not counted",
+    )
+    .option("--min-agreement <k>", "with --repeat: runs a finding (and the outcome) must recur in to count (default: a majority of N)")
+    .option(
+      "--persona <name=storageState>",
+      "run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--personas <file>", "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\"}]}")
     .option("--json", "emit a JSON envelope")
     .addHelpText(
       "after",
@@ -1610,6 +1631,10 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
+        repeat?: string;
+        minAgreement?: string;
+        persona: string[];
+        personas?: string;
         minControlCoverage?: string;
         requireFormSubmit: boolean;
         fileIssues?: boolean;
@@ -1655,6 +1680,20 @@ export function buildProgram(deps: CliDeps): Command {
       } & BrowserLaunchFlags>();
 
       const strategy = o.strategy ?? "goal";
+      // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
+      if (wantsMultiRun(o)) {
+        try {
+          const plan = resolveMultiRunPlan(o);
+          const result = await runExploreMultiRun({ cmd: this, newProgram: () => buildProgram(deps), plan, strategy, ...(o.out === undefined ? {} : { out: o.out }) });
+          emitJson(program, ok(withEngine(result)));
+          process.exitCode = result.exitCode;
+        } catch (err) {
+          if (err instanceof MultiRunArgsError) emitJson(program, fail(err.code, err.message));
+          else if (err instanceof MultiRunAbortedError) emitJson(program, fail(err.envelope.error.code, err.envelope.error.message));
+          else emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+        }
+        return;
+      }
       // #120: a killed run prints what this command would have printed — the envelope (always, for
       // the strategies that only ever emit one) or the bare result JSON — before it exits.
       setKillSwitchOutput(
