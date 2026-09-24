@@ -153,6 +153,7 @@ import {
   runUsabilityMission,
   runUxReview,
   UxAnalysisFailedError,
+  UsabilityInvariantsUnsupportedError,
   type MissionTranscriptEntryLike,
 } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
@@ -1904,10 +1905,6 @@ export function buildProgram(deps: CliDeps): Command {
       // package reads process.env for invariants — never inside @jevitate/explore or @jevitate/recording.
       let invariantAuthTokens: Map<string, string> | undefined;
       if (o.invariants.length > 0) {
-        if (strategy === "usability" && o.feature === undefined) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--invariants is not supported with --strategy usability"));
-          return;
-        }
         if (o.url !== undefined) {
           try {
             const loaded = loadInvariantFiles(o.invariants, {
@@ -2201,6 +2198,7 @@ export function buildProgram(deps: CliDeps): Command {
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...withServerLog,
+            ...withInvariants,
           });
           emitJson(program, ok(result));
           // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
@@ -2212,6 +2210,8 @@ export function buildProgram(deps: CliDeps): Command {
             emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
             emitJson(program, fail("E_UX_ARGS", err.message));
+          } else if (err instanceof UsabilityInvariantsUnsupportedError) {
+            emitJson(program, fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }

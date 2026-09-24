@@ -60,6 +60,7 @@ import {
   type InvariantReport,
   type InvariantViolation,
 } from "../declared-invariants.js";
+import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -170,7 +171,9 @@ export type AdversarialStop =
   /** The start URL did not stay in scope (it redirected elsewhere), so the target could not be tested. */
   | "scope-unreachable"
   | "hang"
-  | "crashed";
+  | "crashed"
+  /** A declared mission spend budget (#150) was crossed, or a paid action was refused before crossing it. */
+  | "budget";
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
@@ -202,6 +205,8 @@ export interface AdversarialOutcome {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects?: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  readonly budget?: BudgetTrajectory[];
 }
 
 export interface AdversarialMissionParams {
@@ -422,6 +427,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
         });
   declared?.attach(params.page);
+  // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule).
+  const budgetDecls = params.invariants?.budget ?? [];
+  const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared);
   /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
   let armed = false;
   sessions.onReset((page) => {
@@ -494,6 +502,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       timing: summarizeTimings(timings),
       scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
       ...(declared === null ? {} : { invariants: declared.report() }),
+      ...(budget === null ? {} : { budget: budget.trajectory() }),
       ...safety.result(),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
@@ -617,6 +626,17 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const verdict = (): MissionOutcome =>
     combineOutcomes([
       defects.size > 0 ? "defects-found" : "clean",
+      ...[...hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
+    ]);
+
+  /**
+   * #150 — the verdict for a `stop: "budget"` ending: a clean, deliberate stop, so it is never
+   * `clean` (the run didn't finish its work) — `inconclusive`, unless a defect was already found,
+   * which still wins.
+   */
+  const budgetVerdict = (): MissionOutcome =>
+    combineOutcomes([
+      defects.size > 0 ? "defects-found" : "inconclusive",
       ...[...hangs.values()].map((h) => hangOutcome(h.reproduction.status)),
     ]);
 
@@ -896,6 +916,26 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
     }
 
+    // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
+    // An unreadable baseline fails closed by default (`onUnreadable: "stop"`). A defect found on the
+    // seed load itself (just above) still wins over the budget stop.
+    if (budget !== null) {
+      const b = await budget.baseline(sessions.page);
+      if (b.crossed) {
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "budget",
+          actOk: false,
+          reason: b.reason ?? "budget observable unreadable at run start",
+          snapshot: snap,
+        });
+        return finish(budgetVerdict(), "budget");
+      }
+    }
+
     let last: LastAction | null = null;
     let lastRecordedTarget: string | null = null;
     let actions = 0;
@@ -1148,6 +1188,29 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           stepTiming = undefined;
           break;
         }
+        // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
+        // would cross what remains of the budget is refused BEFORE it fires — code decides, never a
+        // model routing around it. The run stops cleanly, with `stop: "budget"`.
+        if (budget !== null) {
+          const risk = s.control === null ? null : safety.policy.riskOf(s.control);
+          const g = await budget.guard(sessions.page, { op: s.op, control: s.control?.name ?? s.op, paid: risk === "paid" });
+          if (g.refuse) {
+            transcript.record({
+              op: null,
+              control: s.control,
+              confidence: null,
+              chosenBy: "strategy",
+              strategy,
+              actOk: false,
+              reason: joinReasons([s.note, g.reason]),
+              snapshot: stepSnap,
+              ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+            });
+            stepTiming = undefined;
+            stop = "budget";
+            break;
+          }
+        }
         // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
         const actedOn = sessions.page.url();
         if (declared !== null && !armed) {
@@ -1206,6 +1269,24 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         }
         // The rest of the episode was planned for a page that is gone.
         if (after.kind === "reset") break;
+        // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
+        if (budget !== null) {
+          const b = await budget.afterSettle(sessions.page, step);
+          if (b.crossed) {
+            transcript.record({
+              op: null,
+              control: null,
+              confidence: null,
+              chosenBy: "strategy",
+              strategy: "budget",
+              actOk: true,
+              reason: b.reason ?? "mission budget crossed",
+              snapshot: snap,
+            });
+            stop = "budget";
+            break;
+          }
+        }
         stepSnap = snap;
         stepTiming = snapTiming;
         snapTiming = undefined;
@@ -1214,7 +1295,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 
     // Anything that arrived after the last adjudication still counts.
     await drainLate(Math.max(1, transcript.nextStep - 1));
-    return finish(verdict(), stop);
+    return finish(stop === "budget" ? budgetVerdict() : verdict(), stop);
   } catch (e) {
     crashHost = await probeHost();
     return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));

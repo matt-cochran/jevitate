@@ -158,6 +158,59 @@ describe("invariant spec schema (#86)", () => {
   });
 });
 
+describe("budget declarations (#150)", () => {
+  it("accepts a budget-only spec (no invariants required)", () => {
+    const spec = validateInvariantSpec(
+      {
+        observe: { credits: valid.observe.balance, confirmEst: valid.observe.confirmEst },
+        invariants: [],
+        budget: [{ observe: "credits", maxDelta: -150, guard: { estimate: "confirmEst", factor: 2 }, settle: { withinMs: 60000, pollMs: 5000 } }],
+      },
+      ALLOW,
+    );
+    expect(spec.budget).toHaveLength(1);
+    expect(spec.invariants).toHaveLength(0);
+  });
+
+  it("refuses a spec with neither invariants nor budget", () => {
+    expect(refusal({ invariants: [] }).join()).toMatch(/invariants/);
+  });
+
+  it("refuses a budget over an undeclared observable, or a guard estimate over an undeclared one", () => {
+    expect(
+      refusal({ observe: { credits: valid.observe.balance }, invariants: [], budget: [{ observe: "balanse", maxDelta: -10 }] }).join(),
+    ).toMatch(/budget\[0\]\.observe: unknown observable "balanse"/);
+    expect(
+      refusal({
+        observe: { credits: valid.observe.balance },
+        invariants: [],
+        budget: [{ observe: "credits", maxDelta: -10, guard: { estimate: "nope" } }],
+      }).join(),
+    ).toMatch(/budget\[0\]\.guard\.estimate: unknown observable "nope"/);
+  });
+
+  it("refuses a zero maxDelta and a non-GET-shaped budget object", () => {
+    expect(
+      refusal({ observe: { credits: valid.observe.balance }, invariants: [], budget: [{ observe: "credits", maxDelta: 0 }] }).join(),
+    ).toMatch(/maxDelta/);
+    expect(
+      refusal({ observe: { credits: valid.observe.balance }, invariants: [], budget: [{ observe: "credits", maxDelta: -10, post: "/x" }] }).join(),
+    ).toMatch(/Unrecognized key/);
+  });
+
+  it("merges budgets across files", () => {
+    const a = validateInvariantSpec(
+      { observe: { credits: valid.observe.balance }, invariants: [], budget: [{ observe: "credits", maxDelta: -10 }] },
+      ALLOW,
+    );
+    const b = validateInvariantSpec(
+      { observe: { credits: valid.observe.balance }, invariants: [{ id: "x", require: "credits >= 0" }] },
+      ALLOW,
+    );
+    expect(mergeInvariantSpecs([a, b]).budget).toHaveLength(1);
+  });
+});
+
 describe("invariant expressions: parsed, three-valued, never eval'ed", () => {
   const env = (before: Record<string, EvalValue>, after: Record<string, EvalValue>) => ({
     before: (n: string) => (n in before ? (before[n] as EvalValue) : UNKNOWN),

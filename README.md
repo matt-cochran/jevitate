@@ -173,7 +173,7 @@ own terms.
 | `succeeded` | 0 | the success assertion held |
 | `exhausted` | 1 | the action/decision budget ran out before the assertion held |
 | `blocked` | 1 | the model decided it could not proceed (e.g. no matching control) |
-| `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) |
+| `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable, or a declared mission spend budget was crossed — `run.stop === "budget"`, see below) |
 | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
 | `hang` | 3 | the app under test hung, and it reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
@@ -190,6 +190,7 @@ the `outcome` above; not separately exit-coded):
 | `hang` | the app under test hung |
 | `inconclusive` | a required decision round-trip stayed unavailable |
 | `crashed` | the engine failed |
+| `budget` | a declared mission spend budget (#150) was crossed, or a paid action was refused before crossing it — folds into `outcome: "inconclusive"`, never `succeeded`, never `crashed` |
 
 **Adversarial mission (`--strategy adversarial`) — `stop: AdversarialStop`**, why the hunt
 ended (its own top-level `outcome` is already the canonical `MissionOutcome` from the table
@@ -217,6 +218,7 @@ above, so it needs no separate exit-code mapping):
 | `stalled` | no step completed within `--stall-timeout` seconds (default 120) — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+| `budget` | a declared mission spend budget (#150) was crossed, or a paid action was refused before crossing it — `inconclusive` (`defects-found` still wins if any were found first) |
 
 **Feature mission (`--feature`) — its own `outcome`**, same idea plus its own path cap:
 
@@ -229,6 +231,7 @@ above, so it needs no separate exit-code mapping):
 | `stalled` | as above — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+| `budget` | as above — `inconclusive` (`defects-found` still wins if any were found first) |
 
 **Coverage vs exploratory.** Both expand the same state frontier. `coverage` sweeps it
 breadth-first: every control of a state, in page order, before the controls a click revealed.
@@ -431,6 +434,57 @@ spec, so `jevitate verify-fix --result … --fingerprint …` re-checks the same
 by replaying up to the step. `--invariants` on `verify-fix` overrides the saved spec.
 Over MCP, `queue_exploration` takes the same spec inline as `invariants`. It never takes
 a path, and its probes are checked against the target's origin.
+
+### Mission spend budgets
+
+A `budget` key in the same invariants file (#150) puts a cumulative spend cap on a declared
+observable — e.g. a credits balance that pays for real LLM/provider calls. Code reads it at
+run start and after every settled step; crossing it stops the mission CLEANLY, before its
+next action, with `stop: "budget"` (never folded into `clean`/`succeeded`, never `crashed`).
+
+```json
+{
+  "observe": {
+    "credits":    { "probe": { "get": "/v1/billing/balance", "json": "$.credits" } },
+    "confirmEst": { "dom": { "selector": "[data-testid=confirm-estimate]", "number": true, "optional": true } }
+  },
+  "invariants": [],
+  "budget": [
+    {
+      "observe": "credits",
+      "maxDelta": -150,
+      "guard": { "estimate": "confirmEst", "factor": 2.0 },
+      "settle": { "withinMs": 600000, "pollMs": 10000 },
+      "onUnreadable": "stop"
+    }
+  ]
+}
+```
+
+- `observe` names an entry in this same file's `observe` map (a `dom` read or a read-only
+  `probe`, authenticated the same way #86/#135 probes are — never a new credential path).
+- `maxDelta` is the cap on `current - baseline` since the run's first settled snapshot:
+  **negative** caps spend (a balance that must not drop past it), **positive** caps growth
+  (a counter that must not climb past it).
+- `guard` (optional): before an action the #116 safety policy flags **paid**, code computes
+  `estimate × factor` (`estimate` is a constant or another observable, read before the
+  action) and refuses the action if it would cross what remains of the budget — a missing
+  estimate is refused, never treated as zero cost.
+- `settle`: after the loop ends (for any reason), keep re-reading for `withinMs` to catch a
+  charge that lands after the last action (an async job that settles after the click) — an
+  overrun seen during drain is still reported.
+- `onUnreadable` (default `"stop"`): an observable that cannot be read fails the run closed
+  (`inconclusive`, with the reason) rather than being treated as unspent.
+
+The result carries a `budget` field per declared budget: `{ observe, limit, baseline, final,
+delta, perAction, refused?, unreadable? }` — the full observed trajectory, whatever the
+outcome. If a hard defect was already found before the budget stopped the run, the defect
+still wins (`missionOutcome: "defects-found"`, reported with `stop: "budget"`).
+
+`budget` works through the same `--invariants <file.json>` transport (repeatable, merged) as
+declared invariants — no separate flag, and it currently applies to the **goal**, **coverage**
+and **exploratory** and **`--feature`** missions. (Adversarial and the usability review do not
+yet read a declared budget — tracked as follow-up work.)
 
 ### Backend log correlation
 

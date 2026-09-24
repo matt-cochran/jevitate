@@ -55,3 +55,4 @@ export * from "./seed-redirect.js";
 export * from "./coverage/sufficiency.js";
 export * from "./coverage/nav.js";
 export * from "./declared-invariants.js";
+export * from "./budget.js";

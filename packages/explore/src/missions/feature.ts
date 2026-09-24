@@ -47,6 +47,7 @@ import {
   type InvariantDefect,
   type InvariantReport,
 } from "../declared-invariants.js";
+import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -106,7 +107,7 @@ export interface FeatureRunResult {
    * mid-run, the frontier could not return to the seed after a departure (#114).
    * `stalled`: no step completed within the stall watchdog's bound (#114).
    */
-  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang" | "scope-unreachable" | "stalled";
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   hangs: HangFinding[];
   /** Why the run crashed, could not reach its target, or stalled. */
@@ -122,6 +123,8 @@ export interface FeatureRunResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   sideEffects?: SideEffect[];
   sideEffectsTruncated?: number;
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  budget?: BudgetTrajectory[];
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
@@ -268,11 +271,23 @@ export async function runFeatureMission(params: FeatureMissionParams): Promise<F
   // The named capability is the mission's goal: a risky control whose verb it names ("buy a pack"
   // → "Buy pack 1") is what the operator asked to test; any other stays refused (#116).
   const safety = new MissionSafety(params.safety, { goal: params.scope.name });
-  const result = { ...(await runFeatureFrontier(params, declared, safety)), ...safety.result() };
-  return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
+  // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule).
+  const budgetDecls = params.invariants?.budget ?? [];
+  const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
+  const result = { ...(await runFeatureFrontier(params, declared, safety, budget)), ...safety.result() };
+  return {
+    ...result,
+    ...(declared === null ? {} : { invariantDefects: declared.log.defects(), invariants: declared.monitor.report() }),
+    ...(budget === null ? {} : { budget: budget.trajectory() }),
+  };
 }
 
-async function runFeatureFrontier(params: FeatureMissionParams, declared: Declared | null, safety: MissionSafety): Promise<FeatureRunResult> {
+async function runFeatureFrontier(
+  params: FeatureMissionParams,
+  declared: Declared | null,
+  safety: MissionSafety,
+  budget: BudgetMonitor | null,
+): Promise<FeatureRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const maxPaths = params.maxPaths ?? 20;
@@ -371,6 +386,26 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
     chrome.observe(pathnameOf(snap.url), snap.controls);
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
+
+    // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
+    // An unreadable baseline fails closed by default (`onUnreadable: "stop"`).
+    if (budget !== null) {
+      const b = await guard(budget.baseline(sessions.page));
+      if (b.crossed) {
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "budget",
+          actOk: false,
+          reason: b.reason ?? "budget observable unreadable at run start",
+          snapshot: snap,
+        });
+        return endRun("budget");
+      }
+    }
+
     // Chrome last (#115): nav/header/footer landmarks, controls repeated across pathnames and links out
     // of scope are tried only once the capability's own controls are exhausted, each destination once.
     const frontier = new Frontier({ classify: chromeClassifier({ chrome, inScope: (url) => isInScope(url, params.scope) }) });
@@ -492,6 +527,24 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
         const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: item.control.name, url: beforeUrl }));
         for (const v of checked.violations) {
           declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
+        }
+      }
+
+      // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
+      if (budget !== null && seenHang.last === null) {
+        const b = await guard(budget.afterSettle(sessions.page, transitionsExercised));
+        if (b.crossed) {
+          transcript.record({
+            op: item.op,
+            control: item.control,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "budget",
+            actOk: true,
+            reason: b.reason ?? "mission budget crossed",
+            snapshot: snap,
+          });
+          return endRun("budget");
         }
       }
 

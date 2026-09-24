@@ -54,6 +54,7 @@ import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
+import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
@@ -130,7 +131,7 @@ export interface InductionRunResult {
    *  bounced to a login page) — the run never got to test what it was asked to (#82) — or, mid-run,
    *  the frontier could not return to the seed after a departure (#114). */
   /** `stalled`: no step completed within the stall watchdog's bound (#114). */
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
   /** Why the run crashed/could not reach its target/stalled — present for `crashed`, `scope-unreachable` and `stalled`. */
@@ -149,6 +150,8 @@ export interface InductionRunResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects?: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  readonly budget?: BudgetTrajectory[];
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
@@ -327,14 +330,24 @@ export async function runInductionMission(params: InductionMissionParams): Promi
           log: new InvariantDefectLog(),
         };
   const safety = new MissionSafety(params.safety);
-  const result = { ...(await runInductionFrontier(params, declared, safety)), ...safety.result() };
-  return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
+  // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule,
+  // the same #86/#135 read/auth/redaction machinery). A budget-only spec (no invariants) still works:
+  // `declared` above is non-null whenever `params.invariants` is given, whatever its `invariants` array.
+  const budgetDecls = params.invariants?.budget ?? [];
+  const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
+  const result = { ...(await runInductionFrontier(params, declared, safety, budget)), ...safety.result() };
+  return {
+    ...result,
+    ...(declared === null ? {} : { invariantDefects: declared.log.defects(), invariants: declared.monitor.report() }),
+    ...(budget === null ? {} : { budget: budget.trajectory() }),
+  };
 }
 
 async function runInductionFrontier(
   params: InductionMissionParams,
   declared: Declared | null,
   safety: MissionSafety,
+  budget: BudgetMonitor | null,
 ): Promise<InductionRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
@@ -474,6 +487,34 @@ async function runInductionFrontier(
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
     observe(snap);
+
+    // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
+    // An unreadable baseline fails closed by default (`onUnreadable: "stop"`): the run stops before
+    // it ever acts against a budget it cannot see.
+    if (budget !== null) {
+      const b = await guard(budget.baseline(sessions.page));
+      if (b.crossed) {
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "budget",
+          actOk: false,
+          reason: b.reason ?? "budget observable unreadable at run start",
+          snapshot: snap,
+        });
+        return {
+          outcome: "budget",
+          coverage: report(false),
+          recordings: [...statePaths.values()],
+          transcript: transcript.entries(),
+          timing: summarizeTimings(timings),
+          hangs: [...hangs.values()],
+        };
+      }
+    }
+
     const frontier = new Frontier({
       order: params.strategy === "exploratory" ? "novelty" : "breadth",
       classify: chromeClassifier({ chrome, inScope }),
@@ -611,6 +652,31 @@ async function runInductionFrontier(
         const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: liveControl.name, url: actedOn }));
         for (const v of checked.violations) {
           declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
+        }
+      }
+
+      // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
+      if (budget !== null && seenHang.last === null) {
+        const b = await guard(budget.afterSettle(sessions.page, transitionsExercised));
+        if (b.crossed) {
+          transcript.record({
+            op: item.op,
+            control: liveControl,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "budget",
+            actOk: true,
+            reason: b.reason ?? "mission budget crossed",
+            snapshot: snap,
+          });
+          return {
+            outcome: "budget",
+            coverage: report(false),
+            recordings: [...statePaths.values()],
+            transcript: transcript.entries(),
+            timing: summarizeTimings(timings),
+            hangs: [...hangs.values()],
+          };
         }
       }
 
