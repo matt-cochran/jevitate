@@ -1711,6 +1711,18 @@ export function buildProgram(deps: CliDeps): Command {
       "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
     )
     .option(
+      "--allow-writes",
+      "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
+        "(checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change",
+    )
+    .option(
+      "--allow-write <glob>",
+      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments), beyond the built-in auth-refresh ones " +
+        "(**/refresh*, **/token*, **/oauth/**, **/auth/**/refresh*). The app's background writes outside an action always pass",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--read-rpc <glob>",
       "a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). " +
         "gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes",
@@ -1880,6 +1892,8 @@ export function buildProgram(deps: CliDeps): Command {
         jobWaitMs?: string;
         deny: string[];
         allowDestructive?: boolean;
+        allowWrites?: boolean;
+        allowWrite: string[];
         readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
@@ -1978,6 +1992,8 @@ export function buildProgram(deps: CliDeps): Command {
             deny: o.deny,
             readRpc: o.readRpc,
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
+            ...(o.allowWrites === true ? { allowWrites: true } : {}),
+            allowWrite: o.allowWrite,
             ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
           });
         } catch (err) {

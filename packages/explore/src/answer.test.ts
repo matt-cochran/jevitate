@@ -49,6 +49,44 @@ describe("groundAnswer — code adjudicates a reported answer (#101)", () => {
   });
 });
 
+describe("figures are free-standing numerals only (#157)", () => {
+  const keys = [{ url: "http://app.test/keys", text: "API keys\nTwo-factor authentication is required before you can create an API key.\nPro: $25/mo · 25% off · 1,234 seats · 5GB" }];
+
+  it("digits inside words are never figures: 'no2fa', '2FA', 'v2', 'S3' ground on the quote alone", () => {
+    const v = groundAnswer(
+      {
+        answer: "You cannot create the key 'no2fa' via the v2 API or S3: 2FA is required first.",
+        claims: [{ claim: "2FA is required before creating an API key", quote: "Two-factor authentication is required before you can create an API key" }],
+      },
+      keys,
+    );
+    expect(v.accept).toBe(true);
+  });
+
+  it("currency, percent, thousands and unit figures are still figures", () => {
+    const quote = "Pro: $25/mo · 25% off · 1,234 seats · 5GB";
+    const ok = groundAnswer({ answer: "Pro costs $25/mo, 25% off, 1234 seats, 5GB.", claims: [{ claim: "Pro is $25/mo with 1,234 seats and 5GB", quote }] }, keys);
+    expect(ok.accept).toBe(true);
+    for (const bad of ["Pro costs $26/mo.", "Pro is 30% off.", "Pro has 1,235 seats.", "Pro has 6GB."]) {
+      const v = groundAnswer({ answer: bad, claims: [{ claim: "Pro pricing", quote }] }, keys);
+      expect(v.accept, bad).toBe(false);
+      expect(!v.accept && v.reason).toMatch(/which no observed page shows/);
+    }
+  });
+
+  it("names the offending token when a figure carries a unit", () => {
+    const v = groundAnswer({ answer: "Pro has 7GB.", claims: [{ claim: "Pro pricing", quote: "Pro: $25/mo" }] }, keys);
+    expect(!v.accept && v.reason).toMatch(/states 7 \(in "7GB"\)/);
+  });
+
+  it("a figure the goal itself states needs no page to show it", () => {
+    const claims = [{ claim: "2FA is required", quote: "Two-factor authentication is required" }];
+    const answer = "The key 'key 42' cannot be created: 2FA is required.";
+    expect(groundAnswer({ answer, claims }, keys).accept).toBe(false);
+    expect(groundAnswer({ answer, claims }, keys, { goal: "Try to create an API key named 'key 42'." }).accept).toBe(true);
+  });
+});
+
 describe("ObservedPages", () => {
   it("redacts secrets when observed, dedupes, and lists most recent first (bounded context)", () => {
     const o = new ObservedPages(["s3cret-token"]);

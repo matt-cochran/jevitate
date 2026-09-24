@@ -82,6 +82,7 @@ import {
   type PageStatus,
 } from "./status.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
+import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
@@ -210,6 +211,14 @@ export interface ExploreConfig {
   readonly jobWaitMs?: number;
   /** The shared safety policy (#116) and write classifier (#110) configuration. */
   readonly safety?: SafetyConfig;
+  /**
+   * A READ-ONLY run (#158: a find-out goal that does not ask for a change): code refuses clicks on
+   * controls that start a write flow / submit a form, `send` and `upload`, and aborts the write
+   * requests (#110's classifier) a model-chosen action fires (act → settle); the app's own background
+   * writes (token refresh, heartbeat) pass and are listed `background`. Every refusal is recorded (origin
+   * `engine`) and told to the model. Set by the goal mission; never a model decision.
+   */
+  readonly readOnly?: boolean;
   /**
    * Mission spend budget (#150) PRE-ACTION hook: called with the resolved control right before it
    * would be acted on (after the safety-policy risk classification, for every op). A refusal stops
@@ -350,7 +359,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
   const secretContext = secretFieldContext(cfg.secretFields);
   const missionContext =
-    secretContext === null ? cfg.missionContext : cfg.missionContext ? `${cfg.missionContext}; ${secretContext}` : secretContext;
+    [cfg.missionContext, secretContext, cfg.readOnly === true ? READ_ONLY_NOTE : null]
+      .filter((c): c is string => c !== undefined && c !== null && c !== "")
+      .join("; ") || undefined;
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
@@ -516,6 +527,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
   /** The writes the run's actions fire (#116: the result's `sideEffects`). */
   const effectLog = new SideEffectLog({ isWrite, now });
+  /** A find-out goal's read-only guard (#158), or null when the run may write. */
+  const readOnly =
+    cfg.readOnly === true
+      ? new ReadOnlyGuard(isWrite, cfg.safety?.allowWriteRequests === undefined ? {} : { allowWrites: cfg.safety.allowWriteRequests })
+      : null;
   const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   let jobWaitedMs = 0;
@@ -565,6 +581,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     }
     if (firstNavFailed) throw new FirstNavigationFailedSentinel();
     recorder.navigate(cfg.startUrl, now());
+    // #158 — from here on, a read-only run's write requests never leave the browser.
+    if (readOnly !== null) {
+      await readOnly.arm(page);
+      effectLog.markBackground();
+      history.push(READ_ONLY_NOTE);
+    }
 
     for (;;) {
       if (!tracker.mayDecide()) {
@@ -578,6 +600,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
       sideEffects.settle();
+      // #158 — the action's window closes once the page settled: later writes are the app's own.
+      if (readOnly?.settled() === true) effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
       const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
       {
@@ -777,6 +801,29 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
       observed.add(snap.url, await readPageText(page));
+
+      // #158 — the write requests the read-only guard aborted since the last decision: recorded
+      // (jevitate's own refusal) and told to the model.
+      {
+        const blocked = readOnly?.drain() ?? [];
+        if (blocked.length > 0) {
+          const what = [...new Set(blocked.map((b) => `${b.method} ${b.path}`))].join(", ");
+          const note = `blocked write request(s) ${redactText(what, secrets)}: this find-out goal is read-only — find the answer without changing anything`;
+          history.push(note);
+          transcript.record({
+            op: null,
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "read-only",
+            actOk: false,
+            reason: note,
+            origin: "engine",
+            snapshot: snap,
+            timing: perception.timing,
+          });
+        }
+      }
 
       let decision: Awaited<ReturnType<typeof decide>>;
       try {
@@ -1131,6 +1178,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         const at = now();
         effectLog.mark(transcript.nextStep, "reload");
+        readOnly?.beginAction();
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
           recorder.navigate(page.url(), at);
@@ -1157,6 +1205,17 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         stop = "exhausted";
         break;
       }
+      // #158 — a read-only (find-out) goal: code refuses a control that would start a write flow,
+      // submit a form, send a message or upload. Refused before any interaction, recorded, told.
+      if (readOnly !== null) {
+        const refusal = readOnly.refuses(decision.op, control);
+        if (refusal !== null) {
+          history.push(refusal);
+          record(false, refusal, { origin: "engine" });
+          lastActedOp = decision.op;
+          continue;
+        }
+      }
       // The shared safety policy (#116): a session-ending, destructive, paid or --deny'd control is
       // never clicked unless the goal itself asks for it (or --allow-destructive). Refused, recorded.
       if (decision.op === "click") {
@@ -1171,6 +1230,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const at = now();
       const risk = safety.riskOf(control);
       effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
+      readOnly?.beginAction();
 
       // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
       // would cross what remains of the budget is refused BEFORE it fires — code decides, never the
@@ -1632,6 +1692,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
   }
 
+  await readOnly?.disarm();
   const finished = recorder.tryFinish({ intent: cfg.goal });
   const cause = blockingCause();
   const finalOutcome: RunOutcome =
