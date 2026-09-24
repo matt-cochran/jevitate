@@ -4,6 +4,7 @@ import { perceive, type PerceiveOptions } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { observeAfterStep } from "./record.js";
 import { hangFingerprint, type HangKind, type HangSignal } from "./hang.js";
+import { messageClass } from "./adversarial/defect-fingerprint.js";
 import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
 import type { MissionOutcome } from "@jevitate/domain";
@@ -22,8 +23,15 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
  *
  * Every attempt's evidence is kept; the finding is never dropped and never reported clean.
  *
- * For `ui-no-progress` found as a stalled state (no busy indicator), "the same hang" means the
- * replay lands on the SAME stalled page state and it stays there for the stall window.
+ * `ui-no-progress` has two sub-kinds, told apart by `HangSignal.element` (#108):
+ *
+ *  - a BUSY-INDICATOR hang (`element` set — a spinner/progressbar that never cleared): "the same
+ *    hang" means THAT indicator (by its normalized identity) is visible again after the replay. A
+ *    settled page with a stable signature is not evidence either way — it is what a genuinely
+ *    fixed page looks like, so it can never alone read as reproduced;
+ *  - a STALLED-STATE hang (`element` undefined — an action whose result undid itself, #79/#80): "the
+ *    same hang" means the replay lands on the SAME page signature and stays there for the stall
+ *    window.
  */
 
 export const DEFAULT_HANG_REPLAYS = 2;
@@ -133,11 +141,32 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
 
     const seen = await perceive(session.page, p.perceive ?? {});
     const kind = seen.hang?.kind ?? null;
+    if (p.hang.kind === "ui-no-progress" && p.hang.element !== undefined) {
+      // A busy-indicator hang (#108): reproduction requires THAT indicator to be visible again.
+      // A stable, settled page signature alone proves nothing — it is exactly what a fixed page
+      // looks like, so the same-signature rule below must never decide this sub-kind.
+      const wantElement = messageClass(p.hang.element);
+      const backAgain = kind === "ui-no-progress" && seen.hang?.element !== undefined && messageClass(seen.hang.element) === wantElement;
+      return {
+        reproduced: backAgain,
+        kind: backAgain ? "ui-no-progress" : kind,
+        replay,
+        ran: true,
+        detail: backAgain
+          ? `busy-indicator rule: the indicator (${seen.hang?.element ?? p.hang.element}) is back — ${seen.hang?.detail ?? p.hang.detail}`
+          : kind === null
+            ? `busy-indicator rule: the indicator (${p.hang.element}) is gone and the page settled — fixed`
+            : kind === "ui-no-progress"
+              ? `busy-indicator rule: a different busy indicator (${seen.hang?.element ?? "unknown"}), not the one that hung`
+              : `busy-indicator rule: no busy indicator, a different hang (${kind}) instead`,
+      };
+    }
     if (p.hang.kind === "ui-no-progress" && kind !== "ui-no-progress") {
-      // A stalled state: the replay must land on the SAME state and stay there.
+      // A stalled state (no busy indicator, #79/#80): the replay must land on the SAME state and
+      // stay there.
       const stalled = p.hang.lastState.signature;
       if (seen.snapshot.signature !== stalled) {
-        return { reproduced: false, kind, replay, ran: true, detail: "replay reached a different page state (progress was made)" };
+        return { reproduced: false, kind, replay, ran: true, detail: "stalled-state rule: replay reached a different page state (progress was made)" };
       }
       await (p.sleep ?? realSleep)(p.stallMs ?? DEFAULT_STALL_MS);
       const again = await perceive(session.page, p.perceive ?? {});
@@ -147,7 +176,9 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
         kind: stuck ? "ui-no-progress" : null,
         replay,
         ran: true,
-        detail: stuck ? "the replay landed on the same stalled state and stayed there" : "the page moved on after the stall window",
+        detail: stuck
+          ? "stalled-state rule: the replay landed on the same stalled state and stayed there"
+          : "stalled-state rule: the page moved on after the stall window",
       };
     }
     const reproduced = kind === p.hang.kind;
@@ -156,7 +187,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       kind,
       replay,
       ran: true,
-      detail: reproduced ? (seen.hang?.detail ?? p.hang.detail) : kind === null ? "the page settled — no hang" : `a different hang (${kind})`,
+      detail: reproduced ? (seen.hang?.detail ?? p.hang.detail) : kind === null ? "same-kind rule: the page settled — no hang" : `same-kind rule: a different hang (${kind})`,
     };
   } catch (e) {
     return { reproduced: false, kind: null, replay: "failed", ran: false, detail: `replay failed: ${firstLine(e)}` };

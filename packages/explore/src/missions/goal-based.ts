@@ -120,6 +120,12 @@ export interface GoalBasedResult {
   /** The hang finding (with its reproduction k/N), for a `hang`/`intermittent` outcome. */
   readonly hang?: HangFinding;
   /**
+   * #126: a hang met on the SEED load (before any action) that did NOT reproduce (0/N). It never
+   * ends the mission — it is kept here as evidence and the run retried the goal once more, whatever
+   * that retry's own `outcome` turned out to be.
+   */
+  readonly intermittentHangs?: HangFinding[];
+  /**
    * Why the mission did not succeed, in one line — set for EVERY outcome but `succeeded`
    * (`blocked`/`exhausted` included, which carry no engine `failure`): how the loop ended and
    * which success check did not hold.
@@ -281,68 +287,60 @@ async function adjudicatedRun(
   let heldAtStep: number | null = null;
   let settledSteps = 0;
   const held = cfg.successWhen === "held" && pageChecks.length > 0;
-  const run = await explore({
-    ...cfg,
-    missionContext:
-      "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
-    // `held`: after every settled step, a quick look at the page checks — remembered once they all
-    // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
-    ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
-    onSnapshot: async (snap) => {
-      await cfg.onSnapshot?.(snap);
-      await declared?.settled().catch(() => undefined);
-      settledSteps += 1;
-      if (!held || heldAtStep !== null) return;
-      const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
-      if (ok) heldAtStep = settledSteps;
-    },
-    // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
-    // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
-    // final verdict — reloading mid-run would throw away the state the run is still building.
-    // Under `held`, a page check that already held (together, at a settled step) counts.
-    successCheck: () =>
-      evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
-        (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
-        () => false,
-      ),
-  });
+  const runOnce = (): Promise<ExploreRun> =>
+    explore({
+      ...cfg,
+      missionContext:
+        "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
+      // `held`: after every settled step, a quick look at the page checks — remembered once they all
+      // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
+      ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
+      onSnapshot: async (snap) => {
+        await cfg.onSnapshot?.(snap);
+        await declared?.settled().catch(() => undefined);
+        settledSteps += 1;
+        if (!held || heldAtStep !== null) return;
+        const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
+        if (ok) heldAtStep = settledSteps;
+      },
+      // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
+      // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
+      // final verdict — reloading mid-run would throw away the state the run is still building.
+      // Under `held`, a page check that already held (together, at a settled step) counts.
+      successCheck: () =>
+        evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
+          (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
+          () => false,
+        ),
+    });
+
+  let run = await runOnce();
+  /**
+   * #126: a hang met on the SEED load (before any action — `recordingStepIndex === 0`) that does
+   * NOT reproduce is not proof the app is stuck; it can be a single slow request on a loaded host.
+   * It must not end the mission. It is recorded as an intermittent finding and the goal is tried
+   * once more from a fresh navigate of the seed. A hang that DOES reproduce (or that could not be
+   * replayed at all) ends the run exactly as before.
+   */
+  const intermittentHangs: HangFinding[] = [];
+  if (run.stop === "hang" && run.hang !== undefined && run.hang.recordingStepIndex === 0 && cfg.openFreshSession !== undefined) {
+    const h = run.hang;
+    const reproduction = await reproduceSeedHang(cfg, run, h);
+    if (reproduction.status === "intermittent") {
+      intermittentHangs.push(hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction));
+      run = await runOnce();
+    } else {
+      return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
+    }
+  }
 
   await declared?.finish(run);
 
   // A hang is a first-class finding: reproduce it in fresh contexts, then report k/N.
   if (run.stop === "hang" && run.hang !== undefined) {
     const h = run.hang;
-    const reproduction: HangReproduction =
-      cfg.openFreshSession === undefined
-        ? NOT_REPLAYED
-        : await reproduceHang({
-            recording: run.recording,
-            recordingStepIndex: h.recordingStepIndex,
-            hang: h.signal,
-            openSession: cfg.openFreshSession,
-            ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
-            perceive: {
-              ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
-              ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
-              ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
-              ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
-              ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
-            },
-            ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
-          });
-    const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
-    return {
-      // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
-      outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
-      assertionPassed: false,
-      checks: [],
-      run,
-      recording: run.recording,
-      transcript: run.transcript,
-      finalUrl: run.finalUrl,
-      hang: finding,
-      reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
-    };
+    const reproduction = await reproduceSeedHang(cfg, run, h);
+    return { ...hangResult(run, h, reproduction), ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }) };
   }
 
   // A broken run proves nothing: its assertion is never evaluated into a pass.
@@ -356,6 +354,7 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: whyNot(run, []),
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
   }
 
@@ -380,6 +379,7 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       reason: `success oracle failed: ${message}`,
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
   }
 
@@ -409,6 +409,49 @@ async function adjudicatedRun(
     transcript: run.transcript,
     finalUrl: run.finalUrl,
     ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
+    ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+  };
+}
+
+/** Reproduce a hang the loop stopped on, in fresh contexts (owner ruling 7). */
+async function reproduceSeedHang(
+  cfg: GoalBasedMissionConfig,
+  run: ExploreRun,
+  h: NonNullable<ExploreRun["hang"]>,
+): Promise<HangReproduction> {
+  return cfg.openFreshSession === undefined
+    ? NOT_REPLAYED
+    : await reproduceHang({
+        recording: run.recording,
+        recordingStepIndex: h.recordingStepIndex,
+        hang: h.signal,
+        openSession: cfg.openFreshSession,
+        ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
+        perceive: {
+          ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
+          ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
+          ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+          ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
+          ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
+        },
+        ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
+      });
+}
+
+/** The mission-ending result for a hang whose reproduction is already known. */
+function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reproduction: HangReproduction): GoalBasedResult {
+  const finding = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
+  return {
+    // A hang whose replays could not run at all is `inconclusive`, never a non-reproduction.
+    outcome: reproduction.status === "reproduced" ? "hang" : reproduction.status,
+    assertionPassed: false,
+    checks: [],
+    run,
+    recording: run.recording,
+    transcript: run.transcript,
+    finalUrl: run.finalUrl,
+    hang: finding,
+    reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
   };
 }
 

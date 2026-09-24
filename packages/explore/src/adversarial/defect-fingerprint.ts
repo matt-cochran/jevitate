@@ -20,23 +20,33 @@ const NUMERIC = /^\d+$/;
 const HEXISH = /^[0-9a-f]{12,}$/i;
 /** A long opaque token that mixes letters and digits (e.g. an object id or a hash). */
 const OPAQUE = /^(?=.*\d)(?=.*[a-z])[a-z0-9_-]{16,}$/i;
-/** A literal prefix (kept) followed by `-` and a UUID suffix — `candidate-<uuid>` → `candidate-:id`
- *  (#95). Checked before `PREFIXED_ID_SUFFIX` so a uuid's own internal dashes never split wrong. */
+/** A literal prefix followed by `-` and a UUID suffix — `candidate-<uuid>` (#95). Checked before
+ *  `PREFIXED_ID_SUFFIX` so a uuid's own internal dashes never split wrong. Templates the WHOLE
+ *  segment (#127): a literal prefix is never kept, so `demo-bet-1` and `candidate-<uuid>` — a short
+ *  numeric suffix and a uuid suffix on a literal prefix — normalize identically. */
 const PREFIXED_UUID = /^(.+-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
-/** A literal prefix (kept) followed by `-` and a short numeric/hex id — `item-42` → `item-:id`; below
+/** A literal prefix followed by `-` and a short numeric/hex id — `item-42`, `demo-bet-1` (#127); below
  *  `OPAQUE`'s 16-char floor, so this is what catches the SHORT prefixed ids that floor misses. */
 const PREFIXED_ID_SUFFIX = /^(.+-)([0-9]+|[0-9a-f-]{8,})$/i;
 
-/** One path segment → `:id` when it is an identifier rather than a route word; `prefix-<id>` → `prefix-:id`
- *  so a resource id with a literal prefix collapses to ONE route without losing the prefix (#95:
- *  `/decisions/candidate-<uuid-a>` and `/decisions/candidate-<uuid-b>` both normalize identically). */
+/**
+ * One path segment → `:id` when it is an identifier rather than a route word (#127: matched
+ * anywhere in the segment — ends in digits after a separator, contains a uuid, or is a long
+ * hex/base62 token — the WHOLE segment templates, a literal prefix is never kept, so
+ * `/decisions/demo-bet-1` and `/decisions/candidate-<uuid>` both give `/decisions/:id`).
+ */
 function normalizeSegment(seg: string): string {
   if (seg === "") return seg;
-  if (NUMERIC.test(seg) || UUID.test(seg) || HEXISH.test(seg) || OPAQUE.test(seg)) return ":id";
-  const uuidSuffix = PREFIXED_UUID.exec(seg);
-  if (uuidSuffix) return `${uuidSuffix[1]}:id`;
-  const idSuffix = PREFIXED_ID_SUFFIX.exec(seg);
-  if (idSuffix) return `${idSuffix[1]}:id`;
+  if (
+    NUMERIC.test(seg) ||
+    UUID.test(seg) ||
+    HEXISH.test(seg) ||
+    OPAQUE.test(seg) ||
+    PREFIXED_UUID.test(seg) ||
+    PREFIXED_ID_SUFFIX.test(seg)
+  ) {
+    return ":id";
+  }
   return seg;
 }
 

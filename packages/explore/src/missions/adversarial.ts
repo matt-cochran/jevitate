@@ -25,7 +25,7 @@ import {
   type TranscriptJudgment,
   type TranscriptListener,
 } from "../transcript.js";
-import { CrashWatch, describeFailure, tryTriage, type Triage } from "../mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget, tryTriage, type Triage } from "../mission-failure.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
@@ -763,7 +763,28 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
     await monitorFor(sessions.page).instrument();
-    await Navigate.to(params.seedUrl).performAs(sessions.actor);
+    // #128: real network evidence for the FIRST navigation — a refused connection can still
+    // surface as a bare navigation timeout.
+    let firstNavNetError: string | null = null;
+    const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
+      const text = req.failure()?.errorText;
+      if (text !== undefined) firstNavNetError = text;
+    };
+    sessions.page.on("requestfailed", onFirstNavRequestFailed);
+    try {
+      await Navigate.to(params.seedUrl).performAs(sessions.actor);
+    } catch (e) {
+      const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+      return finish("inconclusive", "scope-unreachable", {
+        kind: "target-unreachable",
+        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
+      });
+    } finally {
+      sessions.page.off("requestfailed", onFirstNavRequestFailed);
+    }
     recorder.navigate(params.seedUrl, now());
     const started = now();
 

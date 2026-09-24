@@ -269,6 +269,8 @@ export class UsabilityCapture {
       url: e.url,
       ...(e.descriptor === undefined ? {} : { descriptor: e.descriptor }),
       ...(e.reason === undefined ? {} : { reason: e.reason }),
+      ...(e.href === undefined ? {} : { href: e.href }),
+      ...(e.ariaCurrent === undefined ? {} : { ariaCurrent: e.ariaCurrent }),
     }));
     const requests: SignalRequest[] = this.#requests.map((r) => ({ ...r }));
     return { steps, requests, screens: [...this.#screens], endedAt: this.#now(), typedValues };

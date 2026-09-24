@@ -58,6 +58,8 @@ export interface Control {
   readonly checked?: boolean | null;
   /** The raw `aria-haspopup` value (e.g. `dialog`), or null — marks a control that discloses more UI. */
   readonly ariaHasPopup?: string | null;
+  /** The raw `aria-current` value (e.g. `page`, `true`), or null — marks the current nav item (#127). */
+  readonly ariaCurrent?: string | null;
 }
 
 export interface Snapshot {
@@ -120,6 +122,8 @@ interface ControlFacts {
   readonly href: string | null;
   /** The raw `aria-haspopup` attribute, or null — a disclosure signal (e.g. `dialog`). */
   readonly ariaHasPopup: string | null;
+  /** The raw `aria-current` attribute, or null — marks the current nav item (#127). */
+  readonly ariaCurrent: string | null;
 }
 
 /**
@@ -239,6 +243,7 @@ function readControlFacts(node: Node): ControlFacts {
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
   const href = tag === "a" ? (el as HTMLAnchorElement).href || null : null;
   const ariaHasPopup = norm(el.getAttribute("aria-haspopup")).toLowerCase() || null;
+  const ariaCurrent = norm(el.getAttribute("aria-current")).toLowerCase() || null;
 
   return {
     tag,
@@ -257,6 +262,7 @@ function readControlFacts(node: Node): ControlFacts {
     submits,
     href,
     ariaHasPopup,
+    ariaCurrent,
   };
 }
 
@@ -363,6 +369,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         href: facts.href === null ? null : redactUrl(facts.href),
         checked: facts.checked,
         ariaHasPopup: facts.ariaHasPopup,
+        ariaCurrent: facts.ariaCurrent,
       });
       keptFacts.push(facts);
     } catch {

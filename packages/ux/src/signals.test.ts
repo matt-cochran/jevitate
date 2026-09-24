@@ -201,6 +201,41 @@ describe("detectInertControls", () => {
     ).toHaveLength(0);
     expect(detectInertControls(capture({ steps: [click(1, "Go")], screens: [screen(0, 1, 0, same)] }))).toHaveLength(0);
   });
+
+  describe("#127 — a link to the CURRENT page doing nothing is not inert", () => {
+    const same = { signature: "same" };
+    const unchanged = (over: Partial<SignalStep> = {}) =>
+      capture({
+        steps: [click(1, "Applications", over)],
+        screens: [screen(0, 1, 0, same), screen(1, 2, 1_000, same)],
+      });
+
+    it("is silent when the clicked link's href resolves to the page it was clicked on", () => {
+      expect(detectInertControls(unchanged({ href: URL }))).toHaveLength(0);
+    });
+
+    it("ignores a hash and a trailing slash when comparing href to the current URL", () => {
+      expect(detectInertControls(unchanged({ href: `${URL}#section` }))).toHaveLength(0);
+      expect(detectInertControls(unchanged({ href: `${URL}/` }))).toHaveLength(0);
+    });
+
+    it("is silent when the control carries aria-current", () => {
+      expect(detectInertControls(unchanged({ ariaCurrent: "page" }))).toHaveLength(0);
+      expect(detectInertControls(unchanged({ ariaCurrent: "true" }))).toHaveLength(0);
+    });
+
+    it("aria-current=\"false\" is explicitly NOT current — still flagged inert", () => {
+      expect(detectInertControls(unchanged({ ariaCurrent: "false" }))).toHaveLength(1);
+    });
+
+    it("a link to a DIFFERENT page doing nothing is still flagged inert", () => {
+      expect(detectInertControls(unchanged({ href: "http://app.test/bets/8" }))).toHaveLength(1);
+    });
+
+    it("a control with no href and no aria-current is still flagged inert (unchanged behaviour)", () => {
+      expect(detectInertControls(unchanged())).toHaveLength(1);
+    });
+  });
 });
 
 describe("signal findings through the report", () => {

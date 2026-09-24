@@ -33,7 +33,7 @@ import type { HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure } from "../mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
@@ -357,7 +357,33 @@ async function runInductionFrontier(params: InductionMissionParams, declared: De
 
   try {
     await monitorFor(sessions.page).instrument();
-    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
+    // #128: real network evidence for the FIRST navigation — a refused connection can still
+    // surface as a bare navigation timeout.
+    let firstNavNetError: string | null = null;
+    const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
+      const text = req.failure()?.errorText;
+      if (text !== undefined) firstNavNetError = text;
+    };
+    sessions.page.on("requestfailed", onFirstNavRequestFailed);
+    try {
+      await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
+    } catch (e) {
+      const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
+      return {
+        outcome: "scope-unreachable",
+        coverage: report(false),
+        recordings: [],
+        transcript: transcript.entries(),
+        timing: summarizeTimings(timings),
+        hangs: [...hangs.values()],
+        failure: { kind: "target-unreachable", message: `target unreachable (${describeUnreachable(message, firstNavNetError)})` },
+      };
+    } finally {
+      sessions.page.off("requestfailed", onFirstNavRequestFailed);
+    }
     let snap = await takeSnapshot();
 
     // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most

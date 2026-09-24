@@ -60,7 +60,7 @@ import { resolveMissionFixture } from "./fixture.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, describeFailure } from "./mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
 import { EMPTY_STATUS, describeStatus, isEmptyStatus, readPageStatus, statusDelta, type PageStatus } from "./status.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
@@ -250,6 +250,13 @@ function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
 
+/**
+ * Unwinds out of the loop after the FIRST navigation failed unreachable (#128) — `stop`/`failure`
+ * are already set at the point it's thrown; the outer catch recognises it and does nothing more
+ * (never reclassifies it as a generic `crashed` engine failure).
+ */
+class FirstNavigationFailedSentinel extends Error {}
+
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   // #1 — authorize the start target before ANY snapshot/decision/action.
   const startOrigin = assertAuthorizedExploreTarget(cfg.startUrl, cfg.allowlist);
@@ -386,11 +393,35 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     statusAfter = label;
   };
 
+  // #128: real network evidence for the FIRST navigation, preferred over whatever `page.goto`
+  // itself reports — a refused connection can still surface as a bare navigation timeout.
+  let firstNavNetError: string | null = null;
+  const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
+    const text = req.failure()?.errorText;
+    if (text !== undefined) firstNavNetError = text;
+  };
+  let firstNavFailed = false;
+
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
     await monitorFor(page).instrument();
     // Initial navigation (authorized above).
-    await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+    page.on("requestfailed", onFirstNavRequestFailed);
+    try {
+      await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+    } catch (e) {
+      const message = firstLine(e);
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
+      // a configuration problem (a bad URL, the target not running). `inconclusive`, not `crashed`;
+      // no crash report is built for it, so no issue is ever drafted from it.
+      firstNavFailed = true;
+      stop = "inconclusive";
+      failure = { kind: "target-unreachable", message: `target unreachable (${describeUnreachable(message, firstNavNetError)})` };
+    } finally {
+      page.off("requestfailed", onFirstNavRequestFailed);
+    }
+    if (firstNavFailed) throw new FirstNavigationFailedSentinel();
     recorder.navigate(cfg.startUrl, now());
 
     for (;;) {
@@ -1237,10 +1268,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       lastActedOp = decision.op;
     }
   } catch (e) {
-    // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
-    // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
-    failure = describeFailure(e, crashWatch.signals());
-    stop = "crashed";
+    if (!(e instanceof FirstNavigationFailedSentinel)) {
+      // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
+      // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
+      failure = describeFailure(e, crashWatch.signals());
+      stop = "crashed";
+    }
+    // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
+    // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
   }
 
   const finished = recorder.tryFinish({ intent: cfg.goal });
