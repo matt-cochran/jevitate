@@ -1,6 +1,6 @@
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult, type SelfHealer } from "@jevitate/runtime";
@@ -29,6 +29,10 @@ export interface RunJourneyProgrammaticallyOptions {
    * this port (enforced by `JourneyRunner`'s write floor).
    */
   selfHealer?: SelfHealer;
+  /** Testing seam / `jevitate check` wiring — defaults to a real `PlaywrightBrowserPort`. */
+  browserPortFactory?: () => BrowserPort;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  browser?: BrowserLaunchOptions;
 }
 
 /**
@@ -57,11 +61,12 @@ export async function runJourneyProgrammatically(
 
   const policy = opts.policy ?? safeRunPolicy();
 
-  const port = new PlaywrightBrowserPort();
+  const port = opts.browserPortFactory?.() ?? new PlaywrightBrowserPort();
   const session = await port.open({
     headless: true,
     allowedOrigins: [journey.recording.site],
     baseUrl: journey.recording.site,
+    ...opts.browser,
   });
   try {
     const actor = CastActor.named("cli-runner").whoCan(
