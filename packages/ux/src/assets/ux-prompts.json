@@ -1,7 +1,10 @@
 {
-  "version": "ux-prompts@5",
-  "notes": "App-agnostic prompt + rubric-description assets for @jevitate/ux. Never name a specific product, route or domain term here (enforced by prompts.test.ts). Bump `version` on any change and re-measure (scripts/ux-quality).",
+  "version": "ux-prompts@7",
+  "notes": "App-agnostic prompt + rubric-description assets for @jevitate/ux. Never name a specific product, route or domain term here (enforced by prompts.test.ts). Bump `version` on any change and re-measure with packages/cli/scripts/ux-quality (baseline.json pins the measured content hash). @7 = the tuning loop's best measured configuration (generator v2 + grader v4); the v3 generator + minViolation 0.6 margin (it2) was rejected: holdouts held but the tuning app's share and consistency fell.",
   "applicability": "Setting aside whether it is satisfied: can the principle \"{principle}\" sensibly be at issue on THIS screen, given what the screen is for (its type and purpose), the job, and the app class? Answer no when the principle cannot meaningfully apply here — e.g. choice overload on a screen with two buttons, error recovery on a screen showing no error and no input, progress/status on a static confirmation.",
+  "thresholds": {
+    "minViolation": 0
+  },
   "specifics": [
     "You are reviewing ONE screen of a web app for usability problems. An automated judge flagged each listed rubric item on this screen; most such flags are false alarms, so confirm each one against the screen before reporting it.",
     "For EACH item return:",

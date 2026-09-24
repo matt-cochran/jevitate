@@ -4,6 +4,7 @@ import { UxAnalyzer, MissingAppContextError, evaluateFlag } from "./analyzer.js"
 import { loadRubric } from "./rubric/schema.js";
 import { APPLIES_QUESTION_ID, questionKey } from "./judge.js";
 import type { UxSpecificsItem } from "./specifics.js";
+import { UX_PROMPTS } from "./prompts.js";
 import type { AppContext, RubricEntry, UxEvidence } from "./types.js";
 
 const appContext: AppContext = { appClass: "consumer-checkout", persona: "first-time buyer" };
@@ -235,6 +236,22 @@ describe("UxAnalyzer", () => {
     expect(outcome.suppressed?.[0]?.reason).toBe("not-confirmed");
   });
 
+  it("a near-coin-flip violation (below the asset's minViolation margin) is counted, never sent for specifics", async () => {
+    const specifics = scriptedGen(() => grounded());
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.45, 0.9), gen: specifics });
+    const saved = UX_PROMPTS.thresholds.minViolation;
+    UX_PROMPTS.thresholds.minViolation = 0.6; // the shipped asset may disable the margin (0); exercise the mechanism
+    const outcome = await analyzer
+      .analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 })
+      .finally(() => {
+        UX_PROMPTS.thresholds.minViolation = saved;
+      });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(specifics.calls).toBe(0);
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.suppressed?.[0]).toMatchObject({ reason: "not-confirmed", detail: expect.stringContaining("margin") });
+  });
+
   it("a heuristic Jev judges inapplicable to the screen cannot score high", async () => {
     const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.01, 0.1), gen: scriptedGen(() => grounded()) });
     const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
@@ -313,6 +330,18 @@ describe("UxAnalyzer", () => {
     expect(requests[1]).toEqual(["grade::0"]);
     expect(requests[0]).not.toContain("grade::0");
     expect(outcome.findings[0]?.quality?.label).toBe("generic");
+  });
+
+  it("occurrences citing OVERLAPPING controls on the same route merge into one finding (no near-duplicates)", async () => {
+    let n = 0;
+    const gen = scriptedGen(() => ({ ...grounded(), implicatedControls: n++ === 0 ? [0, 1] : [0] }));
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.1, 0.9), gen });
+    const screens = [1, 2].map((i) => screen({ screenId: `s${i}`, url: `https://app.example.com/checkout#${i}`, controls: twoButtons }));
+    const outcome = await analyzer.analyze({ screens, rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(1);
+    expect(outcome.findings[0]?.occurrences).toBe(2);
+    expect(outcome.findings[0]?.confidenceBasis?.agreement).toBe(1);
   });
 
   it("a specifics-generation error becomes `failed`, never a silent empty result", async () => {

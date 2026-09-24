@@ -30,16 +30,19 @@
 export const GROUNDING_UNNAMED = 0.6;
 
 /**
- * Default `minConfidence` cutoff for reported findings. Findings below it are counted and
- * summarized in `report.suppressed`, never silently dropped.
+ * Default `minConfidence` cutoff for reported findings — a SECONDARY filter behind the quality
+ * grade (grade.ts). Findings below it are counted in `report.suppressed`, never silently dropped.
  *
- * 0.75 is the calibration study's recommendation (simuli-jevdog
- * `docs/dogfooding/jevitate/2026-09-23-ux-dogfood.md`, "Confidence calibration" → Recommendation),
- * measured on the PRE-fix confidence (inverted noul-false, no applicability gate).
- * TODO(calibration): re-derive this from a re-run of that study on the corrected confidence
- * (confidence.ts formula) — the owner sets the final value from that data.
+ * The calibration study (simuli-jevdog `docs/dogfooding/jevitate/2026-09-23-ux-dogfood.md`)
+ * recommended 0.75, but measured on the PRE-fix confidence (inverted noul-false, no
+ * applicability gate). Re-measured on this formula (2026-09-24, packages/cli/scripts/ux-quality):
+ * 0.75 kept 1 of 76 hand-labeled findings and 0 findings in both live Preveti runs, including
+ * findings a human rated relevant; the independent grader separates useful findings better
+ * (precision 53% / recall 63% vs a 21% base rate). 0.3 drops single-sighting, low-agreement
+ * findings on multi-state routes while keeping recurring ones.
+ * TODO(calibration): the owner sets the final value from a larger labeled re-run.
  */
-export const DEFAULT_MIN_CONFIDENCE = 0.75;
+export const DEFAULT_MIN_CONFIDENCE = 0.3;
 
 /**
  * Env var that overrides the config file and `DEFAULT_MIN_CONFIDENCE` (a CLI `--min-confidence`

@@ -13,9 +13,9 @@ describe("combineConfidence", () => {
 });
 
 describe("resolveMinConfidence", () => {
-  it("defaults to the named constant (0.75 per the calibration study)", () => {
+  it("defaults to the named constant (re-measured: 0.3, secondary to the quality grade)", () => {
     expect(resolveMinConfidence(undefined, {})).toBe(DEFAULT_MIN_CONFIDENCE);
-    expect(DEFAULT_MIN_CONFIDENCE).toBe(0.75);
+    expect(DEFAULT_MIN_CONFIDENCE).toBe(0.3);
   });
   it("flag > env > config", () => {
     expect(resolveMinConfidence("0.2", { JEVITATE_UX_MIN_CONFIDENCE: "0.4" }, 0.6)).toBe(0.2);

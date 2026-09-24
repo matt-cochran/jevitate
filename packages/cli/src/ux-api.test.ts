@@ -108,7 +108,7 @@ describe("runUxReview — min-confidence + quality policy resolution", () => {
     expect((await runUxReview({ ...base, env: {} })).report).toMatchObject({ minConfidence: 0.3, qualityShown: ["actionable"] });
     expect((await runUxReview({ ...base, env: { JEVITATE_UX_MIN_CONFIDENCE: "0.6", JEVITATE_UX_SHOW: "generic" } })).report).toMatchObject({ minConfidence: 0.6, qualityShown: ["generic"] });
     expect((await runUxReview({ ...base, env: { JEVITATE_UX_MIN_CONFIDENCE: "0.6" }, minConfidence: "0.9", show: "wrong" })).report).toMatchObject({ minConfidence: 0.9, qualityShown: ["wrong"] });
-    expect((await runUxReview({ ...base, configPath: join(outDir, "absent.json"), env: {} })).report.minConfidence).toBe(0.75);
+    expect((await runUxReview({ ...base, configPath: join(outDir, "absent.json"), env: {} })).report.minConfidence).toBe(0.3);
   });
 
   it("an invalid cutoff or policy fails closed (never silently defaulted)", async () => {

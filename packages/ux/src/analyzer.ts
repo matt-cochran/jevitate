@@ -21,6 +21,7 @@ import { generateSpecifics, type UxSpecificsItem } from "./specifics.js";
 import { adjudicate, controlKey, normalizeText } from "./adjudicate.js";
 import { clamp01, combineConfidence } from "./confidence.js";
 import { routeOf } from "./route.js";
+import { UX_PROMPTS } from "./prompts.js";
 import { gradeCandidates, type QualityGrade } from "./grade.js";
 import type { MakeFindingInput } from "./finding.js";
 import type {
@@ -259,6 +260,18 @@ export class UxAnalyzer {
           if (f) flagged.push(f);
         }
         rawOccurrences += flagged.length;
+        // Consistency margin: near-coin-flip violations are counted, never shown.
+        const minViolation = UX_PROMPTS.thresholds.minViolation;
+        for (const f of flagged.filter((x) => x.violation < minViolation)) {
+          suppressed.push({
+            rubricItemId: f.entry.id,
+            route,
+            screenId: screen.screenId,
+            reason: "not-confirmed",
+            detail: `violation probability ${f.violation.toFixed(2)} below the ${minViolation} margin`,
+          });
+        }
+        flagged.splice(0, flagged.length, ...flagged.filter((x) => x.violation >= minViolation));
 
         // One structured-output specifics call for everything flagged on this screen.
         if (flagged.length > 0) {
@@ -398,6 +411,42 @@ function flagEntry(entry: RubricEntry, answers: Record<string, Answer>): Flagged
   return { entry, severity, violation, applicability };
 }
 
+/**
+ * Groups occurrences of the same rubric item on the same route whose evidence OVERLAPS (a shared
+ * implicated control, or — for text-only findings — a shared quote) into one issue. Exact
+ * control-set keys would split one issue into near-duplicates when the model cites a slightly
+ * different subset of controls on each screen-state. Deterministic: input order is stable and
+ * each group is keyed by its first occurrence's dedupe key.
+ */
+function groupOccurrences(occurrences: readonly Occurrence[]): Map<string, Occurrence[]> {
+  const parent = occurrences.map((_, i) => i);
+  const find = (i: number): number => {
+    let r = i;
+    while (parent[r] !== r) r = parent[r] ?? r;
+    return r;
+  };
+  const byAnchor = new Map<string, number>();
+  occurrences.forEach((o, i) => {
+    const scope = `${o.entry.id}|${o.route}`;
+    const anchors = o.controlKeys.length > 0 ? o.controlKeys.map((k) => `c:${k}`) : o.quotes.map((q) => `q:${normalizeText(q)}`);
+    for (const a of anchors) {
+      const k = `${scope}|${a}`;
+      const j = byAnchor.get(k);
+      if (j === undefined) byAnchor.set(k, i);
+      else parent[find(i)] = find(j);
+    }
+  });
+  const groups = new Map<string, Occurrence[]>();
+  occurrences.forEach((o, i) => {
+    const root = occurrences[find(i)];
+    if (!root) return;
+    const g = groups.get(root.dedupeKey);
+    if (g) g.push(o);
+    else groups.set(root.dedupeKey, [o]);
+  });
+  return groups;
+}
+
 /** A deduplicated semantic finding before grading + construction. */
 interface Draft {
   readonly key: string;
@@ -409,24 +458,22 @@ interface Draft {
 
 /** Same item × route × implicated controls/text → ONE draft with an occurrence count (deterministic order). */
 function dedupeSemantic(occurrences: readonly Occurrence[], judgedOnRoute: ReadonlyMap<string, readonly JudgedScreen[]>): Draft[] {
-  const groups = new Map<string, Occurrence[]>();
-  for (const o of occurrences) {
-    const g = groups.get(o.dedupeKey);
-    if (g) g.push(o);
-    else groups.set(o.dedupeKey, [o]);
-  }
+  const groups = groupOccurrences(occurrences);
   const out: Draft[] = [];
   for (const [key, group] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const first = group[0];
     if (!first) continue;
-    // Agreement denominator: judged screen-states on this route where the SAME evidence was
-    // present (the implicated controls, or the quoted text) — so an issue on a control that
+    // Agreement denominator: judged screen-states on this route where some of the SAME evidence
+    // was present (an implicated control, or the quoted text) — so an issue on a control that
     // only appears in some states is not diluted by states that never showed it.
-    const judged = (judgedOnRoute.get(`${first.entry.id}|${first.route}`) ?? []).filter((j) =>
-      first.controlKeys.length > 0
-        ? first.controlKeys.every((k) => j.controlKeys.has(k))
-        : first.quotes.every((q) => j.text.includes(normalizeText(q))),
-    ).length;
+    const keys = new Set(group.flatMap((o) => o.controlKeys));
+    const quotes = [...new Set(group.flatMap((o) => o.quotes.map((q) => normalizeText(q))))];
+    const judged = Math.max(
+      group.length,
+      (judgedOnRoute.get(`${first.entry.id}|${first.route}`) ?? []).filter((j) =>
+        keys.size > 0 ? [...keys].some((k) => j.controlKeys.has(k)) : quotes.some((q) => j.text.includes(q)),
+      ).length,
+    );
     const { confidence, basis } = combineConfidence(group, judged);
     // Representative = the best-grounded, most-confident occurrence (ties: first observed).
     const rep = [...group].sort((a, b) => b.grounding * b.violation - a.grounding * a.violation)[0] ?? first;

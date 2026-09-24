@@ -48,7 +48,7 @@ authorized the target.
 ## Filtering what is shown
 
 - `--min-confidence <0..1>` (also `JEVITATE_UX_MIN_CONFIDENCE`, or `ux.minConfidence` in
-  `~/.jevitate/config.json`; default 0.75): findings below it are suppressed.
+  `~/.jevitate/config.json`; default 0.3, a secondary filter behind the quality grade): findings below it are suppressed.
 - `--show <labels>` (also `JEVITATE_UX_SHOW`, or `ux.show` in the config; default
   `actionable,relevant-minor`): which quality grades are shown. The grades are
   `actionable`, `relevant-minor`, `generic` and `wrong`.

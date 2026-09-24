@@ -19,6 +19,16 @@ export const UxPromptsSchema = z
     version: z.string().regex(/^ux-prompts@\d+$/),
     notes: z.string(),
     applicability: z.string().includes("{principle}"),
+    thresholds: z
+      .object({
+        /**
+         * A Jev flag whose violation probability is below this margin is not sent for specifics:
+         * judgments near 0.5 flip run to run, so they are counted (suppressed, not-confirmed) but
+         * never shown — this is the main run-to-run consistency lever.
+         */
+        minViolation: z.number().min(0).max(1),
+      })
+      .strict(),
     specifics: z.array(z.string().min(1)).min(1),
     grader: z
       .object({

@@ -1,0 +1,122 @@
+[
+ {
+  "key": "primary-action|/|link \"Apply for a place\"+link \"Apply for a place\"",
+  "label": "generic",
+  "observation": "There are two prominent calls to action labeled 'APPLY FOR A PLACE' and 'APPLY', which may confuse users about which action to take first."
+ },
+ {
+  "key": "nielsen-5|/startup-program/|checkbox \"My company meets every criterion listed above.\"",
+  "label": "wrong",
+  "observation": "The checkbox 'My company meets every criterion listed above.' is unchecked by default, which may lead users to overlook it and submit incorrect information."
+ },
+ {
+  "key": "nielsen-9|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "generic",
+  "observation": "There is no clear error messaging or guidance if a user tries to apply when the limit has been reached, which could lead to confusion."
+ },
+ {
+  "key": "nielsen-1|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "generic",
+  "observation": "The button 'CHECK ELIGIBILITY AND APPLY' does not provide any feedback or indication of what happens after it is clicked, leaving users uncertain about the next steps."
+ },
+ {
+  "key": "nielsen-3|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "wrong",
+  "observation": "The 'CHECK ELIGIBILITY AND APPLY' button does not have a visible cancel or back option, forcing users to commit without the ability to reverse their action."
+ },
+ {
+  "key": "progressive-disclosure|/startup-program/|combobox \"Annual recurring revenue\"+combobox \"Most recent round\"+combobox \"Total outside funding raised\"",
+  "label": "wrong",
+  "observation": "The comboboxes for funding and revenue options present all choices at once, which may overwhelm users with too many options at once."
+ },
+ {
+  "key": "nielsen-10|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "generic",
+  "observation": "There is no help or documentation available on how to fill out the form or what information is required, which could leave users unsure of how to proceed."
+ },
+ {
+  "key": "primary-action|/pricing/|link \"Get started\"+link \"Get started\"",
+  "label": "generic",
+  "observation": "There are two 'Get Started' buttons for different pricing plans, which can create ambiguity about which action the user should take next."
+ },
+ {
+  "key": "primary-action|/founders/|link \"Apply for a place\"+link \"Apply for a place\"",
+  "label": "generic",
+  "observation": "The presence of two 'Apply for a place' buttons creates ambiguity about which action is the primary next step for the user."
+ },
+ {
+  "key": "primary-action|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "There are multiple links competing for attention, which dilutes the clarity of the primary action users should take."
+ },
+ {
+  "key": "primary-action|/overview/|link \"Discuss your next bet\"+link \"Pre-vet your next bet\"+link \"Review the case\"",
+  "label": "relevant-minor",
+  "observation": "Multiple actions are presented as equally important, which can confuse users about the primary next step they should take to understand the product."
+ },
+ {
+  "key": "nielsen-4|/founders/|link \"Apply for a place\"+link \"Apply for a place\"",
+  "label": "wrong",
+  "observation": "The label 'Apply for a place' is used twice on the screen, which can confuse users about whether they are taking the same action or if there are different contexts for each instance."
+ },
+ {
+  "key": "progressive-disclosure|/pricing/|link \"Check eligibility\"+link \"See the Design Partner offer\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The advanced options for programs are presented alongside the primary pricing plans, which may confuse users about what they should focus on first."
+ },
+ {
+  "key": "progressive-disclosure|/overview/|tab \"01Conversational framing\"+tab \"02Inquiry intelligence\"+tab \"03Evidence you authorize\"+tab \"04Study handoff & recovery\"+tab \"05Billing that stays in the app\"+tab \"06Reproducible verdicts\"",
+  "label": "generic",
+  "observation": "The tabs for different features are all presented equally, which may overwhelm users with options instead of guiding them to the most essential actions for their current task."
+ },
+ {
+  "key": "progressive-disclosure|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The screen presents multiple options that may distract from the primary action, which is to understand the product's offerings."
+ },
+ {
+  "key": "progressive-disclosure|/founders/|link \"Design Partner\"+link \"Pricing\"+link \"See the Design Partner offer\"+link \"Terms apply\"",
+  "label": "generic",
+  "observation": "The screen presents several options that may not be essential for the immediate task of applying for a place, which could overwhelm users with choices."
+ },
+ {
+  "key": "cognitive-load|/pricing/|link \"Check eligibility\"+link \"See the Design Partner offer\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The simultaneous presentation of multiple pricing plans and program options increases cognitive load, making it harder for users to make a decision."
+ },
+ {
+  "key": "cognitive-load|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The number of choices presented may lead to cognitive overload, as users are faced with too many options at once."
+ },
+ {
+  "key": "scent|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The labels for the links do not clearly indicate their relevance to the user's job of understanding the product, leading to weak information scent."
+ },
+ {
+  "key": "nielsen-7|/startup-program/|combobox \"Annual recurring revenue\"+combobox \"Most recent round\"+combobox \"Total outside funding raised\"",
+  "label": "generic",
+  "observation": "The comboboxes for funding raised, most recent round, and annual recurring revenue require users to select from a list without providing any context or guidance on what each option means, which can slow down the process for all users."
+ },
+ {
+  "key": "nielsen-8|/founders/|link \"Design Partner\"+link \"Pricing\"+link \"See the Design Partner offer\"+link \"Terms apply\"",
+  "label": "generic",
+  "observation": "The presence of multiple promotional elements and links (like 'See the Design Partner Offer', 'Terms apply', 'Design Partner', and 'Pricing') may distract users from the primary action of applying for a place."
+ },
+ {
+  "key": "nielsen-8|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"MC Product Labs\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The presence of multiple links (Design Partner, Startup Program, Pricing, Finance, Journal, MC Product Labs) may distract users from the primary task of understanding the product's core functionalities."
+ },
+ {
+  "key": "nielsen-8|/pricing/|link \"Check eligibility\"+link \"See the Design Partner offer\"+link \"Startup Program\"",
+  "label": "generic",
+  "observation": "The presence of multiple program options (Design Partner, Startup Program) alongside the pricing plans may distract users from the primary task of selecting a pricing plan."
+ },
+ {
+  "key": "nielsen-8|/overview/|link \"Discuss your next bet\"+link \"Pre-vet your next bet\"+link \"Preveti home\"+link \"Review the case\"",
+  "label": "generic",
+  "observation": "The prominent elements on the screen, such as the links and headings, do not clearly align with the primary job of understanding the product's purpose and cost, leading to potential confusion about the next steps."
+ }
+]

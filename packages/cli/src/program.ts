@@ -1273,7 +1273,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--min-confidence <n>",
-      "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.75",
+      "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
@@ -2204,7 +2204,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--min-confidence <n>",
-      "UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.75",
+      "UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option("--persona <p>", "optional persona for calibration")
     .option("--job <text>", "the job the flow pursues (improves relevance)")

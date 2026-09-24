@@ -120,7 +120,7 @@ describe("buildReport", () => {
   });
 
   it("defaults the cutoff to DEFAULT_MIN_CONFIDENCE", () => {
-    const report = buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.74)], coverage: fullCoverage });
+    const report = buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.29)], coverage: fullCoverage });
     expect(report.minConfidence).toBe(DEFAULT_MIN_CONFIDENCE);
     expect(report.findings).toHaveLength(0);
     expect(report.suppressed.byReason["below-min-confidence"]).toBe(1);
