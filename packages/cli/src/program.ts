@@ -73,6 +73,14 @@ import {
   UnknownMissionTargetError,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
+import { FsMissionQueueStore } from "@jevitate/missions";
+import {
+  drainMissionQueue,
+  needsModel,
+  realQueuedMissionExecutor,
+  type DrainReport,
+  type QueuedMissionExecutor,
+} from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
 import { InvariantsFileError, loadInvariantFiles } from "./invariants-file.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
@@ -82,7 +90,8 @@ import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
-import { currentEngineInfo } from "./engine.js";
+import { currentEngineInfo, withEngine } from "./engine.js";
+import { setKillSwitchOutput } from "./kill-signal.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -102,6 +111,7 @@ import {
   runAuthorJourney,
   runCoverageMission,
   runAdversarialCliMission,
+  CLI_ADVERSARIAL_STRATEGIES,
   runFeatureCliMission,
   parseAssertionSpec,
   parseSuccessSpec,
@@ -186,6 +196,8 @@ export interface CliDeps {
   ai?: AiCliDeps;
   /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
   explore?: ExploreCliDeps;
+  /** Optional, additive: `mission run` wiring — tests inject the executor so no browser opens. */
+  missions?: { execute?: QueuedMissionExecutor };
   /** Optional, additive: `jevitate record` wiring (see record-api.ts). */
   record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
@@ -943,7 +955,7 @@ export function buildProgram(deps: CliDeps): Command {
           params: param,
           policy,
           selfHealer,
-        });
+        }).then((r) => withEngine(r));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1208,7 +1220,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...resolveSourceApiDeps(deps),
           runJourney: deps.sources?.runJourney ?? realResolvedJourneyRunner,
         };
-        const result = await runSourceJourney(apiDeps, { sourceName: name, journeyId, params: param });
+        const result = withEngine(await runSourceJourney(apiDeps, { sourceName: name, journeyId, params: param }));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1288,7 +1300,7 @@ export function buildProgram(deps: CliDeps): Command {
           iterationsPerActor: Number(iterations),
           seed: Number(seed),
           authorizedOrigins: authorizedOrigin,
-        });
+        }).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
           emitJson(program, envelope);
@@ -1509,6 +1521,11 @@ export function buildProgram(deps: CliDeps): Command {
       } & BrowserLaunchFlags>();
 
       const strategy = o.strategy ?? "goal";
+      // #120: a killed run prints what this command would have printed — the envelope (always, for
+      // the strategies that only ever emit one) or the bare result JSON — before it exits.
+      setKillSwitchOutput(
+        o.json || o.feature !== undefined || strategy === "adversarial" || strategy === "usability" ? "envelope" : "raw",
+      );
       const conversation = {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
         ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
@@ -1741,23 +1758,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(filing === undefined ? {} : { filing }),
             issueFiler,
             ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
-            strategies: [
-              // Form-aware misuse around submitting (#64): most app pages are forms.
-              "double-submit",
-              "boundary-submit",
-              "edit-cancel-save",
-              "navigate-away-unsaved",
-              "act-while-pending",
-              // Coverage: act on every target control once.
-              "exercise-controls",
-              "ordering-violation",
-              "repeat-rapid",
-              "boundary-input",
-              "contradictory-actions",
-              "nav-during-pending",
-              // Keep hunting on other routes (within the target's scope) after and between defects.
-              "visit-route",
-            ],
+            strategies: CLI_ADVERSARIAL_STRATEGIES,
             judgment: advJudge,
             generation: advGen,
             browserPortFactory: deps.explore?.browserPortFactory,
@@ -2006,7 +2007,7 @@ export function buildProgram(deps: CliDeps): Command {
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });
-        emitJson(program, ok(report));
+        emitJson(program, ok(withEngine(report)));
         process.exitCode = report.exitCode;
       } catch (err) {
         if (err instanceof VerifyFixInputError || err instanceof TargetConfigError) {
@@ -2259,7 +2260,7 @@ export function buildProgram(deps: CliDeps): Command {
             opened.push(close);
             return actor;
           },
-        });
+        }).then((r) => withEngine(r));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -2287,15 +2288,22 @@ export function buildProgram(deps: CliDeps): Command {
     .command("add <id>")
     .description("register an exploration mission target (UNPROMOTED — not usable by queue_exploration until promoted)")
     .option("--name <name>", "human-readable target name")
-    .option("--authorized-origin <origin>", "the single authorized exploration origin for this target")
+    .option("--authorized-origin <origin>", "the target's app origin (a bare http(s) origin); --base-url must be on it")
+    .option(
+      "--api-origin <origin>",
+      "a further origin the app talks to, e.g. its API on another origin (repeatable) — the queued-mission analogue of a second `explore --allow`",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--base-url <url>", "the base URL a mission starts navigation from")
     .option("--description <text>", "optional human-readable description")
     .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { name, authorizedOrigin, baseUrl, description, dir, json } = this.opts<{
+      const { name, authorizedOrigin, apiOrigin, baseUrl, description, dir, json } = this.opts<{
         name?: string;
         authorizedOrigin?: string;
+        apiOrigin: string[];
         baseUrl?: string;
         description?: string;
         dir?: string;
@@ -2309,7 +2317,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
-        const target = await addMissionTarget(ctx, { id, name, authorizedOrigin, baseUrl, description });
+        const target = await addMissionTarget(ctx, { id, name, authorizedOrigin, apiOrigins: apiOrigin, baseUrl, description });
         const envelope = ok(target);
         if (json) {
           emitJson(program, envelope);
@@ -2340,7 +2348,8 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           const out = program.configureOutput().writeOut;
           for (const t of targets) {
-            out?.(`${t.id}\t${t.name}\t${t.authorizedOrigin}${t.promoted ? "" : " (unpromoted)"}\n`);
+            const origins = [t.authorizedOrigin, ...(t.apiOrigins ?? [])].join(",");
+            out?.(`${t.id}\t${t.name}\t${origins}${t.promoted ? "" : " (unpromoted)"}\n`);
           }
           process.exitCode = 0;
         }
@@ -2372,6 +2381,101 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_MISSION_TARGET_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // `mission run` (#117) — drains the queue `queue_exploration` (MCP) fills: each queued mission runs
+  // through its strategy's CLI runner, its typed result lands in the recordings dir `jevitate mcp`
+  // reads, and its queue record moves queued → running → done (resultId) | failed, so
+  // `get_mission_result {id: missionId}` resolves it. `--once` (default) drains what is queued now
+  // and exits; `--watch` keeps polling.
+  withBrowserLaunchFlags(
+    mission
+      .command("run")
+      .description("run queued missions (queue_exploration) through their strategy's runner; get_mission_result {id: missionId} then reads the result"),
+  )
+    .option("--once", "drain the missions queued now, then exit (default)")
+    .option("--watch", "keep draining: poll the queue every --interval ms until interrupted")
+    .option("--interval <ms>", "--watch poll interval in ms (default 5000)", "5000")
+    .option("--dir <path>", "mission queue directory (default: ~/.jevitate/missions/queue)")
+    .option("--targets-dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--out <dir>", "where results are written (default: ~/.jevitate/recordings — where `jevitate mcp` reads them)")
+    .option("--real", "use live Jev + OpenRouter gateways for model-driven missions (requires keys)", false)
+    .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<
+        {
+          once?: boolean;
+          watch?: boolean;
+          interval: string;
+          dir?: string;
+          targetsDir?: string;
+          out?: string;
+          real?: boolean;
+          fakeAi?: boolean;
+          json?: boolean;
+        } & BrowserLaunchFlags
+      >();
+      if (o.once && o.watch) {
+        emitJson(program, fail("E_MISSION_RUN_ARGS", "--once and --watch are mutually exclusive"));
+        return;
+      }
+      const intervalMs = Number(o.interval);
+      if (!Number.isInteger(intervalMs) || intervalMs <= 0) {
+        emitJson(program, fail("E_MISSION_RUN_ARGS", `--interval must be a positive integer (got ${JSON.stringify(o.interval)})`));
+        return;
+      }
+      // Model-driven missions need a gateway selection; without one they stay queued (reported as
+      // skipped), never run against a silently-substituted fake. Feature missions are model-free.
+      let gatewayRefusal: string | undefined;
+      try {
+        await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false });
+      } catch (err) {
+        if (!(err instanceof MissingCredentialError || err instanceof GatewaySelectionError)) throw err;
+        gatewayRefusal = err.message;
+      }
+      const queue = new FsMissionQueueStore(o.dir ?? resolveDataDir(["missions", "queue"]));
+      const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
+      const execute =
+        deps.missions?.execute ??
+        realQueuedMissionExecutor({
+          outDir: o.out ?? resolveDataDir(["recordings"]),
+          gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
+          ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+          ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
+        });
+      const drainOnce = () =>
+        drainMissionQueue({
+          queue,
+          targets,
+          execute,
+          accepts: (m) => (gatewayRefusal !== undefined && needsModel(m) ? `needs a model gateway: ${gatewayRefusal}` : true),
+        });
+      const emit = (report: DrainReport) => {
+        const data = withEngine(report);
+        if (o.json) {
+          emitJson(program, ok(data));
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(data)}\n`);
+        }
+        // Every claimed mission ran (whatever its own outcome); 1 only when one could not run at all.
+        process.exitCode = report.ran.some((m) => m.status === "failed") ? 1 : 0;
+      };
+      try {
+        if (!o.watch) {
+          emit(await drainOnce());
+          return;
+        }
+        // --watch: one envelope per pass that ran something; interrupted by SIGINT/SIGTERM (the kill
+        // switch still writes a killed mission's partial result).
+        for (;;) {
+          const report = await drainOnce();
+          if (report.ran.length > 0) emit(report);
+          await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        }
+      } catch (err) {
+        emitJson(program, fail("E_MISSION_RUN", String(err instanceof Error ? err.message : err)));
       }
     });
 
@@ -2431,6 +2535,7 @@ export function buildProgram(deps: CliDeps): Command {
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
           recordingsDir: resolveDataDir(["recordings"]),
+          uxReportsDir: resolveDataDir(["ux-reports"]),
           inboxDir: resolveInboxDir(deps),
           credentialStore: aiStore,
           generationGateway,
@@ -2565,7 +2670,7 @@ export function buildProgram(deps: CliDeps): Command {
           missionTranscript,
           ...(missionTranscriptUnavailable !== undefined ? { missionTranscriptUnavailable } : {}),
         });
-        emitJson(program, ok(result));
+        emitJson(program, ok(withEngine(result)));
       } catch (err) {
         if (err instanceof UxAnalysisFailedError) {
           emitJson(program, fail("E_UX_ANALYSIS", err.message));

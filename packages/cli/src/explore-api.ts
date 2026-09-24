@@ -292,7 +292,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
@@ -620,7 +625,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
   // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -691,6 +701,28 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     await closeQuietly(session);
   }
 }
+
+/**
+ * The misuse strategies `explore --strategy adversarial` runs, in order — shared with the queue drain
+ * (`jevitate mission run`, #117) so a queued adversarial mission hunts exactly like the CLI's.
+ */
+export const CLI_ADVERSARIAL_STRATEGIES: readonly MisuseStrategy[] = [
+  // Form-aware misuse around submitting (#64): most app pages are forms.
+  "double-submit",
+  "boundary-submit",
+  "edit-cancel-save",
+  "navigate-away-unsaved",
+  "act-while-pending",
+  // Coverage: act on every target control once.
+  "exercise-controls",
+  "ordering-violation",
+  "repeat-rapid",
+  "boundary-input",
+  "contradictory-actions",
+  "nav-during-pending",
+  // Keep hunting on other routes (within the target's scope) after and between defects.
+  "visit-route",
+];
 
 /**
  * Options for the additive adversarial CLI mission. Mirrors `runExploration`'s
@@ -799,7 +831,12 @@ export async function runAdversarialCliMission(
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
@@ -958,7 +995,11 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+  });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({

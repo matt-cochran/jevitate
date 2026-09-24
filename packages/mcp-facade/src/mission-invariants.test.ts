@@ -73,12 +73,27 @@ describe("ticket #8 — queue_exploration invariant refusal contract", () => {
     expect(await queue.list()).toEqual([]);
   });
 
-  it("4. unsupported strategy value ('adversarial') refuses (zod error) — proves P2 mission types can't sneak through before their schema lands", async () => {
+  it("4. unsupported strategy value ('usability', 'induction') refuses (zod error) — only strategies a runner executes are queueable", async () => {
     const { targets, queue } = await buildDeps();
-    await expect(
-      queueExploration(targets, queue, { ...baseRequest, strategy: "adversarial" }),
-    ).rejects.toThrow();
+    for (const strategy of ["usability", "induction"]) {
+      await expect(queueExploration(targets, queue, { ...baseRequest, strategy })).rejects.toThrow();
+    }
+    // A goal-shaped request cannot be relabelled adversarial: its goal/success assertion are refused.
+    await expect(queueExploration(targets, queue, { ...baseRequest, strategy: "adversarial" })).rejects.toThrow();
     expect(await queue.list()).toEqual([]);
+  });
+
+  it("4b. coverage / adversarial / feature missions enqueue against a promoted target (#117)", async () => {
+    const { targets, queue } = await buildDeps();
+    const requests = [
+      { target: baseRequest.target, strategy: "coverage", route: "/thread/**" },
+      { target: baseRequest.target, strategy: "adversarial" },
+      { target: baseRequest.target, strategy: "feature", feature: "checkout" },
+    ];
+    for (const req of requests) {
+      await expect(queueExploration(targets, queue, req)).resolves.toMatchObject({ ok: true, status: "queued" });
+    }
+    expect((await queue.list()).map((m) => m.strategy).sort()).toEqual(["adversarial", "coverage", "feature"]);
   });
 
   it("5. budget above MISSION_BOUNDS_CEILING refuses (BudgetExceedsCeilingError), nothing written", async () => {

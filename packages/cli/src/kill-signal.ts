@@ -1,7 +1,10 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
+import type { UsageCounts } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { closeSharedBrowserPool } from "@jevitate/playwright";
-import { writeMissionResult } from "./mission-journal.js";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { ok } from "./envelope.js";
+import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { transcriptPathFor } from "./transcript-file.js";
 
 /**
@@ -33,7 +36,32 @@ export interface KillableMission {
    * `transcriptPathFor`/`resultPathFor` are derived from it.
    */
   readonly recordingPath: string;
+  /**
+   * Where the journal flushes the transcript, when it is NOT `transcriptPathFor(recordingPath)` — a
+   * usability run keys its transcript off its report (`usability-<stamp>.transcript.json`), not off
+   * its Recording (`usability-<stamp>.recording.json`) (#120).
+   */
+  readonly transcriptPath?: string;
+  /**
+   * The live step list (the journal's last flushed entries) — read in preference to the file, so a
+   * killed run reports every step it took even when the file lags or lives elsewhere (#120).
+   */
+  readonly transcript?: () => readonly TranscriptEntry[] | undefined;
+  /** The run's usage tracker: the tokens already spent are part of the killed run's result (#120). */
+  readonly usage?: { snapshot(): UsageCounts };
+  /**
+   * Whatever partial report the mission has so far (e.g. a usability run's observed screens and
+   * screenshots). Read synchronously on the signal; absent/throwing means no partial report.
+   */
+  readonly partialReport?: () => Record<string, unknown> | undefined;
 }
+
+/**
+ * What a killed run prints to stdout before exiting (#120): the `--json` envelope, the bare result
+ * (a non-`--json` explore prints its result as JSON), or nothing (a caller that owns stdout, e.g.
+ * the MCP server, or a library use). Set by the CLI command that armed the mission.
+ */
+export type KillSwitchOutput = "envelope" | "raw" | "none";
 
 const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } as const;
 type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
@@ -45,6 +73,10 @@ export interface KillSwitchDeps {
   readonly writeResult: (recordingPath: string, missionOutcome: string, exitCode: number, result: unknown) => string;
   readonly readTranscript: (transcriptPath: string) => { steps: number; transcript: readonly TranscriptEntry[] };
   readonly onSignal: (signal: KillSignal, handler: () => void) => void;
+  /** This build's identity, stamped on the killed run's result like every other result (#112). */
+  readonly engine?: () => EngineInfo;
+  /** SYNCHRONOUS stdout write — the process exits in the same turn, so nothing may be buffered. */
+  readonly writeStdout?: (text: string) => void;
 }
 
 /** Reads whatever the journal has already flushed; a run killed before its first step is 0 steps. */
@@ -66,11 +98,57 @@ const realDeps: KillSwitchDeps = {
   onSignal: (signal, handler) => {
     process.on(signal, handler);
   },
+  engine: currentEngineInfo,
+  writeStdout: (text) => {
+    writeSync(1, text);
+  },
 };
 
 let installed = false;
 let active: KillableMission | undefined;
 let terminating = false;
+let output: KillSwitchOutput = "none";
+const killedListeners = new Set<(killed: { resultPath: string; exitCode: number }) => void>();
+
+/** A getter that throws (or a missing one) yields `undefined` — a flush must never block the exit. */
+function safely<T>(read: (() => T) | undefined): T | undefined {
+  if (read === undefined) return undefined;
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/** The killed run's partial typed result: every field a finished run's result would carry that exists yet. */
+function partialResult(mission: KillableMission, signal: KillSignal, code: number, deps: KillSwitchDeps): Record<string, unknown> {
+  const transcriptPath = mission.transcriptPath ?? transcriptPathFor(mission.recordingPath);
+  // The live step list wins over the file (it is never behind it); the file is the fallback for a
+  // mission armed without a live reference.
+  const live = safely(mission.transcript);
+  const flushed = live === undefined ? deps.readTranscript(transcriptPath) : undefined;
+  const transcript = live ?? flushed?.transcript ?? [];
+  const steps = live === undefined ? (flushed?.steps ?? 0) : live.length;
+  const engine = safely(deps.engine);
+  const usage = safely(() => mission.usage?.snapshot());
+  const report = safely(mission.partialReport);
+  return {
+    outcome: "inconclusive",
+    missionOutcome: "inconclusive",
+    reason: `interrupted by ${signal} after ${steps} step${steps === 1 ? "" : "s"}`,
+    stop: "terminated",
+    signal,
+    steps,
+    exitCode: code,
+    recordingPath: mission.recordingPath,
+    transcriptPath,
+    resultPath: resultPathFor(mission.recordingPath),
+    transcript,
+    ...(engine === undefined ? {} : { engine }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(report === undefined ? {} : { partialReport: report }),
+  };
+}
 
 /**
  * Synchronous by design (never `await`s before `deps.exit`): a killed mission's OWN in-flight
@@ -95,21 +173,32 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
   terminating = true;
   const mission = active;
   if (mission !== undefined) {
-    const transcriptPath = transcriptPathFor(mission.recordingPath);
-    const { steps, transcript } = deps.readTranscript(transcriptPath);
-    const partial = {
-      outcome: "inconclusive",
-      reason: `interrupted by ${signal} after ${steps} step${steps === 1 ? "" : "s"}`,
-      stop: "terminated",
-      signal,
-      recordingPath: mission.recordingPath,
-      transcriptPath,
-      transcript,
-    };
+    let partial: Record<string, unknown> | undefined;
+    let resultPath: string | undefined;
     try {
-      deps.writeResult(mission.recordingPath, "inconclusive", code, partial);
+      partial = partialResult(mission, signal, code, deps);
+      resultPath = deps.writeResult(mission.recordingPath, "inconclusive", code, partial);
     } catch {
       // Best-effort: a failed flush must never keep the process from honoring the signal.
+    }
+    // Whoever ran the mission (e.g. the queue drain, #117) records where its result went — synchronously.
+    if (resultPath !== undefined) {
+      for (const listener of killedListeners) {
+        try {
+          listener({ resultPath, exitCode: code });
+        } catch {
+          // Best-effort, like the flush.
+        }
+      }
+    }
+    // A `--json` caller gets its envelope even from a killed run (#120) — written synchronously,
+    // before the exit below.
+    if (partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
+      try {
+        deps.writeStdout(`${JSON.stringify(output === "envelope" ? ok(partial) : partial)}\n`);
+      } catch {
+        // Best-effort, like the flush: stdout may already be gone (a closed pipe).
+      }
     }
   }
   deps.closeBrowsers().catch(() => {
@@ -158,9 +247,31 @@ export function armMissionKillSwitch(mission: KillableMission, deps: KillSwitchD
   };
 }
 
+/**
+ * What a killed run prints to stdout (#120). The CLI command that runs a mission sets it from its
+ * own flags (`--json` → the envelope) before arming; the default prints nothing.
+ */
+export function setKillSwitchOutput(mode: KillSwitchOutput): void {
+  output = mode;
+}
+
+/**
+ * Registers a SYNCHRONOUS listener told where a killed mission's partial result was written, just
+ * before the process exits — e.g. the queue drain marks the running mission done with that result
+ * instead of leaving it `running` forever. Returns the unregister function.
+ */
+export function onMissionKilled(listener: (killed: { resultPath: string; exitCode: number }) => void): () => void {
+  killedListeners.add(listener);
+  return () => {
+    killedListeners.delete(listener);
+  };
+}
+
 /** Test seam: resets all module state (a real run never needs this — one process, one exit). */
 export function __resetKillSwitchForTests(): void {
   installed = false;
   active = undefined;
   terminating = false;
+  output = "none";
+  killedListeners.clear();
 }
