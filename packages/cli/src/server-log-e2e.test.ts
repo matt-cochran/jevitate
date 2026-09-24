@@ -91,7 +91,10 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       const parsed = JSON.parse(lines.join(""));
       expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       const result = parsed.data;
-      expect(result.outcome).toBe("succeeded");
+      // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1) even though the
+      // goal's own success assertion held — never silently "succeeded".
+      expect(result.outcome).toBe("defects-found");
+      expect(result.exitCode).toBe(1);
       expect(result.transcript.map((e: { op: string | null }) => e.op)).toEqual(["click", "click", "done"]);
 
       // Evidence: WARN attached to step 1 (the warn button), ERROR to step 2 (the error button).
@@ -176,6 +179,68 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       expect(result.serverLogs.byLevel.warn).toBe(1);
       expect(result.serverLogs.byLevel.error ?? 0).toBe(0);
       expect(result.serverLogs.oracleOk).toBe(true); // the source WAS readable — it just saw no error
+      // #142 follow-up: a demonstrably-readable, silent oracle is genuine evidence — stays clean.
+      expect(result.outcome).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+
+      await rm(outDir, { recursive: true, force: true });
+    },
+    180_000,
+  );
+
+  it(
+    "a dead log source with --log-defect never lets an otherwise-clean run read as clean (#142 exit-code follow-up)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-server-log-dead-out-"));
+      // Deliberately never written to: the file never appears during the run or its drain window.
+      const logFile = join(await mkdtemp(join(tmpdir(), "jevitate-server-log-dead-file-")), "never-appears.log");
+
+      const lines: string[] = [];
+      const program = buildProgram({
+        profiles: new ProfileManager("/unused"),
+        explore: {
+          // No click needed: the seed page already satisfies the success check.
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway({}),
+        },
+      });
+      program.configureOutput({ writeOut: (s) => lines.push(s) });
+      program.exitOverride();
+
+      await program.parseAsync(
+        [
+          "explore",
+          "--url",
+          `${site.url}/server-log-mission/page`,
+          "--goal",
+          "do nothing",
+          "--success",
+          "urlIncludes:/server-log-mission/page",
+          "--allow",
+          site.url,
+          "--log-source",
+          `file:${logFile}`,
+          "--log-defect",
+          "error",
+          "--server-log-drain-ms",
+          "300",
+          "--out",
+          outDir,
+          "--json",
+        ],
+        { from: "user" },
+      );
+
+      const parsed = JSON.parse(lines.join(""));
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+      const result = parsed.data;
+      expect(result.serverLogDefects ?? []).toHaveLength(0);
+      expect(result.serverLogs.oracleOk).toBe(false);
+      expect(result.serverLogs.sources[0].linesRead).toBe(0);
+      // A run this --log-defect oracle never demonstrably watched is inconclusive, not clean.
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.exitCode).toBe(2);
+      expect(result.reason).toMatch(/--log-defect oracle could not run/);
 
       await rm(outDir, { recursive: true, force: true });
     },

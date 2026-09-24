@@ -1,4 +1,5 @@
 import { redactText } from "@jevitate/ai-core";
+import { worstOutcome, type MissionOutcome } from "@jevitate/domain";
 import type { TranscriptEntry } from "@jevitate/explore";
 import {
   closeLogSources,
@@ -361,4 +362,20 @@ function recordingStepIndexFor(transcript: readonly TranscriptEntry[], uptoStep:
 /** Parses `--log-defect` values, failing closed on the first bad one. */
 export function parseLogDefectSpecs(raw: readonly string[]): LogDefectMatcher[] {
   return raw.map(parseLogDefectSpec);
+}
+
+/**
+ * Folds a server-log correlation result into an already-computed `MissionOutcome` (#142, follow-up
+ * on the exit-code requirement): a found `server-log` defect is at least `defects-found` — via
+ * `worstOutcome`, so it never DOWNGRADES a worse outcome (hang/crashed/inconclusive already proves
+ * more, or the same, than a defect). An unreadable `--log-defect` oracle (`oracleOk: false`) turns
+ * an otherwise-`clean` run `inconclusive` — its absence of defects proves nothing when the source
+ * that would have caught them was never demonstrably read. `undefined` (no `--log-source`) is a
+ * complete no-op.
+ */
+export function applyServerLogOutcome(outcome: MissionOutcome, run: ServerLogRuntimeResult | undefined): MissionOutcome {
+  if (run === undefined) return outcome;
+  if (run.defects.length > 0) return worstOutcome(outcome, "defects-found");
+  if (!run.summary.oracleOk && outcome === "clean") return "inconclusive";
+  return outcome;
 }

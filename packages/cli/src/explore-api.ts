@@ -64,7 +64,13 @@ import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
-import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import {
+  applyServerLogOutcome,
+  openServerLogRuntime,
+  type ServerLogDefect,
+  type ServerLogRuntimeResult,
+  type ServerLogsSummary,
+} from "./log-correlation.js";
 import type { LogSourceSpec } from "./log-sources.js";
 import type { LogDefectMatcher } from "./log-lines.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
@@ -307,6 +313,33 @@ export interface RunExplorationResult {
   readonly fixtures?: MissionFixtureResult;
 }
 
+/** Outcomes that already mean the run itself broke or hung — a server-log finding never downgrades
+ *  (or, for the oracle-unreadable case, elevates) one of these; they already prove more, or the same. */
+const BROKEN_GOAL_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["inconclusive", "crashed", "hang", "intermittent"]);
+
+/**
+ * Folds a server-log correlation result into the goal mission's own `GoalBasedOutcome` (#142): a
+ * found `server-log` defect makes an otherwise-not-broken run `defects-found`; an unreadable
+ * `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` — mirrors
+ * `applyServerLogOutcome` (the `MissionOutcome` version the other three builders use), but
+ * `GoalBasedOutcome` has its own extra values (`succeeded`/`exhausted`/`blocked`).
+ */
+function applyServerLogGoalOutcome(outcome: GoalBasedOutcome, run: ServerLogRuntimeResult | undefined): GoalBasedOutcome {
+  if (run === undefined) return outcome;
+  if (run.defects.length > 0 && !BROKEN_GOAL_OUTCOMES.has(outcome)) return "defects-found";
+  if (!run.summary.oracleOk && outcome === "succeeded") return "inconclusive";
+  return outcome;
+}
+
+/** One-line reason for a server-log-driven outcome change (`reason` is unset otherwise for `succeeded`). */
+function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, run: ServerLogRuntimeResult | undefined): string {
+  if (newOutcome === "defects-found") {
+    const n = run?.defects.length ?? 0;
+    return `${n} server-log defect${n === 1 ? "" : "s"} found (--log-defect)`;
+  }
+  return "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
+}
+
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
@@ -397,6 +430,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       missionFixture === undefined ? mission.recording : { ...mission.recording, fixture: recordingFixture(missionFixture.record) };
     // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
+    // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1); an unreadable
+    // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
+    const goalOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
     const engine = currentEngineInfo();
@@ -423,7 +459,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const result: RunExplorationResult = {
       issues,
       timing: mission.run.timing,
-      outcome: mission.outcome,
+      outcome: goalOutcome,
       runOutcome: mission.run.outcome,
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       assertionPassed: mission.assertionPassed,
@@ -435,7 +471,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       transcript: serverLogRun?.transcript ?? mission.transcript,
-      exitCode: goalExitCode(mission.outcome),
+      exitCode: goalExitCode(goalOutcome),
       resultPath,
       target: {
         seedUrl: opts.url,
@@ -459,13 +495,17 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
             },
           }),
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
-      ...(mission.reason === undefined ? {} : { reason: mission.reason }),
+      ...(goalOutcome === mission.outcome
+        ? mission.reason === undefined
+          ? {}
+          : { reason: mission.reason }
+        : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
-    writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
+    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result);
     return result;
   } finally {
     disarmKillSwitch();
@@ -787,10 +827,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
           ? "inconclusive"
           : null;
     const thin = bare === null && found === 0 && !result.coverage.sufficiency.sufficient;
-    const missionOutcome: MissionOutcome = combineOutcomes([
+    const preLogOutcome: MissionOutcome = combineOutcomes([
       bare ?? (thin ? "inconclusive" : found > 0 ? "defects-found" : "clean"),
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
+    // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
+    // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
+    const missionOutcome = applyServerLogOutcome(preLogOutcome, serverLogRun);
     const coverageFailure: MissionFailure | undefined = thin
       ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${result.coverage.sufficiency.shortfalls.join("; ")}` }
       : undefined;
@@ -1012,7 +1055,10 @@ export async function runAdversarialCliMission(
     const transcript = (serverLogRun?.transcript ?? outcome.transcript) as TranscriptEntry[];
     journal.writeRecording(outcome.recording);
     journal.writeTranscript(transcript);
-    const exitCode = missionExitCode(outcome.outcome);
+    // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
+    // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
+    const missionOutcome = applyServerLogOutcome(outcome.outcome, serverLogRun);
+    const exitCode = missionExitCode(missionOutcome);
     const resultPath = resultPathFor(journal.recordingPath);
     const engine = currentEngineInfo();
     const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page), engine);
@@ -1032,6 +1078,7 @@ export async function runAdversarialCliMission(
     );
     const result = {
       ...outcome,
+      outcome: missionOutcome,
       transcript,
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
@@ -1049,7 +1096,7 @@ export async function runAdversarialCliMission(
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
-    return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
+    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result) };
   } finally {
     disarmKillSwitch();
     await serverLog?.abort();
@@ -1211,7 +1258,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       : undefined;
     // A declared-invariant violation (#86) is a hard defect even on a thin run: it was observed.
     const invariantDefects = result.invariantDefects?.length ?? 0;
-    const missionOutcome: MissionOutcome = combineOutcomes([
+    const preLogOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed"
         ? "crashed"
         : result.outcome === "scope-unreachable" || result.outcome === "stalled"
@@ -1223,6 +1270,9 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
               : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
+    // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
+    // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
+    const missionOutcome = applyServerLogOutcome(preLogOutcome, serverLogRun);
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
       ...result,
