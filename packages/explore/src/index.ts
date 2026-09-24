@@ -24,6 +24,9 @@ export * from "./adversarial/input-strategy.js";
 export * from "./adversarial/defect-oracle.js";
 export * from "./adversarial/misuse.js";
 export * from "./adversarial/defect-fingerprint.js";
+export * from "./adversarial/form-misuse.js";
+export * from "./adversarial/scope.js";
+export * from "./adversarial/run-coverage.js";
 export * from "./verify-fix.js";
 export * from "./missions/adversarial.js";
 

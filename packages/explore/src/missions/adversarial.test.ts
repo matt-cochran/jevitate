@@ -34,10 +34,14 @@ describe("runAdversarialMission — clean run", () => {
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
         bounds: { maxDecisions: 4 },
-        strategies: ["ordering-violation", "repeat-rapid", "boundary-input"],
+        strategies: ["exercise-controls", "double-submit", "ordering-violation", "boundary-input"],
       });
       expect(result.outcome).toBe("clean");
       expect(result.defects).toEqual([]);
+      // Clean is earned: the run exercised the target's controls and submitted its form.
+      expect(result.coverage.sufficient).toBe(true);
+      expect(result.coverage.forms).toEqual({ found: 1, submitted: 1 });
+      expect(result.coverage.controls.exercised).toBe(result.coverage.controls.total);
     },
     120_000,
   );
@@ -139,7 +143,7 @@ describe("runAdversarialMission — a legit 4xx during misuse is NOT a defect (#
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
         bounds: { maxDecisions: 4 },
-        strategies: ["ordering-violation"],
+        strategies: ["exercise-controls", "double-submit", "ordering-violation"],
         userInvariant: async (page) => {
           await page.evaluate(async () => {
             await fetch("/adversarial/notfound").catch(() => undefined);
@@ -148,6 +152,40 @@ describe("runAdversarialMission — a legit 4xx during misuse is NOT a defect (#
         },
       });
       expect(result.outcome).toBe("clean");
+    },
+    120_000,
+  );
+});
+
+describe("runAdversarialMission — a run that proved nothing is never clean (#64)", () => {
+  test(
+    "a run that never submitted the form and touched little of the page is inconclusive, with its coverage",
+    async () => {
+      const result = await runAdversarialMission({
+        page: session.page,
+        actor,
+        judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } }),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}/login`,
+        allowlist: [site.url],
+        bounds: { maxDecisions: 3 },
+        strategies: ["ordering-violation", "repeat-rapid", "nav-during-pending"],
+      });
+      expect(result.defects).toEqual([]);
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("insufficient-coverage");
+      expect(result.coverage).toMatchObject({
+        sufficient: false,
+        controls: { total: 2, exercised: 0, ratio: 0 },
+        forms: { found: 1, submitted: 0 },
+      });
+      expect(result.coverage.shortfalls).toEqual([
+        "no target control was exercised",
+        "0/2 target controls exercised (0%), below the 25% threshold",
+        "no form was submitted (1 found)",
+      ]);
+      expect(result.coverage.strategies["ordering-violation"]).toEqual({ applied: 0, foundNothing: 1 });
+      expect(result.coverage.strategies["nav-during-pending"]).toEqual({ applied: 1, foundNothing: 0 });
     },
     120_000,
   );
@@ -193,8 +231,9 @@ describe("runAdversarialMission — model verdict is advisory only (guardrail #4
         seedUrl: `${site.url}/login`,
         allowlist: [site.url],
         bounds: { maxDecisions: 4 },
-        strategies: ["boundary-input"],
+        strategies: ["boundary-input", "exercise-controls", "double-submit"],
       });
+      expect(result.defects).toEqual([]);
       expect(result.outcome).toBe("clean");
     },
     120_000,

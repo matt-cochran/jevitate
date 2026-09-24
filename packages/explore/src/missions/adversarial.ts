@@ -39,7 +39,13 @@ import {
 } from "../adversarial/defect-fingerprint.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
-import { controlKey, planMisuseEpisode, type LastAction, type MisuseStep } from "../adversarial/form-misuse.js";
+import { planMisuseEpisode, type LastAction, type MisuseStep } from "../adversarial/form-misuse.js";
+import {
+  CoverageTracker,
+  resolveCoverageThresholds,
+  type AdversarialCoverage,
+  type CoverageThresholds,
+} from "../adversarial/run-coverage.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 
 /**
@@ -147,6 +153,8 @@ export interface AdversarialOutcome {
   readonly timing: TimingSummary;
   /** The target scope and every departure from it. */
   readonly scope: AdversarialScope;
+  /** What the run exercised on its target, and whether that was enough for silence to mean clean. */
+  readonly coverage: AdversarialCoverage;
 }
 
 export interface AdversarialMissionParams {
@@ -200,6 +208,12 @@ export interface AdversarialMissionParams {
    * always the start URL's route and everything under it; these add to it.
    */
   readonly routeGlobs?: readonly string[];
+  /**
+   * How much of the target a run must exercise before "found nothing" may be reported `clean`.
+   * Default `DEFAULT_COVERAGE_THRESHOLDS` (25% of the target's controls, and a submitted form when
+   * there is one). Below them a silent run is `inconclusive`, with its coverage attached.
+   */
+  readonly coverageThresholds?: Partial<CoverageThresholds>;
 }
 
 /** One time the run left its target scope (and was reset to the start URL). */
@@ -281,6 +295,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const inScope = scopePredicate(params.allowlist, routeGlobs);
   const departures: ScopeDeparture[] = [];
   let outOfScopeSteps = 0;
+  const thresholds = resolveCoverageThresholds(params.coverageThresholds);
+  const cov = new CoverageTracker(inScope);
 
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
   const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
@@ -328,9 +344,18 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const recordingFailure: MissionFailure | undefined = finished.ok
       ? undefined
       : { kind: "exception", message: `recording rejected: ${finished.reason}` };
-    const finalFailure = failure ?? recordingFailure;
+    const coverage = cov.report(thresholds, outOfScopeSteps);
+    // A run that found nothing only means something if it tried: below the coverage thresholds a
+    // silent run proved nothing about its target, so it is `inconclusive` — never `clean`.
+    const thin = outcome === "clean" && !coverage.sufficient;
+    const coverageFailure: MissionFailure | undefined = thin
+      ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${coverage.shortfalls.join("; ")}` }
+      : undefined;
+    const finalFailure = failure ?? recordingFailure ?? coverageFailure;
+    const honest: MissionOutcome = thin ? "inconclusive" : outcome;
     return {
-      outcome: finished.ok ? outcome : "crashed",
+      coverage,
+      outcome: finished.ok ? honest : "crashed",
       stop: finished.ok ? stop : "crashed",
       defects: [...defects.values()].map((d) => freeze(d, later)),
       hangs: [...hangs.values()],
@@ -646,8 +671,6 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     let strategySteps = 0;
     let idleStreak = 0;
     const visitedLinks = new Set<string>();
-    /** Target controls acted on (by descriptor key) — the planners prefer the ones not tried yet. */
-    const exercised = new Set<string>();
     /** How many episodes each strategy has run (rotates its form, field and value). */
     const rounds = new Map<MisuseStrategy, number>();
     let stop: AdversarialStop | null = null;
@@ -789,17 +812,19 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       let stepSnap = snap;
       let stepTiming = snapTiming;
       snapTiming = undefined;
+      cov.observe(snap);
       const episode = planMisuseEpisode({
         snapshot: snap,
         strategy,
         round,
         last,
         visitedLinks,
-        exercised,
+        exercised: cov.exercisedKeys,
         inScope,
         rng: Math.random,
       });
 
+      cov.strategy(strategy, episode !== null);
       if (episode === null) {
         idleStreak += 1;
         // Independent oracle — runs EVERY step, even when a strategy chose no action: the user
@@ -833,7 +858,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         const { result, value } = await execute(s);
         actions += 1;
         if (result.ok) recordAction(s, value, at);
-        if (result.ok && s.control !== null) exercised.add(controlKey(s.control));
+        if (result.ok) cov.acted(stepSnap.url, s.control, s.submitsForm);
         if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
         last = { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
         // Evidence for "act while the submit is pending": how many requests the action left in flight.

@@ -76,7 +76,7 @@ clean.
 |---|---|---|
 | `clean` | 0 | the run finished its budget and found nothing (goal mission: the success assertion held) |
 | `defects-found` | 1 | at least one confirmed defect (goal mission: the success assertion did not hold) |
-| `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash) |
+| `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash), or an adversarial run exercised too little of its target to call its silence clean |
 | `hang` | 3 | the app under test hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
@@ -94,6 +94,45 @@ jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.j
 ```
 
 The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
+
+### Adversarial scope, form misuse and coverage
+
+An adversarial run is **scoped to its target**: the start URL's route and everything
+under it, plus any `--route <glob>` you add (`*` is any run of characters within one
+path segment, `**` any number of segments; the path is matched, the query is not).
+When an action lands outside the scope, the run records the departure (the step, the
+URL and what was acted on), resets to the start URL in a fresh page and keeps hunting
+there. Steps that land out of scope are counted separately and never count as coverage.
+A start URL that does not stay in scope (for example, one that redirects to a login
+page) ends `inconclusive`.
+
+Most pages are forms, so the run looks for them: fields plus a Save / Submit control
+(from the page's own `<form>` and submit buttons, or a Save-like button where the page
+has no `<form>`). It then tries misuse around submitting:
+
+- a double submit;
+- a submit with boundary or invalid values (empty, edge, long, unicode, invalid);
+- edit, then Cancel, then Save;
+- a reload with unsaved edits;
+- acting again while the save request is still pending.
+
+It also acts once on every other control on the target. Password fields, file inputs
+and log-out controls are never targets.
+
+Every adversarial result reports **coverage**:
+
+- the target controls exercised out of the total;
+- the forms found and submitted;
+- per strategy, how often it applied and how often it found nothing to do;
+- the out-of-scope steps.
+
+A run that found nothing is `clean` only if it also tried. By default it must have
+exercised at least **25%** of the target's controls
+(`--min-control-coverage <0..1>`) and, when the target has a form, submitted one
+(`--no-require-form-submit` turns that off). Whatever the thresholds, a run that
+exercised no control at all is never clean. Below the thresholds the outcome is
+`inconclusive` (exit 2), with the coverage and the reasons in `coverage.shortfalls`.
+The CLI's JSON result and the MCP `get_mission_result` both carry `coverage`.
 
 ### Hangs
 

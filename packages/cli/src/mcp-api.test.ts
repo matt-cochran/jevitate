@@ -350,6 +350,16 @@ describe("mcp-api get_mission_result — the typed mission verdict over MCP (own
     expect(crashed.body).toMatchObject({ status: "crashed", exitCode: 2, isError: true });
   });
 
+  it("surfaces an adversarial run's coverage next to its status (an inconclusive low-coverage run)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-mcp-results-"));
+    const { writeMissionResult } = await import("./mission-journal.js");
+    const coverage = { sufficient: false, shortfalls: ["no form was submitted (1 found)"], controls: { total: 8, exercised: 1, ratio: 0.125 } };
+    writeMissionResult(join(dir, "adversarial-2026-09-24T00-00-00-000Z.json"), "inconclusive", 2, { coverage });
+    const thin = await call({ ...baseDeps, recordingsDir: dir }, { id: "adversarial-2026-09-24T00-00-00-000Z" });
+    expect(thin.isError).toBe(true);
+    expect(thin.body).toMatchObject({ status: "inconclusive", exitCode: 2, coverage });
+  });
+
   it("accepts an id only — never a path — and reports unknown ids as not_found", async () => {
     const dir = mkdtempSync(join(tmpdir(), "jev-mcp-results-"));
     const traversal = await call({ ...baseDeps, recordingsDir: dir }, { id: "../../etc/passwd" });

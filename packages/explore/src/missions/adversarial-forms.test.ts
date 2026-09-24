@@ -232,3 +232,56 @@ describe("adversarial — scope containment (#64)", () => {
     180_000,
   );
 });
+
+describe("adversarial — coverage and an honest outcome (#64)", () => {
+  it(
+    "a low-coverage run on the form is inconclusive with its coverage attached, never clean",
+    async () => {
+      const result = await huntProfile(["boundary-input"], { bounds: { maxDecisions: 2 } });
+      expect(result.defects).toEqual([]);
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("insufficient-coverage");
+      expect(result.coverage.sufficient).toBe(false);
+      expect(result.coverage.controls.exercised).toBe(1);
+      expect(result.coverage.controls.total).toBeGreaterThanOrEqual(6);
+      expect(result.coverage.forms).toEqual({ found: 1, submitted: 0 });
+      expect(result.coverage.shortfalls).toEqual(
+        expect.arrayContaining([expect.stringMatching(/^1\/\d+ target controls exercised/), "no form was submitted (1 found)"]),
+      );
+    },
+    180_000,
+  );
+
+  it(
+    "a run with the default form strategies covers the target and reports clean, with its coverage",
+    async () => {
+      const result = await huntProfile(
+        ["double-submit", "boundary-submit", "edit-cancel-save", "navigate-away-unsaved", "act-while-pending", "exercise-controls"],
+        { bounds: { maxDecisions: 12 }, openFreshSession: freshSession },
+      );
+      expect(result.defects).toEqual([]);
+      expect(result.outcome).toBe("clean");
+      expect(result.coverage.sufficient).toBe(true);
+      expect(result.coverage.forms.submitted).toBe(1);
+      expect(result.coverage.controls.ratio).toBeGreaterThanOrEqual(0.25);
+      expect(result.coverage.strategies["double-submit"]?.applied).toBeGreaterThan(0);
+      expect(result.coverage.outOfScopeSteps).toBe(result.scope.outOfScopeSteps);
+    },
+    180_000,
+  );
+
+  it(
+    "thresholds are configurable: a stricter ratio turns the same thin run inconclusive",
+    async () => {
+      const result = await huntProfile(["exercise-controls"], {
+        bounds: { maxDecisions: 3 },
+        routeGlobs: ["/"],
+        coverageThresholds: { minControlRatio: 0.9, requireFormSubmit: false },
+      });
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.coverage.thresholds).toEqual({ minControlRatio: 0.9, requireFormSubmit: false });
+      expect(result.coverage.shortfalls).toEqual([expect.stringMatching(/below the 90% threshold$/)]);
+    },
+    180_000,
+  );
+});

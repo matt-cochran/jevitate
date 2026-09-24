@@ -44,7 +44,12 @@ import {
   type OpenRouterCall,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
+import {
+  FixtureNotFoundError,
+  UnauthorizedExploreTargetError,
+  resolveCoverageThresholds,
+  type CoverageThresholds,
+} from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
@@ -1342,9 +1347,19 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
+    .option(
+      "--min-control-coverage <ratio>",
+      "adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive",
+    )
+    .option(
+      "--no-require-form-submit",
+      "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{
+        minControlCoverage?: string;
+        requireFormSubmit: boolean;
         fileIssues?: boolean;
         issueRepo?: string;
         hangReplays?: string;
@@ -1531,6 +1546,16 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
 
+        let coverageThresholds: CoverageThresholds;
+        try {
+          coverageThresholds = resolveCoverageThresholds({
+            ...(o.minControlCoverage === undefined ? {} : { minControlRatio: Number(o.minControlCoverage) }),
+            requireFormSubmit: o.requireFormSubmit,
+          });
+        } catch (err) {
+          emitJson(program, fail("E_EXPLORE_ARGS", String(err instanceof Error ? err.message : err)));
+          return;
+        }
         const advBounds: Record<string, number> = {};
         if (o.maxActions !== undefined) advBounds.maxActions = Number(o.maxActions);
         if (o.maxDecisions !== undefined) advBounds.maxDecisions = Number(o.maxDecisions);
@@ -1540,6 +1565,7 @@ export function buildProgram(deps: CliDeps): Command {
             seedUrl: o.url,
             allowlist: advAllowlist,
             ...(o.route.length > 0 ? { routeGlobs: o.route } : {}),
+            coverageThresholds,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(filing === undefined ? {} : { filing }),

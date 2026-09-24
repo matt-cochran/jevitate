@@ -163,6 +163,16 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS" } });
   });
 
+  it("adversarial: refuses a --min-control-coverage outside 0..1 before any browser opens", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--strategy", "adversarial", "--url", "http://127.0.0.1:3000/login", "--fake-ai", "--min-control-coverage", "2", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("between 0 and 1") } });
+  });
+
   it("fails on a malformed --success spec", async () => {
     const { program, lines } = newProgram();
     await program.parseAsync(

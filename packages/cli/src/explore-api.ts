@@ -24,6 +24,7 @@ import {
   type FeatureRunResult,
   type TranscriptEntry,
   type RunOutcome,
+  type CoverageThresholds,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -593,6 +594,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly target?: TargetConfig;
   /** Extra in-scope route globs (`--route`); the start URL's route is always in scope. */
   readonly routeGlobs?: readonly string[];
+  /** Coverage a silent run needs to be `clean` (`--min-control-coverage`, `--no-require-form-submit`). */
+  readonly coverageThresholds?: Partial<CoverageThresholds>;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -655,6 +658,7 @@ export async function runAdversarialCliMission(
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
+      ...(opts.coverageThresholds === undefined ? {} : { coverageThresholds: opts.coverageThresholds }),
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
       ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
