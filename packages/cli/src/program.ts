@@ -59,7 +59,7 @@ import {
   type SuccessCheck,
 } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
-import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
+import { CastActor, BrowseTheWeb, BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
@@ -87,6 +87,24 @@ import { InvariantsFileError, loadInvariantFiles } from "./invariants-file.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
+import {
+  buildMissionFixtures,
+  checkSetupRefs,
+  checkUrlRefOrigin,
+  fixtureSetupFailedResult,
+  regressionFixtures,
+  withFixtureFlags,
+  type FixtureFlags,
+} from "./fixture-cli.js";
+import {
+  FixtureSetupError,
+  FixtureSpecError,
+  SETUP_REF,
+  UnboundSetupRefError,
+  rebindReplayNavigation,
+  substituteSetupRefs,
+  type MissionFixtures,
+} from "./mission-fixtures.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
@@ -933,8 +951,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  journey
-    .command("run <id>")
+  withFixtureFlags(journey.command("run <id>"))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -952,6 +969,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
+      const fixtureFlags = this.opts<FixtureFlags>();
       const { dir, param, storageState, selfHeal, real, fakeAi, json } = this.opts<{
         dir?: string;
         param: Record<string, string>;
@@ -1009,6 +1027,16 @@ export function buildProgram(deps: CliDeps): Command {
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
           ...(storageState !== undefined ? { storageState } : {}),
+          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
+          fixtures: (site) => {
+            const fx = buildMissionFixtures(fixtureFlags, {
+              allowlist: [site],
+              baseUrl: site,
+              ...(storageState !== undefined ? { storageState } : {}),
+            });
+            checkSetupRefs({ "--param": Object.values(param) }, fx);
+            return fx;
+          },
         }).then((r) => withEngine(r));
         const envelope = ok(result);
         if (json) {
@@ -1025,6 +1053,15 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
+        } else if (err instanceof FixtureSetupError) {
+          // Never run on unknown state: inconclusive, a configuration error (exit 2).
+          emitJson(
+            program,
+            ok(withEngine({ outcome: "inconclusive", reason: err.message, failure: { kind: "configuration", message: err.message }, attribution: "configuration" })),
+          );
+          process.exitCode = 2;
+        } else if (err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
+          emitJson(program, fail(err.code, err.message));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
         } else {
@@ -1435,10 +1472,12 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  withBrowserLaunchFlags(
-    program
-      .command("explore")
-      .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+  withFixtureFlags(
+    withBrowserLaunchFlags(
+      program
+        .command("explore")
+        .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+    ),
   )
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option(
@@ -1684,7 +1723,7 @@ export function buildProgram(deps: CliDeps): Command {
         fakeAi?: boolean;
         out?: string;
         json?: boolean;
-      } & BrowserLaunchFlags>();
+      } & BrowserLaunchFlags & FixtureFlags>();
 
       const strategy = o.strategy ?? "goal";
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
@@ -1826,6 +1865,13 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail(err.code, err.message));
           return;
         }
+      }
+
+      // Mission fixtures (#140/#144) run around the goal loop and its replays only.
+      const fixtureFlagsGiven = o.fixtures !== undefined || o.before !== undefined || o.after !== undefined;
+      if (fixtureFlagsGiven && (o.feature !== undefined || strategy !== "goal")) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal"));
+        return;
       }
 
       // Additive coverage/exploratory strategy: proof-by-induction state coverage.
@@ -2118,6 +2164,25 @@ export function buildProgram(deps: CliDeps): Command {
       }
       const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
       const allowlist = resolveExploreAllowlist(o.url, o.allow);
+      // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
+      // browser or request; the setup itself runs just before the mission (below).
+      let fx: MissionFixtures | undefined;
+      try {
+        checkUrlRefOrigin(o.url);
+        fx = buildMissionFixtures(o, {
+          allowlist,
+          baseUrl: o.url.replace(SETUP_REF, "0"),
+          ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
+          secretFields,
+          secrets: o.secret,
+          ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
+        });
+        checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success }, fx);
+      } catch (err) {
+        if (!(err instanceof FixtureSpecError || err instanceof UnboundSetupRefError)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
       const bounds: Record<string, number> = {};
       if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
       if (o.maxDecisions !== undefined) bounds.maxDecisions = Number(o.maxDecisions);
@@ -2136,11 +2201,33 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
 
+      let url = o.url;
+      let goal = o.goal;
+      if (fx !== undefined) {
+        // Never run the mission on unknown state: a failed setup ends the run inconclusive (a
+        // configuration error), after restoring whatever the partial setup created.
+        try {
+          await fx.setup();
+          const b = fx.bindings();
+          url = substituteSetupRefs(o.url, b, { where: "--url" });
+          goal = substituteSetupRefs(o.goal, b, { where: "--goal" });
+          successChecks = o.success.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
+        } catch (err) {
+          if (!(err instanceof FixtureSetupError || err instanceof UnboundSetupRefError)) {
+            await fx.restore();
+            throw err;
+          }
+          await fx.restore();
+          emitJson(program, ok(withEngine(fixtureSetupFailedResult(err, fx))));
+          process.exitCode = 2;
+          return;
+        }
+      }
       try {
         const result = await runExploration({
             ...(target === undefined ? {} : { target }),
-          url: o.url,
-          goal: o.goal,
+          url,
+          goal,
           successChecks,
           ...(successWhen === undefined ? {} : { successWhen }),
           allowlist,
@@ -2161,6 +2248,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
           ...withInvariants,
+          ...(fx === undefined ? {} : { fixtures: fx }),
         });
         const envelope = ok(result);
         if (o.json) {
@@ -2178,16 +2266,21 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
+      } finally {
+        // Every exit path restores the fixture state (a no-op when the mission already did).
+        await fx?.restore();
       }
     });
 
   // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
   // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
   // 4 intermittent (fired on some but not all replays — never reported as fixed).
-  withBrowserLaunchFlags(
-    program
-      .command("verify-fix")
-      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
+  withFixtureFlags(
+    withBrowserLaunchFlags(
+      program
+        .command("verify-fix")
+        .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
+    ),
   )
     .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
     .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
@@ -2199,10 +2292,25 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--secret <value>",
+      "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<
-        { result: string; fingerprint: string; storageState?: string; replays?: string; invariants: string[]; json?: boolean } & BrowserLaunchFlags
+        {
+          result: string;
+          fingerprint: string;
+          storageState?: string;
+          replays?: string;
+          invariants: string[];
+          secret: string[];
+          json?: boolean;
+        } & BrowserLaunchFlags &
+          FixtureFlags
       >();
       try {
         const report = await runVerifyFix({
@@ -2212,6 +2320,8 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
+          fixtureFlags: o,
+          secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });
@@ -2423,8 +2533,7 @@ export function buildProgram(deps: CliDeps): Command {
   // `runRegressionCapture`.
   const regression = program.command("regression");
 
-  regression
-    .command("capture")
+  withFixtureFlags(regression.command("capture"))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
@@ -2444,7 +2553,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = this.opts<{
+      const flags = this.opts<{
         from: string;
         id: string;
         dir?: string;
@@ -2454,15 +2563,25 @@ export function buildProgram(deps: CliDeps): Command {
         fingerprint?: string;
         storageState?: string;
         json?: boolean;
-      }>();
+      } & FixtureFlags>();
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = flags;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
         return;
       }
       const opened: Array<() => Promise<void>> = [];
+      let fx: MissionFixtures | undefined;
       try {
         const raw = JSON.parse(await readFile(from, "utf8"));
         const recording = RecordingSchema.parse(raw);
+        // #144: every reproduce/minimize replay restores the fixture state the Recording started from.
+        fx = regressionFixtures(
+          flags,
+          recording,
+          resultPath === undefined ? undefined : JSON.parse(await readFile(resultPath, "utf8")),
+          storageState,
+        );
+        const replayFixture = fx;
 
         const result = await runRegressionCapture({
           failingRecordingPath: from,
@@ -2473,12 +2592,17 @@ export function buildProgram(deps: CliDeps): Command {
           resultPath,
           fingerprint,
           makeActor: async () => {
+            await replayFixture?.reset();
             const { actor, close } = await makeRealBrowserActor(recording.site, storageState);
             opened.push(close);
+            if (replayFixture !== undefined) {
+              rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
+            }
             return actor;
           },
         }).then((r) => withEngine(r));
-        const envelope = ok(result);
+        await fx?.restore();
+        const envelope = ok(fx === undefined ? result : { ...result, fixtures: fx.record() });
         if (json) {
           emitJson(program, envelope);
         } else {
@@ -2489,6 +2613,7 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
       } finally {
         for (const close of opened) await close();
+        await fx?.restore();
       }
     });
 

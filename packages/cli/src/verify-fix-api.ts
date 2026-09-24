@@ -3,6 +3,17 @@ import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
 import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording } from "@jevitate/recording";
 import { loadInvariantFiles } from "./invariants-file.js";
+import { buildMissionFixtures, type FixtureFlags } from "./fixture-cli.js";
+import {
+  FixtureSpecError,
+  fixtureReplayOpener,
+  hookHash,
+  loadFixtureFile,
+  parseFixtureSpec,
+  type FixtureRecord,
+  type FixtureSpec,
+  type MissionFixtures,
+} from "./mission-fixtures.js";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
@@ -53,11 +64,22 @@ export interface RunVerifyFixOptions {
    * the spec persisted with the mission. Validated against the MISSION's allowlist before any replay.
    */
   readonly invariantFiles?: readonly string[];
+  /**
+   * Mission fixtures (#140/#144): every replay restores + re-runs the mission's own fixture (saved
+   * with its result) so it starts from the same state. `fixtures` overrides the saved spec; the
+   * mission's shell hooks are never replayed from the file — the operator re-supplies the SAME
+   * `before`/`after` (checked by hash) with `allowShellHooks`.
+   */
+  readonly fixtureFlags?: FixtureFlags;
+  /** Values redacted from everything the fixture logs (CLI `--secret`). */
+  readonly secrets?: readonly string[];
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
   readonly exitCode: number;
   readonly title?: string;
+  /** The fixture every replay started from (#140/#144): the mission's identity and this run's setup/restore log. */
+  readonly fixtures?: FixtureRecord & { readonly missionIdentity: string };
 }
 
 export class VerifyFixInputError extends Error {
@@ -103,6 +125,30 @@ export interface PersistedMission {
   readonly findings: PersistedFinding[];
   /** The declared-invariant spec the mission evaluated (#86), when it had one and it still validates. */
   readonly invariantSpec?: InvariantSpec;
+  /** The mission's fixture (#140/#144): spec (re-validated before use), hook hashes and recorded outputs. */
+  readonly fixtures?: PersistedMissionFixtures;
+}
+
+interface PersistedMissionFixtures {
+  readonly identity: string;
+  readonly spec?: unknown;
+  readonly hooks: { readonly before?: string; readonly after?: string };
+  readonly outputs: Readonly<Record<string, string>>;
+}
+
+function asPersistedFixtures(v: unknown): PersistedMissionFixtures | undefined {
+  if (!isRecord(v) || typeof v.identity !== "string") return undefined;
+  const hooks = isRecord(v.hooks) ? v.hooks : {};
+  const outputs = isRecord(v.outputs) ? v.outputs : {};
+  return {
+    identity: v.identity,
+    ...(v.spec === undefined ? {} : { spec: v.spec }),
+    hooks: {
+      ...(typeof hooks.before === "string" ? { before: hooks.before } : {}),
+      ...(typeof hooks.after === "string" ? { after: hooks.after } : {}),
+    },
+    outputs: Object.fromEntries(Object.entries(outputs).filter((e): e is [string, string] => typeof e[1] === "string")),
+  };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -150,8 +196,10 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
   }
   // A persisted spec that no longer validates is dropped: its defects are then inconclusive, never fixed.
   const spec = result.invariantSpec === undefined ? undefined : InvariantSpecSchema.safeParse(result.invariantSpec);
+  const fixtures = asPersistedFixtures(result.fixtures);
   return {
     ...(spec?.success === true ? { invariantSpec: spec.data } : {}),
+    ...(fixtures === undefined ? {} : { fixtures }),
     recording,
     target: {
       seedUrl: target.seedUrl,
@@ -215,36 +263,101 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   } catch (e) {
     throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
   }
+  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, opts.secrets ?? []);
   const declared =
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
       ? { spec: invariantSpec, id: finding.invariantId, allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl }
       : undefined;
-  const result = await verifyFix({
-    perceive: perceiveOpts,
-    recording,
-    recordingStepIndex: finding.repro.recordingStepIndex,
-    fingerprint: finding.fingerprint,
-    defectKind: finding.kind,
-    ...(declared === undefined ? {} : { invariant: declared }),
-    ...(finding.hang === undefined ? {} : { hang: finding.hang }),
-    ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
-    ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
-    ...(opts.replays === undefined ? {} : { replays: opts.replays }),
-    openSession: async () => {
-      const session = await portFactory().open({
-        headless: true,
-        allowedOrigins: [...mission.target.allowlist],
-        baseUrl: origin,
-        ...opts.browser,
-        ...(storageState !== undefined ? { storageState } : {}),
-      });
-      const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
-      return { page: session.page, actor, close: () => session.close() };
-    },
-  });
+  const openSession = async () => {
+    const session = await portFactory().open({
+      headless: true,
+      allowedOrigins: [...mission.target.allowlist],
+      baseUrl: origin,
+      ...opts.browser,
+      ...(storageState !== undefined ? { storageState } : {}),
+    });
+    const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
+    return { page: session.page, actor, close: () => session.close() };
+  };
+  let result: VerifyFixResult;
+  try {
+    result = await verifyFix({
+      perceive: perceiveOpts,
+      recording,
+      recordingStepIndex: finding.repro.recordingStepIndex,
+      fingerprint: finding.fingerprint,
+      defectKind: finding.kind,
+      ...(declared === undefined ? {} : { invariant: declared }),
+      ...(finding.hang === undefined ? {} : { hang: finding.hang }),
+      ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
+      ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
+      ...(opts.replays === undefined ? {} : { replays: opts.replays }),
+      // Each replay restores the mission's fixture state first; a failed setup makes that replay
+      // "could not open a session" — no evidence, so never `fixed`.
+      openSession:
+        fx === undefined ? openSession : fixtureReplayOpener(openSession, fx, recording.fixture?.outputs ?? mission.fixtures?.outputs ?? {}),
+    });
+  } finally {
+    await fx?.restore();
+  }
   return {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
     ...(finding.title === undefined ? {} : { title: finding.title }),
+    ...(fx === undefined ? {} : { fixtures: { ...fx.record(), missionIdentity: mission.fixtures?.identity ?? "none" } }),
   };
+}
+
+/**
+ * The replay fixture: the mission's saved spec (re-validated against the MISSION's allowlist, never
+ * trusted as-is) or `--fixtures`, plus the operator's re-supplied shell hooks, which must match the
+ * mission's by hash. A mission that ran with a fixture never replays without one.
+ */
+function missionFixtures(
+  mission: PersistedMission,
+  flags: FixtureFlags,
+  storageState: string | undefined,
+  secrets: readonly string[],
+): MissionFixtures | undefined {
+  const saved = mission.fixtures;
+  if (saved === undefined && flags.fixtures === undefined && flags.before === undefined && flags.after === undefined) return undefined;
+  const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl };
+  const hooks = saved?.hooks ?? {};
+  const given = {
+    ...(flags.before === undefined ? {} : { before: hookHash(flags.before) }),
+    ...(flags.after === undefined ? {} : { after: hookHash(flags.after) }),
+  };
+  if (given.before !== hooks.before || given.after !== hooks.after) {
+    throw new VerifyFixInputError(
+      hooks.before === undefined && hooks.after === undefined
+        ? "the mission ran without shell hooks; do not pass --before/--after"
+        : "the mission ran with --before/--after shell hooks: re-supply the SAME commands with --allow-shell-hooks (they are never replayed from the result file)",
+    );
+  }
+  try {
+    const openRefs = { openRefs: hooks.before !== undefined };
+    const spec: FixtureSpec | undefined =
+      flags.fixtures !== undefined
+        ? loadFixtureFile(flags.fixtures, bounds, openRefs)
+        : saved?.spec !== undefined
+          ? parseFixtureSpec(saved.spec, bounds, openRefs)
+          : undefined;
+    // `--secret-field` bindings a spec authenticates with come from the same environment variables.
+    const names = [...(spec?.setup ?? []), ...(spec?.restore ?? [])].flatMap((s) => (s.auth?.from === "secretField" ? [s.auth.name] : []));
+    const secretFields = names.flatMap((name) => {
+      const secret = process.env[name];
+      return secret === undefined ? [] : [{ descriptor: name, matcher: { key: "name" as const, value: name }, name, kind: "value" as const, secret }];
+    });
+    const { fixtures: _file, ...hookFlags } = flags;
+    return buildMissionFixtures(hookFlags, {
+      ...bounds,
+      ...(storageState === undefined ? {} : { storageState }),
+      secretFields,
+      secrets,
+      ...(spec === undefined ? {} : { spec }),
+    });
+  } catch (e) {
+    if (e instanceof FixtureSpecError) throw new VerifyFixInputError(`mission fixtures: ${e.message}`);
+    throw e;
+  }
 }
