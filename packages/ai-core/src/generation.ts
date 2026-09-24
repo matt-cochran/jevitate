@@ -27,11 +27,68 @@ export const UxRecommendationInput = z
   .strict();
 export const UxRecommendationOutput = z.object({ recommendation: z.string() }).strict();
 
+/**
+ * UX finding specifics (@jevitate/ux semantic tier): for ONE redacted screen-state and the
+ * rubric items Jev flagged on it, name WHAT is wrong — the implicated controls (by index),
+ * verbatim quotes of on-screen text, the observation relative to the job, the user impact and
+ * a specific fix. Structured output only; @jevitate/ux adjudicates every cited control/quote
+ * against the observed screen in code before anything becomes a finding.
+ */
+export const UxSpecificsInput = z
+  .object({
+    instructions: z.string().max(4000),
+    appClass: z.string(),
+    job: z.string().max(1000),
+    persona: z.string().max(500).optional(),
+    url: z.string(),
+    controls: z.array(z.object({ index: z.number().int().min(0), summary: z.string().max(500) }).strict()).max(200),
+    visibleText: z.string().max(6000),
+    items: z
+      .array(
+        z
+          .object({
+            rubricItemId: z.string(),
+            principle: z.string(),
+            criteria: z.string().max(2000),
+            citation: z.string(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(40),
+  })
+  .strict();
+export const UxSpecificsItem = z
+  .object({
+    rubricItemId: z.string(),
+    /** Independent re-judgment: after looking for concrete evidence, is the principle really violated? */
+    violated: z.boolean(),
+    /** Indexes of the controls actually implicated (from `controls[].index`). */
+    implicatedControls: z.array(z.number().int()),
+    /** Verbatim excerpts of on-screen text (visibleText or a control label) that show the problem. */
+    quotes: z.array(z.string()),
+    /** What is wrong, naming the control/label/text, relative to the job. */
+    observation: z.string(),
+    /** The consequence for the user pursuing the job. */
+    userImpact: z.string(),
+    /** A specific change to THIS control/text — not a restatement of the heuristic. */
+    recommendation: z.string(),
+  })
+  .strict();
+export const UxSpecificsOutput = z.object({ items: z.array(UxSpecificsItem) }).strict();
+
 export const GEN_TASKS = {
   "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "1" },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
+  "ux.specifics": { input: UxSpecificsInput, output: UxSpecificsOutput, promptVersion: "1", temperature: 0 },
 } as const;
+
+/** A task's sampling temperature when it pins one (run-to-run consistency); else the provider default. */
+export function taskTemperature(kind: GenTaskKind): number | undefined {
+  const task = GEN_TASKS[kind];
+  return "temperature" in task ? task.temperature : undefined;
+}
 export type GenTaskKind = keyof typeof GEN_TASKS;
 export type GenInput<K extends GenTaskKind> = z.input<(typeof GEN_TASKS)[K]["input"]>;
 export type GenOutput<K extends GenTaskKind> = z.output<(typeof GEN_TASKS)[K]["output"]>;
@@ -74,6 +131,22 @@ export class FakeGenerationGateway implements GenerationPort {
     if (kind === "ux.recommendation") {
       const i = input as { principle: string };
       return { recommendation: `Improve "${i.principle}" on this screen.` };
+    }
+    if (kind === "ux.specifics") {
+      // Deterministic, grounded-by-construction: cite the first control verbatim (or none).
+      const i = input as z.output<typeof UxSpecificsInput>;
+      const first = i.controls[0];
+      return {
+        items: i.items.map((it) => ({
+          rubricItemId: it.rubricItemId,
+          violated: true,
+          implicatedControls: first ? [first.index] : [],
+          quotes: [],
+          observation: first ? `${first.summary} does not satisfy "${it.principle}" for the job.` : "",
+          userImpact: "The user may hesitate or take the wrong path.",
+          recommendation: first ? `Revise ${first.summary} so it satisfies "${it.principle}".` : "",
+        })),
+      };
     }
     return { summary: "fake triage", likelyCause: "unknown" };
   }

@@ -1,0 +1,489 @@
+{
+ "app": "preveti",
+ "source": "simuli-jevdog docs/superpowers/artifacts/jevitate-ux-2026-09-23/confidence-calibration.csv (judged keys, human-labeled 2026-09-23)",
+ "jobs": {
+  "J1": "You want to figure out whether adding a free tier would grow your product. Ask Preveti that question and answer its follow-up questions until the question is framed and you can see what Preveti will investigate next.",
+  "J10": "Find out which plan you are on, how many credits you have left, and what you need to do this month to keep your Design Partner pricing.",
+  "J3": "Take the 'Raise Pro to $149' bet forward: give it a stakes estimate, then review and approve it so it is committed with your reasoning recorded.",
+  "J7": "Pressure-test the 'Raise Pro to $149' bet by simulating how your customers would respond, and read the verdict on whether to go ahead.",
+  "J8b": "You were sent this link to give feedback on a product's pricing. Agree to take part and answer the first question.",
+  "admin": "Review the pending Startup plan application and approve it if the company meets the criteria.",
+  "proposal": "An assistant suggested a change to your 'Should we raise Pro to $149?' analysis. Find the suggestion, review it, and accept it if it is reasonable.",
+  "J2": "Customers keep cancelling after their first month and you don't know why. Talk it through with Preveti until you have a concrete bet saved that you could go on to test.",
+  "J8a": "Set up a customer interview about the 'Raise Pro to $149' bet so you can send a customer a link, and check whether anyone has responded yet."
+ },
+ "items": [
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/admin/plan-applications",
+   "screen": "admin-plan-applications",
+   "journey": "admin",
+   "label": "generic",
+   "note": "Two buttons per row; low burden."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Low burden."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/e/:token",
+   "screen": "participant-link",
+   "journey": "J8b",
+   "label": "wrong",
+   "note": "Consent and single-question screens have 2 controls (Agree/No thanks; answer/Next); decision burden is minimal."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/research",
+   "screen": "research",
+   "journey": "J8a",
+   "label": "relevant-minor",
+   "note": "Same page, same observation."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/settings",
+   "screen": "settings",
+   "journey": "J10",
+   "label": "relevant-minor",
+   "note": "Same long page; real but overlaps the disclosure finding."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J1",
+   "label": "generic",
+   "note": "Composer screen is simple."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J2",
+   "label": "generic",
+   "note": "Composer screen is simple."
+  },
+  {
+   "rubricItemId": "cognitive-load",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Composer screen is simple."
+  },
+  {
+   "rubricItemId": "nielsen-1",
+   "route": "/research",
+   "screen": "research",
+   "journey": "J8a",
+   "label": "relevant-minor",
+   "note": "After J8a confirmed 'start research', the page says '0 active - No work is recorded' (fixture mode): status does not reflect the action just taken."
+  },
+  {
+   "rubricItemId": "nielsen-1",
+   "route": "/settings",
+   "screen": "settings",
+   "journey": "J10",
+   "label": "generic",
+   "note": "Status is shown (active, 7 days left); boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-1",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J1",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-1",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J2",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-1",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-10",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "J3",
+   "label": "generic",
+   "note": "Help/documentation boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-10",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Help/documentation boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-10",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J1",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-10",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J2",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-10",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-4",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "J3",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-4",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-4",
+   "route": "/settings",
+   "screen": "settings",
+   "journey": "J10",
+   "label": "generic",
+   "note": "No inconsistency identified."
+  },
+  {
+   "rubricItemId": "nielsen-5",
+   "route": "/admin/plan-applications",
+   "screen": "admin-plan-applications",
+   "journey": "admin",
+   "label": "wrong",
+   "note": "Page states every decision is audited and reversible; no error-prone input."
+  },
+  {
+   "rubricItemId": "nielsen-5",
+   "route": "/workspace?inquiry=raise-pro",
+   "screen": "workspace-raise-pro",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Accept copy says it applies every edit at once; boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-7",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "J3",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-7",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-7",
+   "route": "/decisions/new",
+   "screen": "decisions-new",
+   "journey": "J7",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-7",
+   "route": "/e/:token",
+   "screen": "participant-link",
+   "journey": "J8b",
+   "label": "generic",
+   "note": "Accelerators are irrelevant on a 2-control participant screen."
+  },
+  {
+   "rubricItemId": "nielsen-7",
+   "route": "/workspace?inquiry=raise-pro",
+   "screen": "workspace-raise-pro",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "nielsen-9",
+   "route": "/admin/plan-applications",
+   "screen": "admin-plan-applications",
+   "journey": "admin",
+   "label": "wrong",
+   "note": "No error state on screen; the item fires on every screen."
+  },
+  {
+   "rubricItemId": "primary-action",
+   "route": "/research",
+   "screen": "research",
+   "journey": "J8a",
+   "label": "relevant-minor",
+   "note": "Several competing actions (Refresh progress, Generate customer research, expanders)."
+  },
+  {
+   "rubricItemId": "primary-action",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J1",
+   "label": "generic",
+   "note": "One primary button; boilerplate."
+  },
+  {
+   "rubricItemId": "primary-action",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J2",
+   "label": "generic",
+   "note": "One primary button; boilerplate."
+  },
+  {
+   "rubricItemId": "primary-action",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "One primary button; boilerplate."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/admin/plan-applications",
+   "screen": "admin-plan-applications",
+   "journey": "admin",
+   "label": "generic",
+   "note": "Short page: one application row plus a log form; nothing to disclose progressively."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "J3",
+   "label": "generic",
+   "note": "Ledger with legend and one row; nothing to collapse."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Ledger with legend and one row; nothing to collapse."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/decisions/demo-bet-1",
+   "screen": "decision-demo-bet-1",
+   "journey": "J8a",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/decisions/new",
+   "screen": "decisions-new",
+   "journey": "J7",
+   "label": "generic",
+   "note": "Form fields are needed to price the run."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/e/:token",
+   "screen": "participant-link",
+   "journey": "J8b",
+   "label": "wrong",
+   "note": "Consent must disclose purpose and retention up front; hiding it would be the defect."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/research",
+   "screen": "research",
+   "journey": "J8a",
+   "label": "relevant-minor",
+   "note": "Research mixes WIP box, human study, milestones and generation on one page; real but low value."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/settings",
+   "screen": "settings",
+   "journey": "J10",
+   "label": "actionable",
+   "note": "Settings is ~5,000px: team, credits, then every plan with full legal-style terms expanded; the current plan's participation rule is buried (J10)."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J1",
+   "label": "relevant-minor",
+   "note": "Empty composer shows cost-authorisation text, compare-options explanation and product picker before any question; dense but defensible."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J2",
+   "label": "relevant-minor",
+   "note": "Empty composer shows cost-authorisation text, compare-options explanation and product picker before any question; dense but defensible."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "proposal",
+   "label": "relevant-minor",
+   "note": "Empty composer shows cost-authorisation text, compare-options explanation and product picker before any question; dense but defensible."
+  },
+  {
+   "rubricItemId": "progressive-disclosure",
+   "route": "/workspace?inquiry=raise-pro",
+   "screen": "workspace-raise-pro",
+   "journey": "proposal",
+   "label": "relevant-minor",
+   "note": "Inquiry view stacks intelligence, proposed changes, thread, tree and four action links in a 1280x720 viewport; thread pane is ~300px."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/admin/plan-applications",
+   "screen": "admin-plan-applications",
+   "journey": "admin",
+   "label": "generic",
+   "note": "Title, row and Approve/Reject are explicit; jevitate's own failure was choosing scroll."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "J3",
+   "label": "generic",
+   "note": "Bet rows are the obvious path; J3 clicked the right row first."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/decisions",
+   "screen": "decisions",
+   "journey": "proposal",
+   "label": "generic",
+   "note": "Bet rows are the obvious path; J3 clicked the right row first."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/decisions/demo-bet-1",
+   "screen": "decision-demo-bet-1",
+   "journey": "J8a",
+   "label": "relevant-minor",
+   "note": "Bet page has no route to interviews at the Blind rung (by design, gated behind Simulated) and no pending-proposal indicator."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/decisions/demo-bet-1",
+   "screen": "decision-demo-bet-1",
+   "journey": "proposal",
+   "label": "relevant-minor",
+   "note": "Bet page has no route to interviews at the Blind rung (by design, gated behind Simulated) and no pending-proposal indicator."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/decisions/new",
+   "screen": "decisions-new",
+   "journey": "J7",
+   "label": "generic",
+   "note": "Boilerplate."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/e/:token",
+   "screen": "participant-link",
+   "journey": "J8b",
+   "label": "wrong",
+   "note": "One obvious next action per screen."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/research",
+   "screen": "research",
+   "journey": "J8a",
+   "label": "generic",
+   "note": "J8a reached Research by mistake; that is a scent problem of the bet page, not this page."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/settings",
+   "screen": "settings",
+   "journey": "J10",
+   "label": "relevant-minor",
+   "note": "Header balance link lands on #credits, not on Plans, for a 'which plan am I on' job."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J1",
+   "label": "generic",
+   "note": "For J1/J2 the question box is obvious. (Proposal-journey instance labelled separately below.)"
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "J2",
+   "label": "generic",
+   "note": "For J1/J2 the question box is obvious. (Proposal-journey instance labelled separately below.)"
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/workspace",
+   "screen": "workspace",
+   "journey": "proposal",
+   "label": "actionable",
+   "note": "From /workspace nothing signals that the raise-pro inquiry has a pending proposal (no badge on the sidebar item or Home); jevitate detoured via Decisions -> bet -> 'Return to the framing conversation'."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/workspace?inquiry=new",
+   "screen": "workspace-inquiry-new",
+   "journey": "J2",
+   "label": "generic",
+   "note": "'Develop & vet a candidate bet' is visible under the thread; jevitate found it every run."
+  },
+  {
+   "rubricItemId": "scent",
+   "route": "/workspace?inquiry=raise-pro",
+   "screen": "workspace-raise-pro",
+   "journey": "proposal",
+   "label": "wrong",
+   "note": "'Proposed changes 1 - waiting for your review' with a 'Review proposed changes' button is strong scent."
+  }
+ ]
+}

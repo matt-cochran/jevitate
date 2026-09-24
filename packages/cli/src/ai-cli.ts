@@ -136,13 +136,14 @@ export function realSecureIO(): SecureKeyIO {
 async function realOpenRouterCall(): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
-  return async ({ model, schema, body, authHeader }) => {
+  return async ({ model, schema, body, authHeader, temperature }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
     const { object } = await generateObject({
       model: openrouter(model),
       schema,
       prompt: JSON.stringify(body),
+      ...(temperature === undefined ? {} : { temperature }),
     });
     return { object, latencyMs: Date.now() - start };
   };

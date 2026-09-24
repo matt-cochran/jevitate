@@ -63,6 +63,7 @@ export const RubricEntrySchema = z
     questions: z.array(JevQuestionSpecSchema).min(1, "a rubric entry needs ≥1 question"),
     requiredEvidence: z.array(z.enum(UX_EVIDENCE_KEYS)).min(1),
     attentionProvenance: z.string().min(1).optional(),
+    applicability: z.object({ minControls: z.number().int().min(1).optional() }).strict().optional(),
   })
   .strict();
 
