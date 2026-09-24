@@ -69,6 +69,18 @@ const KEYS_AND_SIGNUP = (): string => `<!doctype html><html><body>
   </script>
 </body></html>`;
 
+/**
+ * #161 — a regression of #75: a visually-hidden "Skip to content" anchor (the sr-only clipping
+ * idiom) alongside two ordinary, always-actionable buttons.
+ */
+const SKIP_LINK_PAGE = (): string => `<!doctype html><html><body>
+  <a href="#main" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden">Skip to content</a>
+  <main id="main">
+    <button type="button" id="one" onclick="this.textContent='clicked one'">Action One</button>
+    <button type="button" id="two" onclick="this.textContent='clicked two'">Action Two</button>
+  </main>
+</body></html>`;
+
 /** A submit that never becomes enabled — the "never click a disabled control" guard's target. */
 const STUCK_SUBMIT = `<!doctype html><html><body>
   <form id="f">
@@ -142,6 +154,10 @@ beforeAll(async () => {
     if (path === "/api/signin-native" && req.method === "POST") {
       state.nativeSignins += 1;
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    if (path === "/app/skip-link") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(SKIP_LINK_PAGE());
       return;
     }
     if (path === "/app/stuck-submit") {
@@ -471,6 +487,29 @@ describe("adversarial — a blocked submit is never counted as submitted (#155)"
       // Recording's own click steps prove that — this is about the SUBMIT COUNT, not the click.
       const submitClicks = result.transcript.filter((e) => e.op === "click" && e.target?.includes('"Sign In"') === true && e.actOk);
       expect(submitClicks.length).toBeGreaterThanOrEqual(1);
+    },
+    180_000,
+  );
+});
+
+describe("adversarial — a visually-hidden skip link is never chosen (#161, regression of #75)", () => {
+  it(
+    "exercise-controls / repeat-rapid / visit-route never target it, and it never appears as a not-actionable failure",
+    async () => {
+      const result = await huntProfile(["exercise-controls", "repeat-rapid", "visit-route"], {
+        seedUrl: `${origin}/app/skip-link`,
+        bounds: { maxDecisions: 10 },
+      });
+
+      expect(result.outcome).not.toBe("crashed");
+      // Never a target, under any strategy, at any step.
+      expect(result.transcript.some((e) => e.target?.includes("Skip to content") === true)).toBe(false);
+      // The old failure mode (#161's repro) never happens at all: the control is excluded from the
+      // start, so `act()`'s gate is never even asked about it.
+      expect(result.transcript.some((e) => (e.reason ?? "").includes("visually-hidden skip link"))).toBe(false);
+      // The run still did real work: the ordinary, fully-visible buttons WERE exercised.
+      expect(result.transcript.some((e) => e.target?.includes("Action One") === true && e.actOk)).toBe(true);
+      expect(result.transcript.some((e) => e.target?.includes("Action Two") === true && e.actOk)).toBe(true);
     },
     180_000,
   );

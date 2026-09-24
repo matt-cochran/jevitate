@@ -43,6 +43,7 @@ import {
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
 import { planMisuseEpisode, type LastAction, type MisuseStep } from "../adversarial/form-misuse.js";
+import { controlIdentity } from "../coverage/fingerprint.js";
 import {
   CoverageTracker,
   resolveCoverageThresholds,
@@ -319,6 +320,16 @@ export interface AdversarialScope {
 }
 
 const MAX_LISTED_DEPARTURES = 50;
+
+/**
+ * A failed act whose reason names a timeout, or a target this gate refused as not actionable (a
+ * visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run (#161,
+ * mirroring induction.ts's own `isUnactionableFailure`, #75).
+ */
+function isUnactionableFailure(reason: string | undefined): boolean {
+  if (reason === undefined) return false;
+  return /timeout|not actionable|no longer present/i.test(reason);
+}
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
 
@@ -986,6 +997,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     let strategySteps = 0;
     let idleStreak = 0;
     const visitedLinks = new Set<string>();
+    /**
+     * Control identities (#161, a regression of #75) that failed as not-actionable / timed out:
+     * never re-chosen by any strategy for the rest of the run. The adversarial strategies pick
+     * their own candidates from the live snapshot every step (no shared frontier of #75's own to
+     * consult), so the mission loop tracks this itself.
+     */
+    const unactionable = new Set<string>();
     /** How many episodes each strategy has run (rotates its form, field and value). */
     const rounds = new Map<MisuseStrategy, number>();
     let stop: AdversarialStop | null = null;
@@ -1156,6 +1174,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         last,
         visitedLinks,
         exercised: cov.exercisedKeys,
+        blacklisted: unactionable,
         inScope,
         rng: Math.random,
       });
@@ -1278,7 +1297,16 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           }
         }
         if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
-        last = { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
+        // #161 (a regression of #75): a control refused as not-actionable (occluded, detached, a
+        // clipped/offscreen anchor the static `isExercisable` check missed) is never re-chosen by
+        // any strategy for the rest of the run — and never blindly repeated by `repeat-rapid`.
+        if (!result.ok && s.control !== null && isUnactionableFailure(result.reason)) {
+          unactionable.add(controlIdentity(s.control));
+        }
+        last =
+          !result.ok && s.control !== null && unactionable.has(controlIdentity(s.control))
+            ? null
+            : { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
         // Evidence for "act while the submit is pending": how many requests the action left in flight.
         const inFlight = !s.settle && result.ok ? monitorFor(sessions.page).pending().length : 0;
         const reason = joinReasons([

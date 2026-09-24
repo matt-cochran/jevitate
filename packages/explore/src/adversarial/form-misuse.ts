@@ -4,6 +4,7 @@ import { isSecretLike } from "../feature/boundary-values.js";
 import { pickMisuseAction, type MisuseStrategy } from "./misuse.js";
 import { valueFor, type InputStrategy } from "./input-strategy.js";
 import { DESTRUCTIVE, SESSION_END } from "../safety.js";
+import { controlIdentity } from "../coverage/fingerprint.js";
 
 /**
  * Form-aware misuse (#64). Ordinary apps are mostly forms: fields plus a Save / Submit control.
@@ -122,15 +123,21 @@ function leavesScope(href: string | null | undefined, inScope: (url: string) => 
  * Whether a control counts as a target control a misuse run can (and should) exercise: enabled,
  * not a file input (no fixture), not a secret-like field BY NAME (API token, SSN, credit card…) —
  * except a plain `type=password` field, which IS exercisable (typed with a synthetic boundary/
- * invalid value, never read back, always recorded redacted — see `edit`) — and not a
- * session-ending or destructive control (Delete, Remove, Close account…), and not a link that
- * leads out of scope (it is navigation away from the target, not part of it).
+ * invalid value, never read back, always recorded redacted — see `edit`) — not a
+ * session-ending or destructive control (Delete, Remove, Close account…), not a link that
+ * leads out of scope (it is navigation away from the target, not part of it), and not a
+ * visually-hidden "skip to content" idiom (clipped to near-nothing or pulled far off-screen —
+ * `Control.clippedOffscreen`, #75/#161): `act()`'s gate already refuses one of these at click
+ * time, but the adversarial strategies pick their own candidates and never consult the coverage
+ * frontier's blacklist, so without this it is picked again and again until the run's budget runs
+ * out — it is never offered as a target from the start instead.
  */
 export function isExercisable(c: Control, inScope: (url: string) => boolean): boolean {
   if (!c.enabled) return false;
   if (c.inputType === "file") return false;
   if (c.inputType !== "password" && isSecretLike(c)) return false;
   if (SESSION_END.test(c.name) || DESTRUCTIVE.test(c.name)) return false;
+  if (c.clippedOffscreen === true) return false;
   return !leavesScope(c.href, inScope);
 }
 
@@ -223,10 +230,20 @@ export interface EpisodeContext {
   readonly visitedLinks: ReadonlySet<string>;
   /** Keys (`controlKey`) of target controls already exercised. */
   readonly exercised: ReadonlySet<string>;
+  /**
+   * Identities (`controlIdentity`: role + accessible name) that failed as not-actionable / timed
+   * out earlier in THIS run (#161) — never re-chosen by any strategy for the rest of the run,
+   * whichever state re-offers them. The adversarial strategies have no shared frontier of their
+   * own to consult (unlike #75's coverage-frontier blacklist), so the mission loop tracks and
+   * passes this itself.
+   */
+  readonly blacklisted?: ReadonlySet<string>;
   /** Is a URL inside the mission's scope? Default: everything is. */
   readonly inScope?: (url: string) => boolean;
   readonly rng: () => number;
 }
+
+const EMPTY_IDENTITIES: ReadonlySet<string> = new Set();
 
 const at = <T>(xs: readonly T[], i: number): T | undefined => xs[((i % xs.length) + xs.length) % xs.length];
 
@@ -384,8 +401,13 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
  */
 function planExercise(ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
+  const blacklisted = ctx.blacklisted ?? EMPTY_IDENTITIES;
   const next = ctx.snapshot.controls.find(
-    (c) => isExercisable(c, inScope) && !ctx.exercised.has(controlKey(c)) && !(c.role === "checkbox" && c.checked === true),
+    (c) =>
+      isExercisable(c, inScope) &&
+      !blacklisted.has(controlIdentity(c)) &&
+      !ctx.exercised.has(controlKey(c)) &&
+      !(c.role === "checkbox" && c.checked === true),
   );
   if (next === undefined) return null;
   const op = affordedOp(next);
@@ -422,7 +444,10 @@ function isFormStrategy(s: MisuseStrategy): s is FormMisuseStrategy {
  */
 function planDisclosure(ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
-  const candidates = ctx.snapshot.controls.filter((c) => isExercisable(c, inScope) && isDisclosureControl(c));
+  const blacklisted = ctx.blacklisted ?? EMPTY_IDENTITIES;
+  const candidates = ctx.snapshot.controls.filter(
+    (c) => isExercisable(c, inScope) && !blacklisted.has(controlIdentity(c)) && isDisclosureControl(c),
+  );
   const disclosure = candidates.find((c) => !ctx.exercised.has(controlKey(c))) ?? candidates[0];
   if (disclosure === undefined) return null;
   return { steps: [{ op: "click", control: disclosure, settle: true, note: `open "${disclosure.name}" to look for a form` }] };
@@ -472,9 +497,18 @@ export function planMisuseEpisode(ctx: EpisodeContext): MisuseEpisode | null {
         : { steps: [{ op: "click", control: opposing, settle: true, note: "contradict the previous action" }] };
     }
     case "visit-route": {
-      // Scope-contained: only links that stay on the target (a link out of scope is never followed).
+      // Scope-contained: only links that stay on the target (a link out of scope is never
+      // followed); never a visually-hidden skip link (#161 — see `isExercisable`), and never a
+      // control already blacklisted for the run.
       const link = snapshot.controls.find(
-        (c) => c.role === "link" && c.enabled && c.name !== "" && !ctx.visitedLinks.has(c.name) && !leavesScope(c.href, inScope),
+        (c) =>
+          c.role === "link" &&
+          c.enabled &&
+          c.name !== "" &&
+          c.clippedOffscreen !== true &&
+          !(ctx.blacklisted?.has(controlIdentity(c)) ?? false) &&
+          !ctx.visitedLinks.has(c.name) &&
+          !leavesScope(c.href, inScope),
       );
       return link === undefined ? null : { steps: [{ op: "click", control: link, settle: true, note: "follow a link" }] };
     }
