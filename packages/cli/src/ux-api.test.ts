@@ -143,7 +143,7 @@ describe("runUxReview (offline)", () => {
     expect(report.evidenceCaveats?.[0]).toMatch(/blocked|disabled/i);
   });
 
-  it("(#85) a mission transcript suppresses the evidence caveat", async () => {
+  it("(#85) a mission transcript suppresses the blocked-target caveat; (#134) without the evidence sidecar the report says what needs live signals", async () => {
     const outDir = await mkdtemp(join(tmpdir(), "ux-report-"));
     const { report } = await runUxReview({
       recording: recording(),
@@ -156,7 +156,49 @@ describe("runUxReview (offline)", () => {
       nowIso: () => "2026-09-21T00:00:00Z",
       missionTranscript: [],
     });
+    expect(report.evidenceCaveats).toHaveLength(1);
+    expect(report.evidenceCaveats![0]).not.toMatch(/blocked\/disabled-target evidence not available/);
+    expect(report.evidenceCaveats![0]).toMatch(/no usability evidence sidecar.*hung request, stuck job, duplicate write\/create, failed submit/);
+  });
+
+  it("(#134) with an evidence sidecar there is no evidence caveat, and its screens and run signals are analyzed", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "ux-report-"));
+    const signals = {
+      steps: [
+        { step: 1, op: "click", target: 'button "Pay"', actOk: true, url: "https://shop.test/cart" },
+      ],
+      requests: [{ id: 0, method: "POST", endpoint: "POST /api/pay", url: "https://shop.test/api/pay", resourceType: "fetch", startedAt: 1000, endedAt: 1050, status: 500, step: 1 }],
+      screens: [
+        { index: 0, step: 1, at: 500, url: "https://shop.test/cart", signature: "s-cart", visibleText: "Cart\nPay", busy: false },
+        { index: 1, step: 2, at: 2000, url: "https://shop.test/cart", signature: "s-cart", visibleText: "Cart\nPay", busy: false },
+      ],
+      endedAt: 3000,
+    };
+    const screen = {
+      screenId: "s-cart",
+      url: "https://shop.test/cart",
+      controls: [{ index: 0, role: "button", name: "Pay", tag: "button", inputType: null, enabled: true, summary: 'button "Pay"' }],
+      visibleText: "Cart\nPay",
+      appContext: APP,
+      job: APP.job,
+      history: [],
+      behavior: { noProgress: false, backtracks: 0, formReentry: 0, dwellMs: 0, errors: 0 },
+      a11yFacts: { controls: [] },
+    };
+    const { report } = await runUxReview({
+      recording: recording(),
+      appContext: APP,
+      judge: benignJudge,
+      gen: new FakeGenerationGateway(),
+      outDir,
+      env: {},
+      configPath: join(outDir, "no-config.json"),
+      nowIso: () => "2026-09-21T00:00:01Z",
+      evidenceFile: { version: 1, appContext: APP, job: APP.job, screens: [screen], signals, outcome: { status: "incomplete", reason: "payment failed" } },
+    });
     expect(report.evidenceCaveats).toBeUndefined();
+    expect(report.findings.map((f) => f.rubricItemId)).toContain("signal-failed-submit");
+    expect(report.coverage.skipped.every((s) => !/visibleText/.test(s.reason))).toBe(true);
   });
 
   it("FAILS FAST: an analysis failure throws UxAnalysisFailedError — never a fabricated clean report", async () => {

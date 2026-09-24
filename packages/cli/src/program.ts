@@ -108,7 +108,7 @@ import {
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
-import { runUsabilityMission, runUxReview, UxAnalysisFailedError, type MissionTranscriptEntryLike } from "./ux-api.js";
+import { discoverRecordingSidecars, loadRecordingSidecars, runUsabilityMission, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
@@ -1320,7 +1320,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--app-class <class>", "app class for UX calibration (required for --strategy usability), e.g. consumer|admin|internal")
     .option(
       "--show <labels>",
-      "quality grades to show (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then actionable,relevant-minor",
+      "opt-in filter on the quality grade (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then ALL grades — the grader is uncalibrated (#133), so by default every finding is shown with its grade",
     )
     .option(
       "--min-confidence <n>",
@@ -2477,7 +2477,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--app-class <class>", "app class for calibration (required), e.g. consumer|admin|internal")
     .option(
       "--show <labels>",
-      "quality grades to show (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then actionable,relevant-minor",
+      "opt-in filter on the quality grade (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then ALL grades — the grader is uncalibrated (#133), so by default every finding is shown with its grade",
     )
     .option(
       "--min-confidence <n>",
@@ -2488,7 +2488,11 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--out <dir>", "directory to write the UX report")
     .option(
       "--result <file>",
-      "mission result JSON (as written alongside the Recording by `jevitate explore`) — supplies blocked/disabled-target evidence the Recording alone cannot carry",
+      "mission result JSON (as written alongside the Recording by `jevitate explore`) — supplies blocked/disabled-target evidence the Recording alone cannot carry; default: <stem>.result.json, else <stem>.transcript.json, next to the Recording",
+    )
+    .option(
+      "--evidence <file>",
+      "a live usability run's evidence sidecar (screens as analyzed + run signals); default: <stem>.evidence.json next to the Recording — with it, offline review reproduces the live run's findings",
     )
     .option("--real", "use live Jev gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways", false)
@@ -2502,6 +2506,7 @@ export function buildProgram(deps: CliDeps): Command {
         job?: string;
         out?: string;
         result?: string;
+        evidence?: string;
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
@@ -2517,24 +2522,16 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_UX_RECORDING", String(err instanceof Error ? err.message : err)));
         return;
       }
-      // #85 item 2: --result supplies blocked/disabled-target evidence a Recording alone cannot
-      // carry (a failed action is never recorded as a step — see #81). Absent or unreadable, the
-      // report says so (`report.evidenceCaveats`) rather than silently seeing less.
-      let missionTranscript: MissionTranscriptEntryLike[] | undefined;
-      let missionTranscriptUnavailable: string | undefined;
-      if (o.result) {
-        try {
-          const raw = JSON.parse(await readFile(o.result, "utf8")) as { result?: { transcript?: unknown }; transcript?: unknown };
-          const transcript = raw.result?.transcript ?? raw.transcript;
-          if (Array.isArray(transcript)) {
-            missionTranscript = transcript as MissionTranscriptEntryLike[];
-          } else {
-            missionTranscriptUnavailable = `--result ${o.result} has no transcript`;
-          }
-        } catch (err) {
-          missionTranscriptUnavailable = `could not read --result ${o.result}: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
+      // #85 item 2 / #134: the artifacts next to the Recording — the live usability run's evidence
+      // sidecar, the mission result or transcript — are discovered automatically (explicit flags
+      // win). Absent or unreadable, the report says so (`report.evidenceCaveats`) rather than
+      // silently seeing less.
+      const found = discoverRecordingSidecars(recordingPath);
+      const sidecars = await loadRecordingSidecars({
+        ...((o.evidence ?? found.evidencePath) === undefined ? {} : { evidencePath: o.evidence ?? found.evidencePath }),
+        ...((o.result ?? found.resultPath) === undefined ? {} : { resultPath: o.result ?? found.resultPath }),
+        ...(o.result === undefined && found.transcriptPath !== undefined ? { transcriptPath: found.transcriptPath } : {}),
+      });
       let uxJudge: JudgmentPort;
       let uxGen: GenerationPort;
       let uxUsage: UsageTracker;
@@ -2562,10 +2559,9 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
           outDir: o.out,
-          missionTranscript,
-          ...(missionTranscriptUnavailable !== undefined ? { missionTranscriptUnavailable } : {}),
+          ...sidecars,
         });
-        emitJson(program, ok(result));
+        emitJson(program, ok({ ...result, sidecars: found }));
       } catch (err) {
         if (err instanceof UxAnalysisFailedError) {
           emitJson(program, fail("E_UX_ANALYSIS", err.message));

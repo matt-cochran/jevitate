@@ -35,8 +35,10 @@ an unsafe or unbounded move.
   deterministic, replayable regression.
 - **Self-healing.** Repair a broken step under policy — never auto-healing a
   write or irreversible action.
-- **UX review.** Ranked, cited, evidence-anchored usability findings (Nielsen +
-  cognitive-science heuristics), advisory only.
+- **UX review.** Usability findings grounded in what the run observed (run
+  signals and journey friction), ranked by impact on the job and cited to Nielsen
+  and cognitive-science heuristics. Heuristic-only findings go in an appendix.
+  Advisory only.
 - **Load testing** of a Journey against an authorized origin.
 - **MCP server** exposing only an allowlisted, safe tool surface.
 - **Distributed Journey sources** with an explicit trust/run gate.

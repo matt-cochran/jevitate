@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CALIBRATION_KNOWN_APP_CLASSES, calibrationCaveat, calibrationNoteFor } from "./calibration.js";
+import { CALIBRATION_KNOWN_APP_CLASSES, GRADER_FILTER_KAPPA_GATE, calibrationCaveat, calibrationNoteFor, graderMayFilterByDefault } from "./calibration.js";
 
 describe("calibrationNoteFor", () => {
   it("finds the known-class entry case-insensitively", () => {
@@ -39,6 +39,23 @@ describe("calibrationCaveat", () => {
   it("never returns an empty string for any input (report.ts relies on this to decide whether to show the guardrail)", () => {
     for (const appClass of ["consumer", "admin", "B2B SaaS marketing site", "", undefined]) {
       expect(calibrationCaveat(appClass).length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("grader filtering gate (#133)", () => {
+  it("no app class clears the held-out kappa gate yet, so the grader filters nothing by default", () => {
+    expect(GRADER_FILTER_KAPPA_GATE).toBe(0.4);
+    for (const appClass of ["consumer", "admin", "B2B SaaS marketing site", "", undefined]) {
+      expect(graderMayFilterByDefault(appClass)).toBe(false);
+    }
+  });
+
+  it("every caveat says the grade is shown, not used to hide findings, and how to opt in", () => {
+    for (const appClass of ["consumer", "admin", undefined]) {
+      const c = calibrationCaveat(appClass);
+      expect(c).toMatch(/does NOT hide findings by default/);
+      expect(c).toMatch(/--show actionable,relevant-minor/);
     }
   });
 });

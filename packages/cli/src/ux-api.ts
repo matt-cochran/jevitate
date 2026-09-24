@@ -8,7 +8,8 @@
 // This is the ONLY place @jevitate/ux meets @jevitate/explore — the dep
 // direction stays ux ⟂ explore (both are consumed here, neither imports the
 // other). Findings are advisory; a UX finding never gates a run.
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
@@ -32,13 +33,22 @@ import {
   a11yChecks,
   buildReport,
   calibrationCaveat,
+  detectFriction,
+  detectRepeatedReplies,
   detectSignals,
+  evidenceFromFile,
+  groundFindings,
   loadV1Rubric,
+  parseUxEvidenceFile,
+  persistableScreen,
   resolveMinConfidence,
   resolveQualityPolicy,
   withSignalFindings,
   type AppContext,
+  type JourneyOutcome,
+  type RunSignalCapture,
   type SignalOptions,
+  type UxEvidenceFile,
   type Control as UxControl,
   type ScreenRef,
   type UxEvidence,
@@ -146,11 +156,49 @@ export function extractTypedValues(recording: Recording): string[] {
  * separate so `recordingToEvidence` itself stays decoupled from the live explore-control shape).
  */
 export interface MissionTranscriptEntryLike {
+  readonly step?: number;
   readonly op?: string | null;
+  readonly target?: string | null;
   readonly actOk: boolean;
   readonly reason?: string;
   readonly url: string;
+  readonly signature?: string;
   readonly descriptor?: TargetDescriptor;
+  readonly value?: string;
+  readonly message?: string;
+  readonly reply?: { readonly received?: boolean; readonly text?: string };
+  readonly screenshot?: string;
+}
+
+/**
+ * #134: the run-signal capture a transcript ALONE supports (no visible text, no requests) — enough
+ * for the journey friction (retries, dead ends, waits, backtracks, abandoned fields) and repeated
+ * replies, NOT for the oracles that need requests or page text (they would misfire on the blanks).
+ */
+export function captureFromTranscript(transcript: readonly MissionTranscriptEntryLike[]): RunSignalCapture {
+  const steps = transcript.map((t, i) => ({
+    step: t.step ?? i + 1,
+    op: t.op ?? null,
+    target: t.target ?? null,
+    actOk: t.actOk,
+    url: t.url,
+    ...(t.descriptor === undefined ? {} : { descriptor: t.descriptor }),
+    ...(t.reason === undefined ? {} : { reason: t.reason }),
+    ...(t.value === undefined ? {} : { value: t.value }),
+    ...(t.message === undefined ? {} : { message: t.message }),
+    ...(t.reply?.text === undefined || t.reply.received === false ? {} : { reply: t.reply.text }),
+  }));
+  const screens = transcript.map((t, i) => ({
+    index: i,
+    step: t.step ?? i + 1,
+    at: 0,
+    url: t.url,
+    signature: t.signature ?? `step:${t.step ?? i + 1}`,
+    visibleText: "",
+    busy: false,
+    ...(t.screenshot === undefined ? {} : { screenshot: t.screenshot }),
+  }));
+  return { steps, requests: [], screens, endedAt: 0 };
 }
 
 const ACTIONABLE_OPS = new Set(["click", "type", "select"]);
@@ -272,7 +320,7 @@ export interface RunUxReviewOptions {
   readonly minConfidence?: number | string;
   /**
    * Quality grades to show, e.g. "actionable,relevant-minor". Precedence: this (CLI `--show`) >
-   * `JEVITATE_UX_SHOW` > config `ux.show` > `DEFAULT_QUALITY_POLICY`.
+   * `JEVITATE_UX_SHOW` > config `ux.show` > every grade (#133: the uncalibrated grader labels, it does not filter).
    */
   readonly show?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -294,6 +342,18 @@ export interface RunUxReviewOptions {
   readonly missionTranscript?: readonly MissionTranscriptEntryLike[];
   /** Why `missionTranscript` is absent (e.g. no `--result` given, or the file could not be read) — becomes a report caveat. */
   readonly missionTranscriptUnavailable?: string;
+  /** The source run's end state (a mission result's `outcome`), for the goal-not-reached friction (#132). */
+  readonly missionOutcome?: JourneyOutcome;
+  /**
+   * #134: the live usability run's evidence sidecar (`<stamp>.evidence.json`): every screen as the
+   * live analyzer saw it (redacted) and the run-signal capture. With it, offline review reproduces
+   * the live run's rubric AND signal findings; without it, the report says what it could not see.
+   */
+  readonly evidenceFile?: UxEvidenceFile;
+  /** Why no evidence sidecar was used (not found next to the Recording, or unreadable) — a report caveat. */
+  readonly evidenceUnavailable?: string;
+  /** Tuning of the run-signal oracles (#96/#131). */
+  readonly signals?: SignalOptions;
 }
 
 export interface RunUxReviewResult {
@@ -302,6 +362,9 @@ export interface RunUxReviewResult {
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
 }
+
+const NO_EVIDENCE_CAVEAT =
+  "no usability evidence sidecar (<stamp>.evidence.json, written next to the Recording by live usability runs, #134): this pass sees only the Recording's touched controls and urls — rubric items needing visible text or a11y facts are Skipped, and the run signals that need the live capture (hung request, stuck job, duplicate write/create, failed submit, inert control, internal id, url mismatch) could not be checked; with a transcript, journey friction and repeated replies still are.";
 
 const NO_TRANSCRIPT_CAVEAT =
   "blocked/disabled-target evidence not available: this offline pass has no mission transcript, so a dead end like a button that never enables cannot be seen (pass --result <mission-result.json>, as written by `jevitate explore`, to include it — the same evidence a live usability run sees).";
@@ -318,28 +381,142 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
     loadUxMinConfidence(opts.configPath),
     loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
   );
-  const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
+  const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
-  const screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job, opts.missionTranscript);
+  // #134: a live usability run's evidence sidecar gives offline review the SAME screens and run
+  // signals the live analysis had; otherwise the Recording (+ transcript) is all there is.
+  let screens: UxEvidence[];
+  let appContext = opts.appContext;
+  let signalFindings: ReturnType<typeof detectSignals> = [];
+  let friction: ReturnType<typeof detectFriction> = [];
+  const evidenceCaveats: string[] = [];
+  if (opts.evidenceFile !== undefined) {
+    ({ screens, appContext } = evidenceFromFile(opts.evidenceFile, opts.appContext));
+    signalFindings = detectSignals(opts.evidenceFile.signals, opts.signals);
+    friction = detectFriction(opts.evidenceFile.signals, opts.evidenceFile.outcome ?? opts.missionOutcome);
+  } else {
+    screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job, opts.missionTranscript);
+    if (opts.missionTranscript !== undefined) {
+      const partial = captureFromTranscript(opts.missionTranscript);
+      signalFindings = detectRepeatedReplies(partial, opts.signals);
+      friction = detectFriction(partial, opts.missionOutcome);
+    } else {
+      evidenceCaveats.push(opts.missionTranscriptUnavailable ?? NO_TRANSCRIPT_CAVEAT);
+    }
+    evidenceCaveats.push(opts.evidenceUnavailable === undefined ? NO_EVIDENCE_CAVEAT : `${opts.evidenceUnavailable} — ${NO_EVIDENCE_CAVEAT}`);
+  }
   const outcome = await analyzer.analyze({
     screens,
     rubric: loadV1Rubric(),
-    appContext: opts.appContext,
+    appContext,
     secrets: opts.secrets,
     judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
   });
   if (outcome.kind === "failed") {
     throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
   }
-  const evidenceCaveats = opts.missionTranscript === undefined ? [opts.missionTranscriptUnavailable ?? NO_TRANSCRIPT_CAVEAT] : [];
   const calibrationCaveats = [calibrationCaveat(opts.appContext.appClass)];
-  const report = buildReport(outcome, { minConfidence, quality, evidenceCaveats, calibrationCaveats });
+  const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
+    minConfidence,
+    quality,
+    evidenceCaveats,
+    calibrationCaveats,
+  });
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
   await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   return { report, reportPath, ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }) };
+}
+
+/** #134: the artifacts a run writes next to its Recording (`<stem>.recording.json`). */
+export interface RecordingSidecars {
+  /** `<stem>.evidence.json` — the live usability run's evidence sidecar. */
+  readonly evidencePath?: string;
+  /** `<stem>.transcript.json` — the decision transcript (each step's screenshot). */
+  readonly transcriptPath?: string;
+  /** `<stem>.result.json` — a mission result (explore/adversarial), carrying transcript + outcome. */
+  readonly resultPath?: string;
+  /** `<stem>.screens/` — the per-step screenshots. */
+  readonly screenshotDir?: string;
+}
+
+/** Finds the sidecars that exist next to `recordingPath` (only `<stem>.recording.json` has a stem). */
+export function discoverRecordingSidecars(recordingPath: string): RecordingSidecars {
+  if (!recordingPath.endsWith(".recording.json")) return {};
+  const stem = recordingPath.slice(0, -".recording.json".length);
+  const file = (p: string) => (existsSync(p) && statSync(p).isFile() ? p : undefined);
+  const dir = (p: string) => (existsSync(p) && statSync(p).isDirectory() ? p : undefined);
+  const evidencePath = file(`${stem}.evidence.json`);
+  const transcriptPath = file(`${stem}.transcript.json`);
+  const resultPath = file(`${stem}.result.json`);
+  const screenshotDir = dir(`${stem}.screens`);
+  return {
+    ...(evidencePath === undefined ? {} : { evidencePath }),
+    ...(transcriptPath === undefined ? {} : { transcriptPath }),
+    ...(resultPath === undefined ? {} : { resultPath }),
+    ...(screenshotDir === undefined ? {} : { screenshotDir }),
+  };
+}
+
+/** What the discovered (or given) sidecars supply to `runUxReview`, and why anything is missing. */
+export interface LoadedSidecars {
+  readonly evidenceFile?: UxEvidenceFile;
+  readonly evidenceUnavailable?: string;
+  readonly missionTranscript?: MissionTranscriptEntryLike[];
+  readonly missionTranscriptUnavailable?: string;
+  readonly missionOutcome?: JourneyOutcome;
+}
+
+function asOutcome(v: unknown): JourneyOutcome | undefined {
+  if (v === null || typeof v !== "object") return undefined;
+  const o = v as { status?: unknown; reason?: unknown };
+  if (o.status === "completed") return { status: "completed" };
+  if (o.status === "incomplete") return { status: "incomplete", reason: typeof o.reason === "string" ? o.reason : "not completed" };
+  return undefined;
+}
+
+/**
+ * Reads the evidence sidecar and the transcript/result (explicit paths win over discovered ones).
+ * Never throws: an unreadable file becomes the matching `…Unavailable` caveat.
+ */
+export async function loadRecordingSidecars(paths: {
+  readonly evidencePath?: string;
+  readonly resultPath?: string;
+  readonly transcriptPath?: string;
+}): Promise<LoadedSidecars> {
+  const out: {
+    evidenceFile?: UxEvidenceFile;
+    evidenceUnavailable?: string;
+    missionTranscript?: MissionTranscriptEntryLike[];
+    missionTranscriptUnavailable?: string;
+    missionOutcome?: JourneyOutcome;
+  } = {};
+  if (paths.evidencePath !== undefined) {
+    try {
+      out.evidenceFile = parseUxEvidenceFile(JSON.parse(await readFile(paths.evidencePath, "utf8")));
+    } catch (err) {
+      out.evidenceUnavailable = `could not read the evidence sidecar ${paths.evidencePath}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } else {
+    out.evidenceUnavailable = "no evidence sidecar next to the Recording";
+  }
+  const source = paths.resultPath ?? paths.transcriptPath;
+  if (source !== undefined) {
+    try {
+      const raw = JSON.parse(await readFile(source, "utf8")) as unknown;
+      const obj = (raw ?? {}) as { result?: { transcript?: unknown; outcome?: unknown }; transcript?: unknown; outcome?: unknown };
+      const transcript = Array.isArray(raw) ? raw : (obj.result?.transcript ?? obj.transcript);
+      if (Array.isArray(transcript)) out.missionTranscript = transcript as MissionTranscriptEntryLike[];
+      else out.missionTranscriptUnavailable = `${source} has no transcript`;
+      const outcome = Array.isArray(raw) ? undefined : asOutcome(obj.result?.outcome ?? obj.outcome);
+      if (outcome !== undefined) out.missionOutcome = outcome;
+    } catch (err) {
+      out.missionTranscriptUnavailable = `could not read ${source}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  return out;
 }
 
 export class UxAnalysisFailedError extends Error {
@@ -365,7 +542,7 @@ export interface RunUsabilityMissionOptions {
   readonly minConfidence?: number | string;
   /**
    * Quality grades to show, e.g. "actionable,relevant-minor". Precedence: this (CLI `--show`) >
-   * `JEVITATE_UX_SHOW` > config `ux.show` > `DEFAULT_QUALITY_POLICY`.
+   * `JEVITATE_UX_SHOW` > config `ux.show` > every grade (#133: the uncalibrated grader labels, it does not filter).
    */
   readonly show?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -421,6 +598,12 @@ export interface RunUsabilityMissionResult {
   readonly recordingPath: string;
   /** Where the per-step screenshots are written (secret fields masked). */
   readonly screenshotDir: string;
+  /**
+   * #134: the evidence sidecar (`usability-<stamp>.evidence.json`) — every screen as the analyzer
+   * saw it after redaction, plus the run-signal capture — so `jevitate ux <recording>` reproduces
+   * this run's findings offline. `null` when it could not be written (redaction unavailable).
+   */
+  readonly evidencePath: string | null;
   /** Every per-step screenshot written, in order. */
   readonly screenshots: readonly string[];
   /**
@@ -456,7 +639,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     loadUxMinConfidence(opts.configPath),
     loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
   );
-  const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
+  const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -542,7 +725,29 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const screens = typedValues.length > 0 ? collected.map((ev) => ({ ...ev, typedValues })) : collected;
     // #96: findings from the run's own measurements (hung request, duplicate write, internal id,
     // inert control) — independent code, no model — reported alongside the rubric's.
-    const signalFindings = detectSignals(await capture.signalCapture(run.transcript, typedValues), opts.signals);
+    const signalCapture = await capture.signalCapture(run.transcript, typedValues);
+    const signalFindings = detectSignals(signalCapture, opts.signals);
+    // #132: the friction the run walked into — what grounds (or not) each rubric finding.
+    const friction = detectFriction(signalCapture, run.outcome);
+    // #134: the evidence sidecar, written through the redaction door BEFORE analysis (so it exists
+    // even when analysis fails). Fail-closed: if any screen cannot be redacted, no file is written.
+    const evidencePath = join(outDir, `usability-${stamp}.evidence.json`);
+    let evidenceWritten: string | null = null;
+    try {
+      const file: UxEvidenceFile = {
+        version: 1,
+        appContext: opts.appContext,
+        job: opts.job,
+        screens: screens.map((ev) => persistableScreen(ev, secrets)),
+        signals: signalCapture,
+        outcome: run.outcome,
+      };
+      await mkdir(outDir, { recursive: true });
+      await writeFile(evidencePath, `${JSON.stringify(file, null, 2)}\n`, "utf8");
+      evidenceWritten = evidencePath;
+    } catch {
+      evidenceWritten = null;
+    }
     const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
     const outcome = await analyzer.analyze({
       screens,
@@ -562,6 +767,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       transcriptPath: journal.transcriptPath,
       recordingPath: journal.recordingPath,
       screenshotDir,
+      evidencePath: evidenceWritten,
       screenshots: capture.screenshots(),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
@@ -581,7 +787,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
     }
-    const report = buildReport(withSignalFindings(outcome, signalFindings), {
+    const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
       quality,
       calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],

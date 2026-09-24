@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
-import { DEFAULT_QUALITY_POLICY, describeCandidate, gradeCandidates, parseQualityPolicy, QualityPolicyError, resolveQualityPolicy } from "./grade.js";
+import {
+  CALIBRATED_QUALITY_POLICY,
+  DEFAULT_QUALITY_POLICY,
+  defaultQualityPolicy,
+  describeCandidate,
+  gradeCandidates,
+  parseQualityPolicy,
+  policyFilters,
+  QualityPolicyError,
+  resolveQualityPolicy,
+} from "./grade.js";
 import { redactEvidence } from "./redact.js";
 import { UX_PROMPTS } from "./prompts.js";
 import type { UxEvidence } from "./types.js";
@@ -59,9 +69,17 @@ describe("gradeCandidates", () => {
 });
 
 describe("quality policy", () => {
-  it("default shows actionable + relevant-minor", () => {
+  it("#133: the default shows every grade — the uncalibrated grader labels, it does not filter", () => {
     expect(resolveQualityPolicy(undefined, {})).toEqual(DEFAULT_QUALITY_POLICY);
-    expect(DEFAULT_QUALITY_POLICY.show).toEqual(["actionable", "relevant-minor"]);
+    expect(DEFAULT_QUALITY_POLICY.show).toEqual(["actionable", "relevant-minor", "generic", "wrong"]);
+    expect(policyFilters(DEFAULT_QUALITY_POLICY)).toBe(false);
+    // "consumer" has only single-app evidence with a held-out kappa of 0.15 < 0.4: still no default filtering.
+    expect(resolveQualityPolicy(undefined, {}, undefined, "consumer")).toEqual(DEFAULT_QUALITY_POLICY);
+    expect(defaultQualityPolicy("admin")).toEqual(DEFAULT_QUALITY_POLICY);
+  });
+  it("the filter stays an opt-in", () => {
+    expect(resolveQualityPolicy("actionable,relevant-minor", {}, undefined, "consumer")).toEqual(CALIBRATED_QUALITY_POLICY);
+    expect(policyFilters(CALIBRATED_QUALITY_POLICY)).toBe(true);
   });
   it("precedence: flag > env > config > default", () => {
     expect(resolveQualityPolicy("actionable", { JEVITATE_UX_SHOW: "wrong" }, ["generic"]).show).toEqual(["actionable"]);
