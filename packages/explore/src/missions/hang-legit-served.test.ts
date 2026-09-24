@@ -7,6 +7,8 @@ import { runGoalBasedMission } from "./goal-based.js";
 import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
 import { ScriptedJudge, withSession } from "../testkit.js";
+import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { verifyFix, type VerifySession } from "../verify-fix.js";
 
 /**
  * #153 — long-running LEGITIMATE work is not a hang: a started server stream (gRPC-web, NDJSON), a
@@ -20,6 +22,7 @@ const html = (body: string): string => `<!doctype html><html><body>${body}</body
 
 let server: Server;
 let origin: string;
+let simHits = 0;
 
 /** A page whose content arrives over a server stream that then stays open. */
 const streamPage = (endpoint: string): string =>
@@ -43,6 +46,21 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     switch (path) {
+      case "/sim":
+        // A paid action whose job then hangs: the page loses its controls while the request never ends.
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<div id="root"><button type="button" id="run">Run simulation (paid)</button></div><script>
+            document.getElementById("run").onclick = () => {
+              document.getElementById("root").innerHTML = "<p>Please hold</p>";
+              fetch("/api/sim", { method: "POST" });
+            };
+          </script>`),
+        );
+        return;
+      case "/api/sim":
+        simHits += 1; // every hit is one more paid simulation
+        held.push(res);
+        return;
       case "/rpc/Stream":
         // A gRPC-web SERVER STREAM: headers + a first message now, then it stays open.
         res.writeHead(200, { "content-type": "application/grpc-web+proto" });
@@ -177,4 +195,75 @@ describe("#153 — a link to a route visited earlier is navigation, not an actio
     expect(r.hang).toBeUndefined();
     expect(r.run.stop).toBe("no-progress");
   }, 90_000);
+});
+
+describe("#153 — a hang replay never re-sends a paid/destructive write by default", () => {
+  const port = new PlaywrightBrowserPort();
+  let opened = 0;
+  const freshSession = async (): Promise<VerifySession> => {
+    opened += 1;
+    const session = await port.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+    const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [origin]));
+    return { page: session.page, actor, close: () => session.close() };
+  };
+  const simulate = (safety?: { hangReplayWrites: boolean }) =>
+    withSession(
+      "hang-legit-paid-",
+      async (session) => {
+        const actor = CastActor.named("sim").whoCan(new BrowseTheWeb(session, [origin]));
+        return runGoalBasedMission({
+          actor,
+          judge: new ScriptedJudge([{ op: "click", target: "0" }, { op: "done" }]),
+          gen: new FakeGenerationGateway(),
+          goal: "run the simulation", // the goal asks for the paid action, so the run may click it once
+          allowlist: [origin],
+          startUrl: `${origin}/sim`,
+          successAssertion: { kind: "visible", target: { text: "Results" } },
+          openFreshSession: freshSession,
+          oracleTimeoutMs: 200,
+          ...(safety === undefined ? {} : { safety }),
+          ...FAST,
+        });
+      },
+      origin,
+    );
+
+  it("a hang reached after 'Run simulation (paid)' is NOT replayed: inconclusive, with the reason", async () => {
+    simHits = 0;
+    opened = 0;
+    const r = await simulate();
+    expect(r.run.stop).toBe("hang");
+    expect(r.hang?.hangKind).toBe("request-pending");
+    expect(r.outcome).toBe("inconclusive"); // never reproduced, never "not reproduced"
+    expect(r.hang?.reproduction).toMatchObject({ ran: 0, reproduced: 0, status: "inconclusive", runs: [] });
+    expect(r.hang?.reproduction.withheld).toMatchObject({ step: 2, control: "Run simulation (paid)", risk: "paid" });
+    expect(r.reason).toContain("inconclusive: replay would repeat a paid/destructive write (step 2");
+    expect(simHits).toBe(1); // the run's own click only
+    expect(opened).toBe(0); // no fresh context was even opened
+
+    // verify-fix applies the same rule: never replayed, never "fixed".
+    const check = await verifyFix({
+      recording: r.recording,
+      recordingStepIndex: r.hang?.repro.recordingStepIndex ?? 0,
+      fingerprint: r.hang?.fingerprint ?? "",
+      defectKind: "hang",
+      ...(r.hang === undefined ? {} : { hang: r.hang.signal }),
+      openSession: freshSession,
+      perceive: FAST,
+    });
+    expect(check.verdict).toBe("inconclusive");
+    expect(check.reason).toContain("replay would repeat a paid/destructive write");
+    expect(simHits).toBe(1);
+    expect(opened).toBe(0);
+  }, 120_000);
+
+  it("with safety.hangReplayWrites (--hang-replay-writes) it replays, re-sending the write", async () => {
+    simHits = 0;
+    const r = await simulate({ hangReplayWrites: true });
+    expect(r.run.stop).toBe("hang");
+    expect(r.outcome).toBe("hang");
+    expect(r.hang?.reproduction).toMatchObject({ attempts: 2, reproduced: 2, status: "reproduced" });
+    expect(r.hang?.reproduction.withheld).toBeUndefined();
+    expect(simHits).toBe(3); // the run + 2 replays, as the operator allowed
+  }, 180_000);
 });

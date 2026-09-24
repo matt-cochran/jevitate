@@ -3,7 +3,7 @@ import { fingerprintMarker, targetsFor, contentHash, type Attribution, type Issu
 import type { TranscriptEntry } from "./transcript.js";
 import type { AdversarialDefect } from "./missions/adversarial.js";
 import type { CrashReport } from "./crash-report.js";
-import type { HangFinding } from "./hang-repro.js";
+import { withheldReason, type HangFinding } from "./hang-repro.js";
 import type { HostPressure } from "./host-pressure.js";
 import { attributeCrash } from "@jevitate/domain";
 import { jevitateCodeRoots } from "./crash-report.js";
@@ -214,7 +214,9 @@ export function draftForHang(hang: HangFinding, ctx: DraftContext): IssueDraft {
     // Same offending element, met again elsewhere (#87): one finding, every route it hangs on — no
     // extra replay budget was spent confirming it again.
     ...(otherRoutes.length === 0 ? [] : [`Also seen on: ${otherRoutes.map((route) => `\`${route}\``).join(", ")}.`]),
-    `Reproduced **${r.reproduced}/${r.attempts}** in fresh browser contexts (${r.status}; ${r.ran} of the replays ran — a replay that could not run is no evidence either way). Fingerprint \`${hang.fingerprint}\`.`,
+    r.withheld !== undefined
+      ? `Not replayed — ${withheldReason(r.withheld)}. Fingerprint \`${hang.fingerprint}\`.`
+      : `Reproduced **${r.reproduced}/${r.attempts}** in fresh browser contexts (${r.status}; ${r.ran} of the replays ran — a replay that could not run is no evidence either way). Fingerprint \`${hang.fingerprint}\`.`,
   ].join("\n\n");
   const repro = [
     "## Steps to reproduce",

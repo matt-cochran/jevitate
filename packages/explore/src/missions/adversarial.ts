@@ -591,6 +591,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             openSession: params.openFreshSession,
             ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
             perceive: perceiveOpts,
+            ...(params.safety === undefined ? {} : { safety: params.safety }),
           });
     const finding = hangFinding(h, transcript.entries(), recordingStepIndex, reproduction);
     const segment = segments.indexOf(recorder);

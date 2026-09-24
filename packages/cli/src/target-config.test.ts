@@ -32,6 +32,18 @@ describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
     });
   });
 
+  it("#153: safety.hangReplayWrites is read from the file, the flag also opts in, and a non-boolean fails closed", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const p = join(dir, "targets.json");
+    await writeFile(p, JSON.stringify({ "http://a.test": { safety: { hangReplayWrites: true } }, "http://b.test": {} }));
+    const file = loadTargetsFile(p);
+    expect(resolveTargetConfig(file, "http://a.test").safety?.hangReplayWrites).toBe(true);
+    expect(resolveTargetConfig(file, "http://b.test").safety?.hangReplayWrites).toBeUndefined();
+    expect(resolveTargetConfig(file, "http://b.test", { hangReplayWrites: true }).safety?.hangReplayWrites).toBe(true);
+    await writeFile(p, JSON.stringify({ "http://a.test": { safety: { hangReplayWrites: "yes" } } }));
+    expect(() => loadTargetsFile(p)).toThrow(TargetConfigError);
+  });
+
   it("a missing file is no config; a malformed one fails closed", async () => {
     dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
     expect(loadTargetsFile(join(dir, "none.json"))).toEqual({});

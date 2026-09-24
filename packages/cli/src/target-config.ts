@@ -110,9 +110,13 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     if (f.allowDestructive !== undefined && typeof f.allowDestructive !== "boolean") {
       throw new TargetConfigError(`${where}.safety.allowDestructive must be a boolean`);
     }
+    if (f.hangReplayWrites !== undefined && typeof f.hangReplayWrites !== "boolean") {
+      throw new TargetConfigError(`${where}.safety.hangReplayWrites must be a boolean`);
+    }
     out.safety = {
       ...(f.deny === undefined ? {} : { deny: strings(f.deny, `${where}.safety.deny`) }),
       ...(f.allowDestructive === undefined ? {} : { allowDestructive: f.allowDestructive as boolean }),
+      ...(f.hangReplayWrites === undefined ? {} : { hangReplayWrites: f.hangReplayWrites as boolean }),
       ...(f.readRequests === undefined ? {} : { readRequests: strings(f.readRequests, `${where}.safety.readRequests`) }),
     };
   }
@@ -153,6 +157,8 @@ export interface TargetFlags {
   readonly allowDestructive?: boolean;
   /** `--read-rpc` patterns (added to the file's `safety.readRequests`). */
   readonly readRpc?: readonly string[];
+  /** `--hang-replay-writes` (#153; true wins over the file). */
+  readonly hangReplayWrites?: boolean;
 }
 
 /** The config for one origin: the file's entry, with flag patterns ADDED and flag numbers winning. */
@@ -169,10 +175,12 @@ export function resolveTargetConfig(
   const deny = [...(base.safety?.deny ?? []), ...(flags.deny ?? [])];
   const readRequests = [...(base.safety?.readRequests ?? []), ...(flags.readRpc ?? [])];
   const allowDestructive = flags.allowDestructive === true || base.safety?.allowDestructive === true;
+  const hangReplayWrites = flags.hangReplayWrites === true || base.safety?.hangReplayWrites === true;
   const safety: SafetyConfig = {
     ...(deny.length === 0 ? {} : { deny }),
     ...(readRequests.length === 0 ? {} : { readRequests }),
     ...(allowDestructive ? { allowDestructive } : {}),
+    ...(hangReplayWrites ? { hangReplayWrites } : {}),
   };
   return {
     ...(Object.keys(safety).length === 0 ? {} : { safety }),

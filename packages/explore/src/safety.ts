@@ -44,6 +44,11 @@ export interface SafetyConfig {
   readonly allowDestructive?: boolean;
   /** Extra read-request patterns for the write classifier (`--read-rpc`, #110). */
   readonly readRequests?: readonly string[];
+  /**
+   * Let hang replays (and verify-fix replays of a hang) re-send a paid/destructive write the original
+   * run sent (`--hang-replay-writes`, #153). Off by default: such a hang is reported inconclusive.
+   */
+  readonly hangReplayWrites?: boolean;
 }
 
 /** The built-in category a control's name falls into, with the words that matched, or null. */

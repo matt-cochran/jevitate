@@ -969,6 +969,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         recordingStepIndex: h.recordingStepIndex,
         hang: h.signal,
         openSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+        ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
         perceive: {
           ...(opts.target?.settle === undefined ? {} : { settleConfig: opts.target.settle }),
           ...(opts.target?.hangs === undefined ? {} : { hangConfig: opts.target.hangs }),
