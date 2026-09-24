@@ -44,6 +44,11 @@ export interface SafetyConfig {
   readonly allowDestructive?: boolean;
   /** Extra read-request patterns for the write classifier (`--read-rpc`, #110). */
   readonly readRequests?: readonly string[];
+  /**
+   * Let a find-out goal (no success check, ended by `report`) write (`--allow-writes`, #158). By
+   * default such a goal is read-only unless its text asks for a change (see `read-only.ts`).
+   */
+  readonly allowWrites?: boolean;
 }
 
 /** The built-in category a control's name falls into, with the words that matched, or null. */

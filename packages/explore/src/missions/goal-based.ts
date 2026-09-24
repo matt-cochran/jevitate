@@ -25,6 +25,7 @@ import {
   type InvariantReport,
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
+import { goalAsksForChange } from "../read-only.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -381,9 +382,13 @@ async function adjudicatedRun(
   // "passes" over zero checks) sends `done` through the advisory goal-judgment path instead of a
   // false independent pass.
   const hasChecks = checks.length > 0;
+  // #158 — a find-out goal is READ-ONLY unless its text asks for a change or `--allow-writes`:
+  // independent code refuses write flows and aborts write requests; the model is told.
+  const readOnly = !hasChecks && cfg.safety?.allowWrites !== true && !goalAsksForChange(cfg.goal);
   const runOnce = (): Promise<ExploreRun> =>
     explore({
       ...cfg,
+      readOnly,
       missionContext: hasChecks
         ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
         : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
