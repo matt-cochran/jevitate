@@ -121,6 +121,37 @@ describe("runInductionMission — defect judgment is advisory only", () => {
   }, 30_000);
 });
 
+describe("runInductionMission — a lost --storage-state session (#82)", () => {
+  test("a seed that redirects to /login ends scope-unreachable/inconclusive with an authentication-shaped reason, never exploring the logged-out pages", async () => {
+    // A FRESH, unauthenticated session — no login step — so /inbox's own auth redirect fires,
+    // exactly as a lost/expired --storage-state session would.
+    const browserPort = new PlaywrightBrowserPort();
+    const unauthSession = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url });
+    try {
+      const unauthActor = CastActor.named("unauth-tester").whoCan(new BrowseTheWeb(unauthSession, [site.url]));
+      const result = await runInductionMission({
+        page: unauthSession.page,
+        actor: unauthActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}/inbox`,
+        allowlist: [site.url],
+      });
+      expect(result.outcome).toBe("scope-unreachable");
+      expect(result.failure?.kind).toBe("target-unreachable");
+      expect(result.failure?.message).toBe(
+        "seed /inbox redirected to /login — the --storage-state session is not authenticated",
+      );
+      // Nothing was explored past the redirect — the run never touched /login's own controls.
+      expect(result.coverage.statesVisited).toBe(0);
+      expect(result.coverage.transitionsExercised).toBe(0);
+      expect(result.recordings).toEqual([]);
+    } finally {
+      await unauthSession.close();
+    }
+  }, 30_000);
+});
+
 describe("runInductionMission — bounds", () => {
   test("hitting maxActions terminates with outcome 'cap' and frontierExhausted=false", async () => {
     const result = await runInductionMission({

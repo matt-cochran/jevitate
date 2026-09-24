@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
@@ -98,6 +98,13 @@ export interface RunExplorationOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
@@ -149,6 +156,22 @@ function freshSessionOpener(
     const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [...allowlist]));
     return { page: session.page, actor, close: () => session.close() };
   };
+}
+
+/**
+ * Writes the browser context's live storageState (cookies + origin storage) to `file` when the
+ * caller asked for one (CLI `--save-storage-state`, #82) — so a rotating refresh token stays usable
+ * across runs instead of the `--storage-state` file it started from going stale on first use. The
+ * file holds live session credentials: written with mode 0600 (owner read/write only), and its
+ * contents are never logged. A no-op when `file` is undefined.
+ */
+async function persistStorageState(
+  session: { saveStorageState(file: string): Promise<void> },
+  file: string | undefined,
+): Promise<void> {
+  if (file === undefined) return;
+  await session.saveStorageState(file);
+  await chmod(file, 0o600);
 }
 
 function browserVersionOf(page: { context(): { browser(): { version(): string } | null } }): string | undefined {
@@ -301,6 +324,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
     return result;
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -467,6 +491,13 @@ export interface RunCoverageMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
@@ -474,7 +505,7 @@ export interface RunCoverageMissionOptions {
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
@@ -538,10 +569,19 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       recordingPaths.push(p);
     }
     journal.writeTranscript(result.transcript);
+    // A silent run that never proved anything (the seed redirected off-target, or the frontier
+    // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
+    // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
+    const bare = result.outcome === "crashed" ? "crashed" : result.outcome === "scope-unreachable" ? "inconclusive" : null;
+    const thin = bare === null && result.coverage.defects.length === 0 && !result.coverage.sufficiency.sufficient;
     const missionOutcome: MissionOutcome = combineOutcomes([
-      result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean",
+      bare ?? (thin ? "inconclusive" : result.coverage.defects.length > 0 ? "defects-found" : "clean"),
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
+    const coverageFailure: MissionFailure | undefined = thin
+      ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${result.coverage.sufficiency.shortfalls.join("; ")}` }
+      : undefined;
+    const failure = result.failure ?? coverageFailure;
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
@@ -557,12 +597,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       outcome: result.outcome,
       missionOutcome,
       exitCode,
-      ...(result.failure === undefined ? {} : { failure: result.failure }),
+      ...(failure === undefined ? {} : { failure }),
       recordingPaths,
       transcriptPath: journal.transcriptPath,
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -591,6 +632,13 @@ export interface RunAdversarialCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
   /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
   readonly secrets?: readonly string[];
   /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
@@ -716,6 +764,7 @@ export async function runAdversarialCliMission(
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }
@@ -744,6 +793,13 @@ export interface RunFeatureCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState (cookies + origin storage) here when the run ends
+   * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
+   * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
+   * written with mode 0600, and its contents are never logged.
+   */
+  readonly saveStorageState?: string;
 }
 
 /** The feature mission's result plus its typed verdict and exit code. */
@@ -777,11 +833,16 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       scope,
     });
     const missionOutcome: MissionOutcome = combineOutcomes([
-      result.outcome === "crashed" ? "crashed" : "clean",
+      result.outcome === "crashed"
+        ? "crashed"
+        : result.outcome === "scope-unreachable"
+          ? "inconclusive"
+          : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
     return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
   } finally {
+    await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
 }

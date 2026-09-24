@@ -1,4 +1,4 @@
-import type { Dialog, Page } from "playwright";
+import type { Dialog, ElementHandle, Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Target } from "@jevitate/screenplay";
 import { descriptorToLocator } from "@jevitate/recorder";
@@ -101,6 +101,15 @@ export async function reloadPage(page: Page): Promise<ActResult> {
 const WAIT_MS = 250;
 /** Bound (ms) on selecting an option. */
 const SELECT_TIMEOUT_MS = 5_000;
+/**
+ * Bound (ms) on `gate()`'s post-count actionability re-check (resolving an element handle, plus the
+ * click itself). A target that raced out from under the gate — detached, swapped, or obscured
+ * between the decision and this check — must fail fast, never wait out Playwright's 30s default
+ * actionability timeout and throw (#77).
+ */
+const GATE_TIMEOUT_MS = 2_000;
+/** Bound (ms) on the click Playwright performs after the gate has passed. */
+const CLICK_TIMEOUT_MS = 5_000;
 /** Pixels a scroll op moves. */
 const SCROLL_PX = 600;
 
@@ -116,7 +125,48 @@ function describe(d: TargetDescriptor): string {
   return `css=${d.css ?? "?"}`;
 }
 
-/** Re-checks actionability immediately before input. */
+/**
+ * BROWSER CODE — the classic "skip link" clipping idiom (#75): pulled to near-zero size, or off the
+ * viewport by a large NEGATIVE offset (`position:absolute; left:-9999px`). Deliberately narrow:
+ * ordinary below-the-fold content (positive offsets, reachable by scrolling) never matches.
+ */
+function isClippedOrPulledOffscreen(el: Element): boolean {
+  const rect = (el as HTMLElement).getBoundingClientRect();
+  if (rect.width <= 1 && rect.height <= 1) return true;
+  return rect.left <= -1_000 || rect.top <= -1_000;
+}
+
+/**
+ * A same-page anchor (`<a href="#…">` whose target is THIS page) that is visually hidden by the
+ * clip-to-nothing idiom — a "Skip to content" link is the common case. Playwright's actionability
+ * treats it as clickable (non-zero-ish box, not `display:none`), so without this check the gate lets
+ * it through and the mission burns its budget on a control a sighted user never sees or reaches
+ * (#75). Scoped to same-page anchors only — an off-screen control elsewhere stays eligible (scroll
+ * ops reach it).
+ */
+async function isHiddenSamePageAnchor(
+  handle: ElementHandle,
+  control: Control,
+  pageUrl: string,
+): Promise<boolean> {
+  if (control.tag !== "a" || control.href === null || control.href === undefined || control.href === "") return false;
+  try {
+    const link = new URL(control.href);
+    const current = new URL(pageUrl);
+    if (link.hash === "" || link.origin !== current.origin || link.pathname !== current.pathname) return false;
+  } catch {
+    return false;
+  }
+  return handle.evaluate(isClippedOrPulledOffscreen).catch(() => false);
+}
+
+/**
+ * Re-checks actionability immediately before input. `count()` is bounded/instant by construction
+ * (Playwright never waits for it); everything after resolves to a SINGLE element handle and checks
+ * state on IT — one bounded round trip instead of three separate locator calls — so a target that
+ * detaches between the decision and this check (a click that swaps in a form, a toast that closes:
+ * #77) is caught here as a failed act, never left to wait out an actionability timeout and throw.
+ */
 async function gate(actor: Actor, control: Control): Promise<string | null> {
   const page = actor.ability(BrowseTheWebToken).session.page;
   const locator = descriptorToLocator(page, control.descriptor);
@@ -127,15 +177,39 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
     return `target did not resolve: ${(e as Error).message}`;
   }
   if (count !== 1) return `target no longer unique (count=${count})`;
-  if (!(await locator.isVisible())) return "target not visible";
-  if (!(await locator.isEnabled())) return "target not enabled";
-  // Occlusion: a visible, enabled element can still be covered (a modal overlay, a sticky bar).
-  // Clicking it would wait out Playwright's actionability timeout and then throw — so refuse it
-  // up front, naming what covers it, exactly as a user could not click it either.
-  // The SAME predicate the snapshot filter uses (./occlusion.ts), so the two never disagree.
-  const cover = await locator.evaluate(occluderOf);
-  if (cover !== null) return `target obscured by ${cover}`;
-  return null;
+  let handle: ElementHandle<SVGElement | HTMLElement>;
+  try {
+    handle = await locator.elementHandle({ timeout: GATE_TIMEOUT_MS });
+  } catch (e) {
+    return `target no longer present: ${(e as Error).message.split("\n")[0]}`;
+  }
+  try {
+    let visible: boolean;
+    let enabled: boolean;
+    // Occlusion: a visible, enabled element can still be covered (a modal overlay, a sticky bar).
+    // Clicking it would wait out Playwright's actionability timeout and then throw — so refuse it
+    // up front, naming what covers it, exactly as a user could not click it either.
+    // The SAME predicate the snapshot filter uses (./occlusion.ts), so the two never disagree.
+    let cover: string | null;
+    try {
+      visible = await handle.isVisible();
+      enabled = visible && (await handle.isEnabled());
+      cover = visible ? await handle.evaluate(occluderOf) : null;
+    } catch (e) {
+      // The handle resolved a moment ago but the element is gone by now (detached mid-check) —
+      // a normal UI transition, recorded as a failed act, never a throw (#77).
+      return `target no longer present: ${(e as Error).message.split("\n")[0]}`;
+    }
+    if (!visible) return "target not visible";
+    if (!enabled) return "target not enabled";
+    if (cover !== null) return `target obscured by ${cover}`;
+    if (await isHiddenSamePageAnchor(handle, control, page.url())) {
+      return "target not actionable: visually-hidden skip link";
+    }
+    return null;
+  } finally {
+    await handle.dispose().catch(() => undefined);
+  }
 }
 
 /**
@@ -239,7 +313,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       const bad = await gate(actor, args.control);
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const descriptor = args.control.descriptor;
-      return dispatch(() => Click.on(targetFor(descriptor)).performAs(actor));
+      return dispatch(() => Click.on(targetFor(descriptor), { timeout: CLICK_TIMEOUT_MS }).performAs(actor));
     }
     case "type": {
       if (args.control === null) return { ok: false, mutated: false, reason: "type needs a target" };
@@ -270,7 +344,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
         // with none, Enter submits a single-line field or its form.
         const submit = await submitControlFor(actor, field, pool);
         if (submit !== null && (await gate(actor, submit)) === null) {
-          await Click.on(targetFor(submit.descriptor)).performAs(actor);
+          await Click.on(targetFor(submit.descriptor), { timeout: CLICK_TIMEOUT_MS }).performAs(actor);
           via = { kind: "click", control: submit };
           return;
         }

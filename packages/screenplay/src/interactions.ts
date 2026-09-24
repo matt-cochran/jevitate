@@ -17,12 +17,20 @@ export const Navigate = {
 };
 
 export const Click = {
-  on(target: Target): Activity {
+  /**
+   * `options.timeout` bounds Playwright's own click (its actionability wait +
+   * the click itself) — omit it and Playwright's default (30s) applies,
+   * unchanged from before this option existed. A caller with its own
+   * pre-click actionability gate (e.g. `@jevitate/explore`'s `act()`) passes a
+   * short bound so a target that raced out from under the gate fails fast
+   * rather than waiting out the full default.
+   */
+  on(target: Target, options?: { timeout?: number }): Activity {
     return {
       description: `Click ${target.description}`,
       async performAs(actor) {
         const page = actor.ability(BrowseTheWebToken).session.page;
-        await target.resolve(page).click();
+        await target.resolve(page).click(options);
       },
     };
   },
