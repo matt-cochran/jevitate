@@ -4,7 +4,7 @@ import { Navigate } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { combineOutcomes, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
-import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
+import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
@@ -38,6 +38,7 @@ import {
   normalizeRoute,
 } from "../adversarial/defect-fingerprint.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
+import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
 import { controlKey, planMisuseEpisode, type LastAction, type MisuseStep } from "../adversarial/form-misuse.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 
@@ -120,6 +121,8 @@ export type AdversarialStop =
   | "time-budget"
   | "strategies-exhausted"
   | "not-rendered"
+  /** The start URL did not stay in scope (it redirected elsewhere), so the target could not be tested. */
+  | "scope-unreachable"
   | "hang"
   | "crashed";
 
@@ -142,6 +145,8 @@ export interface AdversarialOutcome {
   readonly crash?: CrashReport;
   /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
   readonly timing: TimingSummary;
+  /** The target scope and every departure from it. */
+  readonly scope: AdversarialScope;
 }
 
 export interface AdversarialMissionParams {
@@ -190,7 +195,35 @@ export interface AdversarialMissionParams {
   readonly settle?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
   readonly hangs?: HangConfig;
+  /**
+   * Extra in-scope route globs (CLI `--route`, the feature mission's glob syntax). The scope is
+   * always the start URL's route and everything under it; these add to it.
+   */
+  readonly routeGlobs?: readonly string[];
 }
+
+/** One time the run left its target scope (and was reset to the start URL). */
+export interface ScopeDeparture {
+  /** The transcript step whose action left the scope. */
+  readonly step: number;
+  /** The (redacted) URL it landed on. */
+  readonly url: string;
+  /** What was acted on (control name or op). */
+  readonly action: string;
+}
+
+/** Where the run was allowed to hunt, and how often it left. Out-of-scope steps never count as coverage. */
+export interface AdversarialScope {
+  readonly routeGlobs: string[];
+  /** Steps whose result landed outside the scope (each was followed by a reset). */
+  readonly outOfScopeSteps: number;
+  /** The first departures (up to 50), in order. */
+  readonly departures: ScopeDeparture[];
+  /** Times the run moved to a fresh page (after a departure or a hang). */
+  readonly resets: number;
+}
+
+const MAX_LISTED_DEPARTURES = 50;
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
 
@@ -243,6 +276,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const now = params.now ?? Date.now;
   const timeBudgetMs = params.timeBudgetMs ?? DEFAULT_ADVERSARIAL_TIME_BUDGET_MS;
   if (params.strategies.length === 0) throw new Error("runAdversarialMission: at least one strategy is required");
+  // Scope containment (#64): the start route (and below it) plus the caller's globs.
+  const routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
+  const inScope = scopePredicate(params.allowlist, routeGlobs);
+  const departures: ScopeDeparture[] = [];
+  let outOfScopeSteps = 0;
 
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
   const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
@@ -301,6 +339,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
       heap: heap.samples(),
       timing: summarizeTimings(timings),
+      scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
             crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
@@ -379,13 +418,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   };
 
   /**
-   * After a hang: reset to a known state — a fresh page when the mission can open one (a hung page
-   * may not even navigate), else the same page — re-navigate to the start URL in a NEW Recording
-   * segment, and keep hunting. False when the mission cannot continue (an unresponsive page with no
-   * way to open a fresh one, or a start page that itself hangs).
+   * Starts a NEW Recording segment at the start URL on the current session page (after a reset):
+   * its findings replay from there, never through what ended the previous segment. Returns the
+   * perceived start page, or why the run cannot go on (the start page hangs, or does not stay in
+   * scope — e.g. the session was lost and it redirects to a login page).
    */
-  const resetAfterHang = async (h: HangSignal): Promise<{ snapshot: Snapshot; timing: PageTiming } | null> => {
-    if (!(await sessions.reset(h))) return null;
+  const restartAtSeed = async (): Promise<
+    { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }
+  > => {
     await monitorFor(sessions.page).instrument();
     recorder = new RunRecorder(site, undefined, secrets);
     segments.push(recorder);
@@ -395,9 +435,23 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     recorder.observed(back.snapshot.url, now(), back.timing);
     if (back.hang !== null) {
       await recordHang(back.hang, back.snapshot, back.timing);
-      return null;
+      return { ok: false, stop: "hang" };
     }
-    return { snapshot: back.snapshot, timing: back.timing };
+    if (!inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
+    return { ok: true, snapshot: back.snapshot, timing: back.timing };
+  };
+
+  /**
+   * After a hang: reset to a known state — a fresh page when the mission can open one (a hung page
+   * may not even navigate), else the same page — re-navigate to the start URL in a NEW Recording
+   * segment, and keep hunting. Null when the mission cannot continue (an unresponsive page with no
+   * way to open a fresh one, or a start page that itself hangs or leaves the scope).
+   */
+  const resetAfterHang = async (
+    h: HangSignal,
+  ): Promise<{ ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }> => {
+    if (!(await sessions.reset(h))) return { ok: false, stop: "hang" };
+    return restartAtSeed();
   };
 
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
@@ -543,6 +597,23 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         message: seed.reason ?? "seed page did not render",
       });
     }
+    if (!inScope(seed.snapshot.url)) {
+      // The start URL did not stay on the target (a redirect to a login page, another route): the
+      // run cannot test what it was asked to — it proves nothing, so it is never `clean`.
+      const message = `the start URL left the target scope (landed on ${redactUrl(seed.snapshot.url)})`;
+      transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "seed-load",
+        actOk: false,
+        reason: `${message} (inconclusive)`,
+        snapshot: seed.snapshot,
+        timing: seed.timing,
+      });
+      return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
+    }
     let snap = seed.snapshot;
     // A perception's timing is reported ONCE — on the first step decided on it — so a run whose
     // strategies found nothing to do on a page does not count that page's load several times.
@@ -642,7 +713,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
      * to a known state and hunts on; an off-origin page sends it back to the seed. "reset" means the
      * page the episode was planned on is gone; "stop" means the mission cannot continue.
      */
-    const observeAfter = async (step: number): Promise<"ok" | "reset" | "stop"> => {
+    const observeAfter = async (
+      step: number,
+      action: string,
+    ): Promise<{ kind: "ok" } | { kind: "reset" } | { kind: "stop"; stop: AdversarialStop }> => {
       const next = await perceiveNow();
       await drainLate(step);
       snap = next.snapshot;
@@ -655,29 +729,42 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
       );
       lastRecordedTarget = null;
+      let restarted: Awaited<ReturnType<typeof restartAtSeed>>;
       if (next.hang !== null) {
         await recordHang(next.hang, next.snapshot, next.timing);
         // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
         // budget. The hung route is not followed again (visit-route remembers it).
-        const fresh = await resetAfterHang(next.hang);
-        if (fresh === null) return "stop";
-        snap = fresh.snapshot;
-        snapTiming = fresh.timing;
-        last = null;
-        return "reset";
+        restarted = await resetAfterHang(next.hang);
+      } else if (!inScope(snap.url)) {
+        // Scope containment (#64; guardrail #1 for another origin): the action left the target.
+        // Record the departure, then reset to the start URL in a fresh page and hunt on there.
+        // The step spent out of scope counts as out-of-scope, never as coverage.
+        outOfScopeSteps += 1;
+        const landed = redactUrl(snap.url);
+        departures.push({ step, url: landed, action });
+        const fresh = params.openFreshSession !== undefined;
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "scope-reset",
+          actOk: true,
+          reason: `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+          snapshot: snap,
+          ...(snapTiming === undefined ? {} : { timing: snapTiming }),
+        });
+        snapTiming = undefined;
+        await sessions.fresh();
+        restarted = await restartAtSeed();
+      } else {
+        return { kind: "ok" };
       }
-      if (!isAuthorizedExploreTarget(snap.url, params.allowlist)) {
-        // Guardrail #1: never act off an authorized origin — go back to the seed and hunt on.
-        await Navigate.to(params.seedUrl).performAs(sessions.actor);
-        recorder.navigate(params.seedUrl, now());
-        const back = await perceiveNow();
-        snap = back.snapshot;
-        snapTiming = back.timing;
-        recorder.observed(snap.url, now(), back.timing);
-        last = null;
-        return "reset";
-      }
-      return "ok";
+      last = null;
+      if (!restarted.ok) return { kind: "stop", stop: restarted.stop };
+      snap = restarted.snapshot;
+      snapTiming = restarted.timing;
+      return { kind: "reset" };
     };
 
     while (stop === null) {
@@ -702,7 +789,16 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       let stepSnap = snap;
       let stepTiming = snapTiming;
       snapTiming = undefined;
-      const episode = planMisuseEpisode({ snapshot: snap, strategy, round, last, visitedLinks, exercised, rng: Math.random });
+      const episode = planMisuseEpisode({
+        snapshot: snap,
+        strategy,
+        round,
+        last,
+        visitedLinks,
+        exercised,
+        inScope,
+        rng: Math.random,
+      });
 
       if (episode === null) {
         idleStreak += 1;
@@ -773,13 +869,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
         if (verdict !== null) await fold(step, verdict.findings);
-        const after = await observeAfter(step);
-        if (after === "stop") {
-          stop = "hang";
+        const after = await observeAfter(step, s.control?.name ?? s.op);
+        if (after.kind === "stop") {
+          stop = after.stop;
           break;
         }
         // The rest of the episode was planned for a page that is gone.
-        if (after === "reset") break;
+        if (after.kind === "reset") break;
         stepSnap = snap;
         stepTiming = snapTiming;
         snapTiming = undefined;

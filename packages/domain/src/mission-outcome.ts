@@ -69,7 +69,13 @@ export function isBrokenRun(outcome: MissionOutcome): boolean {
 }
 
 /** What went wrong when an engine failure ended a run. */
-export type MissionFailureKind = "exception" | "page-crash" | "browser-disconnected" | "page-closed";
+export type MissionFailureKind =
+  | "exception"
+  | "page-crash"
+  | "browser-disconnected"
+  | "page-closed"
+  /** The run could not reach (or stay on) the page it was asked to test — e.g. the start URL redirects elsewhere. */
+  | "target-unreachable";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;

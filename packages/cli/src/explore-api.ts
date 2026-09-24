@@ -591,6 +591,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
+  /** Extra in-scope route globs (`--route`); the start URL's route is always in scope. */
+  readonly routeGlobs?: readonly string[];
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -652,6 +654,7 @@ export async function runAdversarialCliMission(
       seedUrl: opts.seedUrl,
       allowlist: opts.allowlist,
       strategies: opts.strategies,
+      ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
       ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),

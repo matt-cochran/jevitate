@@ -1279,7 +1279,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
-      "in-scope route glob for --feature (repeatable), e.g. /thread/**",
+      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial beyond the start URL's route",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1539,6 +1539,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(target === undefined ? {} : { target }),
             seedUrl: o.url,
             allowlist: advAllowlist,
+            ...(o.route.length > 0 ? { routeGlobs: o.route } : {}),
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(filing === undefined ? {} : { filing }),
