@@ -23,14 +23,16 @@ import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalMet } from "./decide.js";
-import { FillHelper, capMessage, chatReply, matchOption } from "./fill.js";
+import { FieldValueLog, FillHelper, capMessage, chatReply, matchOption } from "./fill.js";
 import {
   type SecretField,
   boundSecretField,
   maskSecretFields,
   secretFieldContext,
+  secretFieldNeedsValue,
   secretFieldSecrets,
   secretFieldValue,
+  secretFieldsToFill,
   secretPlaceholder,
 } from "./secret-fields.js";
 import { act } from "./act.js";
@@ -43,10 +45,14 @@ import {
   GOAL_CHECK_TRIGGER,
   GOAL_MET_THRESHOLD,
   REPLY_WAIT_MS,
+  STUCK_TURNS,
   UnsubmittedTypeTracker,
+  goalCallToAction,
   groundDone,
   isSubmitControl,
+  lastQuestion,
   readPageText,
+  repetitiveTurns,
   sameMessage,
   stillBusy,
   waitForChange,
@@ -229,6 +235,17 @@ const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset
 /** Roles whose click changes an input's value (so a later repeat of a write sends something new). */
 const TOGGLE_ROLES: ReadonlySet<string> = new Set(["checkbox", "radio", "switch", "option", "menuitemcheckbox", "menuitemradio"]);
 
+/** A button whose name reads as a form's submit (#111: a SPA's "Sign up" / "Create account" / "Save"). */
+const SUBMIT_LIKE_NAME = /^\s*(?:sign ?up|register|create(?: account)?|continue|log ?in|sign ?in|save|next|submit|confirm|finish)\b/i;
+
+/** A click that submits a form: a real submit control, a Send-like button, or a submit-named button. */
+const submitsAForm = (c: Control): boolean =>
+  c.submits === true || isSubmitControl(c) || ((c.role === "button" || c.tag === "button") && SUBMIT_LIKE_NAME.test(c.name));
+
+/** A click that may submit what was typed (#123: typed values count as used after it). */
+const buttonLike = (c: Control): boolean =>
+  c.role === "button" || c.tag === "button" || (c.tag === "input" && (c.inputType === "submit" || c.inputType === "button"));
+
 /** A control's identity across snapshots (indexes are per-snapshot only). */
 const keyOf = (c: Control): string => JSON.stringify(c.descriptor);
 
@@ -285,6 +302,30 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let incomplete: string | null = null;
   const unsent = new UnsubmittedTypeTracker();
   const conversation: { latestReply: string | null; sent: string[] } = { latestReply: null, sent: [] };
+  /** Consecutive message generations made while the conversation was stuck (#122). */
+  let stuckTurns = 0;
+  /** The current stuck episode was already told to the decision (#122). */
+  let stuckNoted = false;
+  /**
+   * After a user turn went out (#122): when the conversation is now stuck on content-free / repeated
+   * turns, the NEXT decision is told so once per episode — answer concretely, or take the page's
+   * call to action toward the goal.
+   */
+  const noteStuckConversation = (controls: readonly Control[]): void => {
+    if (!repetitiveTurns(conversation.sent)) {
+      stuckNoted = false;
+      return;
+    }
+    if (stuckNoted) return;
+    stuckNoted = true;
+    const cta = goalCallToAction(controls, cfg.goal);
+    history.push(
+      `the conversation is stuck: your last ${STUCK_TURNS} messages acknowledged or repeated without answering — ` +
+        `answer the assistant's question with a concrete fact or choice${cta === null ? "" : `, or take the page's call to action ${quote(cta.name, 80)}`}`,
+    );
+  };
+  /** The values this run typed into each form field, and which were submitted (#123). */
+  const valueLog = new FieldValueLog();
   /** Controls present just before a message was sent — the next snapshot's new ones were offered with the reply. */
   let offerBaseline: Set<string> | null = null;
   let offeredKeys = new Set<string>();
@@ -549,7 +590,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
       const path = safePath(snap.url);
-      if (lastPath !== null && path !== lastPath) unsent.submitted();
+      if (lastPath !== null && path !== lastPath) {
+        unsent.submitted();
+        valueLog.submitted();
+      }
       lastPath = path;
       const keys = new Map<string, Control>(snap.controls.map((c) => [keyOf(c), c]));
       unsent.retain(new Set(keys.keys()));
@@ -905,6 +949,41 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       const at = now();
 
+      // An EMPTY bound secret field (#111) is typed by code on its own — before a submit of its form,
+      // or once a validation message names it: the model cannot see the value and was seen never
+      // choosing `type` on it (a signup stuck on "Password: Please fill out this field"). Same
+      // guarantees as the chosen-`type` path below: placeholder only, Recording `{ redacted: true }`.
+      {
+        const submitting = decision.op === "click" && submitsAForm(control) ? control : null;
+        const due = secretFieldsToFill(snap.controls, cfg.secretFields, {
+          submitting,
+          status,
+          exclude: decision.op === "type" ? control : null,
+        });
+        for (const { control: field, field: binding, why } of due) {
+          if (!tracker.mayAct() || !(await secretFieldNeedsValue(page, field))) continue;
+          const t = now();
+          const value = secretFieldValue(binding, t);
+          const placeholder = secretPlaceholder(binding);
+          const r = await act(cfg.actor, { op: "type", control: field, value });
+          const cause = why === "submit" ? `before submitting with ${control.name || control.summary}` : "a validation message names it";
+          if (r.ok) {
+            recorder.fill(field.descriptor, { redacted: true, length: value.length }, t);
+            noteMutation(`type ${field.name}`, field.descriptor, snap.signature, t);
+            tracker.countAction();
+            history.push(`typed ${placeholder} into the empty ${field.name} (bound secret, typed by code — ${cause})`);
+          } else {
+            history.push(`type into ${field.name} failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
+          }
+          record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code — ${cause})` : (r.reason ?? "").split(value).join(placeholder), {
+            op: "type",
+            control: field,
+            strategy: "secret-field",
+            value: placeholder,
+          });
+        }
+      }
+
       // A bound secret field (#72): code types the real value (a TOTP code is computed now); the model,
       // history and transcript see only the placeholder, the Recording `{ redacted: true }`.
       const bound = decision.op === "type" ? boundSecretField(control, cfg.secretFields) : null;
@@ -949,6 +1028,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const isMessage =
         op === "send" || (op === "type" && sendable(control));
       if (isMessage) {
+        // Stuck detection (independent code, #122): the last user turns only acknowledged / promised,
+        // or said the same thing again. The next turn is generated with the stuck brief (answer the
+        // assistant's question with a concrete fact or choice), the decision is pointed at the
+        // page's call to action, and a conversation still stuck after that ends the run.
+        const stuck = repetitiveTurns(conversation.sent);
+        stuckTurns = stuck ? stuckTurns + 1 : 0;
+        if (stuckTurns > STUCK_TURNS) {
+          const reason = `stuck: the messages kept acknowledging or repeating without answering the assistant (still after ${STUCK_TURNS} nudged turns)`;
+          record(false, reason, { op });
+          incomplete = reason;
+          stop = "no-progress";
+          break;
+        }
         let text: string | null;
         try {
           text = await chatReply(cfg.gen, {
@@ -958,6 +1050,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             sentMessages: conversation.sent,
             maxChars: replyMaxChars,
             secrets,
+            question: lastQuestion(conversation.latestReply),
+            stuck,
           });
         } catch (e) {
           const reason = `message generation unavailable: ${firstLine(e)}`;
@@ -1015,6 +1109,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             `sent ${quote(message)} via ${via?.kind === "click" ? `"${via.control.name}"` : "Enter"} → ` +
               (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
           );
+          noteStuckConversation(snap.controls);
           record(true, forcedNote ?? undefined, { op, message, reply });
           lastActedOp = op;
           continue;
@@ -1100,8 +1195,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
             secrets,
-            // A text field's value is field-scoped and checked before it is typed (#71).
-            ...(decision.op === "type" ? { field: { tag: control.tag, inputType: control.inputType } } : {}),
+            // A text field's value is field-scoped and checked before it is typed (#71); in an
+            // add-another flow it is the next item, not one already submitted into this field (#123).
+            ...(decision.op === "type"
+              ? { field: { tag: control.tag, inputType: control.inputType }, alreadyUsed: valueLog.used(control.name || control.summary) }
+              : {}),
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
@@ -1136,6 +1234,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             // A form field (not a message composer) is submitted with its form's own button; retyping
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
+            valueLog.typed(control.name || control.summary, text);
           } else recorder.select(control.descriptor, text, at);
           noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
@@ -1183,6 +1282,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
+          // What was typed has now been submitted (a form's button): an add-another flow's next
+          // item must differ from it (#123).
+          if (buttonLike(control) || control.submits === true) valueLog.submitted();
           // Toggling an input (a checkbox, a radio, a switch) changes what a repeat would send (#92).
           if (TOGGLE_ROLES.has(control.role) || (control.tag === "input" && control.inputType !== "submit" && control.inputType !== "button")) {
             sideEffects.inputChanged();
@@ -1200,6 +1302,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               `clicked ${control.name}${quickReply ? " (a quick reply)" : ""} → ` +
                 (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
             );
+            noteStuckConversation(snap.controls);
           } else {
             history.push(`clicked ${control.name}`);
           }

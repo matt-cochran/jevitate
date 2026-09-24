@@ -34,8 +34,8 @@ it("form.value carries the field-scoped instructions in the prompt body (promptV
   };
   const g = new OpenRouterGenerationGateway({ store, catalog, constraints, call });
   const res = await g.generate("form.value", input);
-  expect(body).toMatchObject({ task: "form.value", promptVersion: "3", input: { instructions: FORM_VALUE_INSTRUCTIONS } });
-  expect(res.provenance.promptVersion).toBe("3");
+  expect(body).toMatchObject({ task: "form.value", promptVersion: "4", input: { instructions: FORM_VALUE_INSTRUCTIONS } });
+  expect(res.provenance.promptVersion).toBe("4");
 });
 
 it("throws when the model's returned object fails the task schema", async () => {

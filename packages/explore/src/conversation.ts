@@ -79,6 +79,128 @@ export function newPageText(baseline: string, current: string, sent: string): st
   return fresh.filter((l) => !(/\d/.test(l) && gone.has(shape(l)))).join("\n");
 }
 
+/**
+ * The NEW assistant turn only (#122): `newPageText` is every line that changed anywhere on the page
+ * — a sidebar that re-rendered its inquiry titles, a header counter, a whole page after navigation —
+ * so the "reply" was often the whole page. When the sent message is echoed on the page, the turn is
+ * the first run of new lines AFTER the message's last occurrence (a transcript renders the reply
+ * below the message it answers); new text elsewhere on the page is not part of the turn, and when
+ * nothing new follows the message there is no reply yet. Without an echo, every new line counts
+ * (`newPageText`).
+ */
+export function newTurnText(baseline: string, current: string, sent: string): string {
+  const all = newPageText(baseline, current, sent);
+  const sentN = norm(sent);
+  if (sentN.length === 0 || all === "") return all;
+  const lines = current.split("\n").map(norm).filter((l) => l.length > 0);
+  const isSent = (l: string): boolean =>
+    (sentN.includes(l) && l.length >= Math.min(sentN.length, AUTHORED_FRAGMENT_CHARS)) || (l.includes(sentN) && l.length - sentN.length < 24);
+  let anchor = -1;
+  lines.forEach((l, i) => {
+    if (isSent(l)) anchor = i;
+  });
+  if (anchor === -1) return all;
+  // Which lines are new: the same multiset difference as `newPageText`, in document order.
+  const before = new Map<string, number>();
+  for (const l of baseline.split("\n").map(norm).filter((l) => l.length > 0)) before.set(l, (before.get(l) ?? 0) + 1);
+  const fresh = new Set(all.split("\n"));
+  const isNew = lines.map((l) => {
+    const n = before.get(l) ?? 0;
+    if (n > 0) {
+      before.set(l, n - 1);
+      return false;
+    }
+    return true;
+  });
+  const turn: string[] = [];
+  for (let i = anchor + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (isNew[i] && fresh.has(l)) turn.push(l);
+    // Filtered new text (busy text, the echo) neither belongs to the turn nor ends it.
+    else if (isNew[i]) continue;
+    else if (turn.length > 0) break;
+  }
+  return turn.join("\n");
+}
+
+/**
+ * The assistant's last question in a reply (#122): the last sentence ending in `?`, bounded — what
+ * the next user turn must answer. null when the reply asks nothing.
+ */
+export function lastQuestion(reply: string | null): string | null {
+  if (reply === null) return null;
+  const sentences = norm(reply).match(/[^.!?\n]*\?/g);
+  const q = sentences?.map((s) => s.trim()).filter((s) => s.length >= 3).pop();
+  return q === undefined ? null : q.slice(-300);
+}
+
+/** Consecutive user turns that make the conversation stuck (#122). */
+export const STUCK_TURNS = 3;
+/** Word overlap (Jaccard) above which two user turns say the same thing (#122). */
+export const STUCK_TURN_OVERLAP = 0.6;
+
+const STOP_WORDS = new Set(
+  "a an the and or but to of in on for with at by from as is are was were be been it its this that these those i i'll i'm we we'll you your my our me us let's will can so then just".split(
+    " ",
+  ),
+);
+const contentWords = (s: string): Set<string> =>
+  new Set((s.toLowerCase().match(/[\p{L}\p{N}$]+(?:['’][\p{L}]+)?/gu) ?? []).filter((w) => !STOP_WORDS.has(w.replace("’", "'"))));
+
+/** Word-set Jaccard overlap of two messages (stop words aside): 1 = the same words. */
+export function turnSimilarity(a: string, b: string): number {
+  const x = contentWords(a);
+  const y = contentWords(b);
+  if (x.size === 0 && y.size === 0) return 1;
+  const shared = [...x].filter((w) => y.has(w)).length;
+  return shared / (x.size + y.size - shared);
+}
+
+/** An acknowledgement opener ("That makes sense", "I appreciate…", "Sounds good"). */
+const ACKNOWLEDGE =
+  /^(?:ok(?:ay)?|sure|great|perfect|thanks?|thank you|got it|understood|sounds good|(?:that )?makes sense|that['’]s helpful|i appreciate|i see|noted|right|alright|absolutely|of course|agreed)\b/i;
+/** A deferral: promising to do the work later instead of answering ("I'll pull the data…"). */
+const DEFER =
+  /\b(?:i['’]?ll|i will|i['’]m going to|i am going to|let me|let['’]s|let us|we['’]ll|we will)\s+(?:\w+\s+){0,2}?(?:start|begin|pull|compil\w*|gather|get|look|check|prioriti[sz]e|focus|work|follow|circle|put|collect|dig|review|find|reach|send|prepare|think)\b/i;
+/** Substance: a number, an amount, a date, or an explicit choice. */
+const SUBSTANCE = /\d|\$|€|£|\b(?:go with|choose|chose|pick|picked|prefer|option|yes|no)\b/i;
+
+/**
+ * A content-free user turn (#122): an acknowledgement or a promise to do something later, with no
+ * fact (number, amount, date) and no choice in it — it answers nothing the assistant asked.
+ */
+export function contentFreeTurn(message: string): boolean {
+  const m = norm(message);
+  return (ACKNOWLEDGE.test(m) || DEFER.test(m)) && !SUBSTANCE.test(m);
+}
+
+/**
+ * Stuck detection (independent code, #122): the last `STUCK_TURNS` user turns each either say
+ * nothing (`contentFreeTurn`) or repeat an adjacent turn (word overlap above `STUCK_TURN_OVERLAP`).
+ */
+export function repetitiveTurns(sent: readonly string[], n = STUCK_TURNS): boolean {
+  if (sent.length < n) return false;
+  const last = sent.slice(-n);
+  const similar = (i: number, j: number): boolean =>
+    j >= 0 && j < last.length && turnSimilarity(last[i]!, last[j]!) > STUCK_TURN_OVERLAP;
+  return last.every((m, i) => contentFreeTurn(m) || similar(i, i - 1) || similar(i, i + 1));
+}
+
+/**
+ * The page's visible call to action toward the goal (#122), when a stuck conversation should take it
+ * instead: an enabled button/link whose name points onward (`→`, `›`, `»`) or shares a content word
+ * with the goal — the arrow-marked first. null when there is none.
+ */
+export function goalCallToAction(controls: readonly Control[], goal: string): Control | null {
+  const goalWords = new Set([...contentWords(goal)].filter((w) => w.length >= 3));
+  const clickable = controls.filter(
+    (c) => c.enabled && (c.role === "button" || c.role === "link" || c.tag === "button" || c.tag === "a") && c.name.length > 0 && c.name.length <= 80,
+  );
+  const onward = clickable.filter((c) => /[→›»]\s*$/.test(c.name));
+  const related = (c: Control): boolean => [...contentWords(c.name)].some((w) => goalWords.has(w));
+  return onward.find(related) ?? onward[0] ?? clickable.find((c) => related(c) && !SUBMIT_NAME.test(c.name)) ?? null;
+}
+
 /** A page line this long (or the whole message) found inside a sent message is the message echoed. */
 const AUTHORED_FRAGMENT_CHARS = 24;
 
@@ -196,7 +318,7 @@ export async function waitForReply(
   for (;;) {
     if (remaining() <= 0) return result(false, "ceiling");
     const text = await readPageText(page);
-    const fresh = newPageText(opts.baseline, text, opts.sent);
+    const fresh = newTurnText(opts.baseline, text, opts.sent);
     const t = Date.now();
     if (fresh !== latest) {
       latest = fresh;
@@ -214,7 +336,7 @@ export async function waitForReply(
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.
       await monitor.waitSettled({ quietMs, ceilingMs: Math.max(1, Math.min(remaining(), 15_000)) }).catch(() => undefined);
       const againText = await readPageText(page);
-      const again = newPageText(opts.baseline, againText, opts.sent);
+      const again = newTurnText(opts.baseline, againText, opts.sent);
       const stillBusy =
         (await page.evaluate(visibleBusyIndicator).catch(() => null)) ??
         (pendingStatusShown(opts.baseline, againText) ? "pending status" : null);
