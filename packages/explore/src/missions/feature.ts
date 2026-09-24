@@ -426,6 +426,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
             confidence: null,
             chosenBy: "strategy",
             strategy: "safety-policy",
+            origin: "engine",
             actOk: false,
             reason: unsafe.reason,
             snapshot: decidedOn,

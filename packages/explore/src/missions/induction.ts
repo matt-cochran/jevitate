@@ -527,6 +527,7 @@ async function runInductionFrontier(
             confidence: null,
             chosenBy: "strategy",
             strategy: "safety-policy",
+            origin: "engine",
             actOk: false,
             reason: unsafe.reason,
             snapshot: snap,

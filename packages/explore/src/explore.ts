@@ -1083,7 +1083,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const unsafe = safety.refuses(control);
         if (unsafe !== null) {
           history.push(unsafe.reason);
-          record(false, unsafe.reason);
+          record(false, unsafe.reason, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
