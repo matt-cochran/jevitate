@@ -12,7 +12,7 @@ import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import {
@@ -575,6 +575,8 @@ export interface RunUsabilityMissionOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
   readonly browser?: BrowserLaunchOptions;
+  /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
+  readonly emulation?: EmulationSpec;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) — the
    * deterministic authenticated pre-step. Holds live session cookies: handed only to the
@@ -690,6 +692,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
+    ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await port.open(launch);

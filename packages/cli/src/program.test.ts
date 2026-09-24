@@ -833,6 +833,60 @@ test("verify-fix --device 'Nokia 9000' is refused before any replay", async () =
   expect(parsed.error.message).toContain("Nokia 9000");
 });
 
+test("explore --strategy usability --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["explore", "--strategy", "usability", "--url", "http://127.0.0.1:1/", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("journey run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["journey", "run", "some-id", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_JOURNEY_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("load run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["load", "run", "some-id", "--authorized-origin", "http://127.0.0.1:1", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_LOAD_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("source run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["source", "run", "some-source", "some-id", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_SOURCE_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
 test("explore --help documents the default viewport and --viewport/--device (#149)", () => {
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { contentHash } from "@jevitate/domain";
 import { redactUrl } from "@jevitate/ai-core";
+import type { Box } from "@jevitate/interpreter";
 import { redactText } from "./redact.js";
 import { normalizeRoute } from "./adversarial/defect-fingerprint.js";
 
@@ -17,12 +18,10 @@ import { normalizeRoute } from "./adversarial/defect-fingerprint.js";
  * finding (defect vs. signal finding); this module only detects and attributes.
  */
 
-export interface OverflowRect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
+/** A rendered box, in viewport CSS-px coordinates — `@jevitate/interpreter`'s shared geometry type
+ *  (#148), reused here rather than duplicated: the same `getBoundingClientRect()` shape every
+ *  visual-state/geometry check already uses. */
+export type OverflowRect = Box;
 
 export interface OverflowElement {
   /** testId / role+name / short CSS path — clipped and redacted (an aria-label can carry PII, #149/A12). */

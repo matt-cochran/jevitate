@@ -161,6 +161,28 @@ describe("runJourneyLoadTest", () => {
     for (const opts of opens) expect(opts.storageState).toBe("/tmp/state.json");
   });
 
+  it("#149: --viewport/--device (opts.emulation) reaches EVERY pool member's BrowserPort.open", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "load-api-"));
+    await seedJourney(dir);
+    const sessions: FakeSession[] = [];
+    const opens: OpenOptions[] = [];
+
+    await runJourneyLoadTest({
+      dir,
+      id: "checkout",
+      params: {},
+      concurrency: 2,
+      iterationsPerActor: 1,
+      seed: 1,
+      authorizedOrigins: ["https://example.com"],
+      emulation: { viewport: { width: 375, height: 812 } },
+      browserPortFactory: fakeBrowserPortFactory(sessions, opens),
+    });
+
+    expect(opens).toHaveLength(2);
+    for (const opts of opens) expect(opts.viewport).toEqual({ width: 375, height: 812 });
+  });
+
   it("#118: a journey declaring metadata.requiresAuth refuses BEFORE any browser opens when no --storage-state is given", async () => {
     const dir = await mkdtemp(join(tmpdir(), "load-api-"));
     await seedJourney(dir, "https://example.com", { requiresAuth: true });

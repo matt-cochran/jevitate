@@ -82,9 +82,9 @@ async function makeStores() {
 /** A runner seam spy: records whether it ran and what it was handed, so the
  *  asserts-it-refuses tests can prove NO browser/run happened past a gate. */
 function makeRunnerSpy() {
-  const calls: { file: SharedJourneyFile; params: Record<string, string>; storageState?: string }[] = [];
-  const runJourney: RunResolvedJourney = async (file, params, _policy, storageState) => {
-    calls.push({ file, params, storageState });
+  const calls: { file: SharedJourneyFile; params: Record<string, string>; storageState?: string; emulation?: Parameters<RunResolvedJourney>[4] }[] = [];
+  const runJourney: RunResolvedJourney = async (file, params, _policy, storageState, emulation) => {
+    calls.push({ file, params, storageState, emulation });
     return { outcome: "ok", output: { ran: file.metadata.id } } satisfies JourneyRunResult;
   };
   return { runJourney, calls };
@@ -121,6 +121,20 @@ describe("#26 runSourceJourney (run-gate wired)", () => {
     await runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {}, storageState: "/tmp/state.json" });
 
     expect(spy.calls[0].storageState).toBe("/tmp/state.json");
+  });
+
+  test("#149: passes --viewport/--device (opts.emulation) through to the runner seam", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+    const spy = makeRunnerSpy();
+    const deps: SourceApiDeps & { runJourney: RunResolvedJourney } = {
+      sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney: spy.runJourney,
+    };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    await runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {}, emulation: { device: "iPhone 13" } });
+
+    expect(spy.calls[0].emulation).toEqual({ device: "iPhone 13" });
   });
 
   test("SECURITY: refuses an UNREGISTERED source (UnknownSourceError) and NEVER runs", async () => {

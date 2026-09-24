@@ -75,6 +75,23 @@ describe("runJourneyProgrammatically", () => {
     expect("storageState" in opens[0]!).toBe(false);
   });
 
+  it("#149: --viewport/--device (opts.emulation) reaches BrowserPort.open", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "journey-api-"));
+    await seedJourney(dir);
+    const opens: OpenOptions[] = [];
+
+    await runJourneyProgrammatically({
+      dir,
+      id: "settings",
+      params: {},
+      emulation: { device: "iPhone 13" },
+      browserPortFactory: fakeBrowserPortFactory(opens),
+    });
+
+    expect(opens).toHaveLength(1);
+    expect(opens[0]!.device).toBe("iPhone 13");
+  });
+
   it("#118: a journey declaring metadata.requiresAuth refuses BEFORE any browser opens when no storageState is given", async () => {
     const dir = await mkdtemp(join(tmpdir(), "journey-api-"));
     await seedJourney(dir, { requiresAuth: true });

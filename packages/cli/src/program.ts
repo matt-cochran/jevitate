@@ -1000,7 +1000,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  withFixtureFlags(journey.command("run <id>"))
+  withEmulationFlags(withFixtureFlags(journey.command("run <id>")))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1019,7 +1019,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const fixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState, selfHeal, real, fakeAi, json } = this.opts<{
+      const { dir, param, storageState, selfHeal, real, fakeAi, json, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -1027,10 +1027,17 @@ export function buildProgram(deps: CliDeps): Command {
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
-      }>();
+      } & EmulationFlags>();
 
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let journeyRunEmulation: EmulationSpec | undefined;
+      try {
+        journeyRunEmulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
 
@@ -1075,6 +1082,7 @@ export function buildProgram(deps: CliDeps): Command {
           policy,
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
           fixtures: (site) => {
@@ -1380,8 +1388,7 @@ export function buildProgram(deps: CliDeps): Command {
   // run` stays the LOCAL FsJourneyStore path; keeping remote runs here keeps the
   // two trust boundaries visibly separate. The run NEVER bypasses a gate: every
   // refusal below is a typed error thrown by `resolveForRun` BEFORE any browser.
-  source
-    .command("run <name> <journeyId>")
+  withEmulationFlags(source.command("run <name> <journeyId>"))
     .description("run a Journey from a trusted remote source through the run-gate")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1390,13 +1397,20 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string, journeyId: string) {
-      const { param, storageState, json } = this.opts<{
+      const { param, storageState, json, ...emulationFlags } = this.opts<{
         param: Record<string, string>;
         storageState?: string;
         json?: boolean;
-      }>();
+      } & EmulationFlags>();
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_SOURCE_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let sourceRunEmulation: EmulationSpec | undefined;
+      try {
+        sourceRunEmulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_SOURCE_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {
@@ -1408,6 +1422,7 @@ export function buildProgram(deps: CliDeps): Command {
           sourceName: name,
           journeyId,
           params: param,
+          ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
         }));
         const envelope = ok(result);
@@ -1447,8 +1462,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   const load = program.command("load");
 
-  load
-    .command("run <journeyId>")
+  withEmulationFlags(load.command("run <journeyId>"))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
@@ -1470,7 +1484,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState, json } = this.opts<{
+      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState, json, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         authorizedOrigin: string[];
@@ -1479,7 +1493,7 @@ export function buildProgram(deps: CliDeps): Command {
         seed: string;
         storageState?: string;
         json?: boolean;
-      }>();
+      } & EmulationFlags>();
       if (authorizedOrigin.length === 0) {
         emitJson(
           program,
@@ -1489,6 +1503,13 @@ export function buildProgram(deps: CliDeps): Command {
       }
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_LOAD_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      let loadRunEmulation: EmulationSpec | undefined;
+      try {
+        loadRunEmulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_LOAD_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {
@@ -1501,6 +1522,7 @@ export function buildProgram(deps: CliDeps): Command {
           seed: Number(seed),
           authorizedOrigins: authorizedOrigin,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
         }).then((r) => withEngine(r));
         const envelope = ok(report);
@@ -2281,6 +2303,7 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...(emulation === undefined ? {} : { emulation }),
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...withServerLog,
           });
