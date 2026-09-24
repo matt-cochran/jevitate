@@ -3,6 +3,7 @@ import type { Op } from "./actions.js";
 import type { Control, Snapshot } from "./snapshot.js";
 import { REDACTION_MASK, redactText, redactUrl } from "./redact.js";
 import type { PageTiming, RequestTiming } from "./timing.js";
+import type { RunAnswer } from "./answer.js";
 
 /**
  * The transcript's copy of a perception's timing: redacted, and WITHOUT the per-request sample list
@@ -20,6 +21,21 @@ function redactDescriptor(d: TargetDescriptor, secrets: readonly string[]): Targ
     ...(d.text === undefined ? {} : { text: redactText(d.text, secrets) }),
     ...(d.frameUrl === undefined ? {} : { frameUrl: redactText(redactUrl(d.frameUrl), secrets) }),
     ...(d.container === undefined ? {} : { container: redactDescriptor(d.container, secrets) }),
+  };
+}
+
+function redactAnswer(a: TranscriptAnswer, secrets: readonly string[]): TranscriptAnswer {
+  const r = (v: string): string => redactText(v, secrets);
+  return {
+    text: r(a.text),
+    accepted: a.accepted,
+    evidence: a.evidence.map((e) => ({
+      ...e,
+      claim: r(e.claim),
+      quote: r(e.quote),
+      url: e.url === null ? null : r(redactUrl(e.url)),
+      ...(e.why === undefined ? {} : { why: r(e.why) }),
+    })),
   };
 }
 
@@ -81,6 +97,8 @@ export interface TranscriptEntry {
   readonly reply?: TranscriptReply;
   /** True when this step typed into a `type=password` field: its value is never recorded, even synthetic. */
   readonly redacted?: boolean;
+  /** For a `report` (#101): the proposed answer, whether code accepted it, and each claim's evidence. */
+  readonly answer?: TranscriptAnswer;
   /**
    * The value a `type`/`select` step entered (#98), redacted: registered secrets are masked, a
    * bound secret field shows only its placeholder, and a `type=password` field's value is never
@@ -108,6 +126,11 @@ export interface TranscriptReply {
   readonly endedBy?: "reply" | "idle" | "ceiling";
 }
 
+/** A reported answer as the transcript keeps it (redacted). */
+export interface TranscriptAnswer extends RunAnswer {
+  readonly accepted: boolean;
+}
+
 export interface TranscriptStep {
   readonly op: Op | null;
   readonly control: Control | null;
@@ -126,6 +149,7 @@ export interface TranscriptStep {
   readonly redacted?: boolean;
   /** The value typed/selected (redacted by `record`; see `TranscriptEntry.value`). */
   readonly value?: string;
+  readonly answer?: TranscriptAnswer;
 }
 
 /**
@@ -171,6 +195,7 @@ export class TranscriptLog {
       ...(step.value === undefined
         ? {}
         : { value: step.redacted === true || isPasswordControl(step.control) ? REDACTION_MASK : redactText(step.value, this.#secrets) }),
+      ...(step.answer === undefined ? {} : { answer: redactAnswer(step.answer, this.#secrets) }),
       ...(step.control === null ? {} : { descriptor: redactDescriptor(step.control.descriptor, this.#secrets) }),
     };
     this.#entries.push(entry);

@@ -97,6 +97,12 @@ describe("messages and options", () => {
     expect(withoutAuthored(page, ["Next steps for Preveti to investigate: pricing"])).toBe("Assistant\nWhat else?");
   });
 
+  it("withoutAuthored keeps the app's short status lines that merely occur inside a sent message (#91)", () => {
+    const page = "Bet saved\nApproved\nGreat, keep it Approved once the Bet saved";
+    expect(withoutAuthored(page, ["Great, keep it Approved once the Bet saved"])).toBe("Bet saved\nApproved");
+    expect(withoutAuthored("Bet saved\nok", ["Bet saved"])).toBe("ok");
+  });
+
   it("sameMessage compares normalized text", () => {
     expect(sameMessage("  Hello   there ", "hello there")).toBe(true);
     expect(sameMessage("hello", "hello!")).toBe(false);
