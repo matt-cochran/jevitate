@@ -3,6 +3,7 @@ import {
   InvariantSpecError,
   UNKNOWN,
   evaluateInvariantExpression,
+  invariantAuthSecretRefs,
   mergeInvariantSpecs,
   parseInvariantExpression,
   parseJsonPath,
@@ -68,6 +69,41 @@ describe("invariant spec schema (#86)", () => {
     expect(refusal({ observe: { n: { probe: { json: "$.a" } } }, invariants: [{ id: "a", require: "n > 0" }] }).join()).toMatch(
       /exactly one of get or head/,
     );
+  });
+
+  it("#135: a probe's authFrom is exactly one of localStorage, cookie or secret", () => {
+    const spec = (authFrom: unknown) => ({
+      observe: { n: { probe: { get: "/v1/imports", authFrom } } },
+      invariants: [{ id: "a", require: "n > 0" }],
+    });
+    expect(validateInvariantSpec(spec({ localStorage: "tok" }), ALLOW).invariants[0]?.id).toBe("a");
+    expect(validateInvariantSpec(spec({ cookie: "sid" }), ALLOW).invariants[0]?.id).toBe("a");
+    expect(validateInvariantSpec(spec({ secret: "env:APP_TOKEN" }), ALLOW).invariants[0]?.id).toBe("a");
+    expect(validateInvariantSpec(spec({ localStorage: "tok", scheme: "" }), ALLOW).invariants[0]?.id).toBe("a");
+    expect(refusal(spec({}), ALLOW).join()).toMatch(/exactly one of localStorage, cookie or secret/);
+    expect(refusal(spec({ localStorage: "tok", cookie: "sid" }), ALLOW).join()).toMatch(/exactly one of localStorage, cookie or secret/);
+    // A `secret` ref must look like `env:VAR` — the same shape --secret-field uses.
+    expect(refusal(spec({ secret: "APP_TOKEN" }), ALLOW).join()).toMatch(/a secret ref must be "env:VAR"/);
+    expect(refusal(spec({ secret: "file:///etc/passwd" }), ALLOW).join()).toMatch(/a secret ref must be "env:VAR"/);
+    // Never a new method/payload surface: authFrom stays additive to a read-only GET/HEAD.
+    expect(refusal(spec({ localStorage: "tok", header: "X-Api-Key" }), ALLOW).join()).toMatch(/observe\.n\.probe\.authFrom/);
+  });
+
+  it("#135: invariantAuthSecretRefs lists every distinct env: ref a spec's probes declare", () => {
+    const spec = validateInvariantSpec(
+      {
+        observe: {
+          a: { probe: { get: "/x", authFrom: { secret: "env:TOK_A" } } },
+          b: { probe: { get: "/y", authFrom: { secret: "env:TOK_A" } } },
+          c: { probe: { get: "/z", authFrom: { secret: "env:TOK_B" } } },
+          d: { dom: { selector: "#d" } },
+        },
+        invariants: [{ id: "i", require: "a > 0 && b > 0 && c > 0 && d > 0" }],
+      },
+      ALLOW,
+    );
+    expect(invariantAuthSecretRefs(spec).sort()).toEqual(["env:TOK_A", "env:TOK_B"]);
+    expect(invariantAuthSecretRefs({ invariants: [] })).toEqual([]);
   });
 
   it("refuses a probe whose origin is not authorized, or that carries credentials", () => {

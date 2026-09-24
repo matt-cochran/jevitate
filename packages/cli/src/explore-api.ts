@@ -142,6 +142,8 @@ export interface RunExplorationOptions {
   readonly conversation?: ConversationOptions;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -269,9 +271,15 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
-  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well.
+  // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well. So is a
+  // declared probe's resolved auth token (#135) — redacted everywhere a run secret is, not only in
+  // the invariant monitor's own evidence.
   const bound = secretFieldSecrets(opts.secretFields);
-  const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
+  const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
+  const secrets =
+    opts.secrets === undefined && bound.length === 0 && authTokenValues.length === 0
+      ? undefined
+      : [...(opts.secrets ?? []), ...bound, ...authTokenValues];
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -320,6 +328,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       fixture,
       ...conversationConfig(opts.conversation),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
     });
 
     journal.writeRecording(mission.recording);

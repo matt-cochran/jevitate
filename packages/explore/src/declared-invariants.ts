@@ -19,6 +19,7 @@ import {
   type InvariantSpec,
   type JsonPathSegment,
   type ObservableSpec,
+  type ProbeAuthFrom,
   type ObservedValue,
   type Recording,
 } from "@jevitate/recording";
@@ -97,6 +98,12 @@ export interface InvariantMonitorOptions {
   readonly baseUrl: string;
   /** Registered secrets: redacted out of every value and evidence line. */
   readonly secrets?: readonly string[];
+  /**
+   * Resolved `authFrom.secret` refs (#135): `env:VAR` → its value, resolved by the CLI dispatch
+   * (this module never reads `process.env`). A probe whose `authFrom.secret` ref is not in here
+   * cannot authenticate and reads `unknown` — never silently probed without it.
+   */
+  readonly authTokens?: ReadonlyMap<string, string>;
   /** Sleep seam for `settle` polling (default `page.waitForTimeout`). */
   readonly sleep?: (page: Page, ms: number) => Promise<void>;
   /** Clock seam (ms). Default `Date.now`. */
@@ -201,6 +208,8 @@ export class InvariantMonitor {
   /** The latest value per `network` observable (and its redacted evidence). */
   readonly #network = new Map<string, { value: ObservedValue; evidence: string }>();
   readonly #tally = new Map<string, { checked: number; held: number; violated: number; unknown: number }>();
+  /** Every auth token this monitor has read (#135): scrubbed from evidence/values the instant it's read. */
+  readonly #authSecrets: string[] = [];
   #before: Snapshot | null = null;
 
   constructor(spec: InvariantSpec, opts: InvariantMonitorOptions) {
@@ -447,6 +456,43 @@ export class InvariantMonitor {
     return { values, evidence };
   }
 
+  /**
+   * Resolves a probe's `authFrom` (#135) into an `Authorization` header, reading the token from the
+   * run's own live session — never from a new credential path. `localStorage` is read via
+   * `page.evaluate` (in the page's own JS context); `cookie` from the browser context's cookie jar;
+   * `secret` from the CLI-resolved `authTokens` map (an `env:VAR` ref this module never resolves
+   * itself). The token is pushed into the redaction set the instant it is read — before it is ever
+   * used in a request — so it can never appear in evidence, an error, or the value the probe returns.
+   */
+  async #authHeaders(
+    page: Page,
+    authFrom: ProbeAuthFrom | undefined,
+  ): Promise<{ headers?: Record<string, string>; note: string } | { error: string }> {
+    if (authFrom === undefined) return { note: "" };
+    const scheme = authFrom.scheme ?? "Bearer";
+    const prefix = scheme === "" ? "" : `${scheme} `;
+    let token: string | null;
+    let source: string;
+    if (authFrom.localStorage !== undefined) {
+      const key = authFrom.localStorage;
+      source = `localStorage:${key}`;
+      token = await page.evaluate((k) => window.localStorage.getItem(k), key).catch(() => null);
+    } else if (authFrom.cookie !== undefined) {
+      const name = authFrom.cookie;
+      source = `cookie:${name}`;
+      const cookies = await page.context().cookies().catch(() => []);
+      token = cookies.find((c) => c.name === name)?.value ?? null;
+    } else if (authFrom.secret !== undefined) {
+      source = `secret:${authFrom.secret}`;
+      token = this.#opts.authTokens?.get(authFrom.secret) ?? null;
+    } else {
+      return { error: "authFrom names no source" };
+    }
+    if (token === null || token === "") return { error: `auth token unavailable (${source})` };
+    this.#authSecrets.push(token);
+    return { headers: { Authorization: `${prefix}${token}` }, note: ` (authenticated via ${source.split(":")[0]})` };
+  }
+
   async #read(page: Page, name: string, o: ObservableSpec): Promise<{ value: EvalValue; evidence?: string }> {
     if ("dom" in o) {
       const d = o.dom;
@@ -477,14 +523,20 @@ export class InvariantMonitor {
     if (url === null || url.username !== "" || url.password !== "" || !isAuthorizedExploreTarget(url.href, this.#opts.allowlist)) {
       return { value: UNKNOWN, evidence: "probe refused: not an authorized origin" };
     }
+    // #135: authenticate from the run's own session — never a new credential path. A declared
+    // `authFrom` whose token cannot be read (a missing localStorage key/cookie/env var) fails closed:
+    // the probe is refused rather than silently sent unauthenticated (which would misreport state).
+    const auth = await this.#authHeaders(page, probe.authFrom);
+    if ("error" in auth) return { value: UNKNOWN, evidence: `probe refused: ${auth.error}` };
     const method = probe.head !== undefined ? "HEAD" : "GET";
     const res = await page.context().request.fetch(url.href, {
       method,
+      ...(auth.headers === undefined ? {} : { headers: auth.headers }),
       maxRedirects: 0,
       failOnStatusCode: false,
       timeout: PROBE_TIMEOUT_MS,
     });
-    const evidence = `probe ${method} ${redactUrl(url.href)} → ${res.status()}`;
+    const evidence = `probe ${method} ${redactUrl(url.href)} → ${res.status()}${auth.note}`;
     try {
       if (probe.json === undefined) return { value: res.status(), evidence };
       if (res.status() < 200 || res.status() >= 300) return { value: missing, evidence };
@@ -508,7 +560,7 @@ export class InvariantMonitor {
   }
 
   #redact(s: string): string {
-    return redactText(s, this.#opts.secrets ?? []);
+    return redactText(s, [...(this.#opts.secrets ?? []), ...this.#authSecrets]);
   }
 }
 

@@ -68,6 +68,17 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ total: 7, owner: "tok-SECRET-123" }));
       return;
     }
+    if (path === "/api/secure") {
+      // #135 — an authenticated BFF read: only a matching bearer token unlocks it.
+      const ok = req.headers.authorization === "Bearer SECRET-LS-TOKEN-abc";
+      res.writeHead(ok ? 200 : 401, { "content-type": "application/json" }).end(JSON.stringify({ secure: ok }));
+      return;
+    }
+    if (path === "/api/cookie-secure") {
+      const ok = req.headers.authorization === "SECRET-COOKIE-TOKEN-xyz";
+      res.writeHead(ok ? 200 : 401, { "content-type": "application/json" }).end(JSON.stringify({ secure: ok }));
+      return;
+    }
     res.writeHead(404).end();
   });
   evil = createServer((req, res) => {
@@ -206,6 +217,98 @@ describe("declared invariants around an action (#86)", () => {
         const f = await clickImport(s.actor, new InvariantMonitor(forged, { allowlist: [origin], baseUrl: origin }), s.page);
         expect(f.unknown).toEqual(["forged"]);
         expect(offOriginHits).toEqual([]);
+      } finally {
+        await s.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "#135: a probe authenticates from a localStorage token — attached as Authorization, absent from every artifact (secret-canary)",
+    async () => {
+      const s = await openSession();
+      try {
+        await s.page.goto(`${origin}/app`);
+        await s.page.evaluate(() => window.localStorage.setItem("tok", "SECRET-LS-TOKEN-abc"));
+        const spec = validateInvariantSpec(
+          {
+            observe: { secure: { probe: { get: "/api/secure", json: "$.secure", authFrom: { localStorage: "tok" } } } },
+            invariants: [{ id: "secure-ok", require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const monitor = new InvariantMonitor(spec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r.violations).toEqual([]);
+        expect(r.held).toEqual(["secure-ok"]);
+
+        const probes = requests.filter((q) => q.path === "/api/secure");
+        expect(probes.length).toBeGreaterThan(0);
+        for (const p of probes) {
+          expect(p.method).toBe("GET");
+          expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+        }
+        // secret-canary: the token never shows up anywhere this run's artifacts could echo it.
+        expect(JSON.stringify(r)).not.toContain("SECRET-LS-TOKEN-abc");
+        expect(monitor.report()).toContainEqual({ id: "secure-ok", checked: 1, held: 1, violated: 0, unknown: 0 });
+      } finally {
+        await s.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "#135: an unavailable auth token fails the probe closed — never sent unauthenticated",
+    async () => {
+      const s = await openSession();
+      try {
+        await s.page.goto(`${origin}/app`);
+        // No localStorage token was ever set here.
+        const spec = validateInvariantSpec(
+          {
+            observe: { secure: { probe: { get: "/api/secure", json: "$.secure", authFrom: { localStorage: "missing-key" } } } },
+            invariants: [{ id: "secure-ok", require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const monitor = new InvariantMonitor(spec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r).toEqual({ violations: [], unknown: ["secure-ok"], held: [] });
+        const probes = requests.filter((q) => q.path === "/api/secure");
+        // Refused before ever being sent (fail-closed): never an unauthenticated 401 hit.
+        expect(probes).toEqual([]);
+      } finally {
+        await s.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "#135: a probe authenticates from a named cookie the same way",
+    async () => {
+      const s = await openSession();
+      try {
+        await s.page.goto(`${origin}/app`);
+        await s.page.context().addCookies([{ name: "auth_tok", value: "SECRET-COOKIE-TOKEN-xyz", url: origin }]);
+        const spec = validateInvariantSpec(
+          {
+            observe: { secure: { probe: { get: "/api/cookie-secure", json: "$.secure", authFrom: { cookie: "auth_tok", scheme: "" } } } },
+            invariants: [{ id: "secure-ok", require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const monitor = new InvariantMonitor(spec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r.held).toEqual(["secure-ok"]);
+        const probes = requests.filter((q) => q.path === "/api/cookie-secure");
+        expect(probes.length).toBeGreaterThan(0);
+        for (const p of probes) expect(p.headers.authorization).toBe("SECRET-COOKIE-TOKEN-xyz");
       } finally {
         await s.close();
       }
