@@ -10,6 +10,8 @@ export const COGNITIVE_LOAD: RubricEntry = {
   },
   tier: "semantic",
   requiredEvidence: ["controls", "job"],
+  // Hick's Law needs a real set of competing choices — a 2-button screen cannot overload.
+  applicability: { minControls: 6 },
   questions: [
     {
       id: "decision-burden",

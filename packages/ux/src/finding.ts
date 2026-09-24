@@ -4,11 +4,13 @@
 // `makeFinding` is the only way a `UxFinding` comes into existence: it throws
 // unless (a) `rubricItemId` resolves to a loaded rubric entry (whose citation
 // it copies), AND (b) every `evidenceRef` resolves to a real ref in the
-// analyzed evidence, AND (c) at least one evidenceRef is present. No public
-// raw constructor exists — a caller physically cannot emit an uncited or
-// evidence-less finding.
+// analyzed evidence, AND (c) at least one evidenceRef is present, AND (d) it
+// carries a non-empty observation, user impact and recommendation. No public
+// raw constructor exists — a caller physically cannot emit an uncited,
+// evidence-less or observation-less finding.
 import type {
   AnalyzedEvidence,
+  ConfidenceBasis,
   EvidenceRef,
   PredictedAttention,
   RubricEntry,
@@ -29,8 +31,19 @@ export interface MakeFindingInput {
   readonly evidenceRefs: readonly EvidenceRef[];
   readonly severity: "info" | "minor" | "major";
   readonly confidence: number;
+  readonly observation: string;
+  readonly userImpact: string;
   readonly recommendation: string;
   readonly tier: Tier;
+  /** Normalized route (URL pathname). */
+  readonly route: string;
+  readonly controls?: readonly string[];
+  readonly quotes?: readonly string[];
+  /** Dedupe count (default 1). */
+  readonly occurrences?: number;
+  /** Every screen-state observed (default: just the analyzed evidence's screen). */
+  readonly screenIds?: readonly string[];
+  readonly confidenceBasis?: ConfidenceBasis;
   readonly predictedAttention?: PredictedAttention;
 }
 
@@ -62,14 +75,39 @@ export function makeFinding(
       );
     }
   }
+  for (const [field, value] of [
+    ["observation", input.observation],
+    ["userImpact", input.userImpact],
+    ["recommendation", input.recommendation],
+  ] as const) {
+    if (value.trim().length === 0) {
+      throw new UxFindingError(`specificity gate: a finding for '${entry.id}' must carry a non-empty ${field}`);
+    }
+  }
+  if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
+    throw new UxFindingError(`confidence for '${entry.id}' must be in [0,1], got ${input.confidence}`);
+  }
+  const occurrences = input.occurrences ?? 1;
+  if (!Number.isInteger(occurrences) || occurrences < 1) {
+    throw new UxFindingError(`occurrences for '${entry.id}' must be a positive integer, got ${occurrences}`);
+  }
   const finding: UxFinding = {
     rubricItemId: entry.id,
     citation: { source: entry.citation.source, ref: entry.citation.ref },
     severity: input.severity,
     confidence: input.confidence,
     evidenceRefs: input.evidenceRefs.map((r) => ({ id: r.id })),
-    recommendation: input.recommendation,
+    observation: input.observation.trim(),
+    userImpact: input.userImpact.trim(),
+    recommendation: input.recommendation.trim(),
     tier: input.tier,
+    screenId: evidence.screenId,
+    route: input.route,
+    controls: [...(input.controls ?? [])],
+    quotes: [...(input.quotes ?? [])],
+    occurrences,
+    screenIds: [...(input.screenIds ?? [evidence.screenId])],
+    ...(input.confidenceBasis ? { confidenceBasis: { ...input.confidenceBasis } } : {}),
     ...(input.predictedAttention ? { predictedAttention: input.predictedAttention } : {}),
   };
   return Object.freeze(finding);

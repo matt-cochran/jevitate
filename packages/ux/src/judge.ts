@@ -5,12 +5,24 @@
 // The evidence is already `RedactedEvidence` (branded), so raw evidence cannot
 // reach the model here: the signature enforces it at compile time.
 import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
-import type { RubricEntry } from "./types.js";
+import type { JevQuestionSpec, RubricEntry } from "./types.js";
 import type { RedactedEvidence } from "./redact.js";
 
 /** Namespaced key so questions from different rubric entries never collide. */
 export function questionKey(entryId: string, questionId: string): string {
   return `${entryId}::${questionId}`;
+}
+
+/** The per-entry applicability question's id (asked alongside the entry's own questions). */
+export const APPLIES_QUESTION_ID = "__applies";
+
+/** Max page text sent to Jev per screen (already redacted). */
+const MAX_JUDGED_TEXT = 4000;
+
+/** Fills the rubric's `{persona}` / `{appClass}` placeholders from the calibration context. */
+export function fillTemplate(text: string, evidence: Pick<RedactedEvidence, "appContext">): string {
+  const persona = evidence.appContext.persona ?? "first-time user";
+  return text.replaceAll("{persona}", persona).replaceAll("{appClass}", evidence.appContext.appClass);
 }
 
 /** Builds the calibrated, redacted `JudgmentState` Jev sees for one screen-state. */
@@ -26,19 +38,38 @@ export function buildState(evidence: RedactedEvidence): JudgmentState {
     url: evidence.url,
     controls: evidence.controls.map((c) => c.summary),
     history: evidence.history.map((h) => `${h.screenId} ${h.url}`),
+    ...(evidence.visibleText.trim().length > 0 ? { visibleText: evidence.visibleText.slice(0, MAX_JUDGED_TEXT) } : {}),
   };
 }
 
-function toQuestion(kind: "choice" | "noul" | "score", choices?: readonly string[]): Question {
-  if (kind === "choice") return { kind: "choice", options: [...(choices ?? [])] };
-  if (kind === "score") return { kind: "score" };
-  return { kind: "noul" };
+/**
+ * The rubric question as Jev sees it: the filled instruction PLUS its criteria. (Previously only
+ * the namespaced key reached the model — Jev judged "nielsen-1::status-visible" blind.)
+ */
+function toQuestion(spec: JevQuestionSpec, evidence: RedactedEvidence): Question {
+  const instructions = `${fillTemplate(spec.instruction, evidence)} Criteria: ${fillTemplate(spec.criteria, evidence)}`;
+  if (spec.kind === "choice") return { kind: "choice", options: [...(spec.choices ?? [])], instructions };
+  if (spec.kind === "score") return { kind: "score", instructions };
+  return { kind: "noul", instructions };
+}
+
+/** Rubric applicability as a Jev judgment — a heuristic that does not apply must not score high. */
+function appliesQuestion(entry: RubricEntry): Question {
+  return {
+    kind: "noul",
+    instructions:
+      `Setting aside whether it is satisfied: can the principle "${entry.principle}" sensibly be at issue on THIS screen, ` +
+      "given what the screen is for (its type and purpose), the job, and the app class? Answer no when the principle " +
+      "cannot meaningfully apply here — e.g. choice overload on a screen with two buttons, error recovery on a screen " +
+      "showing no error and no input, progress/status on a static confirmation.",
+  };
 }
 
 /**
- * Judges every question of every entry for one screen-state in ONE request.
- * Returns answers keyed by `questionKey(entryId, questionId)`. Throws whatever
- * the port throws (the analyzer turns that into a `failed` outcome — never `[]`).
+ * Judges every question of every entry — plus one applicability question per entry — for one
+ * screen-state in ONE request. Returns answers keyed by `questionKey(entryId, questionId)`
+ * (applicability under `APPLIES_QUESTION_ID`). Throws whatever the port throws (the analyzer
+ * turns that into a `failed` outcome — never `[]`).
  */
 export async function judgeScreen(
   port: JudgmentPort,
@@ -48,8 +79,9 @@ export async function judgeScreen(
   const questions: Record<string, Question> = {};
   for (const entry of entries) {
     for (const q of entry.questions) {
-      questions[questionKey(entry.id, q.id)] = toQuestion(q.kind, q.choices);
+      questions[questionKey(entry.id, q.id)] = toQuestion(q, evidence);
     }
+    questions[questionKey(entry.id, APPLIES_QUESTION_ID)] = appliesQuestion(entry);
   }
   const state = buildState(evidence);
   return port.systemOne({ state, questions });

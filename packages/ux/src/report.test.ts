@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildReport } from "./report.js";
+import { DEFAULT_MIN_CONFIDENCE } from "./confidence.js";
 import { makeFinding } from "./finding.js";
 import { loadRubric } from "./rubric/schema.js";
 import type { AnalysisOutcome, Coverage, RubricEntry, UxFinding } from "./types.js";
@@ -19,6 +20,9 @@ function finding(id: string, severity: UxFinding["severity"], confidence: number
       severity,
       confidence,
       recommendation: "fix it",
+      observation: `observation for ${id}`,
+      userImpact: "impact",
+      route: `/route-${id}`,
       tier: "semantic",
       ...(attention ? { predictedAttention: { label: "predicted-from-visual-hierarchy", note: "inferred, not gaze data" } } : {}),
     },
@@ -38,7 +42,7 @@ const partialCoverage: Coverage = {
 describe("buildReport", () => {
   it("ranks findings by severity × confidence (major before minor)", () => {
     const outcome: AnalysisOutcome = { kind: "analyzed", findings: [finding("minor-1", "minor", 0.99), finding("major-1", "major", 0.5, true)], coverage: fullCoverage };
-    const report = buildReport(outcome);
+    const report = buildReport(outcome, { minConfidence: 0 });
     expect(report.findings[0].rubricItemId).toBe("major-1");
     expect(report.findings[1].rubricItemId).toBe("minor-1");
   });
@@ -56,7 +60,9 @@ describe("buildReport", () => {
     // zero findings but partial coverage → NOT clean
     expect(buildReport({ kind: "analyzed", findings: [], coverage: partialCoverage }).clean).toBe(false);
     // full coverage but a finding → NOT clean
-    expect(buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.5)], coverage: fullCoverage }).clean).toBe(false);
+    expect(buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.5)], coverage: fullCoverage }, { minConfidence: 0 }).clean).toBe(false);
+    // full coverage, the only finding suppressed below the cutoff → STILL not clean (suppression ≠ "no issues")
+    expect(buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.5)], coverage: fullCoverage }, { minConfidence: 0.75 }).clean).toBe(false);
   });
 
   it("predicted-attention findings keep their provenance label", () => {
@@ -71,6 +77,35 @@ describe("buildReport", () => {
     const text = JSON.stringify(scrubbed).toLowerCase();
     expect(text).not.toContain("eye-tracking");
     expect(text).not.toContain("gaze");
+  });
+
+  it("findings below minConfidence are suppressed, counted by reason/item/route, and summarized — never silently dropped", () => {
+    const outcome: AnalysisOutcome = {
+      kind: "analyzed",
+      findings: [finding("major-1", "major", 0.9), finding("minor-1", "minor", 0.4), finding("minor-1", "minor", 0.3)],
+      coverage: fullCoverage,
+      suppressed: [{ rubricItemId: "major-1", route: "/x", screenId: "s9", reason: "rejected-evidence", detail: "cites control:9 absent" }],
+      rawOccurrences: 12,
+    };
+    const report = buildReport(outcome, { minConfidence: 0.75 });
+    expect(report.minConfidence).toBe(0.75);
+    expect(report.findings.map((f) => f.rubricItemId)).toEqual(["major-1"]);
+    expect(report.suppressed.total).toBe(3);
+    expect(report.suppressed.byReason["below-min-confidence"]).toBe(2);
+    expect(report.suppressed.byReason["rejected-evidence"]).toBe(1);
+    expect(report.suppressed.byRubricItem).toEqual({ "minor-1": 2, "major-1": 1 });
+    expect(report.suppressed.byRubricItemRoute["minor-1 /route-minor-1"]).toBe(2);
+    expect(report.suppressed.items.filter((i) => i.reason === "below-min-confidence").every((i) => i.confidence !== undefined)).toBe(true);
+    expect(report.rawOccurrences).toBe(12);
+    expect(report.headline).toMatch(/^1 finding\(s\) at confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/);
+    expect(report.coverageSummary).toMatch(/3 suppressed/);
+  });
+
+  it("defaults the cutoff to DEFAULT_MIN_CONFIDENCE", () => {
+    const report = buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.74)], coverage: fullCoverage });
+    expect(report.minConfidence).toBe(DEFAULT_MIN_CONFIDENCE);
+    expect(report.findings).toHaveLength(0);
+    expect(report.suppressed.byReason["below-min-confidence"]).toBe(1);
   });
 
   it("a failed outcome surfaces as a non-clean, incomplete report", () => {

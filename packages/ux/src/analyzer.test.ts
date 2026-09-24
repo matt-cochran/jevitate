@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Answer, JudgmentPort } from "@jevitate/ai-core";
-import { UxAnalyzer, MissingAppContextError } from "./analyzer.js";
+import { FakeGenerationGateway, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
+import { UxAnalyzer, MissingAppContextError, evaluateFlag } from "./analyzer.js";
 import { loadRubric } from "./rubric/schema.js";
-import { questionKey } from "./judge.js";
+import { APPLIES_QUESTION_ID, questionKey } from "./judge.js";
+import type { UxSpecificsItem } from "./specifics.js";
 import type { AppContext, RubricEntry, UxEvidence } from "./types.js";
 
 const appContext: AppContext = { appClass: "consumer-checkout", persona: "first-time buyer" };
@@ -42,9 +43,54 @@ const recognition: RubricEntry = {
   questions: [{ id: "recall", instruction: "recall?", criteria: "c", kind: "noul", flag: { when: "noul-false" }, severity: "minor" }],
 };
 
+const gen = new FakeGenerationGateway();
+
+/** A generation port that returns scripted specifics for every flagged item. */
+function scriptedGen(make: (rubricItemId: string) => Omit<UxSpecificsItem, "rubricItemId">): GenerationPort & { calls: number } {
+  const port = {
+    calls: 0,
+    async generate(kind: string, input: unknown) {
+      port.calls++;
+      if (kind !== "ux.specifics") throw new Error(`unexpected task ${kind}`);
+      const items = (input as { items: { rubricItemId: string }[] }).items.map((i) => ({ rubricItemId: i.rubricItemId, ...make(i.rubricItemId) }));
+      return { output: { items }, provenance: { adapter: "fake", model: "fake", promptVersion: "1", latencyMs: 0, responseHash: "h" } };
+    },
+  };
+  return port as unknown as GenerationPort & { calls: number };
+}
+
+/** Jev: primary-action flagged (P(clear)=pClear) and applicability P(applies)=pApplies. */
+function flaggingJudge(pClear: number, pApplies: number): JudgmentPort {
+  return {
+    systemOne: async (args) => {
+      const out: Record<string, Answer> = {};
+      for (const k of Object.keys(args.questions)) {
+        out[k] = k.endsWith(`::${APPLIES_QUESTION_ID}`)
+          ? { kind: "noul", value: pApplies >= 0.5, probability: pApplies }
+          : { kind: "noul", value: pClear >= 0.5, probability: pClear };
+      }
+      return out;
+    },
+  };
+}
+
+const twoButtons = [
+  { index: 0, role: "button", name: "Pay", tag: "button", inputType: null, enabled: true, summary: 'button "Pay"' },
+  { index: 1, role: "button", name: "Pay later", tag: "button", inputType: null, enabled: true, summary: 'button "Pay later"' },
+];
+
+const grounded = (): Omit<UxSpecificsItem, "rubricItemId"> => ({
+  violated: true,
+  implicatedControls: [0, 1],
+  quotes: ["Pay for your order"],
+  observation: 'button "Pay" and button "Pay later" look identical, so the next step toward checkout is ambiguous.',
+  userImpact: "A first-time buyer may defer payment by mistake.",
+  recommendation: 'Make "Pay" the filled primary button and demote "Pay later" to a text link.',
+});
+
 describe("UxAnalyzer", () => {
   it("refuses to run without appContext (constraint #5)", async () => {
-    const analyzer = new UxAnalyzer({ judge: { systemOne: vi.fn() } });
+    const analyzer = new UxAnalyzer({ judge: { systemOne: vi.fn() }, gen });
     await expect(
       analyzer.analyze({ screens: [screen()], rubric: loadRubric([primaryAction]), appContext: undefined as never, judgmentBudget: 10 }),
     ).rejects.toBeInstanceOf(MissingAppContextError);
@@ -59,7 +105,7 @@ describe("UxAnalyzer", () => {
         return out;
       },
     };
-    const analyzer = new UxAnalyzer({ judge });
+    const analyzer = new UxAnalyzer({ judge, gen });
     const outcome = await analyzer.analyze({
       screens: [screen({ history: [] })],
       rubric: loadRubric([primaryAction, recognition]),
@@ -81,7 +127,7 @@ describe("UxAnalyzer", () => {
         throw new Error("jev backend exploded");
       },
     };
-    const analyzer = new UxAnalyzer({ judge });
+    const analyzer = new UxAnalyzer({ judge, gen });
     const outcome = await analyzer.analyze({
       screens: [screen()],
       rubric: loadRubric([primaryAction]),
@@ -101,7 +147,7 @@ describe("UxAnalyzer", () => {
       for (const k of Object.keys(args.questions)) out[k] = { kind: "noul", value: true, probability: 0.9 };
       return out;
     });
-    const analyzer = new UxAnalyzer({ judge: { systemOne } });
+    const analyzer = new UxAnalyzer({ judge: { systemOne }, gen });
     const outcome = await analyzer.analyze({
       screens: [screen({ screenId: "s1" }), screen({ screenId: "s2" })],
       rubric: loadRubric([primaryAction]),
@@ -115,33 +161,138 @@ describe("UxAnalyzer", () => {
     expect(outcome.coverage.budgetTruncated).not.toContain("s1");
   });
 
-  it("(d) a positive judgment produces a finding via makeFinding with resolved refs + attention label", async () => {
-    const judge: JudgmentPort = {
-      systemOne: async (args) => {
-        const out: Record<string, Answer> = {};
-        // value:false triggers primary-action's noul-false flag → a finding
-        out[questionKey("primary-action", "unambiguous")] = { kind: "noul", value: false, probability: 0.82 };
-        void args;
-        return out;
-      },
-    };
-    const analyzer = new UxAnalyzer({ judge });
+  it("(d) a flagged judgment becomes a SPECIFIC finding: observation, narrowed refs, route, calibrated confidence", async () => {
+    const specifics = scriptedGen(() => grounded());
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.18, 0.9), gen: specifics });
     const outcome = await analyzer.analyze({
-      screens: [screen()],
+      screens: [screen({ controls: [...twoButtons, { index: 2, role: "link", name: "Help", tag: "a", inputType: null, enabled: true, summary: 'link "Help"' }] })],
       rubric: loadRubric([primaryAction]),
       appContext,
       judgmentBudget: 10,
     });
     expect(outcome.kind).toBe("analyzed");
     if (outcome.kind !== "analyzed") return;
+    expect(specifics.calls).toBe(1);
     expect(outcome.findings.length).toBe(1);
-    const f = outcome.findings[0];
+    const f = outcome.findings[0]!;
     expect(f.rubricItemId).toBe("primary-action");
     expect(f.severity).toBe("major");
-    expect(f.evidenceRefs.length).toBeGreaterThanOrEqual(1);
     expect(f.citation.source).toBe("NN/g");
     expect(f.predictedAttention?.label).toBe("predicted-from-visual-hierarchy");
+    // Narrowed: only the implicated controls (+ the quoted text), NOT every control on the page.
+    expect(f.evidenceRefs.map((r) => r.id)).toEqual(["control:0", "control:1", "visibleText"]);
+    expect(f.controls).toEqual(['button "Pay"', 'button "Pay later"']);
+    expect(f.quotes).toEqual(["Pay for your order"]);
+    expect(f.observation).toContain("Pay later");
+    expect(f.recommendation).not.toMatch(/^Address "/);
+    expect(f.route).toBe("/checkout");
+    expect(f.screenId).toBe("s1");
+    expect(f.occurrences).toBe(1);
+    // J-1: noul-false violation = 1 − P(clear) = 0.82 (not P(clear)); × applicability 0.9 × grounding 1 × agreement 1.
+    expect(f.confidenceBasis).toEqual({ violation: 0.82, applicability: 0.9, grounding: 1, agreement: 1 });
+    expect(f.confidence).toBe(0.74);
     expect(outcome.coverage.evaluated).toBe(1);
+  });
+
+  it("REJECTS specifics that cite a control absent from the observed screen (independent adjudication)", async () => {
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.1, 0.9), gen: scriptedGen(() => ({ ...grounded(), implicatedControls: [0, 7] })) });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.suppressed).toEqual([
+      expect.objectContaining({ rubricItemId: "primary-action", route: "/checkout", reason: "rejected-evidence", detail: expect.stringContaining("control:7") }),
+    ]);
+  });
+
+  it("REJECTS specifics that quote text not on the screen", async () => {
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.1, 0.9), gen: scriptedGen(() => ({ ...grounded(), quotes: ["Free shipping over $50"] })) });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.suppressed?.[0]?.reason).toBe("rejected-evidence");
+  });
+
+  it("a judgment that cannot name specific evidence is NOT a finding (suppressed as ungrounded, counted)", async () => {
+    const analyzer = new UxAnalyzer({
+      judge: flaggingJudge(0.1, 0.9),
+      gen: scriptedGen(() => ({ ...grounded(), implicatedControls: [], quotes: [], observation: "The screen could be clearer." })),
+    });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.suppressed?.[0]).toMatchObject({ reason: "ungrounded", rubricItemId: "primary-action" });
+    expect(outcome.rawOccurrences).toBe(1);
+  });
+
+  it("the specifics step can refute Jev (violated=false) — suppressed as not-confirmed", async () => {
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.1, 0.9), gen: scriptedGen(() => ({ ...grounded(), violated: false })) });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.suppressed?.[0]?.reason).toBe("not-confirmed");
+  });
+
+  it("a heuristic Jev judges inapplicable to the screen cannot score high", async () => {
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.01, 0.1), gen: scriptedGen(() => grounded()) });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings[0]?.confidence).toBeLessThanOrEqual(0.1);
+  });
+
+  it("the deterministic applicability gate: choice overload on a 2-control screen is never judged (notApplicable, still evaluated)", async () => {
+    const overload: RubricEntry = {
+      id: "cognitive-load",
+      principle: "Choice overload",
+      citation: { source: "Hick", ref: "lawsofux.com/hicks-law" },
+      tier: "semantic",
+      requiredEvidence: ["controls", "job"],
+      applicability: { minControls: 6 },
+      questions: [{ id: "burden", instruction: "burden?", criteria: "c", kind: "score", flag: { when: "score-below", threshold: 0.5 }, severity: "minor" }],
+    };
+    const systemOne = vi.fn(async () => ({}) as Record<string, Answer>);
+    const analyzer = new UxAnalyzer({ judge: { systemOne }, gen });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([overload]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(systemOne).not.toHaveBeenCalled();
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.coverage.notApplicable?.[0]?.reason).toMatch(/2 control\(s\) < 6/);
+    expect(outcome.coverage.evaluated).toBe(1);
+    expect(outcome.coverage.skipped).toHaveLength(0);
+  });
+
+  it("dedupes the same item × route × controls into ONE finding with an occurrence count; agreement discounts states that did not flag", async () => {
+    let call = 0;
+    const judge: JudgmentPort = {
+      systemOne: async (args) => {
+        call++;
+        const out: Record<string, Answer> = {};
+        for (const k of Object.keys(args.questions)) {
+          out[k] = k.endsWith(`::${APPLIES_QUESTION_ID}`)
+            ? { kind: "noul", value: true, probability: 1 }
+            : // 3 of the 4 states on /checkout flag it (P(clear)=0), the 4th passes.
+              { kind: "noul", value: call === 4, probability: call === 4 ? 0.9 : 0 };
+        }
+        return out;
+      },
+    };
+    const analyzer = new UxAnalyzer({ judge, gen: scriptedGen(() => grounded()) });
+    const screens = [1, 2, 3, 4].map((i) => screen({ screenId: `s${i}`, url: `https://app.example.com/checkout?step=${i}`, controls: twoButtons }));
+    const outcome = await analyzer.analyze({ screens, rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.rawOccurrences).toBe(3);
+    expect(outcome.findings).toHaveLength(1);
+    const f = outcome.findings[0]!;
+    expect(f.occurrences).toBe(3);
+    expect(f.screenIds).toEqual(["s1", "s2", "s3"]);
+    expect(f.confidenceBasis?.agreement).toBe(0.75);
+    expect(f.confidence).toBe(0.75);
+  });
+
+  it("a specifics-generation error becomes `failed`, never a silent empty result", async () => {
+    const broken: GenerationPort = { generate: async () => { throw new Error("openrouter down"); } };
+    const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.1, 0.9), gen: broken });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    expect(outcome).toMatchObject({ kind: "failed", screenId: "s1", rubricItemId: "primary-action" });
   });
 
   it("a positive property (no problem) yields no finding but still counts as evaluated", async () => {
@@ -152,10 +303,23 @@ describe("UxAnalyzer", () => {
         return out;
       },
     };
-    const analyzer = new UxAnalyzer({ judge });
+    const analyzer = new UxAnalyzer({ judge, gen });
     const outcome = await analyzer.analyze({ screens: [screen()], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
     if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
     expect(outcome.findings.length).toBe(0);
     expect(outcome.coverage.evaluated).toBe(1);
+  });
+});
+
+describe("evaluateFlag — violation probability is oriented by the flag rule (J-1)", () => {
+  it("noul-false: a noul's probability is P(true), so the violation probability is 1 − P(true)", () => {
+    expect(evaluateFlag({ when: "noul-false" }, { kind: "noul", value: false, probability: 0.1 })).toEqual({ triggered: true, violation: 0.9 });
+  });
+  it("noul-true: violation = P(true)", () => {
+    expect(evaluateFlag({ when: "noul-true" }, { kind: "noul", value: true, probability: 0.8 })).toEqual({ triggered: true, violation: 0.8 });
+  });
+  it("score-below: violation is the margin below the threshold, normalized", () => {
+    expect(evaluateFlag({ when: "score-below", threshold: 0.5 }, { kind: "score", value: 0.25 })).toEqual({ triggered: true, violation: 0.5 });
+    expect(evaluateFlag({ when: "score-below", threshold: 0.5 }, { kind: "score", value: 0.6 }).triggered).toBe(false);
   });
 });

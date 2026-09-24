@@ -7,11 +7,20 @@ export interface ChoiceQuestion<T extends string> {
   /** What the question asks, in plain language. Defaults to the question's name. */
   instructions?: string;
 }
-export interface NoulQuestion { kind: "noul" }          // boolean-ish judgment
-export interface ScoreQuestion { kind: "score" }         // 0..1
+/** Boolean-ish judgment. `instructions` is the plain-language question (defaults to the question's name). */
+export interface NoulQuestion { kind: "noul"; instructions?: string }
+/** 0..1 judgment. `criteria` = [what "low" means, what "high" means] (defaults to the bare labels). */
+export interface ScoreQuestion { kind: "score"; instructions?: string; criteria?: readonly [string, string] }
 export type Question = ChoiceQuestion<string> | NoulQuestion | ScoreQuestion;
 
-export interface JudgmentState { goal: string; url: string; controls: string[]; history: string[] }
+export interface JudgmentState {
+  goal: string;
+  url: string;
+  controls: string[];
+  history: string[];
+  /** Optional redacted page text (e.g. a UX review judging copy). Callers redact before the model. */
+  visibleText?: string;
+}
 export interface ChoiceAnswer<T extends string> { kind: "choice"; value: T; confidence: number }
 export interface NoulAnswer { kind: "noul"; value: boolean; probability: number }
 export interface ScoreAnswer { kind: "score"; value: number }
