@@ -64,7 +64,7 @@ import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
-import { runRegressionCapture } from "./regression-api.js";
+import { runRegressionCapture, runRegressionRun, RegressionNotFoundError } from "./regression-api.js";
 import {
   addMissionTarget,
   listMissionTargets,
@@ -296,9 +296,14 @@ function resolveApprovedBy(deps: CliDeps): string {
  * this once per reproduce/minimize attempt — a Playwright session cannot be
  * reused after a run — so callers must close each one it hands back.
  */
-async function makeRealBrowserActor(site: string): Promise<{ actor: Actor; close: () => Promise<void> }> {
+async function makeRealBrowserActor(site: string, storageState?: string): Promise<{ actor: Actor; close: () => Promise<void> }> {
   const port = new PlaywrightBrowserPort();
-  const session = await port.open({ headless: true, allowedOrigins: [site], baseUrl: site });
+  const session = await port.open({
+    headless: true,
+    allowedOrigins: [site],
+    baseUrl: site,
+    ...(storageState !== undefined ? { storageState } : {}),
+  });
   const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
   return {
     actor,
@@ -2226,12 +2231,16 @@ export function buildProgram(deps: CliDeps): Command {
       "mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay",
     )
     .option(
-      "--fingerprint <stepSignature>",
-      "pin the required failure fingerprint — alone, restricts --from to failing at exactly this structural step; with --result, cross-checks the derived oracle",
+      "--fingerprint <fp>",
+      "pin the required failure — a structural step signature (alone, restricts --from to failing at exactly that step), or (with --result, #119/#129) a defect/invariant fingerprint from the mission's own findings; with --result alone, cross-checks the derived oracle",
+    )
+    .option(
+      "--storage-state <file>",
+      "Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist",
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, json } = this.opts<{
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = this.opts<{
         from: string;
         id: string;
         dir?: string;
@@ -2239,8 +2248,13 @@ export function buildProgram(deps: CliDeps): Command {
         summary?: string;
         result?: string;
         fingerprint?: string;
+        storageState?: string;
         json?: boolean;
       }>();
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
       const opened: Array<() => Promise<void>> = [];
       try {
         const raw = JSON.parse(await readFile(from, "utf8"));
@@ -2255,7 +2269,7 @@ export function buildProgram(deps: CliDeps): Command {
           resultPath,
           fingerprint,
           makeActor: async () => {
-            const { actor, close } = await makeRealBrowserActor(recording.site);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState);
             opened.push(close);
             return actor;
           },
@@ -2269,6 +2283,56 @@ export function buildProgram(deps: CliDeps): Command {
         }
       } catch (err) {
         emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
+      } finally {
+        for (const close of opened) await close();
+      }
+    });
+
+  // Additive: `regression run <id>` (#129 item 4) — replays a committed regression (whatever
+  // `regression capture` wrote — a step-oracle, network-check, or declared-invariant one) and
+  // reports "reproduces" or "fixed". The one CLI/MCP surface `loadRegressions`/`replayRegression`
+  // (`@jevitate/regression`) previously had none of.
+  regression
+    .command("run")
+    .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
+    .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
+    .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)")
+    .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, attempts, storageState, json } = this.opts<{ dir?: string; attempts?: string; storageState?: string; json?: boolean }>();
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      const regressionsDir = resolveRegressionsDir(dir);
+      const opened: Array<() => Promise<void>> = [];
+      try {
+        const recording = RecordingSchema.parse(JSON.parse(await readFile(join(regressionsDir, `${id}.recording.json`), "utf8")));
+        const report = await runRegressionRun({
+          id,
+          regressionsDir,
+          ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
+          makeActor: async () => {
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState);
+            opened.push(close);
+            return actor;
+          },
+        });
+        const envelope = ok(report);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`${JSON.stringify(report)}\n`);
+        }
+        process.exitCode = report.verdict === "reproduces" ? 1 : report.verdict === "fixed" ? 0 : 2;
+      } catch (err) {
+        if (err instanceof RegressionNotFoundError) {
+          emitJson(program, fail(err.code, err.message));
+        } else {
+          emitJson(program, fail("E_REGRESSION_RUN", String(err instanceof Error ? err.message : err)));
+        }
+        process.exitCode = 2;
       } finally {
         for (const close of opened) await close();
       }

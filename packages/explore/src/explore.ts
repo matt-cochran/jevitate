@@ -612,6 +612,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           control?: Control | null;
           strategy?: string;
           answer?: AnswerVerdict["answer"];
+          /** See `TranscriptEntry.origin` — set for a refusal decided by jevitate's own guard/fail-closed logic, never after a real `act()` attempt. */
+          origin?: "engine";
         } = {},
       ): void => {
         transcript.record({
@@ -623,6 +625,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           chosenBy: "model",
           actOk,
           ...(reason === undefined ? {} : { reason }),
+          ...(extra.origin === undefined ? {} : { origin: extra.origin }),
           snapshot: snap,
           timing: perception.timing,
           ...(extra.message === undefined ? {} : { message: extra.message }),
@@ -856,7 +859,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
         // and it counts as an action. Returning to the state the page had is its point, never a stall.
         if (!tracker.mayAct()) {
-          record(false, "action budget exhausted");
+          record(false, "action budget exhausted", { origin: "engine" });
           stop = "exhausted";
           break;
         }
@@ -872,7 +875,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             w.resolved ? "it resolved" : "it is still in flight"
           }`;
           history.push(note);
-          record(false, note);
+          record(false, note, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
@@ -894,12 +897,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // Target-requiring op with no valid target → fail-closed.
       if (control === null || decision.targetMissing) {
-        record(false, "no valid target (fail-closed)");
+        record(false, "no valid target (fail-closed)", { origin: "engine" });
         stop = "blocked";
         break;
       }
       if (!tracker.mayAct()) {
-        record(false, "action budget exhausted");
+        record(false, "action budget exhausted", { origin: "engine" });
         stop = "exhausted";
         break;
       }
@@ -936,7 +939,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const n = unsent.noteRepeat();
         forcedNote = `repeated type into ${control.name} without sending (stuck signal ${n}/${MAX_REPEAT_TYPE_SIGNALS}) — sent instead`;
         if (n >= MAX_REPEAT_TYPE_SIGNALS) {
-          record(false, forcedNote);
+          record(false, forcedNote, { origin: "engine" });
           incomplete = `stuck: typed into ${quote(control.name, 60)} ${n} times without sending`;
           stop = "no-progress";
           break;
@@ -962,13 +965,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } catch (e) {
           const reason = `message generation unavailable: ${firstLine(e)}`;
           history.push(`${op} skipped: ${reason}`);
-          record(false, reason, { op });
+          record(false, reason, { op, origin: "engine" });
           lastActedOp = op;
           continue;
         }
         if (text === null) {
           blockers.failClosed = `no message for ${quote(control.name || control.summary, 80)} (the message generator returned none)`;
-          record(false, "no message available (fail-closed)", { op });
+          record(false, "no message available (fail-closed)", { op, origin: "engine" });
           incomplete = "no message could be generated for the conversation";
           stop = "blocked";
           break;
@@ -978,7 +981,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const n = unsent.noteRepeat();
           const reason = `message not sent: it repeats an earlier message (stuck signal ${n}/${MAX_REPEAT_TYPE_SIGNALS})`;
           history.push(`${reason} — answer the latest reply with something new`);
-          record(false, reason, { op, message });
+          record(false, reason, { op, message, origin: "engine" });
           lastActedOp = op;
           if (n >= MAX_REPEAT_TYPE_SIGNALS) {
             incomplete = "stuck: the generated messages kept repeating";
@@ -1037,7 +1040,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       if (op === "send") {
         // Not message-shaped after all (unreachable: `send` is always a message) — fail closed.
-        record(false, "send without a message (fail-closed)", { op });
+        record(false, "send without a message (fail-closed)", { op, origin: "engine" });
         stop = "blocked";
         break;
       }
@@ -1058,7 +1061,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
           history.push(`select skipped: ${reason}`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = op;
           continue;
         }
@@ -1068,7 +1071,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const reason = `no valid option chosen for ${control.name} (fail-closed)`;
           blockers.failClosed = `no valid option for field ${quote(control.name || control.summary, 80)} (fail-closed)`;
           history.push(`select failed: ${reason}`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = op;
           continue;
         }
@@ -1106,7 +1109,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
           history.push(`${decision.op} skipped: ${reason}`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
@@ -1115,14 +1118,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // model sees in its history, never typed.
           const reason = `typed value rejected: ${rejected}`;
           history.push(`type into ${control.name} failed: ${reason} — the value must be only what goes in this one field`);
-          record(false, reason);
+          record(false, reason, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
         if (text === null) {
           // The generator will not honestly supply a required value → never guess.
           blockers.failClosed = `no value for field ${quote(control.name || control.summary, 80)} (the value generator returned none)`;
-          record(false, "no value available (fail-closed)");
+          record(false, "no value available (fail-closed)", { origin: "engine" });
           stop = "blocked";
           break;
         }
@@ -1169,7 +1172,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             note += ` (waited ${(w.waitedMs / 1000).toFixed(1)}s: ${w.resolved ? "it resolved" : "it is still in flight"})`;
           }
           history.push(note);
-          record(false, note);
+          record(false, note, { origin: "engine" });
           lastActedOp = decision.op;
           continue;
         }
