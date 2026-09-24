@@ -256,6 +256,43 @@ transcript, Recording and issue draft, but it is never typed into a field.
 The bound value and the seed are registered as run secrets, so the existing
 redaction seams scrub them everywhere.
 
+### Stateful and conversational runs: sequential only, one tenant at a time
+
+A conversational or otherwise stateful journey (the goal loop, or any run that
+reads back its own writes — an inbox, a sidebar list, an inquiry thread) mutates
+real state in the target app under the identity your `--storage-state` carries.
+**Run these sequentially, never concurrently, against the same `--storage-state`
+or the same tenant/session.** Two runs sharing one storage-state race on the
+same underlying account, and the app's own UI (a sidebar, a list, a feed) is not
+scoped per jevitate run — it shows whatever the tenant currently has. A second
+run can walk straight into state the first run just created:
+
+- **Cross-run contamination.** In a real-mode dogfood, two concurrent goal runs
+  against one `--storage-state` both wrote into a single shared inquiry: the
+  second run's UI listed the first run's freshly-created item, its title looked
+  plausible for the second run's own goal, and the second run acted on it as if
+  it were its own.
+- **Fixture-vs-real carry-over.** Because the underlying tenant persists between
+  invocations, a later fixture-backed run reused an item a prior real-mode run
+  had created against that same tenant — the state was never reset in between.
+
+To avoid this:
+
+- Run conversational/stateful journeys **one at a time**, in sequence, whenever
+  they share a `--storage-state` file or point at the same tenant/session. Do
+  not fan them out in parallel.
+- Treat one `--storage-state` as scoped to one run at a time, not as a pool to
+  share across concurrent invocations.
+- If you must run several stateful journeys back to back, expect state from
+  each prior run to still be visible to the next one — plan goals accordingly
+  or reset the tenant's data between runs.
+
+**Not yet supported:** a `--storage-state`-per-run pattern that provisions a
+fresh tenant/session from a caller-supplied seed hook, so that genuinely
+parallel runs against a multi-tenant app would not cross-contaminate. Until
+that lands, sequential execution against a shared identity is the only safe
+pattern.
+
 ### Adversarial scope, form misuse and coverage
 
 An adversarial run is **scoped to its target**: the start URL's route and everything
