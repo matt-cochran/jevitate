@@ -66,6 +66,8 @@ export interface Control {
   readonly checked?: boolean | null;
   /** The raw `aria-haspopup` value (e.g. `dialog`), or null — marks a control that discloses more UI. */
   readonly ariaHasPopup?: string | null;
+  /** The raw `aria-current` value (e.g. `page`, `true`), or null — marks the current nav item (#127). */
+  readonly ariaCurrent?: string | null;
   /** The raw `min` attribute (number/date/range…), or null — for type-appropriate boundary values (#121). */
   readonly min?: string | null;
   /** The raw `max` attribute, or null. */
@@ -142,6 +144,8 @@ interface ControlFacts {
   readonly href: string | null;
   /** The raw `aria-haspopup` attribute, or null — a disclosure signal (e.g. `dialog`). */
   readonly ariaHasPopup: string | null;
+  /** The raw `aria-current` attribute, or null — marks the current nav item (#127). */
+  readonly ariaCurrent: string | null;
   /** The raw `min` attribute, or null. */
   readonly min: string | null;
   /** The raw `max` attribute, or null. */
@@ -288,6 +292,7 @@ function readControlFacts(node: Node): ControlFacts {
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
   const href = tag === "a" ? (el as HTMLAnchorElement).href || null : null;
   const ariaHasPopup = norm(el.getAttribute("aria-haspopup")).toLowerCase() || null;
+  const ariaCurrent = norm(el.getAttribute("aria-current")).toLowerCase() || null;
   const min = tag === "input" ? el.getAttribute("min") : null;
   const max = tag === "input" ? el.getAttribute("max") : null;
   const step = tag === "input" ? el.getAttribute("step") : null;
@@ -329,6 +334,7 @@ function readControlFacts(node: Node): ControlFacts {
     submits,
     href,
     ariaHasPopup,
+    ariaCurrent,
     min,
     max,
     step,
@@ -440,6 +446,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         href: facts.href === null ? null : redactUrl(facts.href),
         checked: facts.checked,
         ariaHasPopup: facts.ariaHasPopup,
+        ariaCurrent: facts.ariaCurrent,
         min: facts.min,
         max: facts.max,
         step: facts.step,

@@ -58,6 +58,35 @@ describe("runFeatureMission — single path", () => {
   );
 });
 
+describe("runFeatureMission — the seed itself cannot be loaded (#128)", () => {
+  test(
+    "a net::ERR_UNSAFE_PORT on the first navigation ends scope-unreachable with a target-unreachable failure, never crashed",
+    async () => {
+      const url = "http://127.0.0.1:1/";
+      const browserPort = new PlaywrightBrowserPort();
+      const badSession = await browserPort.open({ headless: true, allowedOrigins: [url], baseUrl: url });
+      try {
+        const badActor = CastActor.named("unreachable-tester").whoCan(new BrowseTheWeb(badSession, [url]));
+        const scope: CapabilityScope = { name: "whatever", originAllowlist: [url], routeGlobs: ["/**"] };
+        const result = await runFeatureMission({
+          page: badSession.page as Page,
+          actor: badActor,
+          seedUrl: url,
+          allowlist: [url],
+          scope,
+        });
+        expect(result.outcome).toBe("scope-unreachable");
+        expect(result.failure?.kind).toBe("target-unreachable");
+        expect(result.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
+        expect(result.recordings).toEqual([]);
+      } finally {
+        await badSession.close();
+      }
+    },
+    30_000,
+  );
+});
+
 describe("runFeatureMission — multi-path discovery", () => {
   const scope = (): CapabilityScope => ({ name: "read messages", originAllowlist: [site.url], routeGlobs: ["/inbox", "/thread/**"] });
 

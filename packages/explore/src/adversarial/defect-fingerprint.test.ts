@@ -25,18 +25,25 @@ describe("normalizeRoute — the route/endpoint pattern", () => {
     ["http://a.test/dev-org-admin/admin/crm-upload-enrichment", "/dev-org-admin/admin/crm-upload-enrichment"],
     ["http://a.test/", "/"],
     ["/relative/7", "/relative/:id"],
-    // #95: a literal prefix + id-like suffix collapses to one route (a long opaque token like a
-    // prefixed uuid is already caught whole by `OPAQUE`; a short prefixed id keeps its prefix).
+    // #95/#127: a literal prefix + id-like suffix collapses to the SAME whole-segment `:id` route,
+    // whatever shape the id part is (a long opaque/uuid token or a short trailing number) — a
+    // literal prefix is never kept, so the same route isn't split into different templates.
     ["http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890", "/decisions/:id"],
-    ["http://a.test/decisions/demo-bet-1", "/decisions/demo-bet-:id"],
-    ["http://a.test/items/item-42", "/items/item-:id"],
+    ["http://a.test/decisions/demo-bet-1", "/decisions/:id"],
+    ["http://a.test/items/item-42", "/items/:id"],
   ])("%s → %s", (raw, want) => {
     expect(normalizeRoute(raw)).toBe(want);
   });
 
-  it("#95: two instances with different ids under a prefix normalize identically", () => {
+  it("#95/#127: two instances with different ids under a prefix normalize identically", () => {
     expect(normalizeRoute("http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
       normalizeRoute("http://a.test/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345"),
+    );
+  });
+
+  it("#127: a short trailing-digit slug and a uuid slug under the SAME prefix normalize to the same route", () => {
+    expect(normalizeRoute("http://a.test/decisions/demo-bet-1")).toBe(
+      normalizeRoute("http://a.test/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890"),
     );
   });
 });

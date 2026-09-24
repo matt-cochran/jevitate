@@ -349,6 +349,8 @@ export class UsabilityCapture {
       url: e.url,
       ...(e.descriptor === undefined ? {} : { descriptor: e.descriptor }),
       ...(e.reason === undefined ? {} : { reason: e.reason }),
+      ...(e.href === undefined ? {} : { href: e.href }),
+      ...(e.ariaCurrent === undefined ? {} : { ariaCurrent: e.ariaCurrent }),
       // #131: the transcript's own (already redacted) value/message/reply — redacted again here.
       ...(e.value === undefined ? {} : { value: this.#redact(e.value) }),
       ...(e.message === undefined ? {} : { message: this.#redact(e.message) }),

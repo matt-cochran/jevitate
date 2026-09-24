@@ -19,6 +19,9 @@ import {
   explore,
   assertAuthorizedExploreTarget,
   resolveMissionFixture,
+  reproduceHang,
+  hangFinding,
+  hangOutcome,
   type Snapshot,
   type Control as ExploreControl,
   type Bounds,
@@ -26,6 +29,8 @@ import {
   type RunAnswer,
   type RunOutcome,
   type SecretField,
+  type HangFinding,
+  type VerifySession,
   type SideEffect,
   secretFieldSecrets,
 } from "@jevitate/explore";
@@ -625,8 +630,26 @@ export interface RunUsabilityMissionResult {
   readonly engine: EngineInfo;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** The hang finding (with its reproduction k/N), present when the run stopped on a hang (#126). */
+  readonly hang?: HangFinding;
   /** The persisted typed result (`usability-<stamp>.recording.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath?: string;
+}
+
+/**
+ * Opens a FRESH browser session for replays (hang reproduction): a new context from the same port
+ * and options — same authenticated storageState, never the session the finding was made in.
+ */
+function freshSessionOpener(
+  portFactory: () => BrowserPort,
+  launch: Parameters<BrowserPort["open"]>[0],
+  allowlist: readonly string[],
+): () => Promise<VerifySession> {
+  return async () => {
+    const session = await portFactory().open(launch);
+    const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [...allowlist]));
+    return { page: session.page, actor, close: () => session.close() };
+  };
 }
 
 /**
@@ -649,13 +672,14 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
   const extract =
@@ -777,8 +801,31 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       secrets,
       judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
     });
+    // #126: a run that stops on a hang is never `clean` — it is reproduced in fresh contexts (same
+    // as a goal mission) and mapped through the same hang/intermittent/inconclusive rule.
+    let hang: HangFinding | undefined;
+    if (run.stop === "hang" && run.hang !== undefined) {
+      const h = run.hang;
+      const reproduction = await reproduceHang({
+        recording: run.recording,
+        recordingStepIndex: h.recordingStepIndex,
+        hang: h.signal,
+        openSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+        perceive: {
+          ...(opts.target?.settle === undefined ? {} : { settleConfig: opts.target.settle }),
+          ...(opts.target?.hangs === undefined ? {} : { hangConfig: opts.target.hangs }),
+        },
+      });
+      hang = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
+    }
     const runOutcome: MissionOutcome =
-      run.stop === "crashed" ? "crashed" : run.stop === "inconclusive" ? "inconclusive" : "clean";
+      run.stop === "crashed"
+        ? "crashed"
+        : run.stop === "inconclusive"
+          ? "inconclusive"
+          : run.stop === "hang"
+            ? hangOutcome(hang?.reproduction.status ?? "inconclusive")
+            : "clean";
     const base = {
       timing: run.timing,
       stop: run.stop,
@@ -795,6 +842,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(hang === undefined ? {} : { hang }),
     };
     if (outcome.kind === "failed") {
       // The analysis is the review's product: without it the review is inconclusive (never a

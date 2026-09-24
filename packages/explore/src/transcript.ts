@@ -129,6 +129,10 @@ export interface TranscriptEntry {
    * usability run sees.
    */
   readonly descriptor?: TargetDescriptor;
+  /** The acted control's resolved `href` (redacted, path only), when it was a link. #127. */
+  readonly href?: string | null;
+  /** The acted control's raw `aria-current` attribute, or null. #127. */
+  readonly ariaCurrent?: string | null;
 }
 
 /** What came back after a message was sent. */
@@ -224,6 +228,8 @@ export class TranscriptLog {
         : { value: step.redacted === true || isPasswordControl(step.control) ? REDACTION_MASK : redactText(step.value, this.#secrets) }),
       ...(step.answer === undefined ? {} : { answer: redactAnswer(step.answer, this.#secrets) }),
       ...(step.control === null ? {} : { descriptor: redactDescriptor(step.control.descriptor, this.#secrets) }),
+      ...(step.control?.href === undefined ? {} : { href: step.control.href }),
+      ...(step.control?.ariaCurrent === undefined ? {} : { ariaCurrent: step.control.ariaCurrent }),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);

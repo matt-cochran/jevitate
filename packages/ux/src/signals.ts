@@ -80,6 +80,10 @@ export interface SignalStep {
   readonly descriptor?: TargetDescriptor;
   /** The transcript's reason for the step (e.g. the run's own refusal to repeat a side effect, #92). */
   readonly reason?: string;
+  /** The acted control's resolved `href`, when it was a link (#127: a same-page nav link is not inert). */
+  readonly href?: string | null;
+  /** The acted control's raw `aria-current` attribute, or null (#127). */
+  readonly ariaCurrent?: string | null;
   /** #131: the (redacted) value a `type`/`select` step entered. */
   readonly value?: string;
   /** #131: the (redacted) message a `send` step sent. */
@@ -517,11 +521,39 @@ export function detectInternalIds(capture: RunSignalCapture): UxFinding[] {
   return out;
 }
 
+/**
+ * Does a control's `href` resolve to the page it was clicked on (ignoring hash and a trailing
+ * slash)? A nav link to the current route doing nothing is correct behaviour, not a bug (#127).
+ */
+function linksToCurrentPage(href: string | null | undefined, currentUrl: string): boolean {
+  if (href === null || href === undefined || href === "") return false;
+  const dropTrailingSlash = (p: string): string => (p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
+  try {
+    const target = new URL(href);
+    const current = new URL(currentUrl);
+    return (
+      target.origin === current.origin &&
+      dropTrailingSlash(target.pathname) === dropTrailingSlash(current.pathname) &&
+      target.search === current.search
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** A truthy `aria-current` (present and not explicitly `"false"`) marks the current nav item (#127). */
+function hasAriaCurrent(v: string | null | undefined): boolean {
+  return v !== null && v !== undefined && v !== "" && v !== "false";
+}
+
 /** A successful click after which nothing observable changed (url, screen, text) and no request fired. */
 export function detectInertControls(capture: RunSignalCapture): UxFinding[] {
   const inert = new Map<string, { step: SignalStep; before: SignalScreen; after: SignalScreen }[]>();
   for (const s of capture.steps) {
     if (s.op !== "click" || !s.actOk) continue;
+    // A link to the route the user is already on, or a control marked as the current nav item,
+    // doing nothing on click is not inert — it is exactly what should happen (#127).
+    if (hasAriaCurrent(s.ariaCurrent) || linksToCurrentPage(s.href, s.url)) continue;
     const before = capture.screens.filter((x) => x.step === s.step).pop();
     const after = capture.screens.find((x) => x.step > s.step);
     if (before === undefined || after === undefined) continue;
