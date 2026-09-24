@@ -78,10 +78,11 @@ import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
-import { serverLogResult, type ServerLogOptions } from "./explore-api.js";
+import { currentUrlSafe, persistStorageState, serverLogResult, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
+import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -594,6 +595,12 @@ export interface RunUsabilityMissionOptions {
    * browser, never to a model or a finding.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState here when the run ends (CLI `--save-storage-state`) —
+   * see `RunExplorationOptions.saveStorageState`'s doc for the full behaviour (written on every exit
+   * path including a crash/kill signal, never over a lost/logged-out session, mode 0600).
+   */
+  readonly saveStorageState?: string;
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
@@ -780,19 +787,27 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // the tokens spent so far and the screens already observed.
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
+  // #159: see RunExplorationOptions.saveStorageState / runExploration's own doc comment.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
     partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
+    ...(opts.saveStorageState === undefined
+      ? {}
+      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
   });
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
   // chain; a server-log runtime (#142) is inserted in FRONT of it (never replacing it) so every step
-  // still gets its screenshot/flush exactly as before, whether or not --log-source was given.
+  // still gets its screenshot/flush exactly as before, whether or not --log-source was given. #159:
+  // every settled step also refreshes the in-memory storageState snapshot (a cheap no-op when
+  // `--save-storage-state` was not given).
   const journalListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(entry, all);
     journal.onTranscriptEntry(entry, capture.withScreenshots(all));
+    snapshotter.noteSettledStep(currentUrlSafe(session));
   };
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
@@ -1040,6 +1055,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
+    // #159: reaches this even when the mission above threw — the context is still open here.
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
 }

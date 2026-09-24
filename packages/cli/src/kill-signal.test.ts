@@ -16,10 +16,16 @@ import {
  *  precisely (no writeFileSync/process.exit ever runs in this file). */
 function fakeDeps(opts: { transcript?: readonly TranscriptEntry[] } = {}) {
   const handlers: Record<string, () => void> = {};
-  const calls: { exit: number[]; closeBrowsers: number; writeResult: Array<Parameters<KillSwitchDeps["writeResult"]>> } = {
+  const calls: {
+    exit: number[];
+    closeBrowsers: number;
+    writeResult: Array<Parameters<KillSwitchDeps["writeResult"]>>;
+    writeStorageStateSnapshot: Array<[string, string]>;
+  } = {
     exit: [],
     closeBrowsers: 0,
     writeResult: [],
+    writeStorageStateSnapshot: [],
   };
   const deps: KillSwitchDeps = {
     exit: (code) => {
@@ -35,6 +41,10 @@ function fakeDeps(opts: { transcript?: readonly TranscriptEntry[] } = {}) {
     readTranscript: () => ({ steps: opts.transcript?.length ?? 0, transcript: opts.transcript ?? [] }),
     onSignal: (signal, handler) => {
       handlers[signal] = handler;
+    },
+    // #159: captured instead of touching the real filesystem (no writeFileSync in this file).
+    writeStorageStateSnapshot: (path, json) => {
+      calls.writeStorageStateSnapshot.push([path, json]);
     },
   };
   return { deps, handlers, calls };
@@ -113,6 +123,101 @@ describe("kill-signal — crash-safe SIGTERM/SIGINT (#94)", () => {
     expect(calls.exit).toEqual([143, 130]);
     expect(calls.writeResult).toHaveLength(1);
     expect(calls.closeBrowsers).toBe(1);
+  });
+});
+
+describe("kill-signal — --save-storage-state on a kill (#159)", () => {
+  it("writes each armed mission's last snapshot, synchronously, mode 0600 (via the injected writer)", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch(
+      {
+        recordingPath: "/out/a.json",
+        transcript: () => [],
+        storageState: { path: "/out/a.state.json", snapshot: () => '{"cookies":["a-good"],"origins":[]}' },
+      },
+      deps,
+    );
+    armMissionKillSwitch(
+      {
+        recordingPath: "/out/b.json",
+        transcript: () => [],
+        storageState: { path: "/out/b.state.json", snapshot: () => '{"cookies":["b-good"],"origins":[]}' },
+      },
+      deps,
+    );
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(calls.writeStorageStateSnapshot).toEqual([
+      ["/out/a.state.json", '{"cookies":["a-good"],"origins":[]}'],
+      ["/out/b.state.json", '{"cookies":["b-good"],"origins":[]}'],
+    ]);
+  });
+
+  it("writes nothing for a mission with no --save-storage-state (no `storageState` field at all)", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch({ recordingPath: "/out/a.json", transcript: () => [] }, deps);
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(calls.writeStorageStateSnapshot).toEqual([]);
+  });
+
+  it("writes nothing when no snapshot was ever safely captured yet (killed before the first settled step)", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch(
+      {
+        recordingPath: "/out/a.json",
+        transcript: () => [],
+        storageState: { path: "/out/a.state.json", snapshot: () => undefined },
+      },
+      deps,
+    );
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(calls.writeStorageStateSnapshot).toEqual([]);
+  });
+
+  it("a throwing snapshot getter never blocks the flush or the exit — best-effort like every other field", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch(
+      {
+        recordingPath: "/out/a.json",
+        transcript: () => [],
+        storageState: {
+          path: "/out/a.state.json",
+          snapshot: () => {
+            throw new Error("boom");
+          },
+        },
+      },
+      deps,
+    );
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(calls.writeStorageStateSnapshot).toEqual([]);
+    expect(calls.writeResult).toHaveLength(1);
+  });
+
+  it("defaults to a real synchronous writeFileSync, mode 0600, when no writer is injected", async () => {
+    const { mkdtemp, readFile, rm, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const outDir = await mkdtemp(join(tmpdir(), "jev-kill-storage-state-"));
+    const path = join(outDir, "state.json");
+    try {
+      const { deps, handlers, calls } = fakeDeps();
+      // No `writeStorageStateSnapshot` override this time — exercises the real default.
+      const { writeStorageStateSnapshot: _omit, ...withoutWriter } = deps;
+      armMissionKillSwitch(
+        { recordingPath: "/out/a.json", transcript: () => [], storageState: { path, snapshot: () => '{"cookies":["real"],"origins":[]}' } },
+        withoutWriter,
+      );
+      handlers.SIGTERM?.();
+      await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+      expect(await readFile(path, "utf8")).toBe('{"cookies":["real"],"origins":[]}');
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
   });
 });
 
