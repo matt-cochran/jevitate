@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { contentHash } from "@jevitate/domain";
+import type { UsageSink } from "./usage.js";
 
 /**
  * The model-facing brief for a `form.value` (#71): the value for ONE field, never the whole goal.
@@ -190,13 +191,21 @@ const FAKE_TYPED_VALUES: Readonly<Record<string, string>> = {
   tel: "5550100",
 };
 
-/** Deterministic fake — used by ALL CI tests; no network, no key. */
+/**
+ * Deterministic fake — used by ALL CI tests; no network, no key. `usage` is optional (#100): when
+ * supplied, every call reports 1 generation at 0 tokens — so a test can assert usage counting
+ * end-to-end without a real OpenRouter call.
+ */
 export class FakeGenerationGateway implements GenerationPort {
-  constructor(private readonly canned?: Partial<Record<GenTaskKind, unknown>>) {}
+  constructor(
+    private readonly canned?: Partial<Record<GenTaskKind, unknown>>,
+    private readonly usage?: UsageSink,
+  ) {}
   async generate<K extends GenTaskKind>(kind: K, input: GenInput<K>): Promise<GenerationResult<K>> {
     const parsed = GEN_TASKS[kind].input.parse(input);
     const raw = this.canned?.[kind] ?? this.defaultFor(kind, parsed);
     const output = GEN_TASKS[kind].output.parse(raw) as GenOutput<K>;
+    this.usage?.recordGeneration({ inputTokens: 0, outputTokens: 0 });
     return {
       output,
       provenance: {

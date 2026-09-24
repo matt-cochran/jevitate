@@ -35,6 +35,7 @@ import {
   openRouterProviderSettings,
   JevJudgmentGateway,
   realJevClientCall,
+  UsageTracker,
   type JudgmentPort,
   type GenerationPort,
   type Answer,
@@ -43,6 +44,7 @@ import {
   type CatalogModel,
   type ModelConstraints,
   type OpenRouterCall,
+  type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import {
@@ -1637,8 +1639,9 @@ export function buildProgram(deps: CliDeps): Command {
 
         let covJudge: JudgmentPort;
         let covGen: GenerationPort;
+        let covUsage: UsageTracker;
         try {
-          ({ judge: covJudge, gen: covGen } = await buildExploreGateways(deps, {
+          ({ judge: covJudge, gen: covGen, usage: covUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
           }));
@@ -1658,6 +1661,7 @@ export function buildProgram(deps: CliDeps): Command {
             allowlist: covAllowlist,
             judge: covJudge,
             gen: covGen,
+            usage: covUsage,
             bounds: Object.keys(covBounds).length > 0 ? covBounds : undefined,
             ...(covRouteGlobs.length > 0 ? { routeGlobs: covRouteGlobs } : {}),
             outDir: o.out,
@@ -1696,8 +1700,9 @@ export function buildProgram(deps: CliDeps): Command {
         const advAllowlist = resolveExploreAllowlist(o.url, o.allow);
         let advJudge: JudgmentPort;
         let advGen: GenerationPort;
+        let advUsage: UsageTracker;
         try {
-          ({ judge: advJudge, gen: advGen } = await buildExploreGateways(deps, {
+          ({ judge: advJudge, gen: advGen, usage: advUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
           }));
@@ -1728,6 +1733,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(target === undefined ? {} : { target }),
             seedUrl: o.url,
             allowlist: advAllowlist,
+            usage: advUsage,
             ...(o.route.length > 0 ? { routeGlobs: o.route } : {}),
             coverageThresholds,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
@@ -1794,8 +1800,9 @@ export function buildProgram(deps: CliDeps): Command {
         if (o.maxDecisions !== undefined) uxBounds.maxDecisions = Number(o.maxDecisions);
         let uxJudge: JudgmentPort;
         let uxGen: GenerationPort;
+        let uxUsage: UsageTracker;
         try {
-          ({ judge: uxJudge, gen: uxGen } = await buildExploreGateways(deps, {
+          ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, {
             real: o.real ?? false,
             fakeAi: o.fakeAi ?? false,
           }));
@@ -1816,6 +1823,7 @@ export function buildProgram(deps: CliDeps): Command {
             appContext: { appClass: o.appClass, job: o.goal },
             judge: uxJudge,
             gen: uxGen,
+            usage: uxUsage,
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
             ...(o.show !== undefined ? { show: o.show } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
@@ -1907,8 +1915,9 @@ export function buildProgram(deps: CliDeps): Command {
 
       let judge: JudgmentPort;
       let gen: GenerationPort;
+      let usage: UsageTracker;
       try {
-        ({ judge, gen } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -1928,6 +1937,7 @@ export function buildProgram(deps: CliDeps): Command {
           allowlist,
           judge,
           gen,
+          usage,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
@@ -2527,8 +2537,9 @@ export function buildProgram(deps: CliDeps): Command {
       }
       let uxJudge: JudgmentPort;
       let uxGen: GenerationPort;
+      let uxUsage: UsageTracker;
       try {
-        ({ judge: uxJudge, gen: uxGen } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge: uxJudge, gen: uxGen, usage: uxUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -2547,6 +2558,7 @@ export function buildProgram(deps: CliDeps): Command {
           },
           judge: uxJudge,
           gen: uxGen,
+          usage: uxUsage,
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
           outDir: o.out,
@@ -2588,9 +2600,13 @@ const DEFAULT_EXPLORE_CONSTRAINTS: ModelConstraints = { requiredCapabilities: []
 async function buildExploreGateways(
   deps: CliDeps,
   opts: { real: boolean; fakeAi: boolean },
-): Promise<{ judge: JudgmentPort; gen: GenerationPort }> {
+): Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }> {
+  // #100: ONE tracker per invocation, handed to whichever gateways are built below — real (counted
+  // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
+  // without a key). Injected gateways (tests) get an empty tracker: they have no real seam to count.
+  const usage = new UsageTracker();
   if (deps.explore?.judge && deps.explore?.gen) {
-    return { judge: deps.explore.judge, gen: deps.explore.gen };
+    return { judge: deps.explore.judge, gen: deps.explore.gen, usage };
   }
   const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
   if (opts.real) {
@@ -2600,15 +2616,15 @@ async function buildExploreGateways(
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,
       constraints: DEFAULT_EXPLORE_CONSTRAINTS,
-      call: await realOpenRouterCall(),
+      call: await realOpenRouterCall(usage),
     });
-    const judge = new JevJudgmentGateway(store, await realJevClientCall());
+    const judge = new JevJudgmentGateway(store, await realJevClientCall(undefined, usage));
     // Transient model/network failures are retried with exponential backoff + jitter (≈16s), then
     // fail typed; validation/auth errors fail at once (owner ruling 4).
-    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen) };
+    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen), usage };
   }
   if (opts.fakeAi) {
-    return { judge: fakeDoneJudge(), gen: new FakeGenerationGateway() };
+    return { judge: fakeDoneJudge(usage), gen: new FakeGenerationGateway(undefined, usage), usage };
   }
   throw new GatewaySelectionError(
     "no gateway selected — pass --real for live Jev+OpenRouter (after `jevitate ai setup`), or --fake-ai for a deterministic pipeline smoke",
@@ -2618,9 +2634,10 @@ async function buildExploreGateways(
 /**
  * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It answers EVERY
  * question it is asked (whatever the mission names it): a choice picks `done` when offered (else
- * fails closed), a noul answers "no", a score answers 0.
+ * fails closed), a noul answers "no", a score answers 0. `usage` (#100) is optional: when supplied,
+ * every call reports 1 judgment at 0 tokens.
  */
-export function fakeDoneJudge(): JudgmentPort {
+export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
   return {
     async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
       const out: Record<string, Answer> = {};
@@ -2642,23 +2659,39 @@ export function fakeDoneJudge(): JudgmentPort {
           }
         }
       }
+      usage?.recordJudgment({ inputTokens: 0, outputTokens: 0 });
       return out;
     },
   };
 }
 
-/** Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`. */
-async function realOpenRouterCall(): Promise<OpenRouterCall> {
+/**
+ * Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`.
+ * `usage` (#100) is an optional sink: when supplied, every call (including a retry — this is the
+ * innermost seam `RetryingGenerationPort` re-invokes on each attempt) reports one generation with
+ * the provider's own token counts, plus `usd` ONLY when OpenRouter's usage-accounting reports a
+ * cost (never estimated). Usage accounting must never itself break a generation call, so a missing
+ * or malformed `providerMetadata` counts as 0 tokens / no cost rather than throwing.
+ */
+async function realOpenRouterCall(usage?: UsageSink): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   return async ({ model, schema, body, authHeader, temperature }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
-    const { object } = await generateObject({
+    const { object, usage: tokenUsage, providerMetadata } = await generateObject({
       model: openrouter(model),
       schema,
       prompt: JSON.stringify(body),
+      // Asks OpenRouter to include usage accounting (incl. `cost`) in providerMetadata.openrouter.usage.
+      providerOptions: { openrouter: { usage: { include: true } } },
       ...(temperature === undefined ? {} : { temperature }),
+    });
+    const openrouterUsage = (providerMetadata as { openrouter?: { usage?: { cost?: number } } } | undefined)?.openrouter?.usage;
+    usage?.recordGeneration({
+      inputTokens: tokenUsage.inputTokens ?? 0,
+      outputTokens: tokenUsage.outputTokens ?? 0,
+      ...(typeof openrouterUsage?.cost === "number" ? { usd: openrouterUsage.cost } : {}),
     });
     return { object, latencyMs: Date.now() - start };
   };

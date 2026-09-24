@@ -10,7 +10,7 @@
 // other). Findings are advisory; a UX finding never gates a run.
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
+import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
@@ -50,6 +50,7 @@ import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
+import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
@@ -259,6 +260,11 @@ export interface RunUxReviewOptions {
   /** Structured-output specifics (observation / implicated controls / fix) for flagged items. */
   readonly gen: GenerationPort;
   /**
+   * Usage accounting (#100): when supplied, its snapshot (judgments/generations/tokens/`usd`) lands
+   * in the result as `usage`. The CLI builds one per invocation and hands it to `judge`/`gen`.
+   */
+  readonly usage?: UsageTracker;
+  /**
    * Report cutoff; findings below it are suppressed (counted in `report.suppressed`). Precedence:
    * this (CLI `--min-confidence`) > `JEVITATE_UX_MIN_CONFIDENCE` > config `ux.minConfidence`
    * (`~/.jevitate/config.json`) > `DEFAULT_MIN_CONFIDENCE`.
@@ -293,6 +299,8 @@ export interface RunUxReviewOptions {
 export interface RunUxReviewResult {
   readonly report: UxReport;
   readonly reportPath: string;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 }
 
 const NO_TRANSCRIPT_CAVEAT =
@@ -331,7 +339,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  return { report, reportPath };
+  return { report, reportPath, ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }) };
 }
 
 export class UxAnalysisFailedError extends Error {
@@ -351,6 +359,8 @@ export interface RunUsabilityMissionOptions {
   readonly appContext: AppContext;
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
+  /** Usage accounting (#100): see `RunUxReviewOptions.usage`. */
+  readonly usage?: UsageTracker;
   /** Report cutoff (see `RunUxReviewOptions.minConfidence`). */
   readonly minConfidence?: number | string;
   /**
@@ -426,6 +436,8 @@ export interface RunUsabilityMissionResult {
   readonly timing: TimingSummary;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
+  /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
+  readonly usage?: UsageCounts;
 }
 
 /**
@@ -462,7 +474,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
       s.page.evaluate(() => (typeof document !== "undefined" && document.body ? document.body.innerText : "")));
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
-  await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const reportPath = join(outDir, `usability-${stamp}.json`);
@@ -479,6 +490,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     secrets,
     ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
   });
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
@@ -551,6 +565,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       screenshots: capture.screenshots(),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
+      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
     };
     if (outcome.kind === "failed") {
       // The analysis is the review's product: without it the review is inconclusive (never a
@@ -575,6 +590,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     return { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
   } finally {
     capture.detach();
+    disarmKillSwitch();
     await closeQuietly(session);
   }
 }
