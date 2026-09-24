@@ -251,6 +251,12 @@ decides it. `--success` can be repeated, and every check must hold:
 | `textIncludes:<d>\|<text>` | the element's text contains the text (case-insensitive) |
 | `count:<d>\|min=<n>,max=<n>` | the number of matching elements is within the bounds |
 | `valueEquals:<d>\|<value>` | a form control's **value** (input, textarea, select) equals the value exactly |
+| `style:<d>\|<prop><op><value>` | the **computed** style of every match (at least one) compares true — e.g. `style:[data-heat]\|alpha(background-color)>0`, `style:#title\|color=rgb(255, 0, 0)` (`styleMatches:` is an alias) |
+| `inViewport:<d>[\|min=<ratio>]` | the visible fraction (0..1) of every match's box inside the viewport is at least `min` (default 0.5) |
+| `box:<d>\|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n>` | every match's rendered size (CSS px) is within the bounds |
+| `overlaps:<d>\|<d2>` / `noOverlap:<d>\|<d2>` | the first matches' boxes do / do not overlap |
+| `attr:<d>\|<name>=<value>` | the first match's attribute equals the value (`attr:<d>\|<name>`: present; `attr:<d>\|!<name>`: absent) |
+| `flashed:<d>\|class=<cls>[\|withinMs=<n>]` | a match **gained** the class (or `attr=<name>`, or `animation`) after the last user input — a transient flash that is gone by the time the page settles |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
 | `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing) |
 | `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status |
@@ -259,7 +265,20 @@ In these specs:
 
 - `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…`, or a CSS selector
   (`[data-testid=x]` is read as the test id).
-- The last `|` separates the descriptor from the text or value.
+- The last `|` separates the descriptor from the text or value (for `style` too). The other
+  visual kinds split the descriptor off at the first `|`.
+- Visual-state checks are read by fixed built-in page functions and decided by code, never a
+  model, and never by evaluating a declared string. `<prop>` is one of an allowlist (`color`,
+  `background-color`, `opacity`, `visibility`, `display`, `outline-color|style|width`,
+  `border-{top,right,bottom,left}-color`, `transform`, `font-weight`, `font-style`,
+  `text-decoration-line`, `fill`, `fill-opacity`, `stroke`), optionally one numeric channel of it:
+  `alpha(…)`, `r(…)`, `g(…)`, `b(…)` of a color, `px(…)` of a length. `<op>` is
+  `= != > >= < <=`; `=`/`!=` compare colors as colors (`red` = `rgb(255, 0, 0)`). A missing
+  element or a value that cannot be read as asked never holds, and the result says what was
+  observed (the ratio, the computed values, the flash timing).
+- `flashed` needs its recorder installed before the action that triggers the flash; the goal
+  mission installs it at the start of any run with a `flashed` check. Canvas pixels are not read:
+  expose canvas state through DOM/ARIA/`data-*` and check that.
 - Path globs match the request path: `*` within one segment, `**` across segments.
   A method of `*` matches any method. **The glob must start with `/`** (it matches the
   request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
@@ -275,6 +294,24 @@ check that caught it:
 jevitate explore --url https://app.example.test/profile --goal "set the last name to Litmus and save" \
   --success 'requestMade:PUT /api/profile' --success 'responseStatus:PUT /api/profile=2xx' \
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
+```
+
+### Rich-text editors
+
+A `contenteditable` element (a document editor's prose block) is also offered the `edit_text`
+op: an edit INSIDE its text instead of `type`, which replaces the whole element. The model
+proposes one edit — `replace` a verbatim quote of the current text, `insertBefore`/`insertAfter`
+it, or `format` it (bold/italic/underline via the keyboard shortcut) — and code checks it: the
+quote must occur in the element's text exactly once, and neither the quote nor the typed text
+may contain a registered secret. A quote that is not there is refused, never degraded to
+replacing the whole element. The caret/selection is placed with a DOM Range and the text is
+typed with keyboard events. The Recording stores the anchor as an `editText` step
+(`anchor: { quote } | { start, end } | { at: "start" | "end" }`), and replay places the same
+anchor in the element's current text — a quote that has gone fails the replay closed.
+
+```bash
+jevitate explore --url http://localhost:8088/editor --goal "in paragraph 2, change 'quick' to 'slow'" \
+  --success 'reloadThen:textIncludes:#b2|slow brown fox'
 ```
 
 ### Find-out goals (no `--success`)
@@ -333,6 +370,12 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
 - `dom`: the text of the first match of a `selector` (CSS) or a `target` descriptor.
   Add `read: "value"` for a form value, `read: "count"` for the number of matches, and
   `number: true` to parse the first number (`"≈ 1,240 credits"` becomes `1240`).
+  Visual state: `read: "inViewport"` (the first match's visible fraction, 0..1),
+  `read: { "attr": "<name>" }`, or `read: { "style": "<prop>", "channel": "alpha", "reduce": "min" }`
+  (a computed style from the allowlist above; with a `channel` it is a number, and `reduce`
+  `first`/`min`/`max` picks across matches). For example, a heat map whose highlights must stay
+  visible: `"heatAlpha": { "dom": { "selector": "[data-heat]", "read": { "style": "background-color",
+  "channel": "alpha", "reduce": "min" } } }` with `"require": "heatSpans >= 1 -> heatAlpha > 0"`.
 - `network`: a JSON path in the last response whose URL matches the glob. Only
   responses from an authorized origin are read.
 - `probe`: a `get` (or `head`) of an existing endpoint. It must be on an `--allow`

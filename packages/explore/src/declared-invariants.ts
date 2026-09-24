@@ -1,6 +1,18 @@
-import type { Page, Response } from "playwright";
+import type { Locator, Page, Response } from "playwright";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
-import { checkAssertion } from "@jevitate/interpreter";
+import {
+  DEFAULT_IN_VIEWPORT_MIN,
+  attrOf,
+  boxesOf,
+  checkAssertion,
+  descriptorToTarget,
+  evaluateVisual,
+  installFlashRecorder,
+  intersectionRatio,
+  isVisualAssertion,
+  styleChannel,
+  stylesOf,
+} from "@jevitate/interpreter";
 import { descriptorToLocator } from "@jevitate/recorder";
 import {
   UNKNOWN,
@@ -14,6 +26,7 @@ import {
   probeUrl,
   readJsonPath,
   type DeclaredInvariant,
+  type DomObservable,
   type EvalValue,
   type ExprNode,
   type InvariantSpec,
@@ -248,6 +261,13 @@ export class InvariantMonitor {
   attach(page: Page): void {
     if (this.#attached.has(page)) return;
     this.#attached.add(page);
+    // A transient-state (`flashed`, #148) always/never check needs the flash recorder before the
+    // actions it watches. Protocol messages are ordered, so it is installed before the next navigation.
+    const assertions = this.#spec.invariants.flatMap((d) => [
+      ...(d.always === undefined ? [] : [d.always]),
+      ...(d.never !== undefined && "assertion" in d.never ? [d.never.assertion] : []),
+    ]);
+    if (assertions.some((a) => a.kind === "flashed")) void installFlashRecorder(page).catch(() => undefined);
     const network = Object.entries(this.#spec.observe ?? {}).filter(
       (e): e is [string, { network: NonNullable<Extract<ObservableSpec, { network: unknown }>["network"]> }] => "network" in e[1],
     );
@@ -377,6 +397,16 @@ export class InvariantMonitor {
       };
     };
 
+    // A visual-state assertion (#148) is decided by code with its evidence; an unreadable one (no
+    // match, a value that does not parse) is `unknown` — never a violation, never a pass.
+    const visual = decl.always ?? (decl.never !== undefined && "assertion" in decl.never ? decl.never.assertion : undefined);
+    if (visual !== undefined && isVisualAssertion(visual)) {
+      const v = await evaluateVisual(visual, (d) => descriptorToTarget(d).resolve(page));
+      if (v.detail.startsWith("unreadable")) return "unknown";
+      const violated = decl.always !== undefined ? !v.held : v.held;
+      const kind = decl.always !== undefined ? "always" : "never";
+      return violated ? make(kind, `${kind} ${JSON.stringify(visual)}`, this.#clip(v.detail), {}, []) : "held";
+    }
     if (decl.always !== undefined) {
       const ok = await checkAssertion(actor, decl.always, { timeoutMs: 500 }).catch(() => null);
       if (ok === null) return "unknown";
@@ -493,6 +523,40 @@ export class InvariantMonitor {
     return { headers: { Authorization: `${prefix}${token}` }, note: ` (authenticated via ${source.split(":")[0]})` };
   }
 
+  /**
+   * A `dom` observable's visual-state read (#148), by fixed page functions and parsed by code: the
+   * first match's in-viewport ratio, a computed style (a number with a `channel`, reduced across
+   * matches; else the first match's raw value), or an attribute. Unreadable → missing.
+   */
+  async #readVisual(
+    locator: Locator,
+    read: Exclude<NonNullable<DomObservable["read"]>, "text" | "value" | "count">,
+    missing: EvalValue,
+  ): Promise<{ value: EvalValue; evidence?: string }> {
+    if (read === "inViewport") {
+      const { boxes, viewport } = await boxesOf(locator.first());
+      const box = boxes[0];
+      return box === undefined ? { value: missing } : { value: Math.round(intersectionRatio(box, viewport) * 1000) / 1000 };
+    }
+    if ("attr" in read) {
+      const { value } = await attrOf(locator, read.attr);
+      return { value: value === null ? missing : this.#clip(value) };
+    }
+    const raws = await stylesOf(locator, read.style);
+    if (read.channel === undefined) {
+      const first = raws[0];
+      return { value: first === undefined || first === "" ? missing : this.#clip(first) };
+    }
+    const channel = read.channel;
+    const nums = raws.map((r) => styleChannel(r, channel));
+    // One unreadable element makes a min/max unknowable: missing, never a partial answer.
+    if (nums.length === 0 || nums.some((n) => n === null)) return { value: missing, evidence: `style ${read.style} unreadable` };
+    const values = nums as number[];
+    const reduce = read.reduce ?? "first";
+    const value = reduce === "min" ? Math.min(...values) : reduce === "max" ? Math.max(...values) : (values[0] as number);
+    return { value, evidence: `${channel}(${read.style}) ${reduce} over ${values.length} element(s) = ${value}` };
+  }
+
   async #read(page: Page, name: string, o: ObservableSpec): Promise<{ value: EvalValue; evidence?: string }> {
     if ("dom" in o) {
       const d = o.dom;
@@ -501,6 +565,7 @@ export class InvariantMonitor {
       const count = await locator.count();
       if (d.read === "count") return { value: count };
       if (count === 0) return { value: missing };
+      if (d.read !== undefined && d.read !== "text" && d.read !== "value") return this.#readVisual(locator, d.read, missing);
       const first = locator.first();
       const raw = d.read === "value" ? await first.inputValue({ timeout: DOM_TIMEOUT_MS }) : await first.innerText({ timeout: DOM_TIMEOUT_MS });
       const text = raw.trim();

@@ -1,6 +1,6 @@
 import { buildServer } from "./server.js";
 
-export { buildServer } from "./server.js";
+export { buildServer, EDITOR_BLOCKS } from "./server.js";
 export { SEED_THREADS } from "./data.js";
 
 export async function startServer(port = 0): Promise<{ url: string; close(): Promise<void> }> {
