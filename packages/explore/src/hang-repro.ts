@@ -198,7 +198,10 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
 
 export async function reproduceHang(p: ReproduceHangParams): Promise<HangReproduction> {
   const attempts = p.attempts ?? DEFAULT_HANG_REPLAYS;
-  if (!Number.isInteger(attempts) || attempts < 1) throw new Error(`reproduceHang: attempts must be >= 1, got ${attempts}`);
+  if (!Number.isInteger(attempts) || attempts < 0) throw new Error(`reproduceHang: attempts must be a non-negative integer, got ${attempts}`);
+  // #154: 0 replays is the operator's "don't replay" (a replay could repeat a paid write): the hang
+  // stays UNCONFIRMED — inconclusive, never a crash and never a non-reproduction.
+  if (attempts === 0) return NOT_REPLAYED;
   const runs: HangAttempt[] = [];
   for (let i = 0; i < attempts; i++) runs.push(await replayAndDetectHang(p));
   return {

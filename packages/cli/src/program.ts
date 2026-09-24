@@ -1725,7 +1725,7 @@ export function buildProgram(deps: CliDeps): Command {
       "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
     )
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
-    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2)")
+    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)")
     .option(
       "--settle-ignore <pattern>",
       "a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)",
@@ -1927,6 +1927,12 @@ export function buildProgram(deps: CliDeps): Command {
       }
       if (conversation.jobWaitMs !== undefined && !(Number.isInteger(conversation.jobWaitMs) && conversation.jobWaitMs > 0)) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
+        return;
+      }
+      // #154: refused BEFORE any browser opens. 0 is valid: "don't replay" — a hang is then
+      // reported unconfirmed (inconclusive), never replayed and never a crash.
+      if (o.hangReplays !== undefined && !/^\d+$/.test(o.hangReplays.trim())) {
+        emitJson(program, fail("E_EXPLORE_ARGS", `--hang-replays must be a non-negative integer (0 = don't replay; the hang is reported unconfirmed), got "${o.hangReplays}"`));
         return;
       }
       try {
