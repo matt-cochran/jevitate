@@ -18,5 +18,6 @@ export * from "./specifics.js";
 export * from "./route.js";
 export * from "./prompts.js";
 export * from "./grade.js";
+export * from "./signals.js";
 export { loadRubric, RubricLoadError, RubricEntrySchema, JevQuestionSpecSchema } from "./rubric/schema.js";
 export { V1_RUBRIC, loadV1Rubric } from "./rubric/v1/index.js";
