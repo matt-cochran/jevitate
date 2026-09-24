@@ -257,6 +257,8 @@ describe("shared decision transcript — every model-deciding strategy writes on
         const result = await runCoverageMission({
           url: `${site.url}/exploratory-testing/cycle-a`,
           allowlist: [site.url],
+          // The cycle spans sibling routes: widen the default start-route scope (#89).
+          routeGlobs: ["/exploratory-testing/**"],
           judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0.1 } }),
           gen: new FakeGenerationGateway(),
           outDir,

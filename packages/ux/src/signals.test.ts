@@ -56,7 +56,7 @@ describe("detectHungRequests", () => {
     });
     const [f, ...rest] = detectHungRequests(c);
     expect(rest).toHaveLength(0);
-    expect(f).toMatchObject({ rubricItemId: "signal-hung-request", tier: "signal", severity: "major", route: "/bets/7" });
+    expect(f).toMatchObject({ rubricItemId: "signal-hung-request", tier: "signal", severity: "major", route: "/bets/:id" }); // #95: dynamic segments are templated
     expect(f!.observation).toContain("POST /api/simulations");
     expect(f!.observation).toContain("still pending");
     expect(f!.signal).toMatchObject({ kind: "hung-request", screenshot: "/out/s/screen-2.png" });
