@@ -31,6 +31,26 @@ describe("classifyRisk", () => {
     ).toBe("read-only");
   });
 
+  it("#125: a click on a link (ARIA role=link) is read-only, not risky", () => {
+    expect(
+      classifyRisk(
+        base([
+          { kind: "navigate", url: "/terms", expect: { kind: "urlIncludes", text: "/terms" } },
+          { kind: "click", target: { role: "link", name: "Privacy" }, expect: { kind: "urlIncludes", text: "/privacy" } },
+          { kind: "assert", check: { kind: "urlIncludes", text: "/privacy" } },
+        ]) as any,
+      ),
+    ).toBe("read-only");
+  });
+
+  it("a click WITHOUT role=link (e.g. a button, or role unknown) stays risky", () => {
+    expect(
+      classifyRisk(
+        base([{ kind: "click", target: { role: "button", name: "Delete" }, expect: { kind: "urlIncludes", text: "/x" } }]) as any,
+      ),
+    ).toBe("risky");
+  });
+
   it("ANY write step is risky — an author cannot downgrade it (FMECA #6)", () => {
     expect(
       classifyRisk(
