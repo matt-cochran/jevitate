@@ -1,0 +1,37 @@
+[
+ {
+  "key": "nielsen-9|/adversarial/notfound|not found",
+  "label": "actionable",
+  "observation": "The error message displayed is 'not found', which does not provide any context or guidance on what the user can do next to resolve the issue."
+ },
+ {
+  "key": "primary-action|/inbox|link \"Follow up\"+link \"Welcome\"",
+  "label": "generic",
+  "observation": "There are multiple links that could be interpreted as primary actions, creating ambiguity about which action the user should take next."
+ },
+ {
+  "key": "scent|/inbox|link \"Follow up\"+link \"Welcome\"",
+  "label": "generic",
+  "observation": "The labels 'Follow up' and 'Circling back' are vague and do not clearly indicate the content or importance of the messages, weakening the information scent."
+ },
+ {
+  "key": "nielsen-1|/inbox|link \"Follow up\"+link \"Welcome\"",
+  "label": "generic",
+  "observation": "There is no indication of whether new messages have arrived or if the inbox is up to date, leaving the user uncertain about the current state of their inbox."
+ },
+ {
+  "key": "nielsen-3|/login|button \"Sign in\"",
+  "label": "generic",
+  "observation": "There is no option to cancel or go back after clicking the 'Sign in' button, which limits user control over the sign-in process."
+ },
+ {
+  "key": "nielsen-1|/login|button \"Sign in\"",
+  "label": "generic",
+  "observation": "The 'Sign in' button does not provide any feedback or indication of progress after being clicked, leaving the user uncertain about whether their action was successful."
+ },
+ {
+  "key": "nielsen-6|/inbox|link \"Follow up\"+link \"Welcome\"",
+  "label": "relevant-minor",
+  "observation": "The user must recall the context of the messages without any previous context or options shown, making it difficult to understand the relevance of the messages."
+ }
+]

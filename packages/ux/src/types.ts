@@ -129,6 +129,17 @@ export interface RubricEntry {
    * INFERENCE from semantic/visual hierarchy, never eye-tracking or gaze data.
    */
   readonly attentionProvenance?: string;
+  /**
+   * Deterministic applicability gate (independent code, before any model call). An entry whose
+   * precondition does not hold on a screen is recorded as `notApplicable` — never judged, never a
+   * finding (e.g. choice overload cannot apply to a two-button consent screen).
+   */
+  readonly applicability?: RubricApplicability;
+}
+
+export interface RubricApplicability {
+  /** The principle needs at least this many interactive controls on the screen to apply. */
+  readonly minControls?: number;
 }
 
 /** A resolved reference into the analyzed evidence, e.g. { id: "control:0" }. */
@@ -144,18 +155,58 @@ export interface PredictedAttention {
 }
 
 /**
+ * The inputs of a finding's confidence (see `confidence.ts` for the formula). Every factor is in
+ * [0,1]; `confidence = mean(violation × applicability × grounding) × agreement`.
+ */
+export interface ConfidenceBasis {
+  /** Mean Jev probability that the principle is violated (correctly oriented per flag rule). */
+  readonly violation: number;
+  /** Mean Jev probability that the principle applies to this screen type / job. */
+  readonly applicability: number;
+  /** Mean grounded specificity from independent adjudication (1 = cited evidence named in the observation). */
+  readonly grounding: number;
+  /** occurrences ÷ screen-states on this route where the item was judged with the same evidence present. */
+  readonly agreement: number;
+}
+
+/**
  * A finding is constructable ONLY via `makeFinding()`. There is no public raw
  * constructor: the type is exported but the sole factory validates the citation
- * + evidence refs and freezes the result (spec FMECA SF4).
+ * + evidence refs + a non-empty grounded observation and freezes the result
+ * (spec FMECA SF4).
  */
 export interface UxFinding {
   readonly rubricItemId: string;
   readonly citation: { readonly source: string; readonly ref: string };
   readonly severity: "info" | "minor" | "major";
   readonly confidence: number;
+  /** ONLY the evidence actually implicated (on the representative screen `screenId`). */
   readonly evidenceRefs: readonly EvidenceRef[];
+  /** What is wrong — naming the control/label/text — relative to the job. */
+  readonly observation: string;
+  /** The consequence for the user pursuing the job. */
+  readonly userImpact: string;
+  /** A specific change to the implicated control/text. */
   readonly recommendation: string;
   readonly tier: Tier;
+  /** Representative screen-state the evidenceRefs resolve in. */
+  readonly screenId: string;
+  /** Normalized route (URL pathname) the finding was observed on. */
+  readonly route: string;
+  /** Human-readable identities of the implicated controls, e.g. `button "Accept"`. */
+  readonly controls: readonly string[];
+  /** Verbatim on-screen text excerpts, each verified present on the screen. */
+  readonly quotes: readonly string[];
+  /** How many screen-states on this route exhibited this same issue (dedupe count). */
+  readonly occurrences: number;
+  /** Every screen-state id the issue was observed on. */
+  readonly screenIds: readonly string[];
+  readonly confidenceBasis?: ConfidenceBasis;
+  /**
+   * The independent quality grade (grade.ts) — advisory; the report's quality policy decides
+   * whether the finding is shown. Absent for objective (computed) findings.
+   */
+  readonly quality?: { readonly label: "actionable" | "relevant-minor" | "generic" | "wrong"; readonly confidence: number };
   readonly predictedAttention?: PredictedAttention;
 }
 
@@ -181,8 +232,46 @@ export interface Coverage {
   readonly skipped: readonly SkippedItem[];
   /** Screen ids left un-analyzed because the judgment budget was exhausted. */
   readonly budgetTruncated: readonly string[];
+  /**
+   * Items deterministically ruled out by the entry's `applicability` gate. They count as
+   * evaluated (the answer is "does not apply"), so they never make coverage incomplete.
+   */
+  readonly notApplicable?: readonly SkippedItem[];
+}
+
+/** Why a flagged judgment did not become a reported finding. */
+export type SuppressionReason =
+  /** The specifics step named no control and no on-screen text — not a finding. */
+  | "ungrounded"
+  /** The specifics cited a control or text that does not exist on the observed screen. */
+  | "rejected-evidence"
+  /** The specifics step, looking for concrete evidence, found the principle not violated. */
+  | "not-confirmed"
+  /** Grounded, but confidence fell below the report's `minConfidence` cutoff. */
+  | "below-min-confidence"
+  /** The quality grade (e.g. generic / wrong) is not in the report's quality policy. */
+  | "quality-policy";
+
+/** A suppressed candidate — counted and summarized in the report, never silently dropped. */
+export interface SuppressedItem {
+  readonly rubricItemId: string;
+  readonly route: string;
+  readonly screenId: string;
+  readonly reason: SuppressionReason;
+  readonly detail: string;
+  readonly confidence?: number;
+  readonly occurrences?: number;
+  readonly qualityLabel?: string;
 }
 
 export type AnalysisOutcome =
-  | { readonly kind: "analyzed"; readonly findings: readonly UxFinding[]; readonly coverage: Coverage }
+  | {
+      readonly kind: "analyzed";
+      readonly findings: readonly UxFinding[];
+      readonly coverage: Coverage;
+      /** Flagged judgments that did not survive adjudication (the report adds below-cutoff ones). */
+      readonly suppressed?: readonly SuppressedItem[];
+      /** Per-screen flagged occurrences before dedupe (for before/after accounting). */
+      readonly rawOccurrences?: number;
+    }
   | { readonly kind: "failed"; readonly reason: string; readonly screenId?: string; readonly rubricItemId?: string };

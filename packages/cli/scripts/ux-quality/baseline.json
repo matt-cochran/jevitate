@@ -1,0 +1,55 @@
+{
+  "promptsVersion": "ux-prompts@7",
+  "promptsSha256": "e757eb66a73f6e22ea38c97908aeb74898ca0decb9b24c6d558a7c7355c2025f",
+  "measuredAt": "2026-09-24",
+  "corpus": "corpus/cross-app-2026-09-24.json",
+  "runs": 3,
+  "grader": {
+    "version": "grader v4 (in ux-prompts@7)",
+    "handLabels": {
+      "n": 76,
+      "showHideKappa": 0.5,
+      "showHideAccuracy": 0.83,
+      "fourClassKappa": 0.24
+    },
+    "legacyLabels": {
+      "n": 59,
+      "showHideKappa": 0.15
+    },
+    "targetShowHideKappa": 0.4
+  },
+  "apps": {
+    "example-site": {
+      "split": "holdout",
+      "goodShare": 1,
+      "jaccard": 1,
+      "labelStability": 1
+    },
+    "jevitate-site": {
+      "split": "holdout",
+      "goodShare": 0.24,
+      "jaccard": 0.54,
+      "labelStability": 0.81
+    },
+    "preveti": {
+      "split": "tune",
+      "goodShare": 0.28,
+      "jaccard": 0.47,
+      "labelStability": 0.81
+    },
+    "preveti-site": {
+      "split": "holdout",
+      "goodShare": 0.27,
+      "jaccard": 0.67,
+      "labelStability": 0.82
+    }
+  },
+  "tolerance": {
+    "goodShare": 0.1,
+    "jaccard": 0.15
+  },
+  "floors": {
+    "goodShare": 0.2,
+    "jaccard": 0.4
+  }
+}

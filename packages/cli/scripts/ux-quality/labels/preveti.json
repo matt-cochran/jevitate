@@ -1,0 +1,212 @@
+[
+ {
+  "key": "nielsen-5|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong",
+  "observation": "The action of raising the subscription lacks a confirmation step, which could prevent accidental changes."
+ },
+ {
+  "key": "nielsen-5|/admin/plan-applications|button \"Approve\"+button \"Reject\"",
+  "label": "relevant-minor",
+  "observation": "The 'Approve' and 'Reject' buttons are both immediate actions without any confirmation prompts, which could lead to accidental clicks."
+ },
+ {
+  "key": "primary-action|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong",
+  "observation": "The button 'Raise Pro to $149' competes with other actions on the screen, making it unclear which action is the primary next step for the user."
+ },
+ {
+  "key": "nielsen-5|/settings|button \"Delete workspace…\"",
+  "label": "wrong",
+  "observation": "The 'Delete workspace…' button does not have a confirmation prompt, which could lead to accidental deletions without user consent."
+ },
+ {
+  "key": "primary-action|/research|button \"Generate customer research\"",
+  "label": "generic",
+  "observation": "The presence of the 'Generate customer research' button is ambiguous as it competes with the lack of a completed model, making it unclear if this is the primary action the user should take."
+ },
+ {
+  "key": "primary-action|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "relevant-minor",
+  "observation": "There are multiple actions that could be perceived as primary, which can confuse users about the next step they should take in the process."
+ },
+ {
+  "key": "primary-action|/settings|button \"Finish subscription setup\"+button \"Review this plan\"+button \"Review this plan\"+button \"Review this plan\"+button \"Review this plan\"+button \"Review this plan\"",
+  "label": "relevant-minor",
+  "observation": "Multiple disabled buttons for reviewing plans and finishing subscription setup create ambiguity about the next actionable step for users."
+ },
+ {
+  "key": "primary-action|/decisions/new|button \"Refresh estimate\"+link \"← Back to the ledger\"",
+  "label": "generic",
+  "observation": "There are multiple calls to action ('RUN THE SIMULATION' and 'Record to ledger') that compete for user attention, making it unclear which action should be prioritized."
+ },
+ {
+  "key": "nielsen-5|/workspace|button \"Find the right context →\"",
+  "label": "wrong",
+  "observation": "The button to find the right context is enabled only after the user has made selections, but there is no confirmation or warning about the credits being spent until after the action is taken."
+ },
+ {
+  "key": "primary-action|/admin/plan-applications|button \"Approve\"+button \"Reject\"",
+  "label": "generic",
+  "observation": "Both 'Approve' and 'Reject' buttons are visually prominent, which may confuse users about which action to take as the primary next step."
+ },
+ {
+  "key": "nielsen-5|/workspace|button \"+New inquiry\"",
+  "label": "wrong",
+  "observation": "The button '+New inquiry' does not provide any confirmation or warning about the action that will be taken, which could lead to accidental submissions without user intent."
+ },
+ {
+  "key": "primary-action|/workspace|button \"+New context\"+button \"+New inquiry\"",
+  "label": "generic",
+  "observation": "The presence of both '+New inquiry' and '+New context' buttons creates ambiguity about which action is the primary next step for users looking to manage inquiries."
+ },
+ {
+  "key": "scent|/research|button \"Generate customer research\"",
+  "label": "generic",
+  "observation": "The button 'Generate customer research' lacks clarity in its purpose, especially in the context of the message indicating that no completed model exists, which may confuse users about its relevance."
+ },
+ {
+  "key": "nielsen-1|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong",
+  "observation": "The button 'Raise Pro to $149' does not provide any feedback or indication of what will happen when clicked, leaving the user uncertain about the action's outcome."
+ },
+ {
+  "key": "nielsen-1|/workspace|button \"Retry loading workspace\"",
+  "label": "relevant-minor",
+  "observation": "The message indicates a failure to load the decision map, but there is no clear progress indicator or confirmation of the action taken when the user clicks 'Retry loading workspace'."
+ },
+ {
+  "key": "nielsen-3|/workspace|button \"+New inquiry\"+textbox \"Start a new inquiry\"",
+  "label": "generic",
+  "observation": "The controls for entering a question and the character limit are present, but there is no visible option to cancel or go back once the user starts typing their question."
+ },
+ {
+  "key": "scent|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong",
+  "observation": "The label 'Raise Pro to $149' does not clearly indicate that it is the primary action related to the user's job of estimating stakes and approving bets."
+ },
+ {
+  "key": "progressive-disclosure|/settings|button \"Create key\"+button \"Manage subscription payment method\"+link \"Workspace balance — buy credits in Settings\"",
+  "label": "relevant-minor",
+  "observation": "Advanced options like managing payment methods and creating API keys are presented alongside essential actions, which can confuse users about what actions are necessary now versus later."
+ },
+ {
+  "key": "nielsen-2|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "relevant-minor",
+  "observation": "The labels used for actions like 'Raise Pro to $149' and 'Double down' do not clearly communicate their purpose or the implications of these actions in a user-friendly manner, potentially confusing users unfamiliar with the terminology."
+ },
+ {
+  "key": "progressive-disclosure|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "generic",
+  "observation": "Advanced options are presented alongside essential actions, which can confuse users about the primary path they should take to complete their task."
+ },
+ {
+  "key": "progressive-disclosure|/workspace|checkbox \"Compare vetting options\"+combobox \"Product for this conversationHelp me find the right contextPrevetiExplore a new product\"",
+  "label": "relevant-minor",
+  "observation": "The presence of both the 'Compare vetting options' checkbox and the product selection combobox on the same screen can overwhelm users with choices that may not be immediately relevant to their primary task."
+ },
+ {
+  "key": "nielsen-1|/admin/plan-applications|button \"Approve\"",
+  "label": "generic",
+  "observation": "The button labeled 'Approve' does not provide any feedback or indication of the approval process once clicked, leaving the user uncertain about the status of their action."
+ },
+ {
+  "key": "scent|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "relevant-minor",
+  "observation": "The labels for actions are vague and do not clearly indicate their purpose or the next steps in the process, making it difficult for users to understand which action to take."
+ },
+ {
+  "key": "nielsen-2|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong",
+  "observation": "The label 'Raise Pro to $149' may not clearly communicate the implications of this action to all users, especially if they are unfamiliar with the context of 'Pro' or the significance of the amount."
+ },
+ {
+  "key": "nielsen-4|/decisions|link \"Raise Pro to $149\"",
+  "label": "generic",
+  "observation": "The button 'Raise Pro to $149' does not follow conventional design patterns for primary actions, as it lacks visual prominence compared to other elements on the screen."
+ },
+ {
+  "key": "nielsen-3|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong",
+  "observation": "There is no visible option to cancel or back out after clicking the 'Raise Pro to $149' button, which could lead to unintended commitments."
+ },
+ {
+  "key": "nielsen-3|/admin/plan-applications|button \"Reject\"",
+  "label": "wrong",
+  "observation": "The presence of only 'Approve' and 'Reject' buttons without a clear way to cancel or go back can lead to user frustration if they change their mind."
+ },
+ {
+  "key": "nielsen-2|/research|button \"Generate customer research\"",
+  "label": "generic",
+  "observation": "The label 'Generate customer research' does not clearly convey what the action will produce, especially since the user is informed that there is 'No completed customer model yet'."
+ },
+ {
+  "key": "cognitive-load|/decisions/new|combobox \"Dollars at risk · your estimate\"+combobox \"Reversibility\"",
+  "label": "wrong",
+  "observation": "The multiple options for 'DOLLARS AT RISK' and 'REVERSIBILITY' may overwhelm users, especially if they are unsure of what to select."
+ },
+ {
+  "key": "nielsen-2|/workspace|button \"Prevetiv4\"",
+  "label": "relevant-minor",
+  "observation": "The label 'Prevetiv4' does not clearly communicate its purpose or relevance to the user, as it appears to be a version number rather than a descriptive label."
+ },
+ {
+  "key": "scent|/workspace|button \"+New context\"+button \"+New inquiry\"+textbox \"Semantic search\"",
+  "label": "generic",
+  "observation": "The labels for 'Semantic search', '+New inquiry', and '+New context' do not clearly indicate their specific functions or how they relate to the user's goal of managing inquiries."
+ },
+ {
+  "key": "nielsen-10|/decisions/new|combobox \"Dollars at risk · your estimate\"+combobox \"Reversibility\"+textbox \"Context\"+textbox \"Semantic search\"+textbox \"The bet\"",
+  "label": "generic",
+  "observation": "There is no help or documentation available on how to use the input fields effectively, which may leave users unsure about what information is required."
+ },
+ {
+  "key": "nielsen-8|/decisions/new|combobox \"Dollars at risk · your estimate\"+combobox \"Reversibility\"+textbox \"Context\"+textbox \"The bet\"",
+  "label": "generic",
+  "observation": "The section titles and input fields for 'THE BET', 'CONTEXT', and 'DOLLARS AT RISK' are prominent but may not be necessary for every user, potentially overwhelming them with information."
+ },
+ {
+  "key": "nielsen-8|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "generic",
+  "observation": "The presence of multiple secondary elements and explanations about pressure-testing and vetting may distract users from the primary task of setting up the interview."
+ },
+ {
+  "key": "nielsen-7|/workspace|combobox \"Product for this conversationHelp me find the right contextPrevetiExplore a new product\"",
+  "label": "generic",
+  "observation": "The combobox for selecting a product context does not provide shortcuts or advanced options for experienced users, forcing all users through the same selection process."
+ },
+ {
+  "key": "nielsen-8|/settings|button \"Create key\"+button \"Manage subscription payment method\"+link \"Workspace balance — buy credits in Settings\"",
+  "label": "generic",
+  "observation": "The presence of multiple secondary actions related to credits and subscriptions may distract users from the primary task of managing their current plan and credits."
+ },
+ {
+  "key": "nielsen-7|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "generic",
+  "observation": "The screen presents multiple options for actions (e.g., 'Double down', 'Probe', 'Wait & watch') that may overwhelm users, especially those who are not experts, forcing them through a complex decision-making process."
+ },
+ {
+  "key": "nielsen-10|/decisions/demo-bet-1|button \"How this was vettedConfidence rung · panel coverage · per-seat spreadOpen ▾\"+button \"The case against itFalsification attempt · independent evidence · the argued nullOpen ▾\"",
+  "label": "wrong",
+  "observation": "There is no clear help or documentation available at the point of need for users who may not understand the vetting process or how to interpret the information presented."
+ },
+ {
+  "key": "nielsen-10|/settings|button \"Manage subscription payment method\"+link \"Workspace balance — buy credits in Settings\"",
+  "label": "generic",
+  "observation": "There is no contextual help or guidance provided for users who encounter issues with payment setup or subscription management, leaving them without support when needed."
+ },
+ {
+  "key": "nielsen-8|/workspace|checkbox \"Compare vetting options\"",
+  "label": "generic",
+  "observation": "The checkbox for comparing vetting options is prominent but may distract from the primary task of asking a question, as it introduces additional complexity."
+ },
+ {
+  "key": "nielsen-10|/workspace|textbox \"Semantic search\"",
+  "label": "generic",
+  "observation": "There is no help or documentation available for the 'Semantic search' textbox, leaving users unsure of how to utilize this feature effectively."
+ },
+ {
+  "key": "nielsen-8|/workspace|link \"Workspace balance — buy credits in Settings\"",
+  "label": "generic",
+  "observation": "The information about workspace balance and buying credits is prominently displayed but may not be relevant to users focused on inquiries, diluting their attention from primary tasks."
+ }
+]

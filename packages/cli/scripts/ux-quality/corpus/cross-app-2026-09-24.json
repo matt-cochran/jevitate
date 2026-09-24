@@ -1,0 +1,4942 @@
+{
+  "capturedAt": "2026-09-24T03:57:10.402Z",
+  "screens": [
+    {
+      "app": "preveti",
+      "id": "workspace",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/workspace",
+      "job": "You want to figure out whether adding a free tier would grow your product. Ask Preveti that question and answer its follow-up questions until the question is framed and you can see what Preveti will investigate next.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "button",
+          "name": "Collapse contexts navigation",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Collapse contexts navigation\""
+        },
+        {
+          "index": 14,
+          "role": "button",
+          "name": "Prevetiv4",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Prevetiv4\""
+        },
+        {
+          "index": 15,
+          "role": "button",
+          "name": "+New inquiry",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"+New inquiry\""
+        },
+        {
+          "index": 16,
+          "role": "button",
+          "name": "+New context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"+New context\""
+        },
+        {
+          "index": 17,
+          "role": "button",
+          "name": "⚙Manage context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"⚙Manage context\""
+        },
+        {
+          "index": 18,
+          "role": "textbox",
+          "name": "Start a new inquiry",
+          "tag": "textarea",
+          "inputType": null,
+          "enabled": true,
+          "summary": "textbox \"Start a new inquiry\""
+        },
+        {
+          "index": 19,
+          "role": "checkbox",
+          "name": "Compare vetting options",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"Compare vetting options\" (unchecked, value=\"on\")"
+        },
+        {
+          "index": 20,
+          "role": "combobox",
+          "name": "Product for this conversationHelp me find the right contextPrevetiExplore a new product",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Product for this conversationHelp me find the right contextPrevetiExplore a new product\""
+        },
+        {
+          "index": 21,
+          "role": "button",
+          "name": "Find the right context →",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Find the right context →\" (disabled)"
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nChoose a product context\n399.88 credits balance\n0.12 credits held\nM\nCONTEXTS\nPreveti\nv4\n+\nNew inquiry\n+\nNew context\n⚙\nManage context\nWhat do you want to figure out?\n\nAsk a question, check what you know, or explore a new idea. First we establish the product and context; then we bring in what you have learned.\n\nYour question\n\nUp to 4,000 characters including context clarification. Longer drafts are kept so you can shorten them before sending.\n\nCompare vetting options\n\nInclude three explained options and the full comparison; you still choose. This applies after you confirm the product and context.\n\nProduct for this conversation\nHelp me find the right context\nPreveti\nExplore a new product\n\nPer message: approximately 0.1 credits; up to 0.1 credits reserved. Sending explicitly authorizes this message.\n\nAvailable to spend: 399.88 credits.\n\nFind the right context →"
+    },
+    {
+      "app": "preveti",
+      "id": "workspace-inquiry-new",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/workspace?inquiry=new",
+      "job": "Customers keep cancelling after their first month and you don't know why. Talk it through with Preveti until you have a concrete bet saved that you could go on to test.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "button",
+          "name": "Collapse contexts navigation",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Collapse contexts navigation\""
+        },
+        {
+          "index": 14,
+          "role": "button",
+          "name": "Prevetiv4",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Prevetiv4\""
+        },
+        {
+          "index": 15,
+          "role": "button",
+          "name": "+New inquiry",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"+New inquiry\""
+        },
+        {
+          "index": 16,
+          "role": "button",
+          "name": "+New context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"+New context\""
+        },
+        {
+          "index": 17,
+          "role": "button",
+          "name": "⚙Manage context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"⚙Manage context\""
+        },
+        {
+          "index": 18,
+          "role": "button",
+          "name": "Retry loading workspace",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Retry loading workspace\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.88 credits balance\n0.12 credits held\nM\nCONTEXTS\nPreveti\nv4\n+\nNew inquiry\n+\nNew context\n⚙\nManage context\n\nCouldn't load the decision map — it no longer exists. It may have been deleted.\n\nRetry loading workspace"
+    },
+    {
+      "app": "preveti",
+      "id": "workspace-raise-pro",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/workspace?inquiry=ws-inq-raise-pro",
+      "job": "An assistant suggested a change to your 'Should we raise Pro to $149?' analysis. Find the suggestion, review it, and accept it if it is reasonable.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "button",
+          "name": "Collapse contexts navigation",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Collapse contexts navigation\""
+        },
+        {
+          "index": 14,
+          "role": "button",
+          "name": "Prevetiv4",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Prevetiv4\""
+        },
+        {
+          "index": 15,
+          "role": "button",
+          "name": "Should we raise Pro to $149?",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Should we raise Pro to $149?\""
+        },
+        {
+          "index": 16,
+          "role": "button",
+          "name": "+New inquiry",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"+New inquiry\""
+        },
+        {
+          "index": 17,
+          "role": "button",
+          "name": "+New context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"+New context\""
+        },
+        {
+          "index": 18,
+          "role": "button",
+          "name": "⚙Manage context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"⚙Manage context\""
+        },
+        {
+          "index": 19,
+          "role": "button",
+          "name": "Reframe",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Reframe\""
+        },
+        {
+          "index": 20,
+          "role": "button",
+          "name": "Review intelligence",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Review intelligence\""
+        },
+        {
+          "index": 21,
+          "role": "button",
+          "name": "Review proposed changes",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Review proposed changes\""
+        },
+        {
+          "index": 22,
+          "role": "checkbox",
+          "name": "Compare vetting options",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"Compare vetting options\" (unchecked, value=\"on\")"
+        },
+        {
+          "index": 23,
+          "role": "textbox",
+          "name": "Type a reply",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Type a reply\""
+        },
+        {
+          "index": 24,
+          "role": "button",
+          "name": "Framing context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Framing context\""
+        },
+        {
+          "index": 25,
+          "role": "button",
+          "name": "Collapse all",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Collapse all\""
+        },
+        {
+          "index": 26,
+          "role": "button",
+          "name": "Expand path",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Expand path\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Graph view ↗",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Graph view ↗\""
+        },
+        {
+          "index": 28,
+          "role": "button",
+          "name": "Inspect question: Should we raise Pro to $149?",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Inspect question: Should we raise Pro to $149?\""
+        },
+        {
+          "index": 29,
+          "role": "checkbox",
+          "name": "Mark sufficient",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"Mark sufficient\" (unchecked, value=\"on\")"
+        },
+        {
+          "index": 30,
+          "role": "button",
+          "name": "Can we hold the base?",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Can we hold the base?\""
+        },
+        {
+          "index": 31,
+          "role": "checkbox",
+          "name": "Mark sufficient",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"Mark sufficient\" (unchecked, value=\"on\")"
+        },
+        {
+          "index": 32,
+          "role": "button",
+          "name": "Is it reversible?",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Is it reversible?\""
+        },
+        {
+          "index": 33,
+          "role": "checkbox",
+          "name": "Sufficient",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"Sufficient\" (checked, value=\"on\")"
+        },
+        {
+          "index": 34,
+          "role": "button",
+          "name": "Improves gross margin?",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Improves gross margin?\""
+        },
+        {
+          "index": 35,
+          "role": "checkbox",
+          "name": "Mark sufficient",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"Mark sufficient\" (unchecked, value=\"on\")"
+        },
+        {
+          "index": 36,
+          "role": "button",
+          "name": "Develop & vet a candidate bet →",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Develop & vet a candidate bet →\""
+        },
+        {
+          "index": 37,
+          "role": "button",
+          "name": "Find evidence and choose the next step",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Find evidence and choose the next step\""
+        },
+        {
+          "index": 38,
+          "role": "button",
+          "name": "Design a study in this context",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Design a study in this context\""
+        },
+        {
+          "index": 39,
+          "role": "link",
+          "name": "Pressure-test numerical assumptions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pressure-test numerical assumptions\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.96 credits balance\n0.02 credits held\nM\nCONTEXTS\nPreveti\nv4\nShould we raise Pro to $149?\n+\nNew inquiry\n+\nNew context\n⚙\nManage context\n\nPreveti · Preveti\n\nShould we raise Pro to $149?\nReframe\nFRAMING 3 OF 5 · 2 OPEN UNKNOWNS · UNDER REVIEW\nReview individual hypotheses before relying on them.\nINQUIRY INTELLIGENCE · What we understand so far\nReview intelligence\n\n1 active · 2 challenged · 2 currently supported\n\nPROPOSED CHANGES\n1\n· waiting for your review\nReview proposed changes\n\nPer message: approximately 0.1 credits; up to 0.1 credits reserved. Sending explicitly authorizes this message.\n\nAvailable to spend: 399.96 credits.\n\nCompare vetting options\n\nInclude three explained options and the full comparison; you still choose.\n\nYou\nSEND\nFRAMING CONTEXT\nDECISION TREE · WORKING HYPOTHESES\nCollapse all\nExpand path\n|\nGraph view ↗\n\nThese are working hypotheses. Preveti assesses them; only you decide when evidence is sufficient to rely on.\n\nShould we raise Pro to $149?\nDoes demand support it?\nunder test\nMark sufficient\nOnly you can set this. It means you choose to rely on current evidence — not that it is proven; new evidence can reopen it.\nWill target buyers pay $149?\ncontested\nMark sufficient\nOnly you can set this. It means you choose to rely on current evidence — not that it is proven; new evidence can reopen it.\nCan we hold the base?\nsupported\nMark sufficient\nOnly you can set this. It means you choose to rely on current evidence — not that it is proven; new evidence can reopen it.\nIs it reversible?\nsupported\nSufficient\nOnly you can set this. It means you choose to rely on current evidence — not that it is proven; new evidence can reopen it.\nImproves gross margin?\nunassessed\nMark sufficient\nOnly you can set this. It means you choose to rely on current evidence — not that it is proven; new evidence can reopen it.\nDevelop & vet a candidate bet →\nFind evidence and choose the next step\nDesign a study in this context\nPressure-test numerical assumptions"
+    },
+    {
+      "app": "preveti",
+      "id": "settings",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/settings",
+      "job": "Find out which plan you are on, how many credits you have left, and what you need to do this month to keep your Design Partner pricing.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "textbox",
+          "name": "Invite by email",
+          "tag": "input",
+          "inputType": "email",
+          "enabled": true,
+          "summary": "textbox \"Invite by email\""
+        },
+        {
+          "index": 14,
+          "role": "combobox",
+          "name": "Role",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Role\""
+        },
+        {
+          "index": 15,
+          "role": "button",
+          "name": "Send invite",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Send invite\""
+        },
+        {
+          "index": 16,
+          "role": "button",
+          "name": "Finish subscription setup",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Finish subscription setup\" (disabled)"
+        },
+        {
+          "index": 17,
+          "role": "button",
+          "name": "Review this plan",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Review this plan\" (disabled)"
+        },
+        {
+          "index": 18,
+          "role": "button",
+          "name": "Review this plan",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Review this plan\" (disabled)"
+        },
+        {
+          "index": 19,
+          "role": "button",
+          "name": "Review this plan",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Review this plan\" (disabled)"
+        },
+        {
+          "index": 20,
+          "role": "button",
+          "name": "Review this plan",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Review this plan\" (disabled)"
+        },
+        {
+          "index": 21,
+          "role": "button",
+          "name": "Review this plan",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Review this plan\" (disabled)"
+        },
+        {
+          "index": 22,
+          "role": "button",
+          "name": "Manage subscription payment method",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Manage subscription payment method\""
+        },
+        {
+          "index": 23,
+          "role": "textbox",
+          "name": "Your feedback",
+          "tag": "textarea",
+          "inputType": null,
+          "enabled": true,
+          "summary": "textbox \"Your feedback\""
+        },
+        {
+          "index": 24,
+          "role": "button",
+          "name": "Send feedback",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Send feedback\" (disabled)"
+        },
+        {
+          "index": 25,
+          "role": "textbox",
+          "name": "Name",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Name\""
+        },
+        {
+          "index": 26,
+          "role": "combobox",
+          "name": "Expires",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Expires\""
+        },
+        {
+          "index": 27,
+          "role": "spinbutton",
+          "name": "Spend cap in credits / 30 days (0 = none)",
+          "tag": "input",
+          "inputType": "number",
+          "enabled": true,
+          "summary": "spinbutton \"Spend cap in credits / 30 days (0 = none)\" (value=\"0\")"
+        },
+        {
+          "index": 28,
+          "role": "combobox",
+          "name": "Tier",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Tier\""
+        },
+        {
+          "index": 29,
+          "role": "button",
+          "name": "Create key",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Create key\" (disabled)"
+        },
+        {
+          "index": 30,
+          "role": "button",
+          "name": "no cap",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"no cap\""
+        },
+        {
+          "index": 31,
+          "role": "button",
+          "name": "Rotate",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Rotate\""
+        },
+        {
+          "index": 32,
+          "role": "button",
+          "name": "Revoke",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Revoke\""
+        },
+        {
+          "index": 33,
+          "role": "button",
+          "name": "Sign out",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Sign out\""
+        },
+        {
+          "index": 34,
+          "role": "button",
+          "name": "Export workspace data",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Export workspace data\""
+        },
+        {
+          "index": 35,
+          "role": "button",
+          "name": "Export my data",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Export my data\""
+        },
+        {
+          "index": 36,
+          "role": "button",
+          "name": "Delete workspace…",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Delete workspace…\""
+        },
+        {
+          "index": 37,
+          "role": "button",
+          "name": "Delete my account…",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Delete my account…\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.86 credits balance\n0.12 credits held\nM\nSETTINGS\nWorkspace settings\nTeam\n\nPeople in this workspace. Invite teammates and manage roles.\n\n[email](you)\n0 creditsused\nOWNER\n\nTotal workspace credits used\n\n0 credits\nINVITE BY EMAIL\nROLE\nmember\nadmin\nSEND INVITE\nCredits\n\nRuns are billed against prepaid credits. Buy a pack here — credits are added once Stripe confirms the payment.\n\nPayments aren't set up yet\n\nCredits can still be added by your Preveti contact.\n\nPlans\n\nDesign Partner: share product feedback to stay active — 7 days left this month.\n\nDesign Partner — 250 credits / month · active\n\n250 credits monthly allowance\n\nCurrent billing period ends 10/13/2026\n\nSubscription setup is incomplete. Review the same plan and finish setup before using subscription management. This resumes the existing subscription.\n\nSubscription checkout is not configured yet. You can review the plans below.\n\nDesign Partner — 250 credits / month\n\n$300 / month\n\n250 credits each month\n\nMonthly allowance expires at the end of its allowance period (after a short grace while a renewal payment settles, or as soon as the next allowance is issued); unused allowance does not roll over. Top-ups are separate.\n\nLimited to 25 active subscribers at a time.\n\nDesign Partner: $300/month (90% off Standard) with the price locked for as long as your subscription stays active. Stay active by taking part in at least one product-feedback interaction each calendar month; a lapsed plan is canceled at the end of its period and you are offered Standard. Usage allowance is issued monthly; additional usage requires top-ups.\n\nFinish subscription setup\nStartup Program — 150 credits / month\n\n$300 / month\n\n150 credits each month\n\nMonthly allowance expires at the end of its allowance period (after a short grace while a renewal payment settles, or as soon as the next allowance is issued); unused allowance does not roll over. Top-ups are separate.\n\nLimited to 250 active subscribers at a time.\n\n24 months from activation; then canceled, with no automatic upgrade.\n\nStartup Program: $300/month (90% off Standard) for approved startups only, limited to 250 startups. Billed monthly until canceled or the 24-month term ends; at the end of the term the plan is canceled at the end of its period and you are offered Standard (no automatic upgrade). Usage allowance is issued monthly; additional usage requires top-ups.\n\nThis plan requires an approved application. Apply for it, or choose another plan.\n\nApplication received — we are reviewing it. You can choose this plan once it is approved.\n\nReview this plan\nStandard (monthly) — 1,000 credits / month\n\n$3,000 / month\n\n1,000 credits each month\n\nMonthly allowance expires at the end of its allowance period (after a short grace while a renewal payment settles, or as soon as the next allowance is issued); unused allowance does not roll over. Top-ups are separate.\n\nBilled monthly until canceled. Usage allowance is issued monthly; unused allowance does not roll over. Additional usage requires top-ups.\n\nReview this plan\nStandard (annual) — 1,000 credits / month\n\n$30,000 / year\n\n1,000 credits each month\n\nMonthly allowance expires at the end of its allowance period (after a short grace while a renewal payment settles, or as soon as the next allowance is issued); unused allowance does not roll over. Top-ups are separate.\n\nBilled yearly until canceled. Usage allowance is issued monthly; unused allowance does not roll over. Additional usage requires top-ups.\n\nReview this plan\nPremium (monthly) — 2,000 credits / month\n\n$4,500 / month\n\n2,000 credits each month\n\nMonthly allowance expires at the end of its allowance period (after a short grace while a renewal payment settles, or as soon as the next allowance is issued); unused allowance does not roll over. Top-ups are separate.\n\nBilled monthly until canceled. Usage allowance is issued monthly; unused allowance does not roll over. Additional usage requires top-ups.\n\nReview this plan\nPremium (annual) — 2,000 credits / month\n\n$45,000 / year\n\n2,000 credits each month\n\nMonthly allowance expires at the end of its allowance period (after a short grace while a renewal payment settles, or as soon as the next allowance is issued); unused allowance does not roll over. Top-ups are separate.\n\nBilled yearly until canceled. Usage allowance is issued monthly; unused allowance does not roll over. Additional usage requires top-ups.\n\nReview this plan\nMANAGE SUBSCRIPTION PAYMENT METHOD\n\nYour current setup remains open. Payment never resumes work automatically; refresh status and retry explicitly.\n\nShare product feedback\n\nTell us what works, what doesn't, and what you need next. Design Partners: each note counts toward this month's participation.\n\nSend feedback\nUsage\n\nWhat you've run recently and what it cost — by activity, not tokens.\n\nConversation context resolution\n1 run\n0.02 credits\nTotal · last 30 days\n0.02 credits\nAPI keys\n\nProgrammatic access to the engine. A key is exchanged at /v1/token for a short-lived token. A full-tier key reaches everything in this workspace — treat it like a password and prefer a narrower tier where you can. The secret is shown once.\n\nNAME\nEXPIRES\n30 days\n60 days\n90 days\nNever\nSPEND CAP IN CREDITS / 30 DAYS (0 = NONE)\n\nMCP agents need a positive spend cap for paid exploration. Setting a cap authorizes spending within that limit; placing bets and approving archetype changes still require human review.\n\nTIER\nFull — reaches everything in this workspace\nRuntime — launch and read runs\nRead-only — read runs\nCREATE KEY\nDemo key\ndemo••••\nFULL\ncreated 2026-09-24\nnever used\nno expiry\nno cap\nROTATE\nREVOKE\nAccount\n\nYou're signed in to this workspace. Everything you create — products, bets, research — belongs to it, and API keys above reach all of it.\n\nCredits are self-serve — buy a pack in the Credits section above.\n\nSIGN OUT\nExport your data\n\nDownload a copy of your data as JSON — the right to portability. A workspace export includes everything in it (decisions, evidence, studies); an account export covers just your own identity and membership.\n\nWorkspace data\nEXPORT WORKSPACE DATA\nMy account data\nEXPORT MY DATA\nDelete workspace or account\n\nDeleting is reversible for a grace window, then permanent: your data is purged from our active systems. You'll immediately lose access except to cancel here or download an export you already started.\n\nDELETE WORKSPACE…\nDELETE MY ACCOUNT…\nRefer a colleague\n\nKnow a product team that should be pressure-testing its bets? Share your link.\n\nYour referral link is unavailable right now — it will appear here once it's provisioned.\n\nModel fallback\n\nPreveti changes an interactive model route only after you approve a named pair. An enabled setting applies only to the exact pair shown below; every fallback stays separately metered.\n\nAutomatic fallback is off. You can opt in beside a named fallback offer."
+    },
+    {
+      "app": "preveti",
+      "id": "decisions",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/decisions",
+      "job": "Take the 'Raise Pro to $149' bet forward: give it a stakes estimate, then review and approve it so it is committed with your reasoning recorded.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Rehearse a workshop",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Rehearse a workshop\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Start a bet →",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Start a bet →\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Raise Pro to $149",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Raise Pro to $149\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.86 credits balance\n0.12 credits held\nM\nBETS\nBet ledger\n\nEvery bet — whether it rests on evidence or gut — and the assumption most likely to break it.\n\nRehearse a workshop\nSTART A BET →\nLEGEND\nAPPROVED\nsigned off — gate the lock\nLOCKED\ncommitted\nAWAITING OUTCOME\nshipped, result pending\nRESOLVED\nreal outcome recorded\nBLIND\nnot vetted — flying blind\nRESEARCH-VETTED\ngrounded in real research; not yet pressure-tested\nBET\tSTATUS\tCONFIDENCE\tOWNER\tDECIDED\nRaise Pro to $149\ninquiry:ws-inq-raise-pro\n\tANNEALING\t\nBLIND\n\t—\t—"
+    },
+    {
+      "app": "preveti",
+      "id": "decision-demo-bet-1",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/decisions/demo-bet-1",
+      "job": "Set up a customer interview about the 'Raise Pro to $149' bet so you can send a customer a link, and check whether anyone has responded yet.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "← Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"← Decisions\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Frame & simulate this bet →",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Frame & simulate this bet →\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Return to the framing conversation",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Return to the framing conversation\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "run a study",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"run a study\""
+        },
+        {
+          "index": 17,
+          "role": "button",
+          "name": "How this was vettedConfidence rung · panel coverage · per-seat spreadOpen ▾",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"How this was vettedConfidence rung · panel coverage · per-seat spreadOpen ▾\""
+        },
+        {
+          "index": 18,
+          "role": "button",
+          "name": "The case against itFalsification attempt · independent evidence · the argued nullOpen ▾",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"The case against itFalsification attempt · independent evidence · the argued nullOpen ▾\""
+        },
+        {
+          "index": 19,
+          "role": "combobox",
+          "name": "Risk of doing",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Risk of doing\""
+        },
+        {
+          "index": 20,
+          "role": "combobox",
+          "name": "Risk of not doing",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Risk of not doing\""
+        },
+        {
+          "index": 21,
+          "role": "combobox",
+          "name": "Opportunity size",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Opportunity size\""
+        },
+        {
+          "index": 22,
+          "role": "combobox",
+          "name": "Bet size",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Bet size\""
+        },
+        {
+          "index": 23,
+          "role": "textbox",
+          "name": "Opportunity cost — what else this crowds out (required)",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Opportunity cost — what else this crowds out (required)\""
+        },
+        {
+          "index": 24,
+          "role": "textbox",
+          "name": "Rationale (required)",
+          "tag": "textarea",
+          "inputType": null,
+          "enabled": true,
+          "summary": "textbox \"Rationale (required)\""
+        },
+        {
+          "index": 25,
+          "role": "button",
+          "name": "Save characterization",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Save characterization\" (disabled)"
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Double downCommit — take this bet to a locked decision.",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Double downCommit — take this bet to a locked decision.\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "ProbeRun an experiment against the weakest assumption before committing.",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"ProbeRun an experiment against the weakest assumption before committing.\""
+        },
+        {
+          "index": 28,
+          "role": "link",
+          "name": "Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\""
+        },
+        {
+          "index": 29,
+          "role": "button",
+          "name": "Evidence drill-downBy research confidence. Confidence does not tell you whether a finding supports or challenges this bet.Open ▾",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Evidence drill-downBy research confidence. Confidence does not tell you whether a finding supports or challenges this bet.Open ▾\""
+        },
+        {
+          "index": 30,
+          "role": "button",
+          "name": "Estimate detailThe prior as a range, read from the run's interval.Open ▾",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Estimate detailThe prior as a range, read from the run's interval.Open ▾\""
+        },
+        {
+          "index": 31,
+          "role": "link",
+          "name": "Open run status →",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Open run status →\""
+        },
+        {
+          "index": 32,
+          "role": "textbox",
+          "name": "Your name",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Your name\""
+        },
+        {
+          "index": 33,
+          "role": "textbox",
+          "name": "Rationale — why this call",
+          "tag": "textarea",
+          "inputType": null,
+          "enabled": true,
+          "summary": "textbox \"Rationale — why this call\""
+        },
+        {
+          "index": 34,
+          "role": "button",
+          "name": "Approve →",
+          "tag": "button",
+          "inputType": null,
+          "enabled": false,
+          "summary": "button \"Approve →\" (disabled)"
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.86 credits balance\n0.12 credits held\nM\n← Decisions\nANNEALING\nBLIND\nRaise Pro to $149\n\ninquiry:ws-inq-raise-pro\n\nFrame & simulate this bet →\nReturn to the framing conversation\nGROUNDING CONFIDENCE\n\nnot yet vetted — confidence is earned by surviving a pressure-test, never assigned when the bet is created\n\nEXPECTED IMPACT\n\nawaiting a linked run — impact range projects from the run's confidence interval\n\n0 findings · 0 cited sources — system-derived from the grounding research\n\nTHE CASE AGAINST — WHAT WOULD REFUTE THIS\n\nWe actively try to disprove this bet. A bet earns confidence by surviving refutation — never by being \"proven\".\n\nNo falsification analysis yet — run a study to pressure-test this bet.\nVETTING RECEIPT\n\nHow thoroughly this was pressure-tested — the coverage, the determinism, and the attempt to disprove it. Shown, not asserted.\n\nNO REFUTATION PASS RAN\nBLIND\n\nNo composed summary — the run carried no scored panel.\n\nHOW THIS WAS VETTED\nConfidence rung · panel coverage · per-seat spread\nOpen ▾\nTHE CASE AGAINST IT\nFalsification attempt · independent evidence · the argued null\nOpen ▾\nInvestment characterization\n\nBet size: Product\n\nRisk of doing: Medium\n\nRisk of not doing: High\n\nOpportunity size: High\n\nOpportunity cost: vs. shipping the onboarding rework this quarter\n\nraising Pro price is high-upside but churn-sensitive; hard to walk back\n\nCharacterize this bet\nRISK OF DOING\n—\nLow\nMedium\nHigh\nRISK OF NOT DOING\n—\nLow\nMedium\nHigh\nOPPORTUNITY SIZE\n—\nLow\nMedium\nHigh\nBET SIZE\n—\nFeature change\nFeature\nProduct\nBuild investment\nProduct-market fit\nOPPORTUNITY COST — WHAT ELSE THIS CROWDS OUT (REQUIRED)\nRATIONALE (REQUIRED)\n\nExplain the opportunity cost and your rationale before saving.\n\nSAVE CHARACTERIZATION\nPick a move\n\nOne standardized option per bet. Wait & watch is the safe default.\n\nDouble down\n\nCommit — take this bet to a locked decision.\n\nProbe\n\nRun an experiment against the weakest assumption before committing.\n\nWait & watch\nDEFAULT\nSELECTED\n\nRecord a decision to wait; revisit as evidence accrues. (Safe default.)\n\nEvidence drill-down\n\nBy research confidence. Confidence does not tell you whether a finding supports or challenges this bet.\n\nOpen ▾\nEstimate detail\n\nThe prior as a range, read from the run's interval.\n\nOpen ▾\nExperiment & run status\n\nLaunch, background, and replay the run that tests this bet.\n\nOPEN RUN STATUS →\nApprove\n\nRecord who is making this call and why — required before it can be locked.\n\nRecording this as Wait & watch.\n\nYOUR NAME\nRATIONALE — WHY THIS CALL\nAPPROVE →"
+    },
+    {
+      "app": "preveti",
+      "id": "decisions-new",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/decisions/new",
+      "job": "Pressure-test the 'Raise Pro to $149' bet by simulating how your customers would respond, and read the verdict on whether to go ahead.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "textbox",
+          "name": "The bet",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"The bet\""
+        },
+        {
+          "index": 14,
+          "role": "textbox",
+          "name": "Context",
+          "tag": "textarea",
+          "inputType": null,
+          "enabled": true,
+          "summary": "textbox \"Context\""
+        },
+        {
+          "index": 15,
+          "role": "combobox",
+          "name": "Dollars at risk · your estimate",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Dollars at risk · your estimate\""
+        },
+        {
+          "index": 16,
+          "role": "combobox",
+          "name": "Reversibility",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Reversibility\""
+        },
+        {
+          "index": 17,
+          "role": "button",
+          "name": "Refresh estimate",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Refresh estimate\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "← Back to the ledger",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"← Back to the ledger\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.86 credits balance\n0.12 credits held\nM\nBETS\nPressure-test a bet\n\nState the call you're weighing. Explore competing explanations before you build, ship, or price it. Numerical forecasts require sourced inputs or explicitly reviewed assumptions.\n\nTHE BET\nCONTEXT\nDOLLARS AT RISK · YOUR ESTIMATE\n—\nUnder $10k\n$10k–$100k\n$100k–$1M\nOver $1M\nREVERSIBILITY\n—\nEasy to undo (two-way door)\nHard to undo (one-way door)\n\nSet the stakes above to see the compute rigor and estimated cost before you run.\n\nA cost estimate is not available yet.\n\nREFRESH ESTIMATE\n\nAvailable to spend: 399.86 credits\n\n0.12 credits are held for other work.\n\nREFRESH BALANCERUN THE SIMULATION →\n\nOnly this confirmation starts paid work. Final metered cost can differ from the estimate; the server rechecks funding and spending limits.\n\nRunning saves your bet as a draft right away — the simulation then grounds it. You commit it with Record to ledger → once the results are in.\n\n← Back to the ledger"
+    },
+    {
+      "app": "preveti",
+      "id": "research",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/research",
+      "job": "Set up a customer interview about the 'Raise Pro to $149' bet so you can send a customer a link, and check whether anyone has responded yet.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 13,
+          "role": "button",
+          "name": "Refresh progress",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Refresh progress\""
+        },
+        {
+          "index": 14,
+          "role": "button",
+          "name": "Generate customer research",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Generate customer research\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.86 credits balance\n0.12 credits held\nM\nRESEARCH\nResearch & evidence library\n\nThe grounded research records behind your bets and customer purpose model — each one a cited intel set covering the markets and customer cohorts it researched. Open a record to read the markets, cohorts, findings, and sources inside it.\n\nWork in progress and recent outcomes\n\nProgress counts do not measure evidence quality, confidence, or participant representativeness. No completion time is promised.\n\n0 active · 0 recorded work items\n\nNo work is recorded for this product.\n\nRefresh progress\nHuman study progress\nMilestone updates and preferences\nCustomer research\n\nGenerate or refresh the customer reality model for Preveti. It captures cited evidence about desired outcomes, workarounds, constraints, alternatives, language, and decision moments before a workshop is proposed. This uses your configured research providers and may consume credits.\n\nGenerate customer research\nNo completed customer model yet\n\nReview saved work above for partial research."
+    },
+    {
+      "app": "preveti",
+      "id": "admin-plan-applications",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/admin/plan-applications",
+      "job": "Review the pending Startup plan application and approve it if the company meets the criteria.",
+      "appClass": "admin",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Workspace",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Decisions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Decisions\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Research",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Research\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Customer Purpose",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Customer Purpose\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Library",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Library\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Calibration",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Calibration\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Participants",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Participants\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Settings\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Config",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Config\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Applications",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Applications\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Privacy",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Privacy\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Workspace balance — buy credits in Settings",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Workspace balance — buy credits in Settings\""
+        },
+        {
+          "index": 14,
+          "role": "textbox",
+          "name": "Semantic search",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Semantic search\""
+        },
+        {
+          "index": 15,
+          "role": "button",
+          "name": "Approve",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Approve\""
+        },
+        {
+          "index": 16,
+          "role": "button",
+          "name": "Reject",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Reject\""
+        },
+        {
+          "index": 17,
+          "role": "textbox",
+          "name": "Workspace id",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Workspace id\""
+        },
+        {
+          "index": 18,
+          "role": "textbox",
+          "name": "What happened",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"What happened\""
+        }
+      ],
+      "visibleText": "Preveti\nProduct Intelligence OS\nHome\nWorkspace\nDecisions\nResearch\nCustomer Purpose\nLibrary\nCalibration\nParticipants\nSettings\nConfig\nApplications\nPressure-test your direction before reality does.\nTerms\nPrivacy\nPreveti\nBuild\n399.86 credits balance\n0.12 credits held\nM\nSUPERADMIN\nPlan applications\n\nApproval-gated plans. A workspace can check out only after its application is approved. Every decision is audited and can be reversed.\n\nApplications\n\nhttps://acme-analytics.example · startup_v1\n\nWorkspace 7e57d06f-0000-4000-8000-00000000d06f · via in-app · company_stage: seed · team_size: 6-20 · use_case: Pricing and packaging decisions\n\nREQUESTED\nAPPROVE\nREJECT\nLog a Design Partner interaction\nLOG INTERACTION"
+    },
+    {
+      "app": "preveti",
+      "id": "participant-link",
+      "split": "tune",
+      "url": "http://127.0.0.1:5190/e/etok_TOKEN",
+      "job": "You were sent this link to give feedback on a product's pricing. Agree to take part and answer the first question.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "button",
+          "name": "Agree & continue",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Agree & continue\""
+        },
+        {
+          "index": 1,
+          "role": "button",
+          "name": "No thanks",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"No thanks\""
+        }
+      ],
+      "visibleText": "7E57D06F-0000-4000-8000-00000000D06F\nMarket conversation\n\nAbout 10 min\n\nBefore you continue\nPurpose:\nto validate a product decision\nRetention:\nYour answers are stored with this study and used only to validate this decision. They are never sold or shared, and can be deleted on request.\n\nBy continuing you agree that your answers to the questions below may be used to validate a product decision, as described above. Participation is voluntary and you can stop at any time.\n\nAGREE & CONTINUE\nNO THANKS"
+    },
+    {
+      "app": "example-site",
+      "id": "login",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5301/login",
+      "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "textbox",
+          "name": "Username",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Username\""
+        },
+        {
+          "index": 1,
+          "role": "button",
+          "name": "Sign in",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Sign in\""
+        }
+      ],
+      "visibleText": "Sign in\nUsername  Sign in"
+    },
+    {
+      "app": "example-site",
+      "id": "inbox",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5301/inbox",
+      "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+      "appClass": "consumer",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Welcome",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Welcome\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Follow up",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Follow up\""
+        }
+      ],
+      "visibleText": "Inbox\nWelcome\n\nHello there\n\nFollow up\n\nCircling back"
+    },
+    {
+      "app": "example-site",
+      "id": "thread",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5301/thread/t-1",
+      "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+      "appClass": "consumer",
+      "controls": [],
+      "visibleText": "Welcome\nHello there"
+    },
+    {
+      "app": "example-site",
+      "id": "notfound",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5301/adversarial/notfound",
+      "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+      "appClass": "consumer",
+      "controls": [],
+      "visibleText": "not found"
+    },
+    {
+      "app": "jevitate-site",
+      "id": "home",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5302/",
+      "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+      "appClass": "developer-tool marketing and docs",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "JEVITATE",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"JEVITATE\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Modes\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Docs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Docs\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "View on GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"View on GitHub\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Read the safety model",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Read the safety model\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Star on GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Star on GitHub\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Jobs it does",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Jobs it does\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Safe by default",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safe by default\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 20,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 21,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "Issues",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Issues\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Discussions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discussions\""
+        }
+      ],
+      "visibleText": "JEVITATE\nMODES\nHOW IT WORKS\nDOCS\nGITHUB\nGET STARTED\n[ OPEN SOURCE · POWERED BY JEV ]\nJOURNEY AUTOMATION · SHIPPING NOW\nAUTONOMOUS TESTING · SHIPPING NOW\nFIND THE BUGS\nBEFORE YOUR\nUSERS DO\n\nJevitate explores your web app like a relentless user: goal-directed one run, exploratory the next, adversarial when you ask. Every failure it finds becomes a deterministic, replayable regression that runs in CI.\n\nModel decisions are hypotheses to verify — runtime evidence decides pass or fail. The same Journeys it tests, it can also run as automation.\n\nGET STARTED\nVIEW ON GITHUB\n[ AVAILABLE TODAY ]\nTHE JOURNEY ENGINE SHIPS NOW\nSHIPPING IN THE OPEN-SOURCE REPO\nJOURNEY LIFECYCLE\n\nRecord by demonstration, then parameterize it, promote it, and replay it deterministically. No model in the loop at run time.\n\nPOLICY-GATED SELF-HEALING\n\nFail-closed by default. Hybrid and full modes allow a scoped re-learn under policy. Steps that write, that are irreversible, or that send for real never auto-heal, in any mode.\n\nLOAD & THROUGHPUT\n\nA seeded pool of virtual actors drives a Journey concurrently and emits an honestly-labeled capacity report.\n\nMCP CAPABILITIES\n\nAgents call promoted Journeys via find_capabilities / run_journey — never raw click, fill, or selector tools.\n\nSECRETS & HANDBACK\n\nVisible-handback or external-manager autofill, origin-bound, nothing stored at rest — secrets never reach a model.\n\nDISTRIBUTED SOURCES\n\nFederated Journeys from pinned, content-hash-bound sources behind a trust + terms-of-use run-gate.\n\n[ SEVEN WAYS IN ]\nSEVEN WAYS TO POINT IT AT YOUR APP\n\nAll seven run today. UX review, the newest, ships as both an offline pass over a saved Journey and a live exploration strategy. Every card is badged so you always know what ships.\n\nAVAILABLE\nGOAL\nGIVE IT A GOAL IN PLAIN ENGLISH\n\n“Upgrade the account to Pro.” Jev drives toward the goal and confirms it from observable application state — never just because a model returned DONE.\n\nAVAILABLE\nFEATURE\nNAME A FEATURE, NOT THE STEPS\n\n“Test checkout.” It discovers the relevant UI paths dynamically and exercises multiple valid routes through the capability.\n\nAVAILABLE\nEXPLORE\nMAP EVERY STATE\n\nNo destination. It maximizes new states and transitions, surfaces undocumented paths, and detects dead ends and loops within a fixed budget.\n\nAVAILABLE\nADVERSARIAL\nBREAK IT ON PURPOSE\n\nOrdering violations, rapid actions, navigation during pending async, boundary inputs — all bounded by your safety policy.\n\nAVAILABLE\nREGRESSION\nEVERY BUG BECOMES A REPRO\n\nReproducible failures are minimized to the smallest trigger and kept as a deterministic, replayable Recording — the exact hand-off to a coding model.\n\nAVAILABLE\nAUTOMATE\nRECORD ONCE, RUN IT FOREVER\n\nRecord a Journey by demonstration, parameterize it, promote it, and replay it deterministically — with no model in the loop. Available today.\n\nAVAILABLE\nUX REVIEW\nREVIEW THE EXPERIENCE, NOT THE MECHANICS\n\nRanked, evidence-cited usability findings that ask whether the user got the job done and where the experience gets in the way. Jev scores each screen against a vetted, cited rubric of Nielsen's 10 heuristics, cognitive-science principles from information scent to choice overload, dark-pattern detection, and a lightweight accessibility tier. Every finding names a real principle and anchors to observed behavior, so it stays advisory and never gates a pass or fail. Runs offline over a saved Journey or live as an exploration strategy.\n\n[ HOW EXPLORATORY TESTING WORKS ]\nAVAILABLE\nA LOOP THAT VERIFIES EVERYTHING\n\nThe Jev-driven exploration loop runs today. Every action produces an observable transition or an explicitly recorded no-op, and every failure ties back to the exact states and actions that produced it.\n\nOBSERVE\n\nCAPTURE PAGE STATE ATOMICALLY\n\nENUMERATE\n\nINDEX ACTIONABLE ELEMENTS\n\nDECIDE\n\nJEV PICKS A TYPED ACTION\n\nACT\n\nONE BROWSER OPERATION\n\nMEASURE\n\nCONSOLE, NETWORK, DOM\n\nVERIFY\n\nEVIDENCE, NOT A CLAIM\n\nRECORD\n\nTRACE + COVERAGE GRAPH\n\nREPEAT\n\nThe rule: a model claim never constitutes proof. Success and failure are decided by runtime evidence (browser exceptions, failed requests, dead ends, broken invariants) or by an explicit assertion you define.\n\n[ THE REFRAME ]\nONE JOURNEY,\nTWO LIVES\n\nEverything produces or consumes a Journey — a parameterized, deterministic, replayable recording. Discovery can be nondeterministic; the product never is.\n\nHuman-driving. AVAILABLE Step through your app; Jevitate records it as a Journey you can replay and parameterize.\n\nLM-driving. AVAILABLE Jev makes typed driving decisions; a generative model supplies text only — never a real recipient for a real send.\n\nPublish once. A promoted Journey becomes one allowlisted MCP action agents can call — no raw browser tools ever cross the line.\n\nDIRECTION SPECTRUM\n\n01\nDeterministic replay\n02\nProgrammatic exploration (no Jev)\n03\nJev-directed\n04\nGenerative goal-based\n\nEvery point on the spectrum ships today — deterministic replay, programmatic exploration, and the Jev-directed and goal-based ends alike. Jev is an optional director, never required — explore a whole state space with no model at all.\n\n[ BUILT FOR AGENTS ]\nDRIVE IT FROM YOUR CODING AGENT\n\nJevitate runs wherever your agent runs. Give Claude Code, Codex or Cursor access two ways, then let jevitate init teach it how to drive.\n\nCLI\nINSTALL THE CLI\n\nOne npm install gives an agent the whole jevitate command surface. It can record, explore, run a Journey or start a UX review by shelling out like any other tool.\n\nMCP SERVER\nSERVE THE MCP TOOLS\n\njevitate mcp starts a stdio MCP server that exposes only the allowlisted Jevitate tools. The agent discovers promoted Journeys and runs them by id. Raw browser tools never cross the boundary.\n\n$ npm i -g @jevitate/cli\n$ jevitate init      # collect keys + install agent skills\n$ jevitate mcp       # or serve the allowlisted MCP tools\n\nSkills the agent can read. One jevitate init collects any missing keys and installs a Jevitate skill set into the runtimes it detects — Claude Code, Codex or Cursor, with a generic AGENTS.md fallback when none is present. The skills teach the agent how to record and promote a Journey, so it knows the safe way to drive.\n\n[ REGRESSION & CI ]\nAVAILABLE\nBUGS TURN INTO TESTS, AUTOMATICALLY\n\nA discovered anomaly never becomes a test on its own. Jevitate reproduces it, minimizes the trace to the smallest reliable sequence, and commits it as a deterministic, replayable Recording — the exact repro to hand a coding model. Direct Playwright export is a candidate for a later slice.\n\nEXPLORE\nDISCOVER FAILURE\nREPRODUCE\nMINIMIZE TRACE\nGENERATE TEST\nFIX & VERIFY\n[ BASH ]\n$ jevitate explore --url http://localhost:3000 --strategy adversarial --real\n  ↳ failure: console_error on step 27  → failing recording emitted\n\n$ jevitate regression capture --from ./failing.recording.json --id checkout-001\n  ↳ reproduced 3/3 · minimized 27→6 steps\n  ↳ committed checkout-001.recording.json (+ .meta.json) — flaky failures are labeled, not committed\n\nThe repro is a deterministic Recording built from durable, semantic descriptors (test-id, role + name, label). It never leans on Jev or ephemeral DOM indices, so it replays anywhere. Flaky failures are labeled, not silently promoted. Direct Playwright export is a candidate for a later slice.\n\nSAFE BY DEFAULT\nREAD THE SAFETY MODEL\nSECRETS NEVER TOUCH A MODEL — ORIGIN-BOUND, NOTHING STORED\nRUNS ONLY AGAINST TARGETS YOU ALLOW-LIST\nEVERY RUN BOUNDED BY A STEP, TIME AND BUDGET CEILING\nBLOCK REAL PAYMENTS, ACCOUNT DELETES AND OUTBOUND EMAILS\n\nJevitate assumes you're testing systems you're authorized to test. Prompt-injection guard is always on — page text is untrusted data, never instructions. Pacing is realism, never detection-evasion.\n\nRUN YOUR FIRST JOURNEY\n\nLOCAL-FIRST · NODE 20+ · MIT LICENSED\n\n$ npm install -g @jevitate/cli\n$ jevitate init                # set up a local profile\n$ jevitate journey run <id>     # replay a Journey deterministically\n\n# or let Jev test it:\n$ jevitate explore --url http://localhost:3000 --goal \"upgrade to Pro\" --success urlIncludes:/pro --real\nGET STARTED\nSTAR ON GITHUB\nJEVITATE\n\nLOCAL-FIRST BROWSER AUTOMATION. APPROVAL-GATED AND AUDITABLE BY DESIGN.\n\nProduct\nJOBS IT DOES\nHOW IT WORKS\nSAFE BY DEFAULT\nDocs\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nCommunity\nGITHUB\nISSUES\nDISCUSSIONS\n© 2026 JEVITATE · OPEN SOURCE\nSYSTEM STABLE"
+    },
+    {
+      "app": "jevitate-site",
+      "id": "docs",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5302/docs/",
+      "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+      "appClass": "developer-tool marketing and docs",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "JEVITATE",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"JEVITATE\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Modes\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Docs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Docs\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Next Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Next Getting Started\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "Jobs it does",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Jobs it does\""
+        },
+        {
+          "index": 20,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 21,
+          "role": "link",
+          "name": "Safe by default",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safe by default\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 24,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 25,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 28,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 29,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 30,
+          "role": "link",
+          "name": "Issues",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Issues\""
+        },
+        {
+          "index": 31,
+          "role": "link",
+          "name": "Discussions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discussions\""
+        }
+      ],
+      "visibleText": "JEVITATE\nMODES\nHOW IT WORKS\nDOCS\nGITHUB\nGET STARTED\n\nDOCUMENTATION\n\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nOVERVIEW\n\nJevitate is an open-source, local-first tool built on one artifact, the Journey. It lets you automate browser work and drive autonomous testing.\n\nShipping now: the Journey engine lets you record a flow, parameterize it, promote it, and replay it deterministically. It also covers load and throughput, the MCP facade, secrets & handback, and distributed sources. On top sit the Jev-driven testing modes (goal, feature, exploratory, adversarial), with regression capture and in-flight self-healing.\nTHE JOURNEY\n\nEverything produces or consumes a Journey: a parameterized, deterministic, replayable recording. Discovery can be nondeterministic — the product never is. Once promoted, a Journey is exposed as a single high-level MCP action. The model never drives the production browser.\n\nTHE LOOP\n\nThe autonomous testing engine operates as a repeated state-transition loop, with Jev (TypeSafe's decision model) choosing one typed action per step and a runner executing it:\n\nObserve\n  → Enumerate\n  → Decide\n  → Act\n  → Measure\n  → Verify\n  → Record\n  → Repeat\n\nA model claim never constitutes proof — success or failure is decided by runtime evidence or an explicit assertion you define.\n\nAVAILABLE TODAY\nJourneys — record by demonstration, parameterize it, promote it, and replay it.\nTesting Modes — goal, feature, exploratory, adversarial.\nRegression & CI — from a discovered bug to a replayable repro.\nMCP & CLI — the domain facade and command surface.\nSafety & Secrets — the hard floors that always hold.\nNEXT\nGetting Started\nJEVITATE\n\nLOCAL-FIRST BROWSER AUTOMATION. APPROVAL-GATED AND AUDITABLE BY DESIGN.\n\nProduct\nJOBS IT DOES\nHOW IT WORKS\nSAFE BY DEFAULT\nDocs\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nCommunity\nGITHUB\nISSUES\nDISCUSSIONS\n© 2026 JEVITATE · OPEN SOURCE\nSYSTEM STABLE"
+    },
+    {
+      "app": "jevitate-site",
+      "id": "getting-started",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5302/docs/getting-started/",
+      "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+      "appClass": "developer-tool marketing and docs",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "JEVITATE",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"JEVITATE\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Modes\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Docs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Docs\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "Previous Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Previous Overview\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "Next Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Next Journeys\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Jobs it does",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Jobs it does\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 20,
+          "role": "link",
+          "name": "Safe by default",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safe by default\""
+        },
+        {
+          "index": 21,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 24,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 25,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 28,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 29,
+          "role": "link",
+          "name": "Issues",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Issues\""
+        },
+        {
+          "index": 30,
+          "role": "link",
+          "name": "Discussions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discussions\""
+        }
+      ],
+      "visibleText": "JEVITATE\nMODES\nHOW IT WORKS\nDOCS\nGITHUB\nGET STARTED\n\nDOCUMENTATION\n\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nGETTING STARTED\n\nOne command to install, one to run. Jevitate runs locally as a daemon, a CLI, and an MCP server.\n\nPREREQUISITES\nNode.js 20+\nA desktop with a visible browser — you sign in yourself, in a real window.\nINSTALL\nnpm install -g @jevitate/cli\n\nOr run on demand without installing:\n\nnpx @jevitate/cli --help\nINITIALIZE & SIGN IN\njevitate init                 # set up local state\njevitate profile create work  # opens a headed browser — you sign in\njevitate profile status work\nYou sign in. Jevitate never requests or stores your password. Complete login, MFA, and consent in the visible browser.\nRUN A JOURNEY\n\nList what's available, find one, and replay it deterministically — no model in the loop:\n\njevitate journey list\njevitate journey find \"checkout\"\njevitate journey run <id> --param email=[email]\n\nJourneys live in ~/.jevitate/journeys by default (override with --dir). See Journeys for the full record → promote → run lifecycle.\n\nRECORD A JOURNEY\n\nDemonstrate a flow yourself in a headed browser and capture it into a Recording:\n\njevitate record --url http://localhost:3000 --intent \"Check out with a saved card\"\n\nPress Enter to finish. The Recording lands in ~/.jevitate/recordings.\n\nPROMOTE A RECORDED TAKE\n\nTurn a captured take into a parameterized, promoted Journey:\n\njevitate recording fit take.json          # bind variables\njevitate recording postdoc take.json --out journey.json\njevitate recording promote journey.json   # register it\nLOAD-TEST A JOURNEY\njevitate load run <journeyId> --concurrency 5 --iterations 10 --seed 1\nAUTONOMOUS TESTING\n\nPoint Jev at your app — goal-directed, feature, exploratory, or adversarial:\n\njevitate explore --url http://localhost:3000 \\\n  --goal \"Add a product to the cart and reach checkout\" \\\n  --success urlIncludes:/checkout --real\n\njevitate explore --url http://localhost:3000 --strategy adversarial --real\n\nEach run emits a deterministic Recording (and, for coverage/exploratory, a coverage summary). See Testing Modes for every strategy and flag.\n\nSERVE OVER MCP\n\nExpose your promoted Journeys to an MCP client as typed, allowlisted tools:\n\njevitate mcp   # MCP stdio server — only allowlisted domain tools, no raw browser\n\nEvery allowlisted tool is wired — no not_implemented stubs. The human-in-the-loop tools read and write a local inbox; approving or cancelling is human-only. See MCP & CLI.\n\nREVIEW AGENT HANDOFFS\n\nWhen an agent needs a human — an approval, a value, or a review — resolve it in the local dashboard:\n\njevitate ui    # local approval dashboard at http://127.0.0.1:4180\nBUILDING FROM SOURCE\ngit clone https://github.com/matt-cochran/jevitate\ncd jevitate && pnpm install && pnpm build\nPREVIOUS\nOverview\nNEXT\nJourneys\nJEVITATE\n\nLOCAL-FIRST BROWSER AUTOMATION. APPROVAL-GATED AND AUDITABLE BY DESIGN.\n\nProduct\nJOBS IT DOES\nHOW IT WORKS\nSAFE BY DEFAULT\nDocs\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nCommunity\nGITHUB\nISSUES\nDISCUSSIONS\n© 2026 JEVITATE · OPEN SOURCE\nSYSTEM STABLE"
+    },
+    {
+      "app": "jevitate-site",
+      "id": "journeys",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5302/docs/journeys/",
+      "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+      "appClass": "developer-tool marketing and docs",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "JEVITATE",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"JEVITATE\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Modes\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Docs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Docs\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "Previous Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Previous Getting Started\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "Next MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Next MCP & CLI\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Jobs it does",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Jobs it does\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 20,
+          "role": "link",
+          "name": "Safe by default",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safe by default\""
+        },
+        {
+          "index": 21,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 24,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 25,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 28,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 29,
+          "role": "link",
+          "name": "Issues",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Issues\""
+        },
+        {
+          "index": 30,
+          "role": "link",
+          "name": "Discussions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discussions\""
+        }
+      ],
+      "visibleText": "JEVITATE\nMODES\nHOW IT WORKS\nDOCS\nGITHUB\nGET STARTED\n\nDOCUMENTATION\n\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nJOURNEYS\n\nA Journey is a parameterized, deterministic, replayable recording plus metadata. It is the one artifact everything in Jevitate produces or consumes.\n\nTHE ARTIFACT\n\nA Journey wraps a parameterized recording with:\n\nA name and a param-schema derived from its variables\nPostconditions that decide whether a step really succeeded\nProvenance, retention, and promotion state\nSecret references — a manager key + bound origin + field, never the value\n1. RECORD BY DEMONSTRATION\n\nStep through your app in a headed browser; Jevitate captures a take — a durable, descriptor-based recording (semantic locators, not brittle selectors). Capture a few takes of the same task to generalize the variable parts.\n\njevitate record --url http://localhost:3000 --intent \"Check out with a saved card\"\n\nThe authorized-target guard runs before any browser opens, and the capture ends when you press Enter. Add --allow <origin> (repeatable) to permit navigation beyond the start origin, or --out <dir> to change where the Recording is written (default ~/.jevitate/recordings). See the flags on MCP & CLI.\n\n2. PARAMETERIZE\n\nBind the variable values and fold multiple takes into one parameterized Journey:\n\njevitate recording diff takeA.json takeB.json   # see what varies\njevitate recording fit take.json                # bind variables\njevitate recording postdoc take.json --out journey.json\n3. PROMOTE\n\nPromotion is the approval gate. Only a promoted Journey is runnable and discoverable over MCP — nothing auto-publishes.\n\njevitate recording promote journey.json\n4. RUN\njevitate journey list\njevitate journey run <id> --param email=[email]\n\nReplay is deterministic — the same descriptors, the same steps, no model in the loop.\n\n5. SHARE (OPTIONAL)\n\nA promoted Journey can be published into a distributed source (a remote git repo of shared Journeys) and consumed from one behind an explicit trust + Terms-of-Use gate. Publishing lands on a new publish/<id> branch (never a default branch) and requires the Journey to be promoted first:\n\njevitate source add acme https://github.com/acme/jevitate-journeys.git --accept-tou\njevitate source trust acme checkout          # trust one Journey, content-hash-bound\njevitate journey publish checkout --to acme  # share a promoted Journey\n\nSee MCP & CLI for every source verb and the publish flags.\n\nTHE RUN CONTEXT\n\nA single immutable RunPolicy is threaded through every step, segmented into narrow sub-policies. It's a required parameter. There is no default construction, and the fallback is never permissive:\n\nRunPolicy (required — no permissive default)\n├── SelfHealPolicy   fail-closed | hybrid | full\n├── DirectionPolicy  deterministic ↔ Jev-directed ↔ goal-based\n├── SecretPolicy     vault-autofill | visible-handback | fail-closed\n├── PacingPolicy     human-speed profile\n└── Budget           max-steps · per-run/day · concurrency\n\nSafe default: fail-closed self-heal, deterministic direction, fail-closed secret handling.\n\nSELF-HEALING\n\nIn-flight self-healing is gated by SelfHealPolicy, chosen per run with --self-heal:\n\njevitate journey run <id> --self-heal fail-closed   # default\njevitate journey run <id> --self-heal hybrid --real\njevitate journey run <id> --self-heal full --real\nfail-closed (default) — on divergence the run stops and quarantines rather than guessing. No AI gateway is wired; behavior is identical to a plain deterministic replay.\nhybrid / full — on divergence Jev does a scoped re-learn of just the broken step and splices the recovered step back into the Journey, gated by policy. Both need an AI gateway (--real or --fake-ai); requesting a heal mode without one fails closed, never a silent unhealed run.\n\nIn every mode, write, irreversible, or real-send steps never auto-heal — the runtime's write floor holds regardless of policy. A recovered run is reported as healed (a success); only an unrecoverable divergence is quarantined.\n\nLM-DRIVING\n\nInstead of recording by hand, let Jev drive: it makes typed op + target decisions while a generative model supplies text only, emitting the same deterministic Journey. Drive a goal and author a promotable (never auto-promoted) Journey in one step:\n\njevitate explore-author-journey --url http://localhost:3000 \\\n  --goal \"Add a product to the cart and reach checkout\" \\\n  --success urlIncludes:/checkout \\\n  --id checkout --name \"Checkout flow\" --real\n\nThe authored Journey lands unpromoted in the store — promote it through the same approval gate as a hand-recorded one. This is the Testing Modes engine, and the DirectionPolicy above places it on the spectrum.\n\nPREVIOUS\nGetting Started\nNEXT\nMCP & CLI\nJEVITATE\n\nLOCAL-FIRST BROWSER AUTOMATION. APPROVAL-GATED AND AUDITABLE BY DESIGN.\n\nProduct\nJOBS IT DOES\nHOW IT WORKS\nSAFE BY DEFAULT\nDocs\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nCommunity\nGITHUB\nISSUES\nDISCUSSIONS\n© 2026 JEVITATE · OPEN SOURCE\nSYSTEM STABLE"
+    },
+    {
+      "app": "jevitate-site",
+      "id": "safety",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5302/docs/safety/",
+      "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+      "appClass": "developer-tool marketing and docs",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "JEVITATE",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"JEVITATE\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Modes\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Docs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Docs\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Previous MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Previous MCP & CLI\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Next Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Next Testing Modes\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Jobs it does",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Jobs it does\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "Safe by default",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safe by default\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 20,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 21,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 24,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 25,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Issues",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Issues\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Discussions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discussions\""
+        }
+      ],
+      "visibleText": "JEVITATE\nMODES\nHOW IT WORKS\nDOCS\nGITHUB\nGET STARTED\n\nDOCUMENTATION\n\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nSAFETY & SECRETS\n\nSome rules are not tunable. They hold regardless of your run policy, and each ships with a test that asserts it refuses.\n\nHARD FLOORS\nSecrets & PII are redacted before any Jev or LLM call. The generative model never picks a real recipient for a real send.\nPrompt-injection guard is always on — page text is untrusted data, never instructions.\nEvery autonomous run is bounded by max-steps and budget — never unbounded.\nEvery executed step is recorded and auditable — even a full-autonomous run is replayable and reviewable after the fact.\nPacing is realism and politeness, never detection-evasion.\nTHE SECRET INVARIANT\n\nA secret has exactly one permitted path:\n\nexternal password manager (fetched on demand)\n  → the browser input\n    → the target site's own auth call\n\nIt is never placed in a model prompt, never persisted in a Journey, recording, or log, and never in any outbound request except the target's own auth call. It is origin-bound — a secret can never be typed into a different origin or an injected/redirected field. Nothing is stored at rest. Jevitate holds only a manager reference.\n\nHow the secret is supplied is configurable via SecretPolicy.secretMode:\n\nMODE\tBEHAVIOR\nvisible-handback\tHeaded browser, the human enters it, resume only on a passing postcondition\nvault-autofill\tFetched from an external manager on demand, origin-bound, nothing stored\nfail-closed\tStop rather than proceed without a secret\n\nThe containment and origin-binding above are not tunable — only how the secret is supplied.\n\nFAIL-FAST INVARIANTS\n\nThese are permanent, named contracts — each with an \"asserts-it-refuses\" test:\n\nNo policy → throw. A missing or partial RunPolicy raises rather than defaulting permissively.\nSecret never serialized. Serializing or logging a secret throws. Only a reference may be stored.\nOrigin mismatch → refuse. Before any fill, current origin must match the secret's bound origin.\nUnknown journey/param → reject. Only published ids and schema-valid params run — no inline steps, ever.\nResume only on postcondition. Handback and self-heal resume require a passing check. A timeout fails closed.\nWrites never auto-heal. Write, irreversible, or real-send steps fail closed for human-approved repair.\nSAFETY BOUNDARIES\n\nJevitate assumes you're testing systems you're authorized to test. It supports domain allowlists, route exclusions, and destructive-action protection — potentially destructive actions require explicit configuration before they can execute:\n\nblocked_actions:\n  - real_payment\n  - account_deletion\n  - send_real_email\n  - modify_real_user_accounts\nallowed_domains:\n  - localhost\nLoad testing is gated too. Driving more than one virtual actor requires an explicit authorized-target assertion and stays within budget and quiet hours. Reported metrics are labeled measured or modeled and never silently downgraded.\nPREVIOUS\nMCP & CLI\nNEXT\nTesting Modes\nJEVITATE\n\nLOCAL-FIRST BROWSER AUTOMATION. APPROVAL-GATED AND AUDITABLE BY DESIGN.\n\nProduct\nJOBS IT DOES\nHOW IT WORKS\nSAFE BY DEFAULT\nDocs\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nCommunity\nGITHUB\nISSUES\nDISCUSSIONS\n© 2026 JEVITATE · OPEN SOURCE\nSYSTEM STABLE"
+    },
+    {
+      "app": "jevitate-site",
+      "id": "testing-modes",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5302/docs/testing-modes/",
+      "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+      "appClass": "developer-tool marketing and docs",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "JEVITATE",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"JEVITATE\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Modes\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Docs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Docs\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Get Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get Started\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "Previous Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Previous Safety & Secrets\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "Next Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Next Regression & CI\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Jobs it does",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Jobs it does\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "How it works",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How it works\""
+        },
+        {
+          "index": 20,
+          "role": "link",
+          "name": "Safe by default",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safe by default\""
+        },
+        {
+          "index": 21,
+          "role": "link",
+          "name": "Overview",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Overview\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "Getting Started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Getting Started\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Journeys",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journeys\""
+        },
+        {
+          "index": 24,
+          "role": "link",
+          "name": "MCP & CLI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MCP & CLI\""
+        },
+        {
+          "index": 25,
+          "role": "link",
+          "name": "Safety & Secrets",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Safety & Secrets\""
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Testing Modes",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Testing Modes\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Regression & CI",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Regression & CI\""
+        },
+        {
+          "index": 28,
+          "role": "link",
+          "name": "GitHub",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"GitHub\""
+        },
+        {
+          "index": 29,
+          "role": "link",
+          "name": "Issues",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Issues\""
+        },
+        {
+          "index": 30,
+          "role": "link",
+          "name": "Discussions",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discussions\""
+        }
+      ],
+      "visibleText": "JEVITATE\nMODES\nHOW IT WORKS\nDOCS\nGITHUB\nGET STARTED\n\nDOCUMENTATION\n\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nTESTING MODES\n\nOne engine, several ways to point it at your app. Each mode changes which actions Jevitate prefers — not how it verifies them.\n\nAvailable. Every mode below runs today, driven by jevitate explore (goal by default, or --strategy) plus the AI gateways behind --real. Discovery is nondeterministic; the Recording it emits replays deterministically (Journeys).\nGOAL-DIRECTED TESTING\n\nGive Jevitate a natural-language goal — \"Create an account and verify the email\", \"Add a product to the cart and reach checkout\". It continuously evaluates available actions relative to the goal and decides whether the goal was reached from observable application state — not because Jev returned DONE. It explores alternate paths when the obvious one is blocked, and changes strategy when repeated actions stop altering state.\n\njevitate explore --url http://localhost:3000 \\\n  --goal \"Add a product to the cart and reach checkout\" \\\n  --success urlIncludes:/checkout --real\nFEATURE TESTING\n\nSpecify a capability instead of a sequence: \"Test checkout\", \"Test team permissions\". Jevitate discovers the relevant UI paths dynamically, exercises multiple valid routes, explores the boundary states around the feature, and records which states and transitions were actually hit. Scope it to routes with repeatable --route globs.\n\njevitate explore --url http://localhost:3000 \\\n  --feature checkout --route \"/cart/**\" --route \"/checkout/**\"\nEXPLORATORY TESTING\n\nNo predefined destination. Jevitate maintains a set of visited states and prefers actions likely to reach unseen ones, discovering undocumented paths while detecting dead ends and loops. The objective flips:\n\nmaximize(new_states + new_transitions + new_behaviors)\n\n# rather than\nminimize(actions_to_goal)\njevitate explore --url http://localhost:3000 --strategy exploratory --real\n\nThe run emits a coverage summary alongside the Recording; a discovered defect exits non-zero so it gates CI.\n\nADVERSARIAL TESTING\n\nAdversarial mode intentionally searches for unexpected behavior. It prioritizes:\n\nUnusual but executable state transitions and ordering violations\nRepeated and rapid interactions\nNavigation during pending asynchronous operations\nBoundary input values and contradictory UI actions\nAlternate paths through multi-step workflows\n\nAll of it stays bounded by your configurable safety policy, and the stop decision comes from a trusted hard-signal oracle — never Jev's own claim.\n\njevitate explore --url http://localhost:3000 --strategy adversarial --real\nREGRESSION VERIFICATION\n\nReproducible failures become deterministic artifacts: a minimized Recording that reproduces the smallest reliable trigger, asserts correct behavior (not the presence of the bug), and replays in CI without Jev. See Regression & CI.\n\nUSABILITY REVIEW\n\nThe usability strategy runs a UX review: ranked, evidence-cited findings that ask whether the user got the job done and where the experience gets in the way. Jev scores each screen against a cited rubric of Nielsen's heuristics, cognitive-science principles, dark-pattern detection, and a lightweight accessibility tier. Every finding names a real principle and anchors to observed behavior, so it stays advisory: it never sets a non-zero exit or gates a run. Calibrate it with --app-class (e.g. consumer, admin).\n\njevitate explore --url http://localhost:3000 \\\n  --strategy usability --goal \"check out\" --app-class consumer --real\n\nIt also runs offline over a saved Recording with jevitate ux <recording> --app-class. See MCP & CLI.\n\nTHE STRATEGY LAYER\n\nStrategies are pluggable. The initial set:\n\nSTRATEGY\tPREFERS\ngoal\tActions likely to advance a declared objective\nexplore\tActions likely to expose new application states\nadversarial\tUnusual transitions, boundaries, ordering violations, fragile states\ncoverage\tActions that expand known state-transition coverage\nregression\tActions related to previously discovered failure paths\nusability\tA UX review: ranked, cited findings scored against a vetted rubric\nINPUT STRATEGIES\n\nTYPE_TEXT delegates to a configurable generator, and input values are chosen by field semantics — Jevitate never assumes every field should get arbitrary fuzz. Reusable strategies include normal, empty, boundary, long, unicode, whitespace, invalid format, duplicate, and previously used.\n\nLOOP PREVENTION\n\nJevitate tracks visited states, state/action pairs, repeated transitions, consecutive no-ops, and time spent per state — with configurable limits on max steps, duration, repeated states, repeated actions, and model/network cost.\n\nPREVIOUS\nSafety & Secrets\nNEXT\nRegression & CI\nJEVITATE\n\nLOCAL-FIRST BROWSER AUTOMATION. APPROVAL-GATED AND AUDITABLE BY DESIGN.\n\nProduct\nJOBS IT DOES\nHOW IT WORKS\nSAFE BY DEFAULT\nDocs\nOVERVIEW\nGETTING STARTED\nJOURNEYS\nMCP & CLI\nSAFETY & SECRETS\nTESTING MODES\nREGRESSION & CI\nCommunity\nGITHUB\nISSUES\nDISCUSSIONS\n© 2026 JEVITATE · OPEN SOURCE\nSYSTEM STABLE"
+    },
+    {
+      "app": "preveti-site",
+      "id": "home",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5303/",
+      "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+      "appClass": "B2B SaaS marketing site",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Preveti home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Preveti home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Sign in",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Sign in\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "See the Design Partner offer",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"See the Design Partner offer\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Apply for a place",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Apply for a place\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Terms apply",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms apply\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Apply for a place",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Apply for a place\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Design Partner",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Startup Program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Startup Program\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Pricing",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pricing\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Finance",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Finance\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Journal",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journal\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "How-to",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How-to\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Contact",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Contact\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "MC Product Labs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MC Product Labs\""
+        }
+      ],
+      "visibleText": "Preveti\nSIGN IN\n\nDESIGN PARTNER PROGRAM\n\nVet Before Bet.\n\nEvery product decision is a bet. Challenge your assumptions before committing engineering time, capital, or months of work.\n\nSEE THE DESIGN PARTNER OFFER\n\n01\n\nChallenge the next decision\n\nShould we build this company? Is this our ICP? Does this feature deserve three engineering sprints? Which pricing, positioning, or onboarding change should we test?\n\nStart with your product context and a consequential question. Examine your assumptions and alternatives against the evidence before choosing your next step.\n\n02\n\nResearch matched to the question\n\nPressure-test study structure with simulation. Use synthetic participants to explore assumptions, then use real people or a hybrid study when the question needs human evidence.\n\nSimulation explores the model you supplied. It does not establish market demand or substitute for observed customer behavior. You review the proposed setup, estimated spend, and evidence limitations before authorizing execution.\n\n03\n\nKeep what you learn\n\nConnect your hypotheses and studies to the evidence and decisions in the appropriate product context. Return to the next bet with your earlier findings available.\n\nLook for evidence that would change your mind. A useful result can be uncertainty, a rejected assumption, or a better next experiment. Favorable findings are never guaranteed.\n\n04\n\nA small design-partner cohort\n\nWe are limiting the Design Partner program to 25 companies so we can work closely with each one as Preveti evolves. Design Partner pricing holds for as long as your company takes part in at least one Preveti research activity each month.\n\nCompany eligibility is reviewed before enrollment.\n\nStartups that would rather not take part in research each month can apply for the Startup Program instead.\n\nCreate your account and product context, then request eligibility review. Signup does not reserve a membership or charge a card. Membership availability and terms are confirmed in the application.\n\nTHE PROGRAM\n\nDesign Partner Membership\n\nDESIGN PARTNER PRICE\n\n$300\n/month\n\n90% off the $3,000/month Standard price.\n\nPrice locked for life · Unlimited seats per company\n\nAPPLY FOR A PLACE\n\n25 of 25 places left\n\nTerms apply\n\nAPPLY\n\nBring your next product bet.\n\nCreate your account, select or build your product context, and review membership eligibility in Settings. You choose whether to purchase and which paid research to authorize.\n\nAPPLY FOR A PLACE\nPreveti\nPRODUCT INTELLIGENCE OS\nDesign Partner\nStartup Program\nPricing\nFinance\nJournal\nHow-to\nTerms\nContact\n\n© 2026 Preveti.\n\nBuilt by MC Product Labs"
+    },
+    {
+      "app": "preveti-site",
+      "id": "pricing",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5303/pricing/",
+      "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+      "appClass": "B2B SaaS marketing site",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Preveti home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Preveti home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Sign in",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Sign in\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Get started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get started\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Get started",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Get started\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "See the Design Partner offer",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"See the Design Partner offer\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Terms apply",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms apply\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Check eligibility",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Check eligibility\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Terms apply",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms apply\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"terms\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Design Partner",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Startup Program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Startup Program\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Pricing",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pricing\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Finance",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Finance\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Journal",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journal\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "How-to",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How-to\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "Contact",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Contact\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "MC Product Labs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MC Product Labs\""
+        }
+      ],
+      "visibleText": "Preveti\nSIGN IN\n\nPRICING\n\nOne price for the whole company.\n\nEvery plan includes unlimited seats for your company. Early companies can join a program at a fraction of the Standard price.\n\nPLANS\nStandard\n\n$3,000/mo\n\nOr $30,000/yr paid in full: 2 months free\n\nUnlimited seats per company\n1,000 credits a month\nGET STARTED\nPremium\n\n$4,500/mo\n\nOr $45,000/yr paid in full: 2 months free\n\nUnlimited seats per company\n2,000 credits a month\nGET STARTED\nPROGRAMS\nDesign Partner\n\nFOR COMPANIES THAT WANT TO HELP SHAPE PREVETI\n\n$300\n/month\n\n90% off the $3,000/month Standard price.\n\nPrice locked for life · Unlimited seats per company\n\nSEE THE DESIGN PARTNER OFFER\n\n25 of 25 places left\n\nTerms apply\nStartup Program\n\nFOR EARLY-STAGE STARTUPS\n\n$300\n/month\n\n90% off the $3,000/month Standard price.\n\nFixed for 24 months · Unlimited seats per company\n\nCHECK ELIGIBILITY\n\nLimited to 250 startups\n\nTerms apply\n\nCredits, top-ups and program conditions are set out in the terms.\n\nPreveti\nPRODUCT INTELLIGENCE OS\nDesign Partner\nStartup Program\nPricing\nFinance\nJournal\nHow-to\nTerms\nContact\n\n© 2026 Preveti.\n\nBuilt by MC Product Labs"
+    },
+    {
+      "app": "preveti-site",
+      "id": "founders",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5303/founders/",
+      "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+      "appClass": "B2B SaaS marketing site",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Preveti home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Preveti home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Sign in",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Sign in\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "See the Design Partner offer",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"See the Design Partner offer\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Apply for a place",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Apply for a place\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Terms apply",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms apply\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Apply for a place",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Apply for a place\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Design Partner",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "Startup Program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Startup Program\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Pricing",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pricing\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Finance",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Finance\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Journal",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journal\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "How-to",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How-to\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Contact",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Contact\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "MC Product Labs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MC Product Labs\""
+        }
+      ],
+      "visibleText": "Preveti\nSIGN IN\n\nDESIGN PARTNER PROGRAM\n\nVet Before Bet.\n\nEvery product decision is a bet. Challenge your assumptions before committing engineering time, capital, or months of work.\n\nSEE THE DESIGN PARTNER OFFER\n\n01\n\nChallenge the next decision\n\nShould we build this company? Is this our ICP? Does this feature deserve three engineering sprints? Which pricing, positioning, or onboarding change should we test?\n\nStart with your product context and a consequential question. Examine your assumptions and alternatives against the evidence before choosing your next step.\n\n02\n\nResearch matched to the question\n\nPressure-test study structure with simulation. Use synthetic participants to explore assumptions, then use real people or a hybrid study when the question needs human evidence.\n\nSimulation explores the model you supplied. It does not establish market demand or substitute for observed customer behavior. You review the proposed setup, estimated spend, and evidence limitations before authorizing execution.\n\n03\n\nKeep what you learn\n\nConnect your hypotheses and studies to the evidence and decisions in the appropriate product context. Return to the next bet with your earlier findings available.\n\nLook for evidence that would change your mind. A useful result can be uncertainty, a rejected assumption, or a better next experiment. Favorable findings are never guaranteed.\n\n04\n\nA small design-partner cohort\n\nWe are limiting the Design Partner program to 25 companies so we can work closely with each one as Preveti evolves. Design Partner pricing holds for as long as your company takes part in at least one Preveti research activity each month.\n\nCompany eligibility is reviewed before enrollment.\n\nStartups that would rather not take part in research each month can apply for the Startup Program instead.\n\nCreate your account and product context, then request eligibility review. Signup does not reserve a membership or charge a card. Membership availability and terms are confirmed in the application.\n\nTHE PROGRAM\n\nDesign Partner Membership\n\nDESIGN PARTNER PRICE\n\n$300\n/month\n\n90% off the $3,000/month Standard price.\n\nPrice locked for life · Unlimited seats per company\n\nAPPLY FOR A PLACE\n\n25 of 25 places left\n\nTerms apply\n\nAPPLY\n\nBring your next product bet.\n\nCreate your account, select or build your product context, and review membership eligibility in Settings. You choose whether to purchase and which paid research to authorize.\n\nAPPLY FOR A PLACE\nPreveti\nPRODUCT INTELLIGENCE OS\nDesign Partner\nStartup Program\nPricing\nFinance\nJournal\nHow-to\nTerms\nContact\n\n© 2026 Preveti.\n\nBuilt by MC Product Labs"
+    },
+    {
+      "app": "preveti-site",
+      "id": "startup-program",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5303/startup-program/",
+      "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+      "appClass": "B2B SaaS marketing site",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Preveti home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Preveti home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Sign in",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Sign in\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Check eligibility and apply",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Check eligibility and apply\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Terms apply",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms apply\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Program terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Program terms\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Design Partner program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner program\""
+        },
+        {
+          "index": 6,
+          "role": "textbox",
+          "name": "Company name",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Company name\""
+        },
+        {
+          "index": 7,
+          "role": "textbox",
+          "name": "Company website",
+          "tag": "input",
+          "inputType": "url",
+          "enabled": true,
+          "summary": "textbox \"Company website\""
+        },
+        {
+          "index": 8,
+          "role": "textbox",
+          "name": "Founding date",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Founding date\""
+        },
+        {
+          "index": 9,
+          "role": "textbox",
+          "name": "Country of incorporation",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Country of incorporation\""
+        },
+        {
+          "index": 10,
+          "role": "textbox",
+          "name": "Your name",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Your name\""
+        },
+        {
+          "index": 11,
+          "role": "textbox",
+          "name": "Your role",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Your role\""
+        },
+        {
+          "index": 12,
+          "role": "textbox",
+          "name": "Company email",
+          "tag": "input",
+          "inputType": "email",
+          "enabled": true,
+          "summary": "textbox \"Company email\""
+        },
+        {
+          "index": 13,
+          "role": "textbox",
+          "name": "Preveti account email (optional)",
+          "tag": "input",
+          "inputType": "email",
+          "enabled": true,
+          "summary": "textbox \"Preveti account email (optional)\""
+        },
+        {
+          "index": 14,
+          "role": "combobox",
+          "name": "Total outside funding raised",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Total outside funding raised\""
+        },
+        {
+          "index": 15,
+          "role": "combobox",
+          "name": "Most recent round",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Most recent round\""
+        },
+        {
+          "index": 16,
+          "role": "combobox",
+          "name": "Annual recurring revenue",
+          "tag": "select",
+          "inputType": null,
+          "enabled": true,
+          "summary": "combobox \"Annual recurring revenue\""
+        },
+        {
+          "index": 17,
+          "role": "spinbutton",
+          "name": "Team size",
+          "tag": "input",
+          "inputType": "number",
+          "enabled": true,
+          "summary": "spinbutton \"Team size\""
+        },
+        {
+          "index": 18,
+          "role": "textbox",
+          "name": "Investors or accelerator (optional)",
+          "tag": "input",
+          "inputType": "text",
+          "enabled": true,
+          "summary": "textbox \"Investors or accelerator (optional)\""
+        },
+        {
+          "index": 19,
+          "role": "textbox",
+          "name": "The product decision you want to vet first",
+          "tag": "textarea",
+          "inputType": null,
+          "enabled": true,
+          "summary": "textbox \"The product decision you want to vet first\""
+        },
+        {
+          "index": 20,
+          "role": "checkbox",
+          "name": "My company meets every criterion listed above.",
+          "tag": "input",
+          "inputType": "checkbox",
+          "enabled": true,
+          "summary": "checkbox \"My company meets every criterion listed above.\" (unchecked, value=\"Yes\")"
+        },
+        {
+          "index": 21,
+          "role": "button",
+          "name": "Open email",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "button \"Open email\""
+        },
+        {
+          "index": 22,
+          "role": "link",
+          "name": "[email]",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"[email]\""
+        },
+        {
+          "index": 23,
+          "role": "link",
+          "name": "Design Partner",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner\""
+        },
+        {
+          "index": 24,
+          "role": "link",
+          "name": "Startup Program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Startup Program\""
+        },
+        {
+          "index": 25,
+          "role": "link",
+          "name": "Pricing",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pricing\""
+        },
+        {
+          "index": 26,
+          "role": "link",
+          "name": "Finance",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Finance\""
+        },
+        {
+          "index": 27,
+          "role": "link",
+          "name": "Journal",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journal\""
+        },
+        {
+          "index": 28,
+          "role": "link",
+          "name": "How-to",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How-to\""
+        },
+        {
+          "index": 29,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 30,
+          "role": "link",
+          "name": "Contact",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Contact\""
+        },
+        {
+          "index": 31,
+          "role": "link",
+          "name": "MC Product Labs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MC Product Labs\""
+        }
+      ],
+      "visibleText": "Preveti\nSIGN IN\n\nSTARTUP PROGRAM\n\nPreveti for your whole startup.\n\nQualifying startups get the whole company on Preveti at a fixed monthly price for their first 24 months.\n\nSTARTUP PROGRAM PRICE\n\n$300\n/month\n\n90% off the $3,000/month Standard price.\n\nFixed for 24 months · Unlimited seats per company\n\nCHECK ELIGIBILITY AND APPLY\n\nLimited to 250 startups\n\nTerms apply\nWHAT YOU GET\nPRICE\n$300/mo (90% discount)\nTERM\nFixed for 24 months\nSEATS\nUnlimited seats per company\nCREDITS\n150 included each month\nAVAILABILITY\nLimited to 250 startups\n\nProgram terms\n\nWHO QUALIFIES\n\nYour company must meet all of the following:\n\nEARLY STAGE\nFounded within the last 5 years.\nFUNDING\nLess than $5M in total outside funding raised, from bootstrapped or pre-seed through Series A.\nREVENUE\nLess than $1M in annual recurring revenue.\nINDEPENDENT\nAn operating company building its own product: not a subsidiary of a larger company, an agency, a consultancy, or a reseller.\nNEW TO PREVETI\nNot currently on a paid Preveti plan, and not enrolled in the Design Partner program.\nVERIFIABLE\nA live company website and an email address on the company domain.\nWANT TO BE MORE INVOLVED?\n\nThe Startup Program cannot be combined with the Design Partner program. Design Partner pricing holds for life, as long as your company takes part in at least one Preveti research activity each month. If you want to help shape Preveti, it may be the better deal. It is limited to 25 companies.\n\nHOW TO APPLY\n\nFill in the form and select Open email. Your mail app opens a message to [email] with your answers filled in. Review it, then send it from your company address.\n\nCOMPANY NAME\nCOMPANY WEBSITE\nFOUNDING DATE\nCOUNTRY OF INCORPORATION\nYOUR NAME\nYOUR ROLE\nCOMPANY EMAIL\nPREVETI ACCOUNT EMAIL (OPTIONAL)\nTOTAL OUTSIDE FUNDING RAISED\nSelect\nBootstrapped\nUnder $500K\n$500K to $2M\n$2M to $5M\nMOST RECENT ROUND\nSelect\nNone\nPre-seed\nSeed\nSeries A\nANNUAL RECURRING REVENUE\nSelect\nPre-revenue\nUnder $100K\n$100K to $500K\n$500K to $1M\nTEAM SIZE\nINVESTORS OR ACCELERATOR (OPTIONAL)\nTHE PRODUCT DECISION YOU WANT TO VET FIRST\nMy company meets every criterion listed above.\nOPEN EMAIL\n\nWE REPLY WITHIN 3 BUSINESS DAYS.\n\nNo mail app on this device? Email [email] directly with the same information. After approval, we enable Startup Program pricing on your account. Nothing is charged until you confirm the purchase in the app.\n\nPreveti\nPRODUCT INTELLIGENCE OS\nDesign Partner\nStartup Program\nPricing\nFinance\nJournal\nHow-to\nTerms\nContact\n\n© 2026 Preveti.\n\nBuilt by MC Product Labs"
+    },
+    {
+      "app": "preveti-site",
+      "id": "overview",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5303/overview/",
+      "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+      "appClass": "B2B SaaS marketing site",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Preveti home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Preveti home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Sign in",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Sign in\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Pre-vet your next bet",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pre-vet your next bet\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Review the case",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Review the case\""
+        },
+        {
+          "index": 4,
+          "role": "tab",
+          "name": "01Conversational framing",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "tab \"01Conversational framing\""
+        },
+        {
+          "index": 5,
+          "role": "tab",
+          "name": "02Inquiry intelligence",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "tab \"02Inquiry intelligence\""
+        },
+        {
+          "index": 6,
+          "role": "tab",
+          "name": "03Evidence you authorize",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "tab \"03Evidence you authorize\""
+        },
+        {
+          "index": 7,
+          "role": "tab",
+          "name": "04Study handoff & recovery",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "tab \"04Study handoff & recovery\""
+        },
+        {
+          "index": 8,
+          "role": "tab",
+          "name": "05Billing that stays in the app",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "tab \"05Billing that stays in the app\""
+        },
+        {
+          "index": 9,
+          "role": "tab",
+          "name": "06Reproducible verdicts",
+          "tag": "button",
+          "inputType": null,
+          "enabled": true,
+          "summary": "tab \"06Reproducible verdicts\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "Discuss your next bet",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Discuss your next bet\""
+        },
+        {
+          "index": 11,
+          "role": "link",
+          "name": "Design Partner",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner\""
+        },
+        {
+          "index": 12,
+          "role": "link",
+          "name": "Startup Program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Startup Program\""
+        },
+        {
+          "index": 13,
+          "role": "link",
+          "name": "Pricing",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pricing\""
+        },
+        {
+          "index": 14,
+          "role": "link",
+          "name": "Finance",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Finance\""
+        },
+        {
+          "index": 15,
+          "role": "link",
+          "name": "Journal",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journal\""
+        },
+        {
+          "index": 16,
+          "role": "link",
+          "name": "How-to",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How-to\""
+        },
+        {
+          "index": 17,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 18,
+          "role": "link",
+          "name": "Contact",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Contact\""
+        },
+        {
+          "index": 19,
+          "role": "link",
+          "name": "MC Product Labs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MC Product Labs\""
+        }
+      ],
+      "visibleText": "Preveti\nSIGN IN\n\nSTARTUP / PMF DECISION INTELLIGENCE\n\nStop burning runway to discover the roadmap was wrong.\n\nPreveti stress-tests startup product directions before founders commit capital, months of runway, and new hires.\n\nPRE-VET YOUR NEXT BET\nREVIEW THE CASE\nProtect\nRUNWAY BEFORE ENGINEERING COMMITS\nFalsify\nWEAK BETS WHILE THEY ARE STILL CHEAP\nCompare\nCOMPETING PRODUCT DIRECTIONS\nFocus\nCAPITAL ON EVIDENCE-EARNED BETS\n01\nThe Financial Risk\n\nRUNWAY · HIRING · OPPORTUNITY COST\n\nA startup rarely fails because it could not ship. It fails because scarce capital, engineering time, and founder attention were committed to a direction the market never earned.\n\nBy the time weak demand becomes undeniable, the organization has hired around the bet, built around the bet, and explained the bet to investors.\n\nThe visible loss is development spend. The larger loss is the runway consumed while a stronger direction remained unexplored.\n\n02\nChallenge the next decision\n\nFRAMING · ASSUMPTIONS · ALTERNATIVES\n\nShould we build this company? Is this our ICP? Does this feature deserve three engineering sprints? Which pricing, positioning, or onboarding change should we test?\n\nStart with your product context and a consequential question. Examine your assumptions and alternatives against the evidence before choosing your next step.\n\n03\nThe Method\n\nRESEARCH MATCHED TO THE QUESTION\n\nPressure-test study structure with simulation. Use synthetic participants to explore assumptions, then use real people or a hybrid study when the question needs human evidence.\n\nSimulation explores the model you supplied. It does not establish market demand or substitute for observed customer behavior. You review the proposed setup, estimated spend, and evidence limitations before authorizing execution.\n\n04\nInside the workspace\n\nPreveti is a chat-first workspace, not a form. Here is what it runs while you decide.\n\n01\nConversational framing\n02\nInquiry intelligence\n03\nEvidence you authorize\n04\nStudy handoff & recovery\n05\nBilling that stays in the app\n06\nReproducible verdicts\nConversational framing\n\nYou bring the decision in plain language. Preveti reframes it into a question you can actually test, surfaces the assumptions no one pressure-tested, and preserves the premise as the conversation moves. Guidance is saved with the turn it belongs to, so the reasoning is never lost.\n\nYou start with a sharper question than the one you walked in with.\n05\nKeep what you learn\n\nPERSISTENT PRODUCT CONTEXT\n\nConnect your hypotheses and studies to the evidence and decisions in the appropriate product context. Return to the next bet with your earlier findings available.\n\nLook for evidence that would change your mind. A useful result can be uncertainty, a rejected assumption, or a better next experiment. Favorable findings are never guaranteed.\n\n06\nA small design-partner cohort\n\nDESIGN PARTNER · ELIGIBILITY REVIEWED\n\nWe are limiting the Design Partner program to 25 companies so we can work closely with each one as Preveti evolves. Design Partner pricing holds for as long as your company takes part in at least one Preveti research activity each month.\n\nCompany eligibility is reviewed before enrollment.\n\nStartups that would rather not take part in research each month can apply for the Startup Program instead.\n\nCreate your account and product context, then request eligibility review. Signup does not reserve a membership or charge a card. Membership availability and terms are confirmed in the application.\n\n07\nThe Stakes\n\nPRESERVE THE RIGHT TO CHANGE DIRECTION\n\nPreveti does not make uncertainty disappear. It makes the financial exposure of a product decision visible before the company spends the runway required to discover it through production.\n\nThe objective is not to prove an idea will win. It is to eliminate weak directions, identify brittle assumptions, and concentrate customer discovery and capital on the bets that have earned the next commitment.\n\n08\nPre-vet the bet\n\nBring the product directions competing for your next meaningful commitment. We will map the assumptions, define what would make each direction wrong, and determine whether simulation can reduce the financial risk of choosing.\n\nThe Founder Program is the structured path for teams that want to run this discipline across a portfolio of early-stage bets.\n\nSEND APPLICATION TO\n[email]\n\nStart with the decision—not a demo request.\n\nDISCUSS YOUR NEXT BET\n\nPreveti — Product Intelligence OS — 2026\n\nDesign Partner\nStartup Program\nPricing\nFinance\nJournal\nHow-to\nTerms\nContact\n\nBuilt by MC Product Labs"
+    },
+    {
+      "app": "preveti-site",
+      "id": "how-to",
+      "split": "holdout",
+      "url": "http://127.0.0.1:5303/how-to/",
+      "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+      "appClass": "B2B SaaS marketing site",
+      "controls": [
+        {
+          "index": 0,
+          "role": "link",
+          "name": "Preveti home",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Preveti home\""
+        },
+        {
+          "index": 1,
+          "role": "link",
+          "name": "Sign in",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Sign in\""
+        },
+        {
+          "index": 2,
+          "role": "link",
+          "name": "Design Partner",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Design Partner\""
+        },
+        {
+          "index": 3,
+          "role": "link",
+          "name": "Startup Program",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Startup Program\""
+        },
+        {
+          "index": 4,
+          "role": "link",
+          "name": "Pricing",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Pricing\""
+        },
+        {
+          "index": 5,
+          "role": "link",
+          "name": "Finance",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Finance\""
+        },
+        {
+          "index": 6,
+          "role": "link",
+          "name": "Journal",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Journal\""
+        },
+        {
+          "index": 7,
+          "role": "link",
+          "name": "How-to",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"How-to\""
+        },
+        {
+          "index": 8,
+          "role": "link",
+          "name": "Terms",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Terms\""
+        },
+        {
+          "index": 9,
+          "role": "link",
+          "name": "Contact",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"Contact\""
+        },
+        {
+          "index": 10,
+          "role": "link",
+          "name": "MC Product Labs",
+          "tag": "a",
+          "inputType": null,
+          "enabled": true,
+          "summary": "link \"MC Product Labs\""
+        }
+      ],
+      "visibleText": "Preveti\nSIGN IN\n\nHOW DO I…?\n\nVet the decision you're facing.\n\nNew answers are on the way.\n\nPreveti\nPRODUCT INTELLIGENCE OS\nDesign Partner\nStartup Program\nPricing\nFinance\nJournal\nHow-to\nTerms\nContact\n\n© 2026 Preveti.\n\nBuilt by MC Product Labs"
+    }
+  ]
+}
