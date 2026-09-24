@@ -487,6 +487,17 @@ describe("AssertionSchema (exported for @jevitate/missions' successAssertion)", 
   it("rejects an unknown assertion kind", () => {
     expect(() => AssertionSchema.parse({ kind: "bogus" })).toThrow();
   });
+
+  it("parses valueEquals (a form control's value) and requires its target and value", () => {
+    expect(AssertionSchema.parse({ kind: "valueEquals", target: { testId: "last" }, value: "Litmus" })).toEqual({
+      kind: "valueEquals",
+      target: { testId: "last" },
+      value: "Litmus",
+    });
+    expect(() => AssertionSchema.parse({ kind: "valueEquals", target: { testId: "last" } })).toThrow();
+    expect(() => AssertionSchema.parse({ kind: "valueEquals", value: "x" })).toThrow();
+    expect(() => AssertionSchema.parse({ kind: "valueEquals", target: { testId: "last" }, value: "x", text: "y" })).toThrow();
+  });
 });
 
 describe("RecordingSchema — upload step", () => {

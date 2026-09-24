@@ -131,3 +131,40 @@ test("checkAssertion: a urlIncludes assertion that becomes true after a delay pa
 
   expect(result).toBe(true);
 });
+
+// === valueEquals: a form control's VALUE, never its text (#65) ===
+
+test("checkAssertion(valueEquals): holds when the control's value equals the text exactly", async () => {
+  const locator = fakeLocator({ count: vi.fn(async () => 1), inputValue: vi.fn(async () => "Litmus") });
+  const actor = actorWithPage(fakePage(locator));
+  const a: Assertion = { kind: "valueEquals", target: { testId: "last" }, value: "Litmus" };
+  await expect(checkAssertion(actor, a, { timeoutMs: 50, pollMs: 10 })).resolves.toBe(true);
+  expect(locator.inputValue).toHaveBeenCalled();
+  expect(locator.innerText).not.toHaveBeenCalled();
+});
+
+test("checkAssertion(valueEquals): a different value, or a partial match, does not hold", async () => {
+  const locator = fakeLocator({ count: vi.fn(async () => 1), inputValue: vi.fn(async () => "Litmus Test") });
+  const actor = actorWithPage(fakePage(locator));
+  const a: Assertion = { kind: "valueEquals", target: { testId: "last" }, value: "Litmus" };
+  await expect(checkAssertion(actor, a, { timeoutMs: 50, pollMs: 10 })).resolves.toBe(false);
+});
+
+test("checkAssertion(valueEquals): a missing, ambiguous or value-less target fails closed", async () => {
+  const a: Assertion = { kind: "valueEquals", target: { testId: "last" }, value: "" };
+  const missing = actorWithPage(fakePage(fakeLocator({ count: vi.fn(async () => 0), inputValue: vi.fn(async () => "") })));
+  await expect(checkAssertion(missing, a, { timeoutMs: 30, pollMs: 10 })).resolves.toBe(false);
+  const twice = actorWithPage(fakePage(fakeLocator({ count: vi.fn(async () => 2), inputValue: vi.fn(async () => "") })));
+  await expect(checkAssertion(twice, a, { timeoutMs: 30, pollMs: 10 })).resolves.toBe(false);
+  const notAControl = actorWithPage(
+    fakePage(
+      fakeLocator({
+        count: vi.fn(async () => 1),
+        inputValue: vi.fn(async () => {
+          throw new Error("Not an <input>, <textarea> or <select> element");
+        }),
+      }),
+    ),
+  );
+  await expect(checkAssertion(notAControl, a, { timeoutMs: 30, pollMs: 10 })).resolves.toBe(false);
+});
