@@ -71,10 +71,17 @@ export function newPageText(baseline: string, current: string, sent: string): st
   return fresh.filter((l) => !(/\d/.test(l) && gone.has(shape(l)))).join("\n");
 }
 
+/** A page line this long (or the whole message) found inside a sent message is the message echoed. */
+const AUTHORED_FRAGMENT_CHARS = 24;
+
 /**
  * The page text minus every line the run itself authored (messages it sent) — so a goal judgment is
  * never grounded on the user's own words echoed back (dogfood J-11: "Next steps…" typed by jevitate
  * read as the app's answer).
+ *
+ * Only the message itself (or a substantial fragment of it, a wrapped paragraph) is removed: a short
+ * app line that merely OCCURS inside a message — a status badge "Approved", "Bet saved", a tab name —
+ * is the app's own evidence and stays (#91: the completion evidence was being stripped).
  */
 export function withoutAuthored(text: string, sent: readonly string[]): string {
   const mine = sent.map(norm).filter((m) => m.length > 0);
@@ -82,7 +89,14 @@ export function withoutAuthored(text: string, sent: readonly string[]): string {
     .split("\n")
     .filter((l) => {
       const n = norm(l);
-      return n.length === 0 || !mine.some((m) => m.includes(n) || (n.includes(m) && n.length - m.length < 24));
+      return (
+        n.length === 0 ||
+        !mine.some(
+          (m) =>
+            (m.includes(n) && n.length >= Math.min(m.length, AUTHORED_FRAGMENT_CHARS)) ||
+            (n.includes(m) && n.length - m.length < 24),
+        )
+      );
     })
     .join("\n");
 }
@@ -257,14 +271,33 @@ export class UnsubmittedTypeTracker {
 
 /** Completion of a run: the goal's success condition observably met, or why not. */
 export type RunOutcome =
-  | { readonly status: "completed"; readonly verifiedBy: "success-condition" | "grounded-judgment" }
+  | {
+      readonly status: "completed";
+      /**
+       * What proved it: the mission's success condition, the grounded goal judgment, or (a find-out
+       * goal, #101) a reported answer whose every claim code found on an observed page.
+       */
+      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer";
+    }
   | { readonly status: "incomplete"; readonly reason: string };
 
 /** A proposed `done`, weighed by code. */
 export type DoneVerdict = { readonly accept: true; readonly outcome: RunOutcome } | { readonly accept: false; readonly reason: string };
 
-/** Probability the advisory goal judgment must reach before code accepts an un-oracled `done`. */
+/**
+ * Probability the advisory goal judgment must reach before code accepts an un-oracled `done`
+ * (inclusive: p ≥ threshold is accepted). A coin-flip p=0.50 is NOT evidence of completion — the
+ * fix for a genuinely completed state judged at 0.50 (#91) is to give the judgment the evidence
+ * (a real question, the app's own status text, what the run did), never to lower this bar.
+ */
 export const GOAL_MET_THRESHOLD = 0.75;
+
+/**
+ * The decision's advisory "is the goal already met here?" signal at or above which code runs the
+ * grounded goal check BEFORE acting (#91: the loop kept acting after the goal was met). Only a
+ * trigger: the grounded check (`groundDone`, same threshold as a proposed `done`) is the verdict.
+ */
+export const GOAL_CHECK_TRIGGER = 0.5;
 
 export interface DoneEvidence {
   /** Fields holding typed text that was never submitted (labels). */

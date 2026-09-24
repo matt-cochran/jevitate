@@ -36,7 +36,10 @@ import {
 import { act } from "./act.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
+import { ObservedPages, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
 import {
+  GOAL_CHECK_TRIGGER,
+  GOAL_MET_THRESHOLD,
   REPLY_WAIT_MS,
   UnsubmittedTypeTracker,
   groundDone,
@@ -73,6 +76,8 @@ export const MAX_IDLE_STEPS = 6;
 export const FORM_TEXT_MAX_CHARS = 600;
 /** Rejected `done` proposals before the run stops incomplete. */
 export const MAX_DONE_REJECTIONS = 3;
+/** Rejected (ungrounded) `report` answers before the run stops incomplete (#101). */
+export const MAX_REPORT_REJECTIONS = 3;
 /** Repeated-type (typed, never sent, typed again) signals before the run stops as no-progress. */
 export const MAX_REPEAT_TYPE_SIGNALS = 3;
 /**
@@ -195,6 +200,11 @@ export interface ExploreRun {
    */
   readonly outcome: RunOutcome;
   /**
+   * For a find-out goal ended by `report` (#101): the answer and the observed page text each claim
+   * rests on. Present only when code grounded it (then `outcome` is completed/grounded-answer).
+   */
+  readonly answer?: RunAnswer;
+  /**
    * The concrete cause the run last ran into (#84), in priority order: the last fail-closed step
    * (field + why), the last disabled / not-visible target (its accessible name), an invalid field's
    * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
@@ -260,6 +270,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let offerBaseline: Set<string> | null = null;
   let offeredKeys = new Set<string>();
   let doneRejections = 0;
+  let reportRejections = 0;
+  /** The visible text of every page state observed — what a reported answer is grounded against (#101). */
+  const observed = new ObservedPages(secrets);
+  /** The grounded answer a `report` ended the run with. */
+  let answer: RunAnswer | undefined;
+  /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
+  const goalChecked = new Set<string>();
   let idleSteps = 0;
   let idleSince: number | null = null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
@@ -518,6 +535,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const offered = new Set(snap.controls.filter((c) => offeredKeys.has(keyOf(c))).map((c) => c.index));
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
+      observed.add(snap.url, await readPageText(page));
+
       let decision: Awaited<ReturnType<typeof decide>>;
       try {
         decision = await decide(cfg.judge, {
@@ -558,11 +577,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const record = (
         actOk: boolean,
         reason?: string,
-        extra: { message?: string; reply?: ReplyResult; judgments?: Record<string, { value: boolean; probability: number }>; op?: typeof decision.op } = {},
+        extra: {
+          message?: string;
+          reply?: ReplyResult;
+          judgments?: Record<string, { value: boolean; probability: number }>;
+          op?: typeof decision.op;
+          control?: Control | null;
+          strategy?: string;
+          answer?: AnswerVerdict["answer"];
+        } = {},
       ): void => {
         transcript.record({
           op: extra.op ?? decision.op,
-          control: decision.control,
+          control: extra.control === undefined ? decision.control : extra.control,
+          ...(extra.strategy === undefined ? {} : { strategy: extra.strategy }),
+          ...(extra.answer === undefined || extra.answer === null ? {} : { answer: { ...extra.answer, accepted: actOk } }),
           confidence: decision.confidence,
           chosenBy: "model",
           actOk,
@@ -575,10 +604,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         });
       };
 
-      // `done` is a PROPOSAL (guardrail #4). Code grounds it: typed-but-unsent text, the mission's
+      // Grounds "the goal is met on this page" (guardrail #4): typed-but-unsent text, the mission's
       // independent success condition, or — without one — an advisory goal judgment on the visible
-      // page (the run's own messages removed) that must clear the threshold.
-      if (decision.op === "done") {
+      // page (the run's own messages removed) and its status text, which must clear the threshold.
+      const groundGoal = async (): Promise<{
+        verdict: ReturnType<typeof groundDone>;
+        judgments: Record<string, { value: boolean; probability: number }> | undefined;
+      }> => {
         const unsubmittedLabels = [...unsent.pending().values()].map((p) => p.label);
         let successCheck: boolean | undefined;
         let goalMet: number | null | undefined;
@@ -590,9 +622,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             );
           } else {
             const pageText = withoutAuthored(await readPageText(page), conversation.sent);
-            goalMet = await judgeGoalMet(cfg.judge, { goal: cfg.goal, url: snap.url, pageText, history, secrets }).catch(
-              () => null,
-            );
+            goalMet = await judgeGoalMet(cfg.judge, {
+              goal: cfg.goal,
+              url: snap.url,
+              pageText,
+              history,
+              secrets,
+              ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
+            }).catch(() => null);
           }
         }
         const verdict = groundDone({
@@ -600,8 +637,51 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           ...(successCheck === undefined ? {} : { successCheck }),
           ...(goalMet === undefined ? {} : { goalMetProbability: goalMet }),
         });
+        // `value` is code's reading of the probability (the acceptance threshold), not the port's
+        // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).
         const judgments =
-          goalMet === undefined || goalMet === null ? undefined : { goalMet: { value: goalMet >= 0.5, probability: goalMet } };
+          goalMet === undefined || goalMet === null
+            ? undefined
+            : { goalMet: { value: goalMet >= GOAL_MET_THRESHOLD, probability: goalMet } };
+        return { verdict, judgments };
+      };
+
+      // The decision's advisory "already met?" signal (#91): the loop used to act past a met goal
+      // because the model never proposed `done`. Code grounds it BEFORE acting — once per page
+      // state — and stops `done` only on the same grounded verdict a proposed `done` needs.
+      if (
+        decision.goalMet !== null &&
+        decision.goalMet >= GOAL_CHECK_TRIGGER &&
+        decision.op !== "done" &&
+        decision.op !== "report" &&
+        decision.op !== "blocked" &&
+        !goalChecked.has(snap.signature)
+      ) {
+        goalChecked.add(snap.signature);
+        const { verdict, judgments } = await groundGoal();
+        if (verdict.accept) {
+          record(
+            true,
+            `goal already met — stopped instead of "${decision.op}": verified by ${verdict.outcome.status === "completed" ? verdict.outcome.verifiedBy : "?"}`,
+            {
+              op: "done",
+              control: null,
+              strategy: "goal-check",
+              judgments: {
+                ...(judgments ?? {}),
+                goalAlreadyMet: { value: true, probability: decision.goalMet },
+              },
+            },
+          );
+          outcome = verdict.outcome;
+          stop = "done";
+          break;
+        }
+      }
+
+      // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
+      if (decision.op === "done") {
+        const { verdict, judgments } = await groundGoal();
         if (verdict.accept) {
           record(true, `done accepted: goal verified by ${verdict.outcome.status === "completed" ? verdict.outcome.verifiedBy : "?"}`, {
             ...(judgments === undefined ? {} : { judgments }),
@@ -617,6 +697,37 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         });
         if (doneRejections >= MAX_DONE_REJECTIONS) {
           incomplete = `the model proposed done ${doneRejections} times, but ${verdict.reason}`;
+          stop = "blocked";
+          break;
+        }
+        continue;
+      }
+      // `report` (#101) ends a find-out goal with an ANSWER — a proposal too: the answer is generated
+      // from the observed page text and accepted only when code grounds every claim on it.
+      if (decision.op === "report") {
+        const verdict: AnswerVerdict = await reportAnswer(cfg.gen, {
+          goal: cfg.goal,
+          url: snap.url,
+          pages: observed.pages(),
+          history,
+          secrets,
+        }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
+        if (verdict.accept) {
+          record(true, `report accepted: answer grounded on the observed pages (${verdict.answer.evidence.length} claim(s))`, {
+            answer: verdict.answer,
+          });
+          answer = verdict.answer;
+          outcome = { status: "completed", verifiedBy: "grounded-answer" };
+          stop = "done";
+          break;
+        }
+        reportRejections += 1;
+        history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
+        record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
+          answer: verdict.answer,
+        });
+        if (reportRejections >= MAX_REPORT_REJECTIONS) {
+          incomplete = `the model reported an answer ${reportRejections} times, but ${verdict.reason}`;
           stop = "blocked";
           break;
         }
@@ -1086,6 +1197,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     timing: summarizeTimings(timings),
     ...(hang === undefined ? {} : { hang }),
     outcome: finalOutcome,
+    ...(answer !== undefined && finalOutcome.status === "completed" ? { answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }

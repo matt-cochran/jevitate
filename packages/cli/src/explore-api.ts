@@ -23,6 +23,7 @@ import {
   type CapabilityScope,
   type FeatureRunResult,
   type TranscriptEntry,
+  type RunAnswer,
   type RunOutcome,
   type CoverageThresholds,
   type StatusSpec,
@@ -206,6 +207,8 @@ export interface RunExplorationResult {
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
    */
   readonly runOutcome: RunOutcome;
+  /** A find-out goal's answer (#101), present only when code grounded it on the observed pages. */
+  readonly answer?: RunAnswer;
   readonly assertionPassed: boolean;
   /** Each success check's verdict and what the oracle saw. */
   readonly checks: SuccessCheckResult[];
@@ -324,6 +327,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       timing: mission.run.timing,
       outcome: mission.outcome,
       runOutcome: mission.run.outcome,
+      ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       stop: mission.run.stop,

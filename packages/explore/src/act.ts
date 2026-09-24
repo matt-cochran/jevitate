@@ -390,6 +390,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
     case "reload":
       return reloadPage(page);
     case "done":
+    case "report":
     case "blocked": {
       // No action — these are loop-terminal signals, not mutations.
       return { ok: true, mutated: false };

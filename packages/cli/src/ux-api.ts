@@ -22,6 +22,7 @@ import {
   type Control as ExploreControl,
   type Bounds,
   type TimingSummary,
+  type RunAnswer,
   type RunOutcome,
 } from "@jevitate/explore";
 import {
@@ -380,6 +381,8 @@ export interface RunUsabilityMissionResult {
    * or why not (`incomplete` + reason)? Never a silent early stop.
    */
   readonly outcome: RunOutcome;
+  /** A find-out job's answer (#101), present only when code grounded it on the observed pages. */
+  readonly answer?: RunAnswer;
   readonly screensObserved: number;
   /** The explore loop's decision transcript, written next to the report. */
   readonly transcriptPath: string;
@@ -485,6 +488,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       timing: run.timing,
       stop: run.stop,
       outcome: run.outcome,
+      ...(run.answer === undefined ? {} : { answer: run.answer }),
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,
       engine: currentEngineInfo(),

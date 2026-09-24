@@ -63,7 +63,15 @@ export interface Decision {
   readonly targetMissing: boolean;
   /** The exact redacted state sent to the model (for the transcript/tests). */
   readonly state: JudgmentState;
+  /**
+   * The same round-trip's advisory P("the goal is already met on this page") — `null` when not
+   * answered. A trigger for the loop's grounded goal check (#91), never a verdict.
+   */
+  readonly goalMet: number | null;
 }
+
+/** The advisory "already met?" head asked alongside `action` in every decision (#91). */
+export const GOAL_ALREADY_MET_QUESTION = "goalAlreadyMet";
 
 export interface DecideInput {
   readonly goal: string;
@@ -194,19 +202,39 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
       "action that already succeeded, and when a dialog or form step is in progress, complete it. " +
       CONVERSATION_GUIDE,
   };
-  const questions: Record<string, Question> = { action: actionQuestion };
+  const questions: Record<string, Question> = {
+    action: actionQuestion,
+    // Same round-trip, no extra call: does the page ALREADY show the goal met? When it does, the
+    // loop grounds that before acting instead of acting past a met goal (#91). Advisory only.
+    [GOAL_ALREADY_MET_QUESTION]: {
+      kind: "noul",
+      instructions:
+        "Is the goal's success condition ALREADY met — shown by this page (its controls and status) together " +
+        "with the steps already taken — so that no further action is needed? A goal merely started, or a " +
+        "form still to be submitted, is not met.",
+    },
+  };
 
   // The question carries page-derived text: prove no registered secret survived, exactly as
   // buildJudgmentState does for the state (fail-closed choke point).
   assertNoSecretInPayload(questions, secrets);
   const answers = await judge.systemOne({ state, questions });
+  const met = answers[GOAL_ALREADY_MET_QUESTION];
+  const goalMet = met?.kind === "noul" && Number.isFinite(met.probability) ? met.probability : null;
   const answer = answers.action;
   const chosen = answer?.kind === "choice" ? candidates.get(answer.value) : undefined;
   if (answer?.kind !== "choice" || chosen === undefined) {
     // The judgment port validates choices against the offered options; reaching here means an
     // unusable answer (missing, wrong kind, or an id that was not offered) — fail closed as a
     // target-requiring op with no target, never a guessed action.
-    return { op: "click", control: null, confidence: answer?.kind === "choice" ? answer.confidence : 0, targetMissing: true, state };
+    return {
+      op: "click",
+      control: null,
+      confidence: answer?.kind === "choice" ? answer.confidence : 0,
+      targetMissing: true,
+      state,
+      goalMet,
+    };
   }
   return {
     op: chosen.op,
@@ -214,6 +242,7 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
     confidence: answer.confidence,
     targetMissing: OPS_NEEDING_TARGET.has(chosen.op) && chosen.control === null,
     state,
+    goalMet,
   };
 }
 
@@ -221,16 +250,37 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
 export const GOAL_MET_QUESTION = "goalObservablyAchievedOnThisPage";
 
 /** Bound on the visible page text shown to the goal-completion judgment. */
-const GOAL_TEXT_CHARS = 3_000;
+const GOAL_TEXT_CHARS = 6_000;
+
+/**
+ * The goal-completion question itself (#91). It used to travel only as a state line while the noul
+ * question's instructions defaulted to its bare key name — Jev was asked "goalObservablyAchieved…"
+ * with no criterion, and a genuinely completed state came back a coin flip (p=0.50).
+ */
+export const GOAL_MET_INSTRUCTIONS =
+  "Is the goal's success condition met now? Judge from the VISIBLE PAGE TEXT and PAGE STATUS (what the " +
+  "app shows: a saved item, a status badge such as Approved/Saved/Sent, a confirmation) together with " +
+  "the steps already taken (history). For a multi-step goal, the goal is met when the earlier steps " +
+  "succeeded and this page shows the final state. Not met: the goal merely started, a form or message " +
+  "not yet submitted, or an error shown.";
 
 /**
  * Asks the model — advisory, never the verdict — whether the goal's success condition is visibly
- * met on the current page, grounded on the page's own visible text (redacted, bounded). Code
- * (`groundDone`) decides what the probability means. Returns `null` when no usable answer came back.
+ * met on the current page, grounded on the page's own visible text (redacted, bounded) and its status
+ * text. Code (`groundDone`) decides what the probability means. Returns `null` when no usable answer
+ * came back.
  */
 export async function judgeGoalMet(
   judge: JudgmentPort,
-  input: { readonly goal: string; readonly url: string; readonly pageText: string; readonly history: readonly string[]; readonly secrets?: readonly string[] },
+  input: {
+    readonly goal: string;
+    readonly url: string;
+    readonly pageText: string;
+    readonly history: readonly string[];
+    readonly secrets?: readonly string[];
+    /** The page's status text (alerts, live regions) — completion often shows only there. */
+    readonly pageStatus?: string;
+  },
 ): Promise<number | null> {
   const secrets = input.secrets ?? [];
   const state = buildJudgmentState({
@@ -238,13 +288,16 @@ export async function judgeGoalMet(
     url: input.url,
     controls: [
       PROMPT_INJECTION_GUARD,
-      "QUESTION: is the goal's success condition visibly met by what this page shows now (not merely started)?",
+      ...(input.pageStatus === undefined || input.pageStatus === "" ? [] : [`PAGE STATUS (untrusted): ${input.pageStatus}`]),
       `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
     ],
     history: input.history,
     secrets,
   });
-  const answers = await judge.systemOne({ state, questions: { [GOAL_MET_QUESTION]: { kind: "noul" } } });
+  const answers = await judge.systemOne({
+    state,
+    questions: { [GOAL_MET_QUESTION]: { kind: "noul", instructions: GOAL_MET_INSTRUCTIONS } },
+  });
   const a = answers[GOAL_MET_QUESTION];
   if (a?.kind !== "noul" || !Number.isFinite(a.probability)) return null;
   // `probability` is P(yes) — the port's noul contract.

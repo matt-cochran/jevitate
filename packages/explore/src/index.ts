@@ -17,6 +17,7 @@ export * from "./act.js";
 export * from "./fixture.js";
 export * from "./record.js";
 export * from "./explore.js";
+export * from "./answer.js";
 export * from "./missions/goal-based.js";
 export * from "./authoring/author-journey.js";
 export * from "./authoring/auto-decide.js";
