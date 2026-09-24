@@ -8,7 +8,7 @@ import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
-import { monitorFor } from "../page-monitor.js";
+import { monitorFor, type PageMonitor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { hangFingerprint, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
@@ -53,7 +53,7 @@ import { descriptorToLocator } from "@jevitate/recorder";
 import { seedRedirectReason } from "../seed-redirect.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
-import type { SideEffect } from "../side-effects.js";
+import { WRITE_METHODS, type SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantMonitor,
@@ -1266,7 +1266,17 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
         if (result.ok) recordAction(s, value, at, result.submittedVia);
-        if (result.ok) cov.acted(stepSnap.url, s.control, s.submitsForm);
+        if (result.ok) cov.acted(stepSnap.url, s.control);
+        // #155 — a submit click counts as submitted only when it actually sent a request (a write
+        // or a navigation); one the browser blocked with native validation never reached the
+        // server, so it is recorded `blocked` instead (with the browser's own message, when known).
+        if (result.ok && s.submitsForm !== undefined) {
+          if (submitRequestSent(monitorFor(sessions.page), at)) {
+            cov.submitted(stepSnap.url, s.submitsForm);
+          } else {
+            cov.blocked(stepSnap.url, s.submitsForm, await nativeValidationMessage(sessions.page));
+          }
+        }
         if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
         last = { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
         // Evidence for "act while the submit is pending": how many requests the action left in flight.
@@ -1368,6 +1378,43 @@ async function isDisabledNow(page: Page, control: Control): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the click that just fired sent a request attributable to it (#155): a write
+ * (POST/PUT/PATCH/DELETE) or a navigation, since `sinceMs` (the click's dispatch time). Checked
+ * against what the page monitor has ALREADY observed — in flight, or already finished — with no
+ * extra wait: the same immediate, synchronous check the "request(s) in flight" evidence above
+ * already relies on (the monitor's request events land before this runs).
+ */
+function submitRequestSent(monitor: PageMonitor, sinceMs: number): boolean {
+  const isSubmitLike = (method: string, resourceType: string): boolean =>
+    WRITE_METHODS.has(method.toUpperCase()) || resourceType === "document";
+  if (monitor.pending().some((r) => r.startedAt >= sinceMs && isSubmitLike(r.method, r.resourceType))) return true;
+  if (monitor.completedSince(sinceMs).some((r) => r.startedAt >= sinceMs && isSubmitLike(r.method, r.resourceType))) return true;
+  return false;
+}
+
+/**
+ * The browser's own native-validation message for a blocked submit (#155): the first field whose
+ * constraint validation currently fails. Read live (never `status.ts`'s stateful `invalid`-event
+ * tracking, which only catches events after ITS listener is installed — too late for the very
+ * first blocked submit of a run): the click that was just refused ran the browser's own validation
+ * a moment ago, so a `checkValidity()` read right now names exactly what blocked it.
+ */
+async function nativeValidationMessage(page: Page): Promise<string | undefined> {
+  return page
+    .evaluate(() => {
+      const fields = Array.from(document.querySelectorAll("input,select,textarea")) as Array<
+        HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+      >;
+      for (const f of fields) {
+        if (typeof f.checkValidity === "function" && !f.checkValidity()) return f.validationMessage || null;
+      }
+      return null;
+    })
+    .then((m) => m ?? undefined)
+    .catch(() => undefined);
 }
 
 /** A native select's first enabled option other than the current one (null: none, or not a select). */

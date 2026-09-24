@@ -40,7 +40,7 @@ describe("runAdversarialMission — clean run", () => {
       expect(result.defects).toEqual([]);
       // Clean is earned: the run exercised the target's controls and submitted its form.
       expect(result.coverage.sufficient).toBe(true);
-      expect(result.coverage.forms).toEqual({ found: 1, submitted: 1 });
+      expect(result.coverage.forms).toEqual({ found: 1, submitted: 1, blocked: 0 });
       expect(result.coverage.controls.exercised).toBe(result.coverage.controls.total);
     },
     120_000,

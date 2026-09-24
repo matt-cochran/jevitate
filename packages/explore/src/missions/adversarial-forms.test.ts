@@ -16,7 +16,21 @@ import { withSession } from "../testkit.js";
  * edits, and acting while the save is still pending.
  */
 
-const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0 };
+const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0, nativeSignins: 0 };
+
+/**
+ * #155 — the issue's minimal repro: a submit button that native validation blocks (`required`
+ * email + a `required minlength=8` password). Its own `onsubmit` handler (the one that would POST)
+ * only runs when the browser's OWN constraint validation passes first — exactly the real-world
+ * case where a submit click never reaches the server.
+ */
+const NATIVE_VALIDATION_FORM = (): string => `<!doctype html><html><body><h1>Sign in</h1>
+  <form id="signin" onsubmit="event.preventDefault(); fetch('/api/signin-native', { method: 'POST' });">
+    <label>Email <input type="email" name="email" required aria-label="Email" /></label>
+    <label>Password <input type="password" name="password" required minlength="8" aria-label="Password" /></label>
+    <button type="submit" id="submit">Sign In</button>
+  </form>
+</body></html>`;
 
 /**
  * #76 — the issue's minimal repro: a form behind a modal trigger (an API-keys page: "Create new
@@ -119,6 +133,15 @@ beforeAll(async () => {
     }
     if (path === "/app/keys-and-signup") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(KEYS_AND_SIGNUP());
+      return;
+    }
+    if (path === "/app/native-validation") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(NATIVE_VALIDATION_FORM());
+      return;
+    }
+    if (path === "/api/signin-native" && req.method === "POST") {
+      state.nativeSignins += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
       return;
     }
     if (path === "/app/stuck-submit") {
@@ -307,7 +330,7 @@ describe("adversarial — coverage and an honest outcome (#64)", () => {
       expect(result.coverage.sufficient).toBe(false);
       expect(result.coverage.controls.exercised).toBe(1);
       expect(result.coverage.controls.total).toBeGreaterThanOrEqual(6);
-      expect(result.coverage.forms).toEqual({ found: 1, submitted: 0 });
+      expect(result.coverage.forms).toEqual({ found: 1, submitted: 0, blocked: 0 });
       expect(result.coverage.shortfalls).toEqual(
         expect.arrayContaining([expect.stringMatching(/^1\/\d+ target controls exercised/), "no form was submitted (1 found)"]),
       );
@@ -412,6 +435,42 @@ describe("adversarial — a form behind a modal trigger, and a password-gated fo
         (e) => e.strategy === "double-submit" && e.op === null && e.reason?.includes("disabled"),
       );
       expect(noOps.length).toBeGreaterThan(0);
+    },
+    180_000,
+  );
+});
+
+describe("adversarial — a blocked submit is never counted as submitted (#155)", () => {
+  it(
+    "a submit the browser refuses with native validation (a still-empty required field) is recorded blocked, never submitted; the run is inconclusive, never clean",
+    async () => {
+      state.nativeSignins = 0;
+      // Only ONE decision: double-submit edits a single field (Email — leaving Password required
+      // and empty) and clicks Sign In twice. Both clicks are native-validation-blocked: no request
+      // ever reaches the server.
+      const result = await huntProfile(["double-submit"], {
+        seedUrl: `${origin}/app/native-validation`,
+        bounds: { maxDecisions: 1 },
+      });
+
+      expect(result.outcome).not.toBe("crashed");
+      // The real ground truth: the server never saw a single request.
+      expect(state.nativeSignins).toBe(0);
+
+      expect(result.coverage.forms.found).toBe(1);
+      expect(result.coverage.forms.submitted).toBe(0);
+      expect(result.coverage.forms.blocked).toBeGreaterThanOrEqual(1);
+      expect(result.coverage.shortfalls).toEqual(
+        expect.arrayContaining([expect.stringMatching(/^form submitted 0 times \(\d+ attempts? blocked by validation/)]),
+      );
+      // Never silently `clean`: a run whose submits never reached the server proved nothing.
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("insufficient-coverage");
+
+      // The submit clicks themselves were still real actions (the control was clicked); the
+      // Recording's own click steps prove that — this is about the SUBMIT COUNT, not the click.
+      const submitClicks = result.transcript.filter((e) => e.op === "click" && e.target?.includes('"Sign In"') === true && e.actOk);
+      expect(submitClicks.length).toBeGreaterThanOrEqual(1);
     },
     180_000,
   );
