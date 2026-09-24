@@ -15,7 +15,8 @@ import type { CpuMetric, MemMetric, ResourceSample, ResourceSignals } from "./re
  * any signal is over its threshold. Both waits share one bounded deadline; on
  * expiry acquisition fails fast with an error naming the violated signal and
  * its source. Slots are released in `finally` paths, so a throwing body can
- * never leak one.
+ * never leak one — and a context close that never settles (a hung page) is
+ * bounded by `closeTimeoutMs`, after which the slot is freed anyway.
  *
  * A browser that disconnects without the pool closing it is a CRASH: every live
  * lease on it is failed loudly with `BrowserCrashedError`, and the next acquire
@@ -62,6 +63,8 @@ export const DEFAULT_PRESSURE_THRESHOLDS: PressureThresholds = Object.freeze({
 /** Memory budget one browser context is assumed to need; also the free-memory admission floor. */
 export const DEFAULT_CONTEXT_MEMORY_BYTES = 400 * 1024 * 1024;
 export const DEFAULT_ADMISSION_TIMEOUT_MS = 5 * 60 * 1000;
+/** Bound on one context close; past it the slot is freed and the stuck close is reported. */
+export const DEFAULT_CLOSE_TIMEOUT_MS = 10_000;
 
 export interface BrowserPoolOptions {
   readonly signals: ResourceSignals;
@@ -76,6 +79,12 @@ export interface BrowserPoolOptions {
   readonly backoffMaxMs?: number;
   /** Close a browser this long after its last context is released (keeps a CLI from hanging). */
   readonly idleCloseMs?: number;
+  /**
+   * Bound on `release()`'s context close. A hung page can keep `close()` from ever settling; the
+   * slot is freed after this long regardless (a process warning names the stuck close), so one
+   * hung context can never drain the pool.
+   */
+  readonly closeTimeoutMs?: number;
   readonly availableParallelism?: () => number;
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<unknown>;
@@ -171,6 +180,7 @@ export class BrowserPool<C extends PooledContext, O> {
   readonly #backoffInitialMs: number;
   readonly #backoffMaxMs: number;
   readonly #idleCloseMs: number;
+  readonly #closeTimeoutMs: number;
   readonly #cores: () => number;
   readonly #now: () => number;
   readonly #sleep: (ms: number) => Promise<unknown>;
@@ -190,6 +200,7 @@ export class BrowserPool<C extends PooledContext, O> {
     this.#backoffInitialMs = opts.backoffInitialMs ?? 250;
     this.#backoffMaxMs = opts.backoffMaxMs ?? 5_000;
     this.#idleCloseMs = opts.idleCloseMs ?? 1_000;
+    this.#closeTimeoutMs = opts.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
     this.#cores = opts.availableParallelism ?? availableParallelism;
     this.#now = opts.now ?? Date.now;
     this.#sleep = opts.sleep ?? ((ms) => sleep(ms));
@@ -246,7 +257,7 @@ export class BrowserPool<C extends PooledContext, O> {
         if (released) return;
         released = true;
         try {
-          if (state.crash === undefined) await context.close();
+          if (state.crash === undefined) await this.#boundedClose(context, launchKey);
         } finally {
           this.#detach(launchKey, owner, state);
           this.#freeSlot();
@@ -337,6 +348,31 @@ export class BrowserPool<C extends PooledContext, O> {
       }, remaining);
       this.#slotWaiters.push(waiter);
     });
+  }
+
+  /**
+   * Closes `context`, waiting at most `closeTimeoutMs`. A close that is still pending then is left
+   * to finish on its own and reported as a process warning — the slot is not held hostage by it.
+   */
+  async #boundedClose(context: C, launchKey: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const closing = context.close();
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), this.#closeTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      const r = await Promise.race([closing.then(() => "closed" as const), timedOut]);
+      if (r === "timeout") {
+        closing.catch(() => undefined);
+        process.emitWarning(
+          `jevitate: closing a browser context (${launchKey}) did not finish within ${this.#closeTimeoutMs}ms ` +
+            "(a hung page?); its slot was freed anyway",
+        );
+      }
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   /** Frees a slot, handing it straight to the next waiter (FIFO) when there is one. */

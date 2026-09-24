@@ -270,6 +270,8 @@ describe("the adversarial mission KEEPS HUNTING after a hang", () => {
             seedUrl: `${origin}/hub`,
             allowlist: [origin],
             strategies: ["visit-route"],
+            // The hub links to the routes under test: this run is scoped to the whole app.
+            routeGlobs: ["/**"],
             bounds: { maxDecisions: 3 },
             openFreshSession: freshSession,
             hangReplays: 1,

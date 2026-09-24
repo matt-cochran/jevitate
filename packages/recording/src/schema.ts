@@ -51,7 +51,9 @@ export type Assertion =
   | { kind: "visible"; target: TargetDescriptor }
   | { kind: "urlIncludes"; text: string }
   | { kind: "textIncludes"; target: TargetDescriptor; text: string }
-  | { kind: "count"; target: TargetDescriptor; min?: number; max?: number };
+  | { kind: "count"; target: TargetDescriptor; min?: number; max?: number }
+  /** A form control's current VALUE (input, textarea, select) equals `value` exactly — never its text content. */
+  | { kind: "valueEquals"; target: TargetDescriptor; value: string };
 
 export type Step =
   | { kind: "navigate"; label?: string; url: string; expect: Assertion }
@@ -220,6 +222,13 @@ export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind"
       target: TargetDescriptorSchema,
       min: z.number().optional(),
       max: z.number().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("valueEquals"),
+      target: TargetDescriptorSchema,
+      value: z.string(),
     })
     .strict(),
 ]);

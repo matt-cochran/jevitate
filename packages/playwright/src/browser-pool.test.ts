@@ -139,6 +139,31 @@ describe("admission policy", () => {
 });
 
 describe("BrowserPool", () => {
+  test("a context whose close never settles (a hung page) still frees its slot after closeTimeoutMs (#68)", async () => {
+    const l = launcher();
+    const pool = new BrowserPool<FakeContext, { tag: string }>({ signals: scripted([calm]), maxContexts: 1, closeTimeoutMs: 30 });
+    const warnings: string[] = [];
+    const onWarning = (w: Error): void => {
+      warnings.push(w.message);
+    };
+    process.on("warning", onWarning);
+    try {
+      const hung = await pool.acquire("k", l.launch, opts);
+      hung.context.close = () => new Promise<void>(() => undefined); // never settles
+      await hung.release();
+      expect(pool.inUse).toBe(0);
+      // The one slot is admissible again: a hung close never drains the pool.
+      const next = await pool.acquire("k", l.launch, opts);
+      await next.release();
+      expect(pool.inUse).toBe(0);
+      await new Promise((r) => setImmediate(r));
+      expect(warnings.some((w) => /did not finish within 30ms/.test(w))).toBe(true);
+    } finally {
+      process.off("warning", onWarning);
+      await pool.close();
+    }
+  });
+
   test("one browser serves many contexts; each lease is its own context", async () => {
     const l = launcher();
     const pool = new BrowserPool<FakeContext, { tag: string }>({ signals: scripted([calm]), maxContexts: 4 });

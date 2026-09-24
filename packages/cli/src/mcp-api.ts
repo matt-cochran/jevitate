@@ -306,7 +306,12 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       return errorResult({ error: "corrupt_result", id: args.id });
     }
     const status = missionStatus(outcome);
-    const body = { id: args.id, ...status, result: (parsed as { result?: unknown }).result ?? null };
+    const result = (parsed as { result?: unknown }).result ?? null;
+    // An adversarial run's coverage is surfaced next to the status: an `inconclusive` run says what
+    // it did and did not exercise, so an agent can tell "found nothing" from "tried nothing".
+    const coverage =
+      result !== null && typeof result === "object" && "coverage" in result ? (result as { coverage: unknown }).coverage : undefined;
+    const body = { id: args.id, ...status, ...(coverage === undefined ? {} : { coverage }), result };
     return status.isError ? errorResult(body) : jsonResult(body);
   };
 
@@ -346,7 +351,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     get_mission_result: {
       description:
-        "Read a finished mission's TYPED result by id (e.g. adversarial-2026-09-23T00-00-00-000Z): status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass.",
+        "Read a finished mission's TYPED result by id (e.g. adversarial-2026-09-23T00-00-00-000Z): status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: getMissionResult,
     },

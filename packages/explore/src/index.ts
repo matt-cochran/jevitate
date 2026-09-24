@@ -24,6 +24,9 @@ export * from "./adversarial/input-strategy.js";
 export * from "./adversarial/defect-oracle.js";
 export * from "./adversarial/misuse.js";
 export * from "./adversarial/defect-fingerprint.js";
+export * from "./adversarial/form-misuse.js";
+export * from "./adversarial/scope.js";
+export * from "./adversarial/run-coverage.js";
 export * from "./verify-fix.js";
 export * from "./missions/adversarial.js";
 
@@ -39,5 +42,6 @@ export * from "./timing.js";
 export * from "./hang.js";
 export * from "./hang-repro.js";
 export * from "./settle-config.js";
+export * from "./success-checks.js";
 export * from "./mission-session.js";
 export * from "./host-pressure.js";

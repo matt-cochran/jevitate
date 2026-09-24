@@ -1,3 +1,4 @@
+import type { Dialog, Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Target } from "@jevitate/screenplay";
 import { descriptorToLocator } from "@jevitate/recorder";
@@ -50,12 +51,50 @@ export type SubmittedVia = { readonly kind: "click"; readonly control: Control }
 export interface ActResult {
   /** True when the op executed successfully (gate passed, action ran). */
   readonly ok: boolean;
-  /** True when the action changed page state (click/type/select). */
+  /** True when the action changed page state (click/type/select/reload). */
   readonly mutated: boolean;
   /** Why the gate/op failed, when `ok` is false. */
   readonly reason?: string;
   /** For `send`: how the typed message was submitted. */
   readonly submittedVia?: SubmittedVia;
+  /** What the action observed on the way (e.g. the page asked to confirm leaving with unsaved changes). */
+  readonly note?: string;
+}
+
+/** Bound (ms) on a reload reaching its new document. The page's settling is perception's job. */
+export const RELOAD_TIMEOUT_MS = 15_000;
+
+/**
+ * Reloads the page. A `beforeunload` "leave the page? changes you made may not be saved" prompt is
+ * ACCEPTED (the user chose to reload) and reported in `note`; any other dialog raised meanwhile is
+ * dismissed, exactly as Playwright does when nobody listens. A reload that cannot commit (blocked,
+ * timed out, the page died) is a failed act — data, never a throw.
+ */
+export async function reloadPage(page: Page): Promise<ActResult> {
+  let prompted = false;
+  const onDialog = (dialog: Dialog): void => {
+    if (dialog.type() === "beforeunload") {
+      prompted = true;
+      void dialog.accept().catch(() => undefined);
+    } else {
+      void dialog.dismiss().catch(() => undefined);
+    }
+  };
+  page.on("dialog", onDialog);
+  monitorFor(page).markAction();
+  try {
+    await page.reload({ waitUntil: "commit", timeout: RELOAD_TIMEOUT_MS });
+    return {
+      ok: true,
+      mutated: true,
+      ...(prompted ? { note: "the page asked to confirm leaving (unsaved changes)" } : {}),
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, mutated: false, reason: `reload failed: ${message.split("\n")[0]}` };
+  } finally {
+    page.off("dialog", onDialog);
+  }
 }
 
 /** How long a `wait` op yields for async settling. Bounded; never a postcondition. */
@@ -274,6 +313,8 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       await page.waitForTimeout(WAIT_MS);
       return { ok: true, mutated: false };
     }
+    case "reload":
+      return reloadPage(page);
     case "done":
     case "blocked": {
       // No action — these are loop-terminal signals, not mutations.

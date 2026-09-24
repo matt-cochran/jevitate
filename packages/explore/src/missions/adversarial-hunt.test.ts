@@ -82,6 +82,8 @@ async function hunt(): Promise<AdversarialOutcome> {
         seedUrl: `${origin}/app`,
         allowlist: [origin],
         strategies: ["visit-route", "nav-during-pending"],
+        // The bugs live on other routes: this run is scoped to the whole app.
+        routeGlobs: ["/**"],
         bounds: { maxDecisions: 6 },
       });
     },

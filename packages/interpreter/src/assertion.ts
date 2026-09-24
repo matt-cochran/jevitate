@@ -1,6 +1,6 @@
 import type { Assertion } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
-import { BrowseTheWebToken, CountOf, IsVisible, TextOf } from "@jevitate/screenplay";
+import { BrowseTheWebToken, CountOf, IsVisible, TextOf, ValueOf } from "@jevitate/screenplay";
 import { descriptorToTarget } from "./descriptor.js";
 
 /** Default bound for the bounded polling loop, in milliseconds. */
@@ -61,7 +61,7 @@ export async function pollUntil(
  * Returns `true` as soon as the assertion holds. Returns `false` only once
  * the timeout has elapsed without it ever holding — this still fails
  * closed: a timeout is never silently treated as success. Every `kind`
- * (`visible`/`urlIncludes`/`textIncludes`/`count`) goes through the same
+ * (`visible`/`urlIncludes`/`textIncludes`/`count`/`valueEquals`) goes through the same
  * polling wrapper; none is special-cased as one-shot.
  *
  * Returns a boolean rather than throwing — callers (e.g. `runStep`) decide
@@ -92,6 +92,8 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
       const n = await actor.asks(CountOf.target(descriptorToTarget(a.target)));
       return (a.min === undefined || n >= a.min) && (a.max === undefined || n <= a.max);
     }
+    case "valueEquals":
+      return (await actor.asks(ValueOf.target(descriptorToTarget(a.target)))) === a.value;
   }
 }
 
@@ -124,5 +126,7 @@ function describeAssertion(a: Assertion): string {
       return `kind=textIncludes target=${JSON.stringify(a.target)} text=${JSON.stringify(a.text)}`;
     case "count":
       return `kind=count target=${JSON.stringify(a.target)} min=${a.min} max=${a.max}`;
+    case "valueEquals":
+      return `kind=valueEquals target=${JSON.stringify(a.target)} value=${JSON.stringify(a.value)}`;
   }
 }

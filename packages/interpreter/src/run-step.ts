@@ -327,5 +327,14 @@ async function evaluateAssertionInRowOnce(
       const n = await resolveInRoot(rowLocator, a.target).count();
       return (a.min === undefined || n >= a.min) && (a.max === undefined || n <= a.max);
     }
+    case "valueEquals": {
+      const control = resolveInRoot(rowLocator, a.target);
+      if ((await control.count()) !== 1) return false;
+      const value = await control.inputValue({ timeout: 1_000 }).then(
+        (v) => v,
+        () => null,
+      );
+      return value === a.value;
+    }
   }
 }

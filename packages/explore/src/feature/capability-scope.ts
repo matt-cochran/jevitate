@@ -20,9 +20,17 @@ function safeOrigin(raw: string): string | null {
   }
 }
 
-/** `**` matches any number of path segments; `*` matches exactly one. */
+/** Escapes every regex metacharacter except `*` (the glob's own wildcard). */
+function escapeLiteral(seg: string): string {
+  return seg.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * `**` matches any number of path segments; `*` matches any run of characters within one segment.
+ * Every other character is literal (a `.` or `?` in a route is never a regex operator).
+ */
 export function matchGlob(pattern: string, pathname: string): boolean {
-  const segs = pattern.split("/").map((seg) => (seg === "**" ? ".*" : seg.replace(/\*/g, "[^/]*")));
+  const segs = pattern.split("/").map((seg) => (seg === "**" ? ".*" : escapeLiteral(seg).replace(/\*/g, "[^/]*")));
   const body = segs.join("/");
   const suffix = pattern.endsWith("/**") ? "" : "$";
   return new RegExp(`^${body}${suffix}`).test(pathname);

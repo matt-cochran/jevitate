@@ -44,7 +44,13 @@ import {
   type OpenRouterCall,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
+import {
+  FixtureNotFoundError,
+  UnauthorizedExploreTargetError,
+  resolveCoverageThresholds,
+  type CoverageThresholds,
+  type SuccessCheck,
+} from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
@@ -91,6 +97,7 @@ import {
   runAdversarialCliMission,
   runFeatureCliMission,
   parseAssertionSpec,
+  parseSuccessSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
@@ -1275,11 +1282,23 @@ export function buildProgram(deps: CliDeps): Command {
       "--min-confidence <n>",
       "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
-    .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
+    .option(
+      "--success <spec>",
+      [
+        "independent success check (repeatable; every one must hold). Kinds:",
+        "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> | count:<d>|min=<n>,max=<n>",
+        "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
+        "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
+        "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
+        "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'",
+      ].join(" "),
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
-      "in-scope route glob for --feature (repeatable), e.g. /thread/**",
+      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial beyond the start URL's route",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1342,9 +1361,19 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
+    .option(
+      "--min-control-coverage <ratio>",
+      "adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive",
+    )
+    .option(
+      "--no-require-form-submit",
+      "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{
+        minControlCoverage?: string;
+        requireFormSubmit: boolean;
         fileIssues?: boolean;
         issueRepo?: string;
         hangReplays?: string;
@@ -1359,7 +1388,7 @@ export function buildProgram(deps: CliDeps): Command {
         appClass?: string;
         minConfidence?: string;
         show?: string;
-        success?: string;
+        success: string[];
         feature?: string;
         route: string[];
         allow: string[];
@@ -1531,6 +1560,16 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
 
+        let coverageThresholds: CoverageThresholds;
+        try {
+          coverageThresholds = resolveCoverageThresholds({
+            ...(o.minControlCoverage === undefined ? {} : { minControlRatio: Number(o.minControlCoverage) }),
+            requireFormSubmit: o.requireFormSubmit,
+          });
+        } catch (err) {
+          emitJson(program, fail("E_EXPLORE_ARGS", String(err instanceof Error ? err.message : err)));
+          return;
+        }
         const advBounds: Record<string, number> = {};
         if (o.maxActions !== undefined) advBounds.maxActions = Number(o.maxActions);
         if (o.maxDecisions !== undefined) advBounds.maxDecisions = Number(o.maxDecisions);
@@ -1539,18 +1578,28 @@ export function buildProgram(deps: CliDeps): Command {
             ...(target === undefined ? {} : { target }),
             seedUrl: o.url,
             allowlist: advAllowlist,
+            ...(o.route.length > 0 ? { routeGlobs: o.route } : {}),
+            coverageThresholds,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(filing === undefined ? {} : { filing }),
             issueFiler,
             ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
             strategies: [
+              // Form-aware misuse around submitting (#64): most app pages are forms.
+              "double-submit",
+              "boundary-submit",
+              "edit-cancel-save",
+              "navigate-away-unsaved",
+              "act-while-pending",
+              // Coverage: act on every target control once.
+              "exercise-controls",
               "ordering-violation",
               "repeat-rapid",
               "boundary-input",
               "contradictory-actions",
               "nav-during-pending",
-              // Keep hunting on other routes after (and between) defects.
+              // Keep hunting on other routes (within the target's scope) after and between defects.
               "visit-route",
             ],
             judgment: advJudge,
@@ -1674,13 +1723,13 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
 
-      if (!o.url || !o.goal || !o.success) {
+      if (!o.url || !o.goal || o.success.length === 0) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--url, --goal and --success are all required"));
         return;
       }
-      let successAssertion;
+      let successChecks: SuccessCheck[];
       try {
-        successAssertion = parseAssertionSpec(o.success);
+        successChecks = o.success.map(parseSuccessSpec);
       } catch (err) {
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
@@ -1708,7 +1757,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(target === undefined ? {} : { target }),
           url: o.url,
           goal: o.goal,
-          successAssertion,
+          successChecks,
           allowlist,
           judge,
           gen,

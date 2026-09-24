@@ -83,6 +83,7 @@ function assertionKey(assertion: Assertion): string {
     case "visible":
     case "textIncludes":
     case "count":
+    case "valueEquals":
       return `${assertion.kind}:${targetDescriptorKey(assertion.target)}`;
   }
 }
@@ -179,6 +180,7 @@ function assertionStrictKey(assertion: Assertion): string {
     case "visible":
     case "textIncludes":
     case "count":
+    case "valueEquals":
       return targetDescriptorStrictKey(assertion.target);
   }
 }

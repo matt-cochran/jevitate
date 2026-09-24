@@ -28,7 +28,15 @@ export type MisuseStrategy =
    * Keep hunting on OTHER routes: follow a same-page link not followed before (by accessible
    * name), so a run that already found a defect goes on to exercise the rest of the app.
    */
-  | "visit-route";
+  | "visit-route"
+  /** Form-aware episodes (#64) — planned by `planMisuseEpisode` in ./form-misuse.ts. */
+  | "double-submit"
+  | "boundary-submit"
+  | "edit-cancel-save"
+  | "navigate-away-unsaved"
+  | "act-while-pending"
+  /** Act once on the next target control not exercised yet (coverage). */
+  | "exercise-controls";
 
 export interface MisuseDecision {
   readonly op: Op;
@@ -38,7 +46,7 @@ export interface MisuseDecision {
   readonly fillText?: string;
 }
 
-const TERMINAL_NAME = /submit|confirm|pay|complete|checkout|send/i;
+const TERMINAL_NAME = /submit|confirm|pay|complete|checkout|send|save/i;
 const OPPOSING_NAME = /cancel|back|reject|decline/i;
 
 function terminalControl(controls: readonly Control[]): Control | undefined {
@@ -98,5 +106,13 @@ export function pickMisuseAction(params: {
       // pending request; this pure function only chooses "do something else
       // immediately" rather than performing the race itself.
       return { op: "scroll_down" };
+    case "double-submit":
+    case "boundary-submit":
+    case "edit-cancel-save":
+    case "navigate-away-unsaved":
+    case "act-while-pending":
+    case "exercise-controls":
+      // Multi-step episodes: planned by `planMisuseEpisode` (./form-misuse.ts), not here.
+      return null;
   }
 }
