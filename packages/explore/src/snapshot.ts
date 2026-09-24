@@ -58,6 +58,12 @@ export interface Control {
   readonly checked?: boolean | null;
   /** The raw `aria-haspopup` value (e.g. `dialog`), or null — marks a control that discloses more UI. */
   readonly ariaHasPopup?: string | null;
+  /**
+   * The page-chrome landmark the control sits in — `navigation` (`<nav>`), `banner` (a page-level
+   * `<header>`) or `contentinfo` (a page-level `<footer>`) — or null. Frontier missions try such
+   * controls only after the page's own content (#115).
+   */
+  readonly landmark?: "navigation" | "banner" | "contentinfo" | null;
 }
 
 export interface Snapshot {
@@ -120,6 +126,8 @@ interface ControlFacts {
   readonly href: string | null;
   /** The raw `aria-haspopup` attribute, or null — a disclosure signal (e.g. `dialog`). */
   readonly ariaHasPopup: string | null;
+  /** The enclosing chrome landmark (`navigation` / `banner` / `contentinfo`), or null. */
+  readonly landmark: "navigation" | "banner" | "contentinfo" | null;
 }
 
 /**
@@ -239,6 +247,25 @@ function readControlFacts(node: Node): ControlFacts {
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
   const href = tag === "a" ? (el as HTMLAnchorElement).href || null : null;
   const ariaHasPopup = norm(el.getAttribute("aria-haspopup")).toLowerCase() || null;
+  // Chrome landmark: a <nav>/role=navigation anywhere up the tree, or a PAGE-level <header>/<footer>
+  // (one inside an article/section/main/aside is that region's own header, not page chrome).
+  let landmark: "navigation" | "banner" | "contentinfo" | null = null;
+  for (let a: Element | null = el.parentElement; a !== null; a = a.parentElement) {
+    const r = (a.getAttribute("role") ?? "").toLowerCase();
+    const t = a.tagName.toLowerCase();
+    if (r === "navigation" || t === "nav") {
+      landmark = "navigation";
+      break;
+    }
+    if (r === "banner" || r === "contentinfo") {
+      landmark = r;
+      break;
+    }
+    if ((t === "header" || t === "footer") && (a.parentElement?.closest("article,aside,main,section") ?? null) === null) {
+      landmark = t === "header" ? "banner" : "contentinfo";
+      break;
+    }
+  }
 
   return {
     tag,
@@ -257,6 +284,7 @@ function readControlFacts(node: Node): ControlFacts {
     submits,
     href,
     ariaHasPopup,
+    landmark,
   };
 }
 
@@ -363,6 +391,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         href: facts.href === null ? null : redactUrl(facts.href),
         checked: facts.checked,
         ariaHasPopup: facts.ariaHasPopup,
+        landmark: facts.landmark,
       });
       keptFacts.push(facts);
     } catch {

@@ -22,7 +22,9 @@ mission and reading the result honestly.
     stated end state.
   - `--strategy coverage` / `--strategy exploratory`: state-coverage by
     induction; the frontier itself is the objective, so it takes no
-    goal/success.
+    goal/success. `coverage` sweeps breadth-first; `exploratory` follows
+    the controls each action just revealed (novelty-first). `--stall-timeout
+    <seconds>` (default 120) ends a run that stops making progress.
   - `--strategy adversarial`: bounded misuse ("try to break it") whose stop
     decision comes from a trusted hard-signal defect oracle, never Jev's own
     signal. Needs only `--url`.

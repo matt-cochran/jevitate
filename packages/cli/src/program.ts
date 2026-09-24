@@ -418,6 +418,13 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
  * "Every outcome, stop and missionOutcome value" sections, derived from the same sources:
  * `MISSION_EXIT_CODES` (@jevitate/domain) and `goalExitCode`/`missionExitCode` (./mission-exit.ts).
  */
+/** `--stall-timeout <seconds>` (#114) → milliseconds; `undefined` when omitted, `null` when not a positive number. */
+function stallTimeoutMs(raw: string | undefined): number | undefined | null {
+  if (raw === undefined) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
+}
+
 const EXPLORE_OUTCOME_HELP = `
 Outcomes, stop reasons and exit codes:
   Every result carries a canonical missionOutcome (and exitCode):
@@ -429,10 +436,10 @@ Outcomes, stop reasons and exit codes:
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
     | scope-unreachable | hang | crashed
-  --strategy coverage's own "outcome" (folds into missionOutcome above):
-    exhausted | cap | crashed | hang
+  --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
+    exhausted | cap | scope-unreachable | stalled | crashed | hang
   --feature's own "outcome" (folds into missionOutcome above):
-    exhausted | cap | path-cap | crashed | hang
+    exhausted | cap | path-cap | scope-unreachable | stalled | crashed | hang
   See README.md "Mission outcomes and exit codes" for what each value means.
 `;
 
@@ -1396,6 +1403,10 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
     .option(
+      "--stall-timeout <seconds>",
+      "--strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120)",
+    )
+    .option(
       "--reply-wait-ms <ms>",
       "conversational pages: how long to keep waiting for a reply while the page shows no sign of working on one " +
         "(goal and usability; default 60000). While a request the message started is in flight, a busy indicator shows, " +
@@ -1499,6 +1510,7 @@ export function buildProgram(deps: CliDeps): Command {
         saveStorageState?: string;
         maxActions?: string;
         maxDecisions?: string;
+        stallTimeout?: string;
         replyWaitMs?: string;
         replyCeilingMs?: string;
         replyMaxChars?: string;
@@ -1636,6 +1648,11 @@ export function buildProgram(deps: CliDeps): Command {
         // Scope containment (#89, reusing #64's model): the start URL's route plus --route globs;
         // --scope app (or --route '/**') widens it to the whole app.
         const covRouteGlobs = [...o.route, ...(o.scope === "app" ? ["/**"] : [])];
+        const covStall = stallTimeoutMs(o.stallTimeout);
+        if (covStall === null) {
+          emitJson(program, fail("E_EXPLORE_ARGS", `--stall-timeout must be a positive number of seconds (got ${JSON.stringify(o.stallTimeout)})`));
+          return;
+        }
 
         let covJudge: JudgmentPort;
         let covGen: GenerationPort;
@@ -1664,6 +1681,8 @@ export function buildProgram(deps: CliDeps): Command {
             usage: covUsage,
             bounds: Object.keys(covBounds).length > 0 ? covBounds : undefined,
             ...(covRouteGlobs.length > 0 ? { routeGlobs: covRouteGlobs } : {}),
+            strategy,
+            ...(covStall === undefined ? {} : { stallTimeoutMs: covStall }),
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
@@ -1866,8 +1885,14 @@ export function buildProgram(deps: CliDeps): Command {
         const featBounds: Record<string, number> = {};
         if (o.maxActions !== undefined) featBounds.maxActions = Number(o.maxActions);
         if (o.maxDecisions !== undefined) featBounds.maxDecisions = Number(o.maxDecisions);
+        const featStall = stallTimeoutMs(o.stallTimeout);
+        if (featStall === null) {
+          emitJson(program, fail("E_EXPLORE_ARGS", `--stall-timeout must be a positive number of seconds (got ${JSON.stringify(o.stallTimeout)})`));
+          return;
+        }
         try {
           const result = await runFeatureCliMission({
+            ...(featStall === undefined ? {} : { stallTimeoutMs: featStall }),
             seedUrl: o.url,
             allowlist: featAllowlist,
             capability: o.feature,
