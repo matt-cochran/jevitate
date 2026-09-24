@@ -18,6 +18,7 @@ test("Navigate/Enter/Click drive the page; TextOf reads locator text", async () 
     click: async () => { calls.push("click"); },
     fill: async (v: string) => { calls.push(`fill:${v}`); },
     innerText: async () => "hello",
+    count: async () => 1,
   };
   const page: any = { goto: async (p: string) => { calls.push(`goto:${p}`); }, getByRole: () => locator, getByLabel: () => locator };
   const actor = CastActor.named("T").whoCan(new BrowseTheWeb(fakeSessionWithPage(page), []));
@@ -26,6 +27,24 @@ test("Navigate/Enter/Click drive the page; TextOf reads locator text", async () 
   await actor.attemptsTo(Navigate.to("/inbox"), Enter.theText("hi").into(Box), Click.on(Btn));
   expect(calls).toEqual(["goto:/inbox", "fill:hi", "click"]);
   expect(await actor.asks(TextOf.target(Box))).toBe("hello");
+});
+
+test("TextOf answers null — promptly, never a throw — when the target is absent or ambiguous", async () => {
+  let waited = false;
+  const locatorOf = (n: number) => ({
+    count: async () => n,
+    innerText: async () => {
+      waited = true; // Playwright would wait its 30s default here for an absent element
+      throw new Error("locator.innerText: Timeout 30000ms exceeded");
+    },
+  });
+  const page: any = { getByRole: (role: string) => locatorOf(role === "none" ? 0 : 2) };
+  const actor = CastActor.named("T").whoCan(new BrowseTheWeb(fakeSessionWithPage(page), []));
+  const absent = Target.named("absent").locatedBy((p: any) => p.getByRole("none"));
+  const ambiguous = Target.named("ambiguous").locatedBy((p: any) => p.getByRole("many"));
+  expect(await actor.asks(TextOf.target(absent))).toBeNull();
+  expect(await actor.asks(TextOf.target(ambiguous))).toBeNull();
+  expect(waited).toBe(false);
 });
 
 // perKeyJitter: 0 and no word/sentence/hesitation pauses makes typingDelays

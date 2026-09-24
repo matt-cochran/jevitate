@@ -42,6 +42,7 @@ describe("goal-based mission — independent oracle adjudicates (Task 10, guardr
 
       expect(result.assertionPassed).toBe(true);
       expect(result.outcome).toBe("succeeded");
+      expect(result.reason).toBeUndefined();
       expect(result.finalUrl).toContain("/inbox");
 
       await withSession(
@@ -81,6 +82,8 @@ describe("goal-based mission — independent oracle adjudicates (Task 10, guardr
 
       expect(result.assertionPassed).toBe(false); // still on /login
       expect(result.outcome).toBe("blocked"); // NOT succeeded despite model done
+      // A `blocked` run carries no engine failure, but always says why it did not succeed.
+      expect(result.reason).toMatch(/success check failed: .+ did not hold on the final page/);
       expect(result.finalUrl).toContain("/login");
     },
     120_000,

@@ -86,7 +86,7 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
     }
     case "textIncludes": {
       const text = await actor.asks(TextOf.target(descriptorToTarget(a.target)));
-      return text.includes(a.text);
+      return text !== null && text.includes(a.text);
     }
     case "count": {
       const n = await actor.asks(CountOf.target(descriptorToTarget(a.target)));
