@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
+import type { InvariantSpec } from "@jevitate/recording";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import {
   explore,
@@ -22,6 +23,8 @@ import {
   reproduceHang,
   hangFinding,
   hangOutcome,
+  InvariantMonitor,
+  BudgetMonitor,
   type Snapshot,
   type Control as ExploreControl,
   type Bounds,
@@ -33,6 +36,7 @@ import {
   type VerifySession,
   type SideEffect,
   type TranscriptEntry,
+  type BudgetTrajectory,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import {
@@ -592,6 +596,26 @@ export interface RunUsabilityMissionOptions {
    * result but — like every UX finding — never gates `missionOutcome`/`exitCode` (advisory-only).
    */
   readonly serverLog?: ServerLogOptions;
+  /**
+   * `--invariants` (#150 only): usability does not check app-declared invariants (#86) or captures
+   * (#147) today — a spec carrying either is refused. Only its `budget` (over its `observe` map) is
+   * read: a pre-action guard and a post-settle check, the same as every other mission.
+   */
+  readonly invariants?: InvariantSpec;
+  /** Resolved `authFrom.secret` refs (#135) a declared budget's probe may use: `env:VAR` → its value. */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+}
+
+/** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
+export class UsabilityInvariantsUnsupportedError extends Error {
+  readonly code = "E_USABILITY_INVARIANTS" as const;
+  constructor() {
+    super(
+      "usability does not check app-declared invariants or captures — only a `budget` is read; " +
+        "give a spec with an empty invariants array (and no capture) to use --invariants with usability",
+    );
+    this.name = "UsabilityInvariantsUnsupportedError";
+  }
 }
 
 export interface RunUsabilityMissionResult {
@@ -647,6 +671,8 @@ export interface RunUsabilityMissionResult {
   readonly serverLogs?: ServerLogsSummary;
   /** `server-log` defects (#142, `--log-defect`) — advisory here, like every UX finding; never gates the outcome. */
   readonly serverLogDefects?: ServerLogDefect[];
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  readonly budget?: BudgetTrajectory[];
 }
 
 /**
@@ -674,6 +700,11 @@ function freshSessionOpener(
  */
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  // #150 — usability reads only a spec's `budget`: it does not check invariants or captures (#86/
+  // #147) today. Refused BEFORE a browser opens, same as every other bad-input refusal here.
+  if (opts.invariants !== undefined && (opts.invariants.invariants.length > 0 || opts.invariants.capture !== undefined)) {
+    throw new UsabilityInvariantsUnsupportedError();
+  }
   // Validate the cutoff before a browser opens — a bad value fails fast, never mid-run.
   const minConfidence = resolveMinConfidence(
     opts.minConfidence,
@@ -744,6 +775,22 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   });
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
+    // #150 — usability's own budget wiring: a plain `InvariantMonitor` reads a budget's declared
+    // observables (the same #86/#135 read/auth/redaction machinery), but this mission folds NO
+    // invariant defects — only a budget crossing can end the run early, via the same pre-action
+    // guard / post-settle hooks `explore()` offers every mission.
+    const budgetDecls = opts.invariants?.budget ?? [];
+    const invariantMonitor =
+      opts.invariants === undefined || budgetDecls.length === 0
+        ? null
+        : new InvariantMonitor(opts.invariants, {
+            allowlist: opts.allowlist,
+            baseUrl: opts.url,
+            ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+            ...(opts.invariantAuthTokens === undefined ? {} : { authTokens: opts.invariantAuthTokens }),
+          });
+    const budget = invariantMonitor === null ? null : new BudgetMonitor(budgetDecls, invariantMonitor);
+    let budgetSettledSteps = 0;
     const run = await explore({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
@@ -778,6 +825,24 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         // #98 the step's (secret-masked) screenshot; #96 the screen's facts for the signal oracles.
         await capture.observe(snap, visibleText);
       },
+      ...(budget === null
+        ? {}
+        : {
+            onBeforeAction: async (info) => {
+              const g = await budget.guard(session.page, info);
+              return g.refuse ? { refuse: true, reason: g.reason ?? "budget guard refused the action" } : { refuse: false };
+            },
+            onSettled: async () => {
+              budgetSettledSteps += 1;
+              // The FIRST settled snapshot (before any action) is the budget's baseline.
+              if (budgetSettledSteps === 1) {
+                const b = await budget.baseline(session.page);
+                return b.crossed ? { stop: true, reason: b.reason ?? "budget observable unreadable at run start" } : { stop: false };
+              }
+              const r = await budget.afterSettle(session.page, budgetSettledSteps);
+              return r.crossed ? { stop: true, reason: r.reason ?? "mission budget crossed" } : { stop: false };
+            },
+          }),
     });
     // Never blocks the mission itself: the drain wait happens AFTER `explore()` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(run.transcript);
@@ -844,10 +909,13 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       });
       hang = hangFinding(h.signal, run.transcript, h.recordingStepIndex, reproduction);
     }
+    // #150 — a declared mission spend budget crossed (or a paid action was refused before crossing
+    // it): a clean, deliberate stop, never `crashed` — but never `clean` either (the run's own work
+    // past the stop is unproven), so it maps to `inconclusive` the same as `run.stop === "inconclusive"`.
     const runOutcome: MissionOutcome =
       run.stop === "crashed"
         ? "crashed"
-        : run.stop === "inconclusive"
+        : run.stop === "inconclusive" || run.stop === "budget"
           ? "inconclusive"
           : run.stop === "hang"
             ? hangOutcome(hang?.reproduction.status ?? "inconclusive")
@@ -872,6 +940,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
       // always advisory, and a `server-log` defect here is treated the same way.
       ...serverLogResult(serverLogRun),
+      ...(budget === null ? {} : { budget: budget.trajectory() }),
     };
     if (outcome.kind === "failed") {
       // The analysis is the review's product: without it the review is inconclusive (never a
