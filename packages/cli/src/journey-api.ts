@@ -4,6 +4,7 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult, type SelfHealer } from "@jevitate/runtime";
+import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -29,6 +30,12 @@ export interface RunJourneyProgrammaticallyOptions {
    * this port (enforced by `JourneyRunner`'s write floor).
    */
   selfHealer?: SelfHealer;
+  /**
+   * Mission fixtures (#140/#144), built for the journey's own site once it is known: set up before
+   * the browser opens (a failure throws `FixtureSetupError` — the journey never runs on unknown
+   * state), `${setup.<name>}` in params bound to its outputs, and restored after the run.
+   */
+  fixtures?: (site: string) => MissionFixtures | undefined;
 }
 
 /**
@@ -42,7 +49,7 @@ export interface RunJourneyProgrammaticallyOptions {
  */
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
-): Promise<JourneyRunResult> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord }> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -57,19 +64,33 @@ export async function runJourneyProgrammatically(
 
   const policy = opts.policy ?? safeRunPolicy();
 
-  const port = new PlaywrightBrowserPort();
-  const session = await port.open({
-    headless: true,
-    allowedOrigins: [journey.recording.site],
-    baseUrl: journey.recording.site,
-  });
+  const fx = opts.fixtures?.(journey.recording.site);
+  let params = opts.params;
   try {
-    const actor = CastActor.named("cli-runner").whoCan(
-      new BrowseTheWeb(session, [journey.recording.site]),
-    );
-    const runner = new JourneyRunner(actor, new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
-    return await runner.run({ journey, params: opts.params, policy });
+    if (fx !== undefined) {
+      await fx.setup();
+      const b = fx.bindings();
+      params = Object.fromEntries(Object.entries(opts.params).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
+    }
+    const port = new PlaywrightBrowserPort();
+    const session = await port.open({
+      headless: true,
+      allowedOrigins: [journey.recording.site],
+      baseUrl: journey.recording.site,
+    });
+    try {
+      const actor = CastActor.named("cli-runner").whoCan(
+        new BrowseTheWeb(session, [journey.recording.site]),
+      );
+      const runner = new JourneyRunner(actor, new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
+      const result = await runner.run({ journey, params, policy });
+      if (fx === undefined) return result;
+      await fx.restore();
+      return { ...result, fixtures: fx.record() };
+    } finally {
+      await session.close();
+    }
   } finally {
-    await session.close();
+    await fx?.restore();
   }
 }

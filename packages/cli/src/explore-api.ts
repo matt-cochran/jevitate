@@ -64,6 +64,7 @@ import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
+import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -142,6 +143,12 @@ export interface RunExplorationOptions {
   readonly conversation?: ConversationOptions;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /**
+   * Mission fixtures (#140/#144), ALREADY set up by the caller: every hang replay re-runs
+   * restore+setup first, the state is restored when the mission ends (the caller also restores on
+   * every exit path — idempotent), and the result/Recording carry the identity.
+   */
+  readonly fixtures?: MissionFixtures;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -262,6 +269,8 @@ export interface RunExplorationResult {
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
+  /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
+  readonly fixtures?: MissionFixtureResult;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -270,8 +279,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well.
-  const bound = secretFieldSecrets(opts.secretFields);
+  const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? [])];
   const secrets = opts.secrets === undefined && bound.length === 0 ? undefined : [...(opts.secrets ?? []), ...bound];
+  // The state the mission starts from — replays restore THIS fixture and rebind its recorded outputs.
+  const fx = opts.fixtures;
+  const missionFixture = fx === undefined ? undefined : { record: fx.record(), persisted: fx.persisted() };
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -299,8 +311,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
-      // A hang is reproduced by replaying its steps in fresh contexts (same auth).
-      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      // A hang is reproduced by replaying its steps in fresh contexts (same auth, same fixture state).
+      openFreshSession:
+        fx === undefined || missionFixture === undefined
+          ? freshSessionOpener(portFactory, launch, opts.allowlist)
+          : fixtureReplayOpener(freshSessionOpener(portFactory, launch, opts.allowlist), fx, missionFixture.record.outputs),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
       onTranscriptEntry: journal.onTranscriptEntry,
       onRecording: journal.onRecording,
@@ -322,7 +337,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
     });
 
-    journal.writeRecording(mission.recording);
+    // The mission (and its hang replays) is done: restore now, so the persisted log includes it. The
+    // caller restores again on every exit path (a no-op once restored).
+    await fx?.restore();
+    const recording: Recording =
+      missionFixture === undefined ? mission.recording : { ...mission.recording, fixture: recordingFixture(missionFixture.record) };
+    journal.writeRecording(recording);
     journal.writeTranscript(mission.transcript);
     const engine = currentEngineInfo();
     const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page), engine);
@@ -367,9 +387,20 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
-      recording: mission.recording,
+      recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
       engine,
+      ...(fx === undefined || missionFixture === undefined
+        ? {}
+        : {
+            fixtures: {
+              ...missionFixture.record,
+              cycles: fx.record().cycles,
+              log: fx.record().log,
+              ...(missionFixture.persisted.spec === undefined ? {} : { spec: missionFixture.persisted.spec }),
+              ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
+            },
+          }),
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),

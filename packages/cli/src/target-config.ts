@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
 import type { HangConfig, SettleConfig, TimingConfig } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
 
@@ -17,12 +18,17 @@ import { resolveDataDir } from "./data-dir.js";
  * action labels or busy indicators where `ui-no-progress` is expected. CLI flags (`--settle-ignore`,
  * `--long-poll-ms`, `--ignore-no-progress`) add to / override the file for one run. A missing file
  * is "no target config"; a malformed one fails closed.
+ *
+ * `fixtures` — a mission fixtures file (#140/#144) for goal runs on this origin when `--fixtures`
+ * is absent; a relative path resolves against the targets file's directory.
  */
 
 export interface TargetConfig {
   readonly settle?: SettleConfig;
   readonly hangs?: HangConfig;
   readonly timing?: TimingConfig;
+  /** Mission fixtures file (#140/#144), absolute. */
+  readonly fixtures?: string;
 }
 
 export class TargetConfigError extends Error {
@@ -36,10 +42,14 @@ function strings(v: unknown, where: string): string[] {
   return v;
 }
 
-function parseTarget(v: unknown, where: string): TargetConfig {
+function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   if (v === null || typeof v !== "object" || Array.isArray(v)) throw new TargetConfigError(`${where} must be an object`);
   const o = v as Record<string, unknown>;
-  const out: { settle?: SettleConfig; hangs?: HangConfig; timing?: TimingConfig } = {};
+  const out: { settle?: SettleConfig; hangs?: HangConfig; timing?: TimingConfig; fixtures?: string } = {};
+  if (o.fixtures !== undefined) {
+    if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
+    out.fixtures = resolvePath(baseDir, o.fixtures);
+  }
   if (o.settle !== undefined) {
     if (o.settle === null || typeof o.settle !== "object") throw new TargetConfigError(`${where}.settle must be an object`);
     const s = o.settle as Record<string, unknown>;
@@ -85,7 +95,7 @@ export function loadTargetsFile(path = resolveDataDir(["targets.json"])): Readon
     throw new TargetConfigError(`${path} must be an object keyed by origin`);
   }
   const out: Record<string, TargetConfig> = {};
-  for (const [origin, v] of Object.entries(parsed as Record<string, unknown>)) out[origin] = parseTarget(v, `${path}[${origin}]`);
+  for (const [origin, v] of Object.entries(parsed as Record<string, unknown>)) out[origin] = parseTarget(v, `${path}[${origin}]`, dirname(path));
   return out;
 }
 
@@ -111,5 +121,6 @@ export function resolveTargetConfig(
     timing: apiPrefixes.length === 0 ? {} : { apiPrefixes },
     settle: { ...(ignoreRequests.length === 0 ? {} : { ignoreRequests }), ...(longPollMs === undefined ? {} : { longPollMs }) },
     hangs: ignoreNoProgress.length === 0 ? {} : { ignoreNoProgress },
+    ...(base.fixtures === undefined ? {} : { fixtures: base.fixtures }),
   };
 }
