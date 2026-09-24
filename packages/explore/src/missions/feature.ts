@@ -293,6 +293,10 @@ export async function runFeatureMission(params: {
       if (item === undefined) break;
       const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
       if (depth >= maxDepth) continue;
+      // A link to a boundary already recorded proves nothing new: shared nav repeated on every
+      // in-scope state would otherwise be re-clicked once per state (the states multiply as
+      // in-scope controls toggle), so the run never exhausts.
+      if (item.control.href != null && !isInScope(item.control.href, params.scope) && boundaryEdgeSet.has(item.control.href)) continue;
 
       if (item.fromFingerprint !== currentFingerprint) {
         const reached = await reachFrontierState({ actor: sessions.actor, item, snapshotNow });
