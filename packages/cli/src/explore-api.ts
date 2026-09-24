@@ -85,6 +85,7 @@ import {
 import type { LogSourceSpec } from "./log-sources.js";
 import type { LogDefectMatcher } from "./log-lines.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
+import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
 
 /**
  * Backend log correlation (#142): already-validated `--log-source`/`--log-defect` specs, threaded
@@ -193,6 +194,12 @@ export interface RunExplorationOptions {
    * every exit path — idempotent), and the result/Recording carry the identity.
    */
   readonly fixtures?: MissionFixtures;
+  /**
+   * #147: the mission's actors (`--actor`). The primary's storageState seeds the mission session
+   * (it must equal `storageState` when both are given); each observer gets its own fresh context,
+   * opened only when a declared cross-actor check needs it, never driven by the model.
+   */
+  readonly actors?: MissionActors;
 }
 
 /** Filing is off by default: drafts only, never a tracker call. */
@@ -366,6 +373,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const fx = opts.fixtures;
   const missionFixture = fx === undefined ? undefined : { record: fx.record(), persisted: fx.persisted() };
 
+  if (opts.actors !== undefined && opts.storageState !== undefined && resolvePath(opts.storageState) !== opts.actors.primary.storageState) {
+    throw new Error("runExploration: storageState must be the primary actor's own");
+  }
+  const primaryState = opts.actors?.primary.storageState ?? opts.storageState;
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const launch = {
@@ -373,9 +384,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
-    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+    ...(primaryState !== undefined ? { storageState: primaryState } : {}),
   };
   const session = await port.open(launch);
+  // #147: each observer in its OWN fresh context (only its own storageState), opened on first use.
+  const observers =
+    opts.actors === undefined || opts.actors.observers.length === 0
+      ? undefined
+      : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
 
   const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -432,7 +448,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...conversationConfig(opts.conversation),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      ...(observers === undefined ? {} : { observers }),
+      ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
     });
+    await observers?.close();
 
     // The mission (and its hang replays) is done: restore now, so the persisted log includes it. The
     // caller restores again on every exit path (a no-op once restored).
@@ -487,7 +506,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       target: {
         seedUrl: opts.url,
         allowlist: [...opts.allowlist],
-        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+        ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}),
+        ...(opts.actors === undefined ? {} : { actors: persistedActors(opts.actors) }),
       },
       recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
@@ -523,6 +543,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
+    await observers?.close().catch(() => undefined);
     await persistStorageState(session, opts.saveStorageState);
     await closeQuietly(session);
   }
@@ -971,6 +992,8 @@ export interface MissionTarget {
   readonly allowlist: string[];
   /** Absolute path of the storageState file the run started from (never its contents). */
   readonly storageStatePath?: string;
+  /** #147: every actor's name, role and storageState PATH (never its contents) — for verify-fix. */
+  readonly actors?: ReadonlyArray<{ readonly name: string; readonly storageStatePath: string; readonly role: "primary" | "observer" }>;
 }
 
 export type AdversarialCliMissionResult = AdversarialOutcome & {

@@ -50,13 +50,13 @@ export interface MultiRunPlan {
 export const MAX_REPEAT = 20;
 const PERSONA_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
-function persona(name: string, storageState: string, base: string): Persona {
+function persona(name: string, storageState: string, base: string, noun = "persona"): Persona {
   if (!PERSONA_NAME.test(name)) {
-    throw new MultiRunArgsError(`persona name ${JSON.stringify(name)} must be 1-64 of [A-Za-z0-9_.-], starting alphanumeric`);
+    throw new MultiRunArgsError(`${noun} name ${JSON.stringify(name)} must be 1-64 of [A-Za-z0-9_.-], starting alphanumeric`);
   }
-  if (storageState.trim() === "") throw new MultiRunArgsError(`persona ${name}: storage state path is empty`);
+  if (storageState.trim() === "") throw new MultiRunArgsError(`${noun} ${name}: storage state path is empty`);
   const path = isAbsolute(storageState) ? storageState : resolve(base, storageState);
-  if (!existsSync(path)) throw new MultiRunArgsError(`persona ${name}: storage state not found: ${path}`);
+  if (!existsSync(path)) throw new MultiRunArgsError(`${noun} ${name}: storage state not found: ${path}`);
   return { name, storageState: path };
 }
 
@@ -65,6 +65,16 @@ export function parsePersonaSpec(spec: string, cwd: string = process.cwd()): Per
   const eq = spec.indexOf("=");
   if (eq <= 0) throw new MultiRunArgsError(`--persona must be <name>=<storageState>, got ${JSON.stringify(spec)}`);
   return persona(spec.slice(0, eq), spec.slice(eq + 1), cwd);
+}
+
+/**
+ * `--actor <name>=<storageState>` (#147): the same `<name>=<storageState>` shape and checks as a
+ * persona (the file must exist; its contents are never read here).
+ */
+export function parseActorSpec(spec: string, cwd: string = process.cwd()): Persona {
+  const eq = spec.indexOf("=");
+  if (eq <= 0) throw new MultiRunArgsError(`--actor must be <name>=<storageState>, got ${JSON.stringify(spec)}`);
+  return persona(spec.slice(0, eq), spec.slice(eq + 1), cwd, "actor");
 }
 
 /**
