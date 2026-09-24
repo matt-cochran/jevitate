@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateInvariantSpec } from "@jevitate/recording";
 import { MissionRequestSchema, type MissionRequest, type QueuedMission } from "./schema.js";
 import { MISSION_BOUNDS_CEILING, type Budget } from "./bounds.js";
 import { BudgetExceedsCeilingError } from "./errors.js";
@@ -42,7 +43,8 @@ function resolveBudget(partial: MissionRequest["budget"]): Budget {
  * fail-closed gate BEFORE the next, so no partial work happens on refusal:
  *   1. schema shape (zod `.strict()` + exactly-one-of goal/feature/route)
  *   2. budget ceiling (never clamp, never silently downgrade)
- *   3. target resolution (promoted-only; never a raw URL)
+ *   3. target resolution (promoted-only; never a raw URL), then declared-invariant probes
+ *      authorized against that target's origin (#86)
  *   4. write (the queue store re-validates via QueuedMissionSchema)
  */
 export async function enqueueMission(
@@ -54,7 +56,11 @@ export async function enqueueMission(
   const request = MissionRequestSchema.parse(rawRequest); // schema refusal first — no I/O yet
   const budget = resolveBudget(request.budget); // throws BudgetExceedsCeilingError before any lookup
   const target = await targets.resolve(request.target); // throws UnknownOrUnpromotedMissionTargetError
-  void target; // resolved only for its refusal side-effect (see doc note below); never merged into the record
+  // Declared invariants (#86): a probe may only ever read the target's own authorized origin —
+  // checked against the resolved target BEFORE the write (throws `InvariantSpecError`).
+  if (request.invariants !== undefined) {
+    validateInvariantSpec(request.invariants, { allowlist: [target.authorizedOrigin], baseUrl: target.baseUrl });
+  }
 
   const mission: QueuedMission = {
     ...request,

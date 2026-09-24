@@ -1,8 +1,15 @@
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
-import type { PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
+import type { InvariantSpec, PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
 import { redactUrl, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
+import {
+  InvariantDefectLog,
+  InvariantMonitor,
+  recordingStepCount,
+  type InvariantDefect,
+  type InvariantReport,
+} from "../declared-invariants.js";
 import {
   assertAuthorizedExploreTarget,
   perceive,
@@ -127,6 +134,16 @@ export interface InductionRunResult {
   readonly transcript: TranscriptEntry[];
   /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
   readonly timing: TimingSummary;
+  /** Declared-invariant violations (#86), each with the path Recording that reproduces it. */
+  readonly invariantDefects?: InvariantDefect[];
+  /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
+  readonly invariants?: InvariantReport[];
+}
+
+/** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
+interface Declared {
+  readonly monitor: InvariantMonitor;
+  readonly log: InvariantDefectLog;
 }
 
 export interface InductionMissionParams {
@@ -165,6 +182,10 @@ export interface InductionMissionParams {
    * add to it. Pass `["/**"]` (CLI `--scope app`) to widen containment to the whole app.
    */
   readonly routeGlobs?: readonly string[];
+  /** App-declared invariants (#86): evaluated around every frontier action; a violation is a hard defect. */
+  readonly invariants?: InvariantSpec;
+  /** Registered secrets: redacted out of invariant values and evidence. */
+  readonly secrets?: readonly string[];
 }
 
 /**
@@ -242,10 +263,38 @@ function extendPath(
   return { version: prefix.version, site: prefix.site, pages };
 }
 
+/** A frontier path as a replayable Recording: the seed navigate, then the path's non-empty pages. */
+function withSeed(branch: Recording, seedUrl: string): Recording {
+  const seed = toPath(seedUrl);
+  return {
+    ...branch,
+    pages: [
+      { url: seed, steps: [{ step: { kind: "navigate", url: seed, expect: { kind: "urlIncludes", text: seed } } }] },
+      ...branch.pages.filter((p) => p.steps.length > 0),
+    ],
+  };
+}
+
 export async function runInductionMission(params: InductionMissionParams): Promise<InductionRunResult> {
   // Guardrail #1 — authoring/test plane only: refuse an undeclared origin before
   // any page interaction (throws UnauthorizedExploreTargetError).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
+  const declared: Declared | null =
+    params.invariants === undefined
+      ? null
+      : {
+          monitor: new InvariantMonitor(params.invariants, {
+            allowlist: params.allowlist,
+            baseUrl: params.seedUrl,
+            ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+          }),
+          log: new InvariantDefectLog(),
+        };
+  const result = await runInductionFrontier(params, declared);
+  return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
+}
+
+async function runInductionFrontier(params: InductionMissionParams, declared: Declared | null): Promise<InductionRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const site = new URL(params.seedUrl).origin;
@@ -272,8 +321,10 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   };
   const transcript = new TranscriptLog([], params.onTranscriptEntry);
   let crashWatch = new CrashWatch(sessions.page);
+  declared?.monitor.attach(sessions.page);
   sessions.onReset((page) => {
     crashWatch = new CrashWatch(page);
+    declared?.monitor.attach(page);
   });
   const visited = new Set<string>();
   const statePaths = new Map<string, Recording>();
@@ -376,6 +427,8 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       const liveControl = resolveControl(snap, item.control);
       if (liveControl === null) continue; // control vanished between snapshots — dropped
 
+      const actedOn = snap.url;
+      await declared?.monitor.before(sessions.actor);
       const result = await act(sessions.actor, {
         op: item.op,
         control: liveControl,
@@ -413,6 +466,15 @@ export async function runInductionMission(params: InductionMissionParams): Promi
       const newFingerprint = stateFingerprint(snap);
       const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
       transitionsExercised += 1;
+      if (declared !== null && seenHang.last === null) {
+        // Declared invariants (#86): judged on the settled state the action produced; the finding
+        // replays this path from the seed (the frontier's reach navigates there first).
+        const path = withSeed(branch, params.seedUrl);
+        const checked = await declared.monitor.after(sessions.actor, { op: item.op, control: liveControl.name, url: actedOn });
+        for (const v of checked.violations) {
+          declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
+        }
+      }
 
       // A hang: record it (reproduced from the path that led here), reset to a known state and keep
       // exploring the rest of the frontier. The hung state is never expanded.
@@ -432,13 +494,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
         await recordCoverageHang({
           hang,
           // The path starts at the seed (the frontier's reach navigates there first): prepend it.
-          recording: {
-            ...branch,
-            pages: [
-              { url: toPath(params.seedUrl), steps: [{ step: { kind: "navigate", url: toPath(params.seedUrl), expect: { kind: "urlIncludes", text: toPath(params.seedUrl) } } }] },
-              ...branch.pages.filter((p) => p.steps.length > 0),
-            ],
-          },
+          recording: withSeed(branch, params.seedUrl),
           steps: transcript.entries(),
           found: hangs,
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),

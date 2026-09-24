@@ -21,6 +21,7 @@ import {
   type AuthoringRecording,
   type ColumnClass,
   type PostdocDecision,
+  type InvariantSpec,
 } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
 import {
@@ -71,6 +72,7 @@ import {
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { InvariantsFileError, loadInvariantFiles } from "./invariants-file.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -1442,6 +1444,12 @@ export function buildProgram(deps: CliDeps): Command {
       "--no-require-form-submit",
       "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
     )
+    .option(
+      "--invariants <file>",
+      "app-declared invariants JSON (repeatable; goal, coverage, exploratory, adversarial, --feature): checked around every action, a violation is a defect (exit 1). Validated before any browser opens; probes are GET/HEAD on an --allow origin only",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--json", "emit a JSON envelope")
     .addHelpText(
       "after",
@@ -1458,6 +1466,7 @@ export function buildProgram(deps: CliDeps): Command {
     .addHelpText("after", EXPLORE_OUTCOME_HELP)
     .action(async function (this: Command) {
       const o = this.opts<{
+        invariants: string[];
         minControlCoverage?: string;
         requireFormSubmit: boolean;
         fileIssues?: boolean;
@@ -1569,6 +1578,24 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
+      // App-declared invariants (#86): validated (schema, observables, probe origins) BEFORE any browser.
+      let invariants: InvariantSpec | undefined;
+      if (o.invariants.length > 0) {
+        if (strategy === "usability" && o.feature === undefined) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--invariants is not supported with --strategy usability"));
+          return;
+        }
+        if (o.url !== undefined) {
+          try {
+            invariants = loadInvariantFiles(o.invariants, { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url });
+          } catch (err) {
+            if (!(err instanceof InvariantsFileError)) throw err;
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+        }
+      }
+      const withInvariants = invariants === undefined ? {} : { invariants };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
@@ -1638,6 +1665,7 @@ export function buildProgram(deps: CliDeps): Command {
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+            ...withInvariants,
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1731,6 +1759,7 @@ export function buildProgram(deps: CliDeps): Command {
             outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+            ...withInvariants,
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1841,6 +1870,7 @@ export function buildProgram(deps: CliDeps): Command {
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+            ...withInvariants,
           });
           emitJson(program, ok(result));
           process.exitCode = result.exitCode;
@@ -1911,6 +1941,7 @@ export function buildProgram(deps: CliDeps): Command {
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
+          ...withInvariants,
         });
         const envelope = ok(result);
         if (o.json) {
@@ -1943,10 +1974,16 @@ export function buildProgram(deps: CliDeps): Command {
     .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
     .option("--storage-state <file>", "override the storageState the mission ran with")
     .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
+    .option(
+      "--invariants <file>",
+      "re-check a declared-invariant defect with these invariant files (repeatable) instead of the spec saved with the mission",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<
-        { result: string; fingerprint: string; storageState?: string; replays?: string; json?: boolean } & BrowserLaunchFlags
+        { result: string; fingerprint: string; storageState?: string; replays?: string; invariants: string[]; json?: boolean } & BrowserLaunchFlags
       >();
       try {
         const report = await runVerifyFix({
@@ -1955,6 +1992,7 @@ export function buildProgram(deps: CliDeps): Command {
           fingerprint: o.fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
+          ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });

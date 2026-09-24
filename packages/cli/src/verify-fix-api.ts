@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
-import { RecordingSchema, type Recording } from "@jevitate/recording";
+import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording } from "@jevitate/recording";
+import { loadInvariantFiles } from "./invariants-file.js";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
@@ -47,6 +48,11 @@ export interface RunVerifyFixOptions {
   readonly targets?: Readonly<Record<string, TargetConfig>>;
   /** Fresh-context replays for a non-hang defect signal (#74, CLI `--replays`). Default 3. */
   readonly replays?: number;
+  /**
+   * Invariant files (CLI `--invariants`, #86) to re-check a declared-invariant defect with, instead of
+   * the spec persisted with the mission. Validated against the MISSION's allowlist before any replay.
+   */
+  readonly invariantFiles?: readonly string[];
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
@@ -74,6 +80,8 @@ interface PersistedFinding {
   readonly recording?: Recording;
   /** How many times the mission's OWN run hit this same finding (its `occurrences`), when recorded. */
   readonly occurrences?: number;
+  /** For a declared-invariant defect (#86): the invariant id to re-check. */
+  readonly invariantId?: string;
 }
 
 const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
@@ -93,6 +101,8 @@ interface PersistedMission {
   readonly recording: Recording | null;
   readonly target: { readonly seedUrl: string; readonly allowlist: string[]; readonly storageStatePath?: string };
   readonly findings: PersistedFinding[];
+  /** The declared-invariant spec the mission evaluated (#86), when it had one and it still validates. */
+  readonly invariantSpec?: InvariantSpec;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -116,6 +126,7 @@ function asFinding(v: unknown): PersistedFinding | null {
     ...(Array.isArray(v.related) ? { related: v.related.filter((r): r is string => typeof r === "string") } : {}),
     ...(typeof v.title === "string" ? { title: v.title } : {}),
     ...(typeof v.occurrences === "number" ? { occurrences: v.occurrences } : {}),
+    ...(v.kind === "invariant" && isRecord(v.invariant) && typeof v.invariant.id === "string" ? { invariantId: v.invariant.id } : {}),
   };
 }
 
@@ -137,7 +148,10 @@ export function parsePersistedMission(raw: unknown): PersistedMission {
       if (f !== null) findings.push(f);
     }
   }
+  // A persisted spec that no longer validates is dropped: its defects are then inconclusive, never fixed.
+  const spec = result.invariantSpec === undefined ? undefined : InvariantSpecSchema.safeParse(result.invariantSpec);
   return {
+    ...(spec?.success === true ? { invariantSpec: spec.data } : {}),
     recording,
     target: {
       seedUrl: target.seedUrl,
@@ -178,12 +192,31 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   };
   const recording = finding.recording ?? mission.recording;
   if (recording === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  // A declared-invariant defect (#86) is re-checked with the same spec (or `--invariants`), its probes
+  // authorized against the MISSION's own origins before any browser opens.
+  let invariantSpec: InvariantSpec | undefined;
+  try {
+    const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl };
+    invariantSpec =
+      opts.invariantFiles !== undefined && opts.invariantFiles.length > 0
+        ? loadInvariantFiles(opts.invariantFiles, bounds)
+        : mission.invariantSpec === undefined
+          ? undefined
+          : validateInvariantSpec(mission.invariantSpec, bounds);
+  } catch (e) {
+    throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
+  }
+  const declared =
+    finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
+      ? { spec: invariantSpec, id: finding.invariantId, allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl }
+      : undefined;
   const result = await verifyFix({
     perceive: perceiveOpts,
     recording,
     recordingStepIndex: finding.repro.recordingStepIndex,
     fingerprint: finding.fingerprint,
     defectKind: finding.kind,
+    ...(declared === undefined ? {} : { invariant: declared }),
     ...(finding.hang === undefined ? {} : { hang: finding.hang }),
     ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
     ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),

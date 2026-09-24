@@ -222,6 +222,87 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
 
+### App-declared invariants
+
+An app team can declare its own hard rules in a JSON file that lives in its repo.
+Jevitate checks them around every action and treats a violation as a defect, like a
+console error or an HTTP 5xx: the outcome is `defects-found` and the exit code is `1`.
+Jevitate evaluates the rules itself. No model is asked whether an invariant held, and
+nothing in the file is run as code.
+
+```json
+{
+  "observe": {
+    "balance":    { "dom": { "selector": "[data-testid=credit-balance]", "number": true } },
+    "imports":    { "probe": { "get": "/v1/imports?limit=1", "json": "$.total" } },
+    "confirmEst": { "dom": { "selector": "[data-testid=confirm-estimate]", "number": true, "optional": true } },
+    "lastCharge": { "network": { "url": "**/v1/billing/credit-activity*", "json": "$.entries[0].credits", "optional": true } }
+  },
+  "invariants": [
+    { "id": "charge-implies-delivery", "require": "delta(balance) < 0 -> delta(imports) >= 1",
+      "settle": { "withinMs": 600000, "pollMs": 5000 } },
+    { "id": "open-is-free", "when": { "control": { "name": "/Open as editable workspace/i" } },
+      "require": "delta(balance) == 0" },
+    { "id": "estimate-honest", "when": { "control": { "name": "/Confirm|Run|Analyze/i" } },
+      "require": "confirmEst == null || delta(balance) >= -1.5 * before(confirmEst)" },
+    { "id": "no-raw-rpc-errors", "never": { "pageText": "/\\[(deadline_exceeded|unavailable|internal|unknown)\\]/" } }
+  ]
+}
+```
+
+```bash
+jevitate explore --url http://localhost:5173/imports --goal "import https://example.com" \
+  --success 'visible:testId=import-result' --allow http://localhost:5173 --allow http://localhost:8088 \
+  --invariants invariants.json
+```
+
+**Observables** are named and read-only:
+
+- `dom`: the text of the first match of a `selector` (CSS) or a `target` descriptor.
+  Add `read: "value"` for a form value, `read: "count"` for the number of matches, and
+  `number: true` to parse the first number (`"≈ 1,240 credits"` becomes `1240`).
+- `network`: a JSON path in the last response whose URL matches the glob. Only
+  responses from an authorized origin are read.
+- `probe`: a `get` (or `head`) of an existing endpoint. It must be on an `--allow`
+  origin, and it runs with the mission browser's own cookies. Redirects are not
+  followed, and nothing else is sent: no other method, headers or body. Without
+  `json`, the value is the HTTP status.
+
+`optional: true` makes a missing value `null`. Without it, a value that cannot be read
+makes the invariant **unknown**. An unknown invariant is not a violation and is not a
+pass: it is counted in the result's `invariants` report.
+
+**Invariants** are each one of:
+
+- `require`: an expression checked after each action that matches `when` (every
+  action when `when` is left out). `when` can match `control.name` (an exact string or
+  a `/regex/flags` pattern), `route` (a path glob) and `op`.
+- `never`: `pageText` (a pattern) or `assertion` (a success-check assertion) that must
+  never hold. It is checked after every action.
+- `always`: an assertion that must hold after every action.
+
+The expression language is small: `before(x)`, `after(x)` (or just `x`), `delta(x)`,
+`+ - * /`, `== != < <= > >=`, `&&`, `||`, `->` (implication), `null`, `true` and `false`.
+`settle` re-checks a violated `require` until it holds or `withinMs` passes, and only
+then counts the violation.
+
+**Refusals and results.** A file that does not validate is refused before any browser
+opens, with the path of the problem, e.g. `inv.json: invariants[2].require: unknown observable "balanse"`.
+So is a probe that is not a GET/HEAD or not on an authorized origin, and any unknown key.
+`--invariants` can be repeated, and it works with the goal, coverage, exploratory,
+adversarial and `--feature` missions. Each violation's defect carries:
+
+- the invariant's `id` and expression,
+- the before and after values (redacted),
+- the action and route,
+- the probe and network evidence (method, URL and status only, never a body).
+
+A defect's fingerprint is the invariant id plus the route. The result also stores the
+spec, so `jevitate verify-fix --result … --fingerprint …` re-checks the same invariant
+by replaying up to the step. `--invariants` on `verify-fix` overrides the saved spec.
+Over MCP, `queue_exploration` takes the same spec inline as `invariants`. It never takes
+a path, and its probes are checked against the target's origin.
+
 ### Authenticated missions
 
 `--secret <value>` **only redacts**: the value is kept out of every model call,
