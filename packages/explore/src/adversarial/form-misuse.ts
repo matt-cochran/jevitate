@@ -69,6 +69,11 @@ const SUBMIT_NAME = /\b(?:save|submit|update|apply|create|confirm|send|publish|r
 const CANCEL_NAME = /\b(?:cancel|discard|revert|reset|undo)\b/i;
 /** Ending the session would end the run's authentication: never a misuse target. */
 const SESSION_END = /\b(?:log ?out|sign ?out|log ?off|sign ?off)\b/i;
+/**
+ * Irreversible actions on a real account: a misuse run against a live app must never click them.
+ * Matched on the control's accessible name; a false positive only costs coverage of that control.
+ */
+export const DESTRUCTIVE = /\b(?:delete|remove|destroy|erase|purge|wipe|drop|deactivate|terminate|revoke|unsubscribe|close (?:my |your |the )?account|cancel (?:my |your |the )?(?:subscription|plan|membership|order))\b/i;
 
 /** A stable key for a control across snapshots (its durable descriptor). */
 export function controlKey(c: Pick<Control, "descriptor">): string {
@@ -89,13 +94,14 @@ function leavesScope(href: string | null | undefined, inScope: (url: string) => 
 
 /**
  * Whether a control counts as a target control a misuse run can (and should) exercise: enabled,
- * not a file input (no fixture), not a secret field, not a session-ending control, and not a link
+ * not a file input (no fixture), not a secret field, not a session-ending or destructive control
+ * (Delete, Remove, Close account…), and not a link
  * that leads out of scope (it is navigation away from the target, not part of it).
  */
 export function isExercisable(c: Control, inScope: (url: string) => boolean): boolean {
   if (!c.enabled) return false;
   if (c.inputType === "file" || c.inputType === "password" || isSecretLike(c)) return false;
-  if (SESSION_END.test(c.name)) return false;
+  if (SESSION_END.test(c.name) || DESTRUCTIVE.test(c.name)) return false;
   return !leavesScope(c.href, inScope);
 }
 
@@ -105,7 +111,9 @@ function isEditable(c: Control, inScope: (url: string) => boolean): boolean {
 }
 
 function isButtonLike(c: Control): boolean {
-  return affordedOp(c) === "click" && c.role !== "checkbox" && c.role !== "radio" && c.role !== "link";
+  return (
+    affordedOp(c) === "click" && c.role !== "checkbox" && c.role !== "radio" && c.role !== "link" && !DESTRUCTIVE.test(c.name)
+  );
 }
 
 function pickSubmit(buttons: readonly Control[]): Control | undefined {

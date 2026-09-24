@@ -196,3 +196,24 @@ describe("planMisuseEpisode — exercise-controls and scope", () => {
     expect(gone).toBeNull();
   });
 });
+
+describe("destructive controls are never misuse targets", () => {
+  it("skips Delete/Remove/Close account but keeps Save and a plain Cancel", () => {
+    const name = field("Name");
+    const save = button("Save", { submits: true });
+    const cancel = button("Cancel");
+    const del = button("Delete profile", { submits: true });
+    const remove = button("Remove member");
+    const close = button("Close my account");
+    const inScope = (): boolean => true;
+    for (const c of [del, remove, close]) expect(isExercisable(c, inScope), c.name).toBe(false);
+    for (const c of [name, save, cancel]) expect(isExercisable(c, inScope), c.name).toBe(true);
+    const [form] = detectForms([name, del, save, cancel, remove, close]);
+    expect(form?.submit.name).toBe("Save");
+    expect(form?.cancel?.name).toBe("Cancel");
+  });
+
+  it("a form whose only submit is destructive is not a misuse target at all", () => {
+    expect(detectForms([field("Confirm name"), button("Delete workspace", { submits: true })])).toEqual([]);
+  });
+});
