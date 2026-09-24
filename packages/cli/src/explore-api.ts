@@ -628,7 +628,7 @@ export interface RunCoverageMissionOptions {
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
@@ -722,12 +722,18 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
     const found = result.coverage.defects.length + (result.invariantDefects?.length ?? 0);
     // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
+    // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
+    // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
     const bare =
       result.outcome === "crashed"
         ? "crashed"
         : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
-          : null;
+          : result.outcome === "budget"
+            ? found > 0
+              ? "defects-found"
+              : "inconclusive"
+            : null;
     const thin = bare === null && found === 0 && !result.coverage.sufficiency.sufficient;
     const missionOutcome: MissionOutcome = combineOutcomes([
       bare ?? (thin ? "inconclusive" : found > 0 ? "defects-found" : "clean"),
@@ -1117,16 +1123,22 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       : undefined;
     // A declared-invariant violation (#86) is a hard defect even on a thin run: it was observed.
     const invariantDefects = result.invariantDefects?.length ?? 0;
+    // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
+    // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
     const missionOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed"
         ? "crashed"
         : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
-          : invariantDefects > 0
-            ? "defects-found"
-            : thin
-              ? "inconclusive"
-              : "clean",
+          : result.outcome === "budget"
+            ? invariantDefects > 0
+              ? "defects-found"
+              : "inconclusive"
+            : invariantDefects > 0
+              ? "defects-found"
+              : thin
+                ? "inconclusive"
+                : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
     const exitCode = missionExitCode(missionOutcome);

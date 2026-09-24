@@ -23,6 +23,7 @@ import {
   type InvariantDefect,
   type InvariantReport,
 } from "../declared-invariants.js";
+import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -57,6 +58,11 @@ import {
  *  - `defects-found` — an app-declared invariant (#86) was violated around an action. A hard
  *                   defect: it overrides `succeeded`/`exhausted`/`blocked` (the goal may well have
  *                   been reached — the app still broke a rule getting there).
+ *  - `inconclusive` (with `run.stop === "budget"`) — a declared mission spend budget (#150) was
+ *                   crossed (or a paid action was refused before crossing it): the run stopped
+ *                   cleanly, before its next action. Never `succeeded`, never `crashed` — a budget
+ *                   stop is deliberate, not the engine breaking, but the run's own work is unproven
+ *                   past that point. Reported with the observed trajectory (`budget`).
  *
  * Declared invariants are observed through the loop's existing hooks (no change to the loop): each
  * settled snapshot evaluates the action taken since the previous one and re-arms the next "before".
@@ -141,6 +147,8 @@ export interface GoalBasedResult {
   readonly invariantDefects?: InvariantDefect[];
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
   readonly invariants?: InvariantReport[];
+  /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
+  readonly budget?: BudgetTrajectory[];
 }
 
 /** Does this result belong to a page check (the kind `held` can remember)? Matched by description. */
@@ -225,6 +233,8 @@ async function adjudicated(
 interface DeclaredHooks {
   readonly onTranscriptEntry: NonNullable<ExploreConfig["onTranscriptEntry"]>;
   readonly onRecording: NonNullable<ExploreConfig["onRecording"]>;
+  readonly onBeforeAction: ExploreConfig["onBeforeAction"];
+  readonly onSettled: ExploreConfig["onSettled"];
   readonly settled: () => Promise<void>;
   readonly finish: (run: ExploreRun) => Promise<void>;
   readonly fold: (result: GoalBasedResult) => GoalBasedResult;
@@ -244,6 +254,7 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
   monitor.attach(page);
   const log = new InvariantDefectLog();
   let steps = 0;
+  let budgetSettledSteps = 0;
   let pending: InvariantAction | null = null;
   const settled = async (): Promise<void> => {
     const action = pending;
@@ -251,6 +262,10 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     const r = await monitor.after(cfg.actor, action, { rearm: true });
     for (const v of r.violations) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
   };
+  // #150 — the SAME monitor reads a budget's declared observables: same #86/#135 read/auth/redaction
+  // machinery, one probe schedule (never a duplicate read of the same observable per step).
+  const budgetDecls = cfg.invariants.budget ?? [];
+  const budget = budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, monitor);
   return {
     onTranscriptEntry: (entry, all) => {
       cfg.onTranscriptEntry?.(entry, all);
@@ -267,6 +282,27 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
       cfg.onRecording?.(recording);
       steps = recordingStepCount(recording);
     },
+    onBeforeAction:
+      budget === null
+        ? undefined
+        : async (info) => {
+            const g = await budget.guard(page, info);
+            return g.refuse ? { refuse: true, reason: g.reason ?? "budget guard refused the action" } : { refuse: false };
+          },
+    onSettled:
+      budget === null
+        ? undefined
+        : async () => {
+            budgetSettledSteps += 1;
+            // The FIRST settled snapshot (before any action) is the budget's baseline (mirrors how
+            // `settled()` above re-arms the invariants' own "before" on its first, action-less call).
+            if (budgetSettledSteps === 1) {
+              const b = await budget.baseline(page);
+              return b.crossed ? { stop: true, reason: b.reason ?? "budget observable unreadable at run start" } : { stop: false };
+            }
+            const r = await budget.afterSettle(page, budgetSettledSteps);
+            return r.crossed ? { stop: true, reason: r.reason ?? "mission budget crossed" } : { stop: false };
+          },
     settled,
     finish: async (run) => {
       // Never on a broken or hung page: an unresponsive page proves nothing either way.
@@ -277,15 +313,22 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     fold: (result) => {
       const invariantDefects = log.defects();
       const invariants = monitor.report();
-      if (invariantDefects.length === 0) return { ...result, invariantDefects, invariants };
+      const withBudget: GoalBasedResult = budget === null ? result : { ...result, budget: budget.trajectory() };
+      if (invariantDefects.length === 0) return { ...withBudget, invariantDefects, invariants };
       // A violated invariant is a hard defect: it overrides a pass or a plain miss — never a broken
-      // run or a hang, whose own verdict is more severe (the defects are still reported).
-      const hard = result.outcome === "succeeded" || result.outcome === "exhausted" || result.outcome === "blocked";
+      // run or a hang, whose own verdict is more severe (the defects are still reported). A budget
+      // stop is a clean, deliberate stop (not the run breaking): #150 — defects found before it still
+      // win, reported with `stop: "budget"`.
+      const hard =
+        withBudget.outcome === "succeeded" ||
+        withBudget.outcome === "exhausted" ||
+        withBudget.outcome === "blocked" ||
+        withBudget.run.stop === "budget";
       const why = invariantDefects.map((d) => d.invariant.reason).join("; ");
       return {
-        ...result,
-        outcome: hard ? "defects-found" : result.outcome,
-        reason: result.reason === undefined ? why : `${why}; ${result.reason}`,
+        ...withBudget,
+        outcome: hard ? "defects-found" : withBudget.outcome,
+        reason: withBudget.reason === undefined ? why : `${why}; ${withBudget.reason}`,
         invariantDefects,
         invariants,
       };
@@ -319,7 +362,14 @@ async function adjudicatedRun(
         : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
       // `held`: after every settled step, a quick look at the page checks — remembered once they all
       // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
-      ...(declared === null ? {} : { onTranscriptEntry: declared.onTranscriptEntry, onRecording: declared.onRecording }),
+      ...(declared === null
+        ? {}
+        : {
+            onTranscriptEntry: declared.onTranscriptEntry,
+            onRecording: declared.onRecording,
+            ...(declared.onBeforeAction === undefined ? {} : { onBeforeAction: declared.onBeforeAction }),
+            ...(declared.onSettled === undefined ? {} : { onSettled: declared.onSettled }),
+          }),
       onSnapshot: async (snap) => {
         await cfg.onSnapshot?.(snap);
         await declared?.settled().catch(() => undefined);
@@ -376,6 +426,23 @@ async function adjudicatedRun(
   if (run.stop === "crashed" || run.stop === "inconclusive") {
     return {
       outcome: run.stop,
+      assertionPassed: false,
+      checks: [],
+      run,
+      recording: run.recording,
+      transcript: run.transcript,
+      finalUrl: run.finalUrl,
+      reason: whyNot(run, []),
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+    };
+  }
+
+  // #150 — a declared mission spend budget was crossed (or a paid action refused before crossing
+  // it): the run stopped cleanly, before its next action. Never `succeeded`, never `crashed` — maps
+  // to `inconclusive` (its own work past the stop is unproven), kept apart from `run.stop`.
+  if (run.stop === "budget") {
+    return {
+      outcome: "inconclusive",
       assertionPassed: false,
       checks: [],
       run,

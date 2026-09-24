@@ -208,6 +208,22 @@ export interface ExploreConfig {
   readonly jobWaitMs?: number;
   /** The shared safety policy (#116) and write classifier (#110) configuration. */
   readonly safety?: SafetyConfig;
+  /**
+   * Mission spend budget (#150) PRE-ACTION hook: called with the resolved control right before it
+   * would be acted on (after the safety-policy risk classification, for every op). A refusal stops
+   * the run with `stop: "budget"` before the action fires — code decides, the model never sees it as
+   * an obstacle to route around. Wired by a mission wrapper from its own `invariants.budget`;
+   * `explore()` itself never reads a budget spec.
+   */
+  readonly onBeforeAction?: (
+    info: Readonly<{ op: string; control: string; paid: boolean }>,
+  ) => Promise<{ readonly refuse: true; readonly reason: string } | { readonly refuse: false }>;
+  /**
+   * Mission spend budget (#150) POST-SETTLE hook: called after each settled, authorized snapshot
+   * (alongside `onSnapshot`, but — unlike it — its result DOES gate the loop): `stop: true` ends the
+   * run cleanly with `stop: "budget"`, before the next decision.
+   */
+  readonly onSettled?: (snap: Snapshot) => Promise<{ readonly stop: true; readonly reason: string } | { readonly stop: false }>;
 }
 
 export interface ExploreRun {
@@ -610,6 +626,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // Additive observation hook (usability analysis). Advisory: awaited but its
       // result never gates the loop, bounds, or stop decision.
       await cfg.onSnapshot?.(snap);
+
+      // #150 — mission spend budget, post-settle: UNLIKE onSnapshot above, this hook's result DOES
+      // gate the loop. A crossed budget stops the run cleanly, before its next decision.
+      if (cfg.onSettled !== undefined) {
+        const budget = await cfg.onSettled(snap);
+        if (budget.stop) {
+          transcript.record({
+            op: null,
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "budget",
+            actOk: false,
+            reason: budget.reason,
+            snapshot: snap,
+            timing: perception.timing,
+          });
+          incomplete = budget.reason;
+          stop = "budget";
+          break;
+        }
+      }
 
       if (!perception.rendered) {
         transcript.record({
@@ -1129,7 +1167,22 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
       }
       const at = now();
-      effectLog.mark(transcript.nextStep, control.name || control.summary, safety.riskOf(control));
+      const risk = safety.riskOf(control);
+      effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
+
+      // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
+      // would cross what remains of the budget is refused BEFORE it fires — code decides, never the
+      // model. The refusal is recorded and the run stops cleanly with `stop: "budget"`.
+      if (cfg.onBeforeAction !== undefined) {
+        const guard = await cfg.onBeforeAction({ op: decision.op, control: control.name || control.summary, paid: risk === "paid" });
+        if (guard.refuse) {
+          history.push(guard.reason);
+          record(false, guard.reason, { origin: "engine" });
+          incomplete = guard.reason;
+          stop = "budget";
+          break;
+        }
+      }
 
       // An EMPTY bound secret field (#111) is typed by code on its own — before a submit of its form,
       // or once a validation message names it: the model cannot see the value and was seen never
@@ -1604,6 +1657,8 @@ function incompleteReason(
       return failure === undefined ? `run ${stop}` : `run ${stop}: ${failure.message}`;
     case "done":
       return "done was proposed but could not be verified";
+    case "budget":
+      return "a declared mission spend budget was crossed";
     default: {
       const exhaustive: never = stop;
       return String(exhaustive);

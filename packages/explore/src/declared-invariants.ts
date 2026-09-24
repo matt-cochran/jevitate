@@ -242,6 +242,22 @@ export class InvariantMonitor {
   }
 
   /**
+   * Reads ONE named observable, mechanically — the same `dom`/`network`/`probe` machinery `before`/
+   * `after` use (#135 auth, redaction, allowlist re-checked at request time). For a caller that needs
+   * a single value outside the before/after cycle (#150's `BudgetMonitor`: a baseline, a post-settle
+   * re-read, a guard's estimate). `unreadable` is true when the value could not be read (or is not
+   * numeric) — the caller decides what that means for its own purpose.
+   */
+  async readObservable(page: Page, name: string): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }> {
+    this.attach(page);
+    const o = this.#spec.observe?.[name];
+    if (o === undefined) return { value: null, unreadable: true };
+    const read = await this.#read(page, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+    if (read.value === UNKNOWN) return { value: null, unreadable: true, ...(read.evidence === undefined ? {} : { evidence: read.evidence }) };
+    return { value: read.value, unreadable: false, ...(read.evidence === undefined ? {} : { evidence: read.evidence }) };
+  }
+
+  /**
    * Starts listening for `network` observables on a page. Idempotent; `before`/`after` call it, but a
    * mission should call it BEFORE its first navigation so the seed load's responses are seen.
    */

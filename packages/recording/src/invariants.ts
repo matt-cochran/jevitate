@@ -23,6 +23,11 @@ import { AssertionSchema, TargetDescriptorSchema, type Assertion, type TargetDes
  *                be read makes the result `unknown`, which is never a violation and never a pass;
  *      `never`   page text matching a pattern, or a recording `Assertion` that must never hold;
  *      `always`  a recording `Assertion` that must hold after every action.
+ *  - `budget`: mission spend budgets (#150) over a declared observable — a cumulative cap
+ *      (`maxDelta`) on the change from the run's baseline reading, with an optional pre-action
+ *      `guard` that refuses a paid action whose estimated cost would cross what remains. Crossing a
+ *      budget stops the mission cleanly, before its next action; browser-side tracking (`baseline`,
+ *      the guard, the post-settle check) lives in `@jevitate/explore`'s `BudgetMonitor`.
  *
  * This module is pure (schema + parser + evaluator) so the dispatch surfaces can reject a bad spec
  * — with a precise path like `invariants[2].require: unknown observable "balanse"` — before any
@@ -41,6 +46,8 @@ export const MIN_SETTLE_POLL_MS = 250;
 /** Hard caps on a spec's size (it is caller input on the MCP path). */
 export const MAX_OBSERVABLES = 64;
 export const MAX_INVARIANTS = 64;
+/** A budget-declaration cap (#150): a run's spend axes are few by design, not a general-purpose list. */
+export const MAX_BUDGETS = 8;
 const MAX_EXPRESSION_CHARS = 1_000;
 
 export interface DomObservable {
@@ -128,10 +135,39 @@ export interface DeclaredInvariant {
   settle?: InvariantSettle;
 }
 
+/**
+ * A mission spend budget (#150) over a declared observable: `observe` names an entry in this same
+ * spec's `observe` map (a `dom` read or a read-only `probe`, authenticated like any other #86/#135
+ * observable — never a new credential path). `maxDelta` is a cumulative cap on `current - baseline`
+ * since the run's first settled snapshot: negative caps spend (a balance that must not drop past
+ * it), positive caps growth. Crossing it stops the mission cleanly, before its next action.
+ */
+export interface BudgetGuard {
+  /** A constant per-action cost, or an observable name read BEFORE the action (e.g. a shown estimate). */
+  estimate: number | string;
+  /** Safety margin over the estimate (a real charge can run higher than shown, #150's A25). Default 1. */
+  factor?: number;
+}
+
+export interface BudgetDeclaration {
+  /** The named observable this budget tracks (must be declared in this spec's `observe`). */
+  observe: string;
+  /** The cumulative change from baseline that ends the run: negative caps spend, positive caps growth. */
+  maxDelta: number;
+  /** Refuses a paid action (#116) whose estimated cost would cross the remaining budget. */
+  guard?: BudgetGuard;
+  /** Keeps re-reading after the loop ends, to catch a charge that settles after the last action. */
+  settle?: InvariantSettle;
+  /** `stop` (default): an observable that cannot be read fails closed. `continue`: skip that check. */
+  onUnreadable?: "stop" | "continue";
+}
+
 export interface InvariantSpec {
   version?: 1;
   observe?: Record<string, ObservableSpec>;
   invariants: DeclaredInvariant[];
+  /** Mission spend budgets (#150) over this spec's declared observables. */
+  budget?: BudgetDeclaration[];
 }
 
 // === Expression language ===
@@ -566,6 +602,29 @@ const ObservableSchema = z
     }
   });
 
+const BudgetGuardSchema = z
+  .object({
+    estimate: z.union([z.number(), z.string().min(1)]),
+    factor: z.number().positive().optional(),
+  })
+  .strict();
+
+const BudgetDeclarationSchema = z
+  .object({
+    observe: z.string().min(1),
+    maxDelta: z.number().refine((n) => n !== 0, "maxDelta must not be 0 (nothing could ever cross it)"),
+    guard: BudgetGuardSchema.optional(),
+    settle: z
+      .object({
+        withinMs: z.number().int().positive().max(MAX_SETTLE_WITHIN_MS),
+        pollMs: z.number().int().min(MIN_SETTLE_POLL_MS).optional(),
+      })
+      .strict()
+      .optional(),
+    onUnreadable: z.enum(["stop", "continue"]).optional(),
+  })
+  .strict();
+
 const WhenSchema = z
   .object({
     after: z.literal("action").optional(),
@@ -640,12 +699,16 @@ const InvariantSpecObjectSchema = z
           }
         }
       }),
-    invariants: z.array(InvariantSchema).min(1).max(MAX_INVARIANTS),
+    invariants: z.array(InvariantSchema).max(MAX_INVARIANTS),
+    budget: z.array(BudgetDeclarationSchema).max(MAX_BUDGETS).optional(),
   })
   .strict()
   .superRefine((spec, ctx) => {
     const declared = new Set(Object.keys(spec.observe ?? {}));
     const ids = new Set<string>();
+    if (spec.invariants.length === 0 && (spec.budget ?? []).length === 0) {
+      ctx.addIssue({ code: "custom", message: "at least one of invariants or budget is required", path: ["invariants"] });
+    }
     spec.invariants.forEach((inv, i) => {
       if (ids.has(inv.id)) ctx.addIssue({ code: "custom", message: `duplicate invariant id ${JSON.stringify(inv.id)}`, path: ["invariants", i, "id"] });
       ids.add(inv.id);
@@ -660,6 +723,14 @@ const InvariantSpecObjectSchema = z
         if (!declared.has(name)) {
           ctx.addIssue({ code: "custom", message: `unknown observable ${JSON.stringify(name)}`, path: ["invariants", i, "require"] });
         }
+      }
+    });
+    (spec.budget ?? []).forEach((b, i) => {
+      if (!declared.has(b.observe)) {
+        ctx.addIssue({ code: "custom", message: `unknown observable ${JSON.stringify(b.observe)}`, path: ["budget", i, "observe"] });
+      }
+      if (typeof b.guard?.estimate === "string" && !declared.has(b.guard.estimate)) {
+        ctx.addIssue({ code: "custom", message: `unknown observable ${JSON.stringify(b.guard.estimate)}`, path: ["budget", i, "guard", "estimate"] });
       }
     });
   });
@@ -756,6 +827,7 @@ export function validateInvariantSpec(raw: unknown, opts: ValidateInvariantOptio
 export function mergeInvariantSpecs(specs: readonly InvariantSpec[]): InvariantSpec {
   const observe: Record<string, ObservableSpec> = {};
   const invariants: DeclaredInvariant[] = [];
+  const budget: BudgetDeclaration[] = [];
   const problems: string[] = [];
   const ids = new Set<string>();
   specs.forEach((s, f) => {
@@ -771,9 +843,10 @@ export function mergeInvariantSpecs(specs: readonly InvariantSpec[]): InvariantS
       ids.add(inv.id);
       invariants.push(inv);
     }
+    budget.push(...(s.budget ?? []));
   });
   if (problems.length > 0) throw new InvariantSpecError(problems);
-  return { ...(Object.keys(observe).length > 0 ? { observe } : {}), invariants };
+  return { ...(Object.keys(observe).length > 0 ? { observe } : {}), invariants, ...(budget.length > 0 ? { budget } : {}) };
 }
 
 /**
