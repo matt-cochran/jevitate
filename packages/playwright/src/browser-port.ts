@@ -10,6 +10,14 @@ export interface BrowserSession {
   stopTracingToFile(file: string): Promise<void>;
   /** Writes the context's cookies + origin storage as a Playwright `storageState` JSON file. */
   saveStorageState(file: string): Promise<void>;
+  /**
+   * Captures the context's cookies + origin storage as a `storageState` JSON string, in memory —
+   * no file write (#159). Used to keep a cheap "last known-good" snapshot as a mission runs, so a
+   * crash or a killed process (SIGTERM/SIGINT, which cannot `await` a live capture) can still
+   * persist a recent authenticated session instead of losing it. Optional: real sessions implement
+   * it; a test double that never exercises `--save-storage-state` need not.
+   */
+  captureStorageState?(): Promise<string>;
   close(): Promise<void>;
 }
 

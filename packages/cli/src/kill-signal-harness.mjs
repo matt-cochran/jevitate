@@ -26,9 +26,11 @@ import { FakeGenerationGateway, UsageTracker } from "@jevitate/ai-core";
 installMissionKillSwitch();
 setKillSwitchOutput("envelope");
 
-const [, , url, outDir, judgeDelayMsRaw, modeRaw, fastCallsRaw] = process.argv;
+const [, , url, outDir, judgeDelayMsRaw, modeRaw, fastCallsRaw, saveStorageStatePath] = process.argv;
 if (!url || !outDir) {
-  process.stderr.write("usage: kill-signal-harness.mjs <url> <outDir> [judgeDelayMs] [explore|usability] [fastCalls]\n");
+  process.stderr.write(
+    "usage: kill-signal-harness.mjs <url> <outDir> [judgeDelayMs] [explore|usability] [fastCalls] [saveStorageStatePath]\n",
+  );
   process.exit(2);
 }
 const judgeDelayMs = Number(judgeDelayMsRaw ?? 8000);
@@ -91,6 +93,7 @@ const run =
         usage,
         outDir,
         browserPortFactory: instrumentedBrowserPortFactory,
+        ...(saveStorageStatePath ? { saveStorageState: saveStorageStatePath } : {}),
       })
     : runExploration({
         url,
@@ -102,6 +105,7 @@ const run =
         usage,
         outDir,
         browserPortFactory: instrumentedBrowserPortFactory,
+        ...(saveStorageStatePath ? { saveStorageState: saveStorageStatePath } : {}),
       });
 
 run

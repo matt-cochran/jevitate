@@ -1672,7 +1672,10 @@ export function buildProgram(deps: CliDeps): Command {
       "--save-storage-state <file>",
       "write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. " +
         "Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, " +
-        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run.",
+        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. " +
+        "Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but " +
+        "never over a good file with a session that already looks lost/logged-out; the last known-good state is used " +
+        "instead, or nothing is written if none was ever captured.",
     )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
@@ -2328,6 +2331,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(emulation === undefined ? {} : { emulation }),
             overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withServerLog,
             ...withInvariants,
           });
