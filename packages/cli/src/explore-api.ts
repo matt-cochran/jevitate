@@ -28,6 +28,7 @@ import {
   type StatusSpec,
   type SuccessCheck,
   type SuccessCheckResult,
+  type SuccessWhen,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -76,6 +77,11 @@ export interface RunExplorationOptions {
   readonly successAssertion?: Assertion;
   /** More independent checks (`--success`, repeatable): page, reloadThen, requestMade, responseStatus. */
   readonly successChecks?: readonly SuccessCheck[];
+  /**
+   * When the page checks must hold (`--success-when`, #80): `final` (default) — on the final page;
+   * `held` — on the final page or together at any settled step. `reloadThen` is final-only.
+   */
+  readonly successWhen?: SuccessWhen;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
@@ -242,6 +248,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       startUrl: opts.url,
       ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
+      ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,

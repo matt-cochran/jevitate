@@ -47,6 +47,7 @@ import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "./mission-failure.js";
+import { EMPTY_STATUS, describeStatus, isEmptyStatus, readPageStatus, statusDelta, type PageStatus } from "./status.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
@@ -65,6 +66,11 @@ export const FORM_TEXT_MAX_CHARS = 600;
 export const MAX_DONE_REJECTIONS = 3;
 /** Repeated-type (typed, never sent, typed again) signals before the run stops as no-progress. */
 export const MAX_REPEAT_TYPE_SIGNALS = 3;
+/**
+ * Consecutive `wait`s that changed nothing while NOTHING was pending (no request in flight, no busy
+ * indicator, no awaited reply) before the run stops as stuck, naming what the page shows (#79).
+ */
+export const MAX_QUIET_WAITS = 3;
 
 
 
@@ -174,6 +180,12 @@ export interface ExploreRun {
    * a budget, a stuck detector, a rejected `done`, a hang, a crash. Never a silent early stop.
    */
   readonly outcome: RunOutcome;
+  /**
+   * The concrete cause the run last ran into (#84), in priority order: the last fail-closed step
+   * (field + why), the last disabled / not-visible target (its accessible name), an invalid field's
+   * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
+   */
+  readonly blockingCause?: string;
 }
 
 /**
@@ -239,6 +251,44 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** The page text before the last message, and the message — to keep listening for its reply. */
   let lastTurn: { baseline: string; sent: string } | null = null;
   let lastPath: string | null = null;
+  /** The page's status text (alerts, invalid fields) at the latest perception (#79). */
+  let status: PageStatus = EMPTY_STATUS;
+  /** The step whose effect the next status read reports ("after <step>: alert …"). */
+  let statusAfter: string | null = null;
+  /** Consecutive `wait`s that changed nothing while nothing was pending. */
+  let quietWaits = 0;
+  /** The concrete causes the run ran into, for a precise stop reason (#84). */
+  const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
+    failClosed: null,
+    target: null,
+  };
+  /** The most concrete cause known now, in #84's priority order; null when there is none. */
+  const blockingCause = (): string | null => {
+    if (blockers.failClosed !== null) return blockers.failClosed;
+    if (blockers.target !== null) return blockers.target.text;
+    const field = status.invalid[0];
+    if (field !== undefined) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
+    const alert = status.alerts[0];
+    if (alert !== undefined) return `the page shows alert ${quote(alert)}`;
+    return null;
+  };
+  /**
+   * A failed act's reason as the model sees it: a disabled / hidden target is named (its accessible
+   * name often says why — "Analyze — enter a URL first"), and remembered as a blocker (#79, #84).
+   */
+  const failNote = (reason: string | undefined, c: Control): string => {
+    const r = reason ?? "?";
+    if (r !== "target not enabled" && r !== "target not visible") return r;
+    const name = quote(c.name || c.summary, 120);
+    blockers.target = { key: keyOf(c), text: `${r === "target not enabled" ? "target disabled" : "target not visible"} — ${name}` };
+    return r === "target not enabled"
+      ? `${r}: ${name} is disabled — its label may say what it needs first`
+      : `${r}: ${name}`;
+  };
+  /** A control acted on successfully is no longer the blocker. */
+  const cleared = (c: Control): void => {
+    if (blockers.target?.key === keyOf(c)) blockers.target = null;
+  };
   const replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
   const replyMaxChars = cfg.replyMaxChars ?? REPLY_MAX_CHARS;
   const waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;
@@ -274,6 +324,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
     track.lastRecordedTarget = JSON.stringify(descriptor);
+    statusAfter = label;
   };
 
   try {
@@ -356,6 +407,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         });
         stop = "blocked";
         break;
+      }
+
+      // Status text (#79): alerts / invalid fields are not controls, so the model would never see
+      // them. What newly appeared after the last step goes into its history; what shows now goes
+      // into its prompt.
+      {
+        const before = status;
+        status = await readPageStatus(page);
+        const appeared = statusDelta(before, status);
+        if (transcript.nextStep > 0 && !isEmptyStatus(appeared)) {
+          history.push(`after ${statusAfter ?? "the last step"}: ${describeStatus(appeared)}`);
+        }
+        statusAfter = null;
       }
 
       // #2 — no-progress: the last executed op left the page unchanged N times.
@@ -451,6 +515,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           ...(conversation.latestReply === null && conversation.sent.length === 0
             ? {}
             : { conversation: { latestReply: conversation.latestReply, sentMessages: conversation.sent } }),
+          ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
         });
       } catch (e) {
         // The decision IS the goal loop's engine: without it the run can prove nothing more, so it
@@ -565,6 +630,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             ? `waited ${((now() - t0) / 1000).toFixed(1)}s → reply: ${quote(reply.text, 300)}`
             : `waited ${((now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
           changed = true;
+          quietWaits = 0;
           record(true, note, reply.received ? { reply } : {});
         } else if (decision.op === "wait") {
           const t0 = now();
@@ -573,13 +639,24 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // a slow reply — not idleness: it does not count toward the idle cap.
           // Bounded: patience lasts as long as a conversational reply may take (`replyWaitMs`).
           // A sent message whose reply has not arrived yet is also still in flight.
-          const busy =
-            !changed && busyWaitedMs < replyWaitMs && (awaitingReply || (await stillBusy(page)));
+          const pending = !changed && (awaitingReply || (await stillBusy(page)));
+          const busy = pending && busyWaitedMs < replyWaitMs;
           busyWaitedMs = busy ? busyWaitedMs + (now() - t0) : 0;
-          note = `waited ${((now() - t0) / 1000).toFixed(1)}s (${changed ? "the page changed" : busy ? "no change yet — the app is still working" : "the page did not change"})`;
+          // Nothing changed and nothing is pending: waiting again cannot help (#79).
+          quietWaits = changed || pending ? 0 : quietWaits + 1;
+          note = `waited ${((now() - t0) / 1000).toFixed(1)}s (${
+            changed
+              ? "the page changed"
+              : busy
+                ? "no change yet — the app is still working"
+                : pending
+                  ? "the page did not change"
+                  : "the page did not change and nothing is pending — waiting again will not help"
+          })`;
           if (busy) changed = true;
           record(true, note);
         } else {
+          quietWaits = 0;
           const y0 = await page.evaluate(() => window.scrollY).catch(() => null);
           const r = await act(cfg.actor, { op: decision.op, control: null });
           const y1 = await page.evaluate(() => window.scrollY).catch(() => null);
@@ -597,6 +674,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           idleSince = idleSince ?? now();
         }
         lastActedOp = decision.op;
+        statusAfter = decision.op === "wait" ? "waiting" : "scrolling";
+        if (quietWaits >= MAX_QUIET_WAITS) {
+          const cause = blockingCause();
+          incomplete = `stuck: ${cause ?? `${quietWaits} waits changed nothing and nothing was pending`}`;
+          stop = "no-progress";
+          break;
+        }
         // Stuck = several idle steps AND for as long as a slow reply may take (`replyWaitMs`): a long
         // simulation or LLM turn gets that long before the run gives up on it.
         if (idleSteps >= MAX_IDLE_STEPS && idleSince !== null && now() - idleSince >= replyWaitMs) {
@@ -607,6 +691,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         continue;
       }
       idleSteps = 0;
+      quietWaits = 0;
 
       if (decision.op === "reload") {
         // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
@@ -685,6 +770,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           continue;
         }
         if (text === null) {
+          blockers.failClosed = `no message for ${quote(control.name || control.summary, 80)} (the message generator returned none)`;
           record(false, "no message available (fail-closed)", { op });
           incomplete = "no message could be generated for the conversation";
           stop = "blocked";
@@ -783,6 +869,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (option === null) {
           fillHelper.commit();
           const reason = `no valid option chosen for ${control.name} (fail-closed)`;
+          blockers.failClosed = `no valid option for field ${quote(control.name || control.summary, 80)} (fail-closed)`;
           history.push(`select failed: ${reason}`);
           record(false, reason);
           lastActedOp = op;
@@ -795,10 +882,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           fillHelper.commit();
           history.push(`selected ${quote(option, 80)} in ${control.name}`);
+          cleared(control);
         } else {
-          history.push(`select failed: ${r.reason ?? "?"}`);
+          history.push(`select failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.reason);
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
         lastActedOp = op;
         continue;
       }
@@ -824,6 +912,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         if (text === null) {
           // The generator will not honestly supply a required value → never guess.
+          blockers.failClosed = `no value for field ${quote(control.name || control.summary, 80)} (the value generator returned none)`;
           record(false, "no value available (fail-closed)");
           stop = "blocked";
           break;
@@ -843,10 +932,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           fillHelper.commit();
           history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
+          cleared(control);
         } else {
-          history.push(`${decision.op} failed: ${r.reason ?? "?"}`);
+          history.push(`${decision.op} failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.reason);
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
       } else if (decision.op === "click") {
         // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
         // latest reply is a conversation turn: its reply is awaited like a `send`'s.
@@ -881,10 +971,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           } else {
             history.push(`clicked ${control.name}`);
           }
+          cleared(control);
         } else {
-          history.push(`click failed: ${r.reason ?? "?"}`);
+          history.push(`click failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.reason, {
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), {
           ...(message === undefined ? {} : { message }),
           ...(reply === undefined ? {} : { reply }),
         });
@@ -904,10 +995,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           history.push(`uploaded the fixture into ${control.name}`);
           fixtureAttached = true;
+          cleared(control);
         } else {
-          history.push(`upload failed: ${r.reason ?? "?"}`);
+          history.push(`upload failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.reason);
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
       }
 
       lastActedOp = decision.op;
@@ -920,10 +1012,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   }
 
   const finished = recorder.tryFinish({ intent: cfg.goal });
+  const cause = blockingCause();
   const finalOutcome: RunOutcome =
     stop === "done" && outcome !== null && finished.ok
       ? outcome
-      : { status: "incomplete", reason: incompleteReason(stop, incomplete, failure, hang, tracker) };
+      : { status: "incomplete", reason: withCause(incompleteReason(stop, incomplete, failure, hang, tracker), stop, cause) };
   if (!finished.ok) {
     // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
     // written; the run is reported crashed so this can never read as a pass.
@@ -942,6 +1035,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     timing: summarizeTimings(timings),
     ...(hang === undefined ? {} : { hang }),
     outcome: finalOutcome,
+    ...(cause === null ? {} : { blockingCause: cause }),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }
       : {}),
@@ -976,6 +1070,18 @@ function incompleteReason(
       return String(exhaustive);
     }
   }
+}
+
+/**
+ * The run's reason with the concrete cause it ran into (#84): a blocked / stuck / exhausted run names
+ * what stopped it (a fail-closed field, a disabled target, an invalid field, an alert). A crash,
+ * hang or inconclusive run keeps its own evidence; a reason already naming the cause is kept as is.
+ */
+function withCause(reason: string, stop: StopReason, cause: string | null): string {
+  if (cause === null || reason.includes(cause)) return reason;
+  if (stop !== "blocked" && stop !== "no-progress" && stop !== "exhausted") return reason;
+  if (reason === "blocked before the goal was met") return `blocked: ${cause}`;
+  return `${reason} — last blocker: ${cause}`;
 }
 
 /** The path part of a URL (navigation detection); the raw string when it does not parse. */

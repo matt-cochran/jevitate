@@ -1295,6 +1295,10 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--success-when <when>",
+      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast). reloadThen is always final",
+    )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
@@ -1389,6 +1393,7 @@ export function buildProgram(deps: CliDeps): Command {
         minConfidence?: string;
         show?: string;
         success: string[];
+        successWhen?: string;
         feature?: string;
         route: string[];
         allow: string[];
@@ -1734,6 +1739,11 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
+      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
+        emitJson(program, fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+        return;
+      }
+      const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
       const allowlist = resolveExploreAllowlist(o.url, o.allow);
       const bounds: Record<string, number> = {};
       if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
@@ -1758,6 +1768,7 @@ export function buildProgram(deps: CliDeps): Command {
           url: o.url,
           goal: o.goal,
           successChecks,
+          ...(successWhen === undefined ? {} : { successWhen }),
           allowlist,
           judge,
           gen,
