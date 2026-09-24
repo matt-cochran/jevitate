@@ -28,6 +28,8 @@ import {
   a11yChecks,
   buildReport,
   loadV1Rubric,
+  resolveMinConfidence,
+  resolveQualityPolicy,
   type AppContext,
   type Control as UxControl,
   type ScreenRef,
@@ -35,6 +37,7 @@ import {
   type UxReport,
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
+import { loadUxMinConfidence, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
@@ -160,6 +163,22 @@ export interface RunUxReviewOptions {
   readonly recording: Recording;
   readonly appContext: AppContext;
   readonly judge: JudgmentPort;
+  /** Structured-output specifics (observation / implicated controls / fix) for flagged items. */
+  readonly gen: GenerationPort;
+  /**
+   * Report cutoff; findings below it are suppressed (counted in `report.suppressed`). Precedence:
+   * this (CLI `--min-confidence`) > `JEVITATE_UX_MIN_CONFIDENCE` > config `ux.minConfidence`
+   * (`~/.jevitate/config.json`) > `DEFAULT_MIN_CONFIDENCE`.
+   */
+  readonly minConfidence?: number | string;
+  /**
+   * Quality grades to show, e.g. "actionable,relevant-minor". Precedence: this (CLI `--show`) >
+   * `JEVITATE_UX_SHOW` > config `ux.show` > `DEFAULT_QUALITY_POLICY`.
+   */
+  readonly show?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Path of the config file holding `ux.minConfidence`. Default `~/.jevitate/config.json`. */
+  readonly configPath?: string;
   readonly secrets?: readonly string[];
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
   readonly fixture?: string;
@@ -180,7 +199,9 @@ export interface RunUxReviewResult {
  * a fabricated "clean" report.
  */
 export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReviewResult> {
-  const analyzer = new UxAnalyzer({ judge: opts.judge, a11yChecker: a11yChecks });
+  const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
+  const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
+  const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
   const screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job);
   const outcome = await analyzer.analyze({
     screens,
@@ -192,7 +213,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   if (outcome.kind === "failed") {
     throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
   }
-  const report = buildReport(outcome);
+  const report = buildReport(outcome, { minConfidence, quality });
   const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
   await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -218,6 +239,16 @@ export interface RunUsabilityMissionOptions {
   readonly appContext: AppContext;
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
+  /** Report cutoff (see `RunUxReviewOptions.minConfidence`). */
+  readonly minConfidence?: number | string;
+  /**
+   * Quality grades to show, e.g. "actionable,relevant-minor". Precedence: this (CLI `--show`) >
+   * `JEVITATE_UX_SHOW` > config `ux.show` > `DEFAULT_QUALITY_POLICY`.
+   */
+  readonly show?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Path of the config file holding `ux.minConfidence`. Default `~/.jevitate/config.json`. */
+  readonly configPath?: string;
   readonly bounds?: Partial<Bounds>;
   readonly secrets?: readonly string[];
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
@@ -270,6 +301,9 @@ export interface RunUsabilityMissionResult {
  */
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  // Validate the cutoff before a browser opens — a bad value fails fast, never mid-run.
+  const minConfidence = resolveMinConfidence(opts.minConfidence, opts.env ?? process.env, loadUxMinConfidence(opts.configPath));
+  const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -324,7 +358,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       },
     });
 
-    const analyzer = new UxAnalyzer({ judge: opts.judge, a11yChecker: a11yChecks });
+    const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
     const outcome = await analyzer.analyze({
       screens: collected,
       rubric: loadV1Rubric(),
@@ -356,7 +390,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
     }
-    const report = buildReport(outcome);
+    const report = buildReport(outcome, { minConfidence, quality });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     return { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
   } finally {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { contentHash } from "@jevitate/domain";
-import { GEN_TASKS, type GenTaskKind, type GenInput, type GenOutput, type GenerationPort, type GenerationResult } from "./generation.js";
+import { GEN_TASKS, taskTemperature, type GenTaskKind, type GenInput, type GenOutput, type GenerationPort, type GenerationResult } from "./generation.js";
 import { type CredentialStore, requireKeys } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";
 import { type CatalogModel, type ModelConstraints, selectModel } from "./model-policy.js";
@@ -15,6 +15,8 @@ export interface OpenRouterCall {
     body: unknown;          // redacted, guard-checked — carries NO key
     authHeader: string;     // `Bearer <key>` — never logged, never in body
     signal?: AbortSignal;
+    /** Sampling temperature when the task pins one (e.g. 0 for ux.specifics consistency). */
+    temperature?: number;
   }): Promise<{ object: unknown; latencyMs: number }>;
 }
 
@@ -40,8 +42,10 @@ export class OpenRouterGenerationGateway implements GenerationPort {
 
     const key = this.cfg.store.read("OPENROUTER_API_KEY");         // read at the call, nowhere else
     if (!key) throw new Error("unreachable: requireKeys passed but key unreadable");
+    const temperature = taskTemperature(kind);
     const { object, latencyMs } = await this.cfg.call({
       model, schema: task.output, body, authHeader: `Bearer ${key}`,
+      ...(temperature === undefined ? {} : { temperature }),
     });
 
     const output = task.output.parse(object) as GenOutput<K>;      // untrusted-out re-validated

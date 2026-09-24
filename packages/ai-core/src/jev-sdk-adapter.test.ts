@@ -50,6 +50,15 @@ describe("toSdkQuestions", () => {
       }),
     );
   });
+
+  test("a noul/score's instructions (and score criteria) reach the SDK — never just the question key (contract)", () => {
+    const sdk = toSdkQuestions({
+      "nielsen-1::status": { kind: "noul", instructions: "Does the screen show system status?" },
+      "load::burden": { kind: "score", instructions: "Rate decision burden.", criteria: ["overloaded", "focused"] },
+    });
+    expect(sdk["nielsen-1::status"]).toEqual(noul("Does the screen show system status?"));
+    expect(sdk["load::burden"]).toEqual(score("Rate decision burden.", ["overloaded", "focused"]));
+  });
 });
 
 describe("realJevClientCall — the lazy live seam (SDK loader injected)", () => {

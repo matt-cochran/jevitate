@@ -34,10 +34,10 @@ export function toSdkQuestions(questions: Record<string, Question>): Record<stri
         break;
       }
       case "noul":
-        out[name] = { type: "noul", instructions: name };
+        out[name] = { type: "noul", instructions: q.instructions ?? name };
         break;
       case "score":
-        out[name] = { type: "score", instructions: name, criteria: SCORE_RUBRIC };
+        out[name] = { type: "score", instructions: q.instructions ?? name, criteria: q.criteria ?? SCORE_RUBRIC };
         break;
       default: {
         const exhaustive: never = q;
