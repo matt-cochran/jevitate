@@ -15,8 +15,12 @@ import {
   runCoverageMission,
   runExploration,
   runFeatureCliMission,
+  type ServerLogOptions,
 } from "./explore-api.js";
-import { onMissionKilled } from "./kill-signal.js";
+import { runWithMissionKillListener } from "./kill-signal.js";
+import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
+import { parseLogSourceSpecs } from "./log-sources.js";
+import { parseLogDefectSpecs } from "./log-correlation.js";
 
 /**
  * The queue drain behind `jevitate mission run` (#117). `queue_exploration` (MCP) only ENQUEUES —
@@ -117,7 +121,9 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
     // Killed mid-mission (SIGTERM/SIGINT): the kill switch writes the run's partial `inconclusive`
     // result; record it on the queue record in the same synchronous turn, so the mission reads as
     // done-with-that-result rather than `running` forever.
-    const stopListening = onMissionKilled(({ resultPath, exitCode }) => {
+    // Scoped to THIS item: with several missions in one process, a kill records each queue item
+    // with its own mission's result, never another's.
+    const onKilled = ({ resultPath, exitCode }: { resultPath: string; exitCode: number }): void => {
       opts.queue.updateSync({
         ...running,
         status: "done",
@@ -126,10 +132,12 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
         missionOutcome: "inconclusive",
         exitCode,
       });
-    });
+    };
     try {
       const target = await opts.targets.resolve(mission.target); // promoted-only, re-checked at run time
-      const run = await opts.execute({ mission: running, target, allowlist: targetAllowlist(target) });
+      const run = await runWithMissionKillListener(onKilled, () =>
+        opts.execute({ mission: running, target, allowlist: targetAllowlist(target) }),
+      );
       const resultId = resultIdFromPath(run.resultPath);
       await opts.queue.update({
         ...running,
@@ -151,8 +159,6 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
       const error = err instanceof Error ? err.message : String(err);
       await opts.queue.update({ ...running, status: "failed", finishedAtIso: now(), error });
       drained = { missionId: mission.id, strategy: mission.strategy, status: "failed", error };
-    } finally {
-      stopListening();
     }
     ran.push(drained);
     opts.onMission?.(drained);
@@ -167,6 +173,34 @@ export interface RealExecutorOptions {
   readonly gateways: () => Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }>;
   readonly browserPortFactory?: () => BrowserPort;
   readonly browser?: BrowserLaunchOptions;
+  /**
+   * `~/.jevitate/targets.json`, by origin (#142 follow-up): a queued mission NEVER carries its own
+   * `--log-source` (a `MissionRequest`/`QueuedMission` may not name a path or a command — see
+   * `packages/missions/src/schema.ts`), so a source is only ever the OPERATOR's own file-declared
+   * default for the target's origin. Omitted or empty ⇒ no log sources for any queued mission.
+   */
+  readonly targets?: Readonly<Record<string, TargetConfig>>;
+}
+
+/** The operator-declared `--log-source`/`--log-defect` for one origin, already parsed (#142 follow-up).
+ *  Throws (via `parseLogSourceSpecs`/`parseLogDefectSpecs`) on a malformed targets.json entry — the
+ *  caller's existing per-mission try/catch turns that into a `failed` queue record, never a crash. */
+function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): ServerLogOptions | undefined {
+  if (targets === undefined) return undefined;
+  let origin: string;
+  try {
+    origin = new URL(baseUrl).origin;
+  } catch {
+    return undefined;
+  }
+  const config = resolveTargetConfig(targets, origin);
+  if ((config.logSources?.length ?? 0) === 0 && (config.logDefect?.length ?? 0) === 0) return undefined;
+  const allowLogCmd = config.allowLogCmd === true;
+  return {
+    sources: parseLogSourceSpecs(config.logSources ?? [], allowLogCmd),
+    logDefect: parseLogDefectSpecs(config.logDefect ?? []),
+    allowLogCmd,
+  };
 }
 
 /**
@@ -188,6 +222,8 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     }
     const invariants = mission.invariants === undefined ? {} : { invariants: mission.invariants };
     const routeGlobs = mission.route === undefined ? [] : [mission.route];
+    const serverLog = serverLogFromTargetConfig(opts.targets, target.baseUrl);
+    const withServerLog = serverLog === undefined ? {} : { serverLog };
     if (mission.strategy === "feature" || (mission.strategy === "goal-based" && mission.feature !== undefined)) {
       const r = await runFeatureCliMission({
         ...common,
@@ -197,6 +233,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         routeGlobs,
         bounds,
         ...invariants,
+        ...withServerLog,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -205,7 +242,18 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     }
     const { judge, gen, usage } = await opts.gateways();
     if (mission.strategy === "coverage") {
-      const r = await runCoverageMission({ ...common, url: target.baseUrl, allowlist, judge, gen, usage, bounds, ...(routeGlobs.length > 0 ? { routeGlobs } : {}), ...invariants });
+      const r = await runCoverageMission({
+        ...common,
+        url: target.baseUrl,
+        allowlist,
+        judge,
+        gen,
+        usage,
+        bounds,
+        ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
+        ...invariants,
+        ...withServerLog,
+      });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
     if (mission.strategy === "adversarial") {
@@ -220,6 +268,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
+        ...withServerLog,
       });
       return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
     }
@@ -234,6 +283,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
       usage,
       bounds,
       ...invariants,
+      ...withServerLog,
     });
     return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
   };

@@ -203,8 +203,8 @@ describe("hangs are detected, classified and REPRODUCED in fresh contexts", () =
       // Both replays RAN fully and settled: that is a genuine non-reproduction.
       expect(result.hangs[0]?.reproduction).toMatchObject({ attempts: 2, ran: 2, reproduced: 0, status: "intermittent" });
       expect(result.hangs[0]?.reproduction.runs.map((r) => r.detail)).toEqual([
-        "the page settled — no hang",
-        "the page settled — no hang",
+        "same-kind rule: the page settled — no hang",
+        "same-kind rule: the page settled — no hang",
       ]);
     },
     180_000,

@@ -9,7 +9,7 @@ import { replayAndDetectHang } from "./hang-repro.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
-import { InvariantMonitor } from "./declared-invariants.js";
+import { InvariantMonitor, type ObserverSessions } from "./declared-invariants.js";
 
 /**
  * verifyFix — "is this defect fixed?", answered by REPLAY, not by opinion.
@@ -101,6 +101,13 @@ export interface VerifyInvariant {
   readonly secrets?: readonly string[];
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
   readonly authTokens?: ReadonlyMap<string, string>;
+  /**
+   * #147: opens the observer actors' sessions for a cross-actor invariant — called once per replay
+   * attempt, so every attempt checks from FRESH observer contexts too.
+   */
+  readonly openObservers?: () => ObserverSessions;
+  /** #147: the primary actor's name. */
+  readonly primaryActor?: string;
 }
 
 export type VerifyFixVerdict = "fixed" | "still-reproduces" | "intermittent" | "inconclusive";
@@ -261,12 +268,15 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
       targetMismatch: false,
     };
   }
+  const observers = inv.openObservers?.();
   try {
     const monitor = new InvariantMonitor(inv.spec, {
       allowlist: inv.allowlist,
       baseUrl: inv.baseUrl,
       ...(inv.secrets === undefined ? {} : { secrets: inv.secrets }),
       ...(inv.authTokens === undefined ? {} : { authTokens: inv.authTokens }),
+      ...(observers === undefined ? {} : { observers }),
+      ...(inv.primaryActor === undefined ? {} : { primaryActor: inv.primaryActor }),
     });
     monitor.attach(session.page);
     await monitorFor(session.page).instrument();
@@ -333,6 +343,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
       targetMismatch: false,
     };
   } finally {
+    await observers?.close().catch(() => undefined);
     await session.close().catch(() => undefined);
   }
 }

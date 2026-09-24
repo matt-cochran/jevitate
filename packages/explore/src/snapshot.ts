@@ -80,6 +80,11 @@ export interface Control {
    * controls only after the page's own content (#115).
    */
   readonly landmark?: "navigation" | "banner" | "contentinfo" | null;
+  /**
+   * True for a rich-text (`contenteditable`) element — not an input/textarea (#148). Such a control
+   * is also offered `edit_text`: an edit INSIDE its text (at a quoted anchor), not a full retype.
+   */
+  readonly richText?: boolean;
 }
 
 export interface Snapshot {
@@ -154,6 +159,8 @@ interface ControlFacts {
   readonly step: string | null;
   /** The enclosing chrome landmark (`navigation` / `banner` / `contentinfo`), or null. */
   readonly landmark: "navigation" | "banner" | "contentinfo" | null;
+  /** A rich-text (`contenteditable`, not input/textarea) element. See `Control.richText`. */
+  readonly richText: boolean;
 }
 
 /**
@@ -296,6 +303,7 @@ function readControlFacts(node: Node): ControlFacts {
   const min = tag === "input" ? el.getAttribute("min") : null;
   const max = tag === "input" ? el.getAttribute("max") : null;
   const step = tag === "input" ? el.getAttribute("step") : null;
+  const richText = (el as HTMLElement).isContentEditable === true && tag !== "input" && tag !== "textarea";
   // Chrome landmark: a <nav>/role=navigation anywhere up the tree, or a PAGE-level <header>/<footer>
   // (one inside an article/section/main/aside is that region's own header, not page chrome).
   let landmark: "navigation" | "banner" | "contentinfo" | null = null;
@@ -339,6 +347,7 @@ function readControlFacts(node: Node): ControlFacts {
     max,
     step,
     landmark,
+    richText,
   };
 }
 
@@ -359,6 +368,7 @@ function summarize(facts: DescribedFacts): string {
   if (facts.checked === true) bits.push("checked");
   if (facts.checked === false) bits.push("unchecked");
   if (facts.value !== null && facts.value !== "") bits.push(`value="${facts.value}"`);
+  if (facts.richText) bits.push("rich text");
   if (facts.accept !== null && facts.accept !== "") bits.push(`accept=${facts.accept}`);
   if (facts.selected !== null && facts.selected !== "") bits.push(`selected="${facts.selected}"`);
   if (facts.options !== null && facts.options.length > 0) {
@@ -451,6 +461,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         max: facts.max,
         step: facts.step,
         landmark: facts.landmark,
+        ...(facts.richText ? { richText: true } : {}),
       });
       keptFacts.push(facts);
     } catch {

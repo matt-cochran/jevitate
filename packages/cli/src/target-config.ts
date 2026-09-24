@@ -34,6 +34,17 @@ export interface TargetConfig {
   readonly safety?: SafetyConfig;
   /** Mission fixtures file (#140/#144), absolute. */
   readonly fixtures?: string;
+  /**
+   * Backend log sources (#142 follow-up): raw `--log-source` specs (`file:`/`docker:`/`cmd:`), used
+   * by missions drained from the queue (`jevitate mission run`) and by `verify_fix` over MCP — a
+   * caller-supplied `MissionRequest`/tool argument may NEVER name a path or a command, so a source
+   * is only ever declared here, by the operator, local to this machine.
+   */
+  readonly logSources?: readonly string[];
+  /** Raw `--log-defect` specs (a level or a `/regex/`), evaluated the same way as the CLI flag. */
+  readonly logDefect?: readonly string[];
+  /** Opt-in for a `cmd:` source in `logSources` (mirrors `--allow-log-cmd`). Default `false`. */
+  readonly allowLogCmd?: boolean;
 }
 
 export class TargetConfigError extends Error {
@@ -50,10 +61,25 @@ function strings(v: unknown, where: string): string[] {
 function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   if (v === null || typeof v !== "object" || Array.isArray(v)) throw new TargetConfigError(`${where} must be an object`);
   const o = v as Record<string, unknown>;
-  const out: { settle?: SettleConfig; hangs?: HangConfig; timing?: TimingConfig; safety?: SafetyConfig; fixtures?: string } = {};
+  const out: {
+    settle?: SettleConfig;
+    hangs?: HangConfig;
+    timing?: TimingConfig;
+    safety?: SafetyConfig;
+    fixtures?: string;
+    logSources?: string[];
+    logDefect?: string[];
+    allowLogCmd?: boolean;
+  } = {};
   if (o.fixtures !== undefined) {
     if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
     out.fixtures = resolvePath(baseDir, o.fixtures);
+  }
+  if (o.logSources !== undefined) out.logSources = strings(o.logSources, `${where}.logSources`);
+  if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
+  if (o.allowLogCmd !== undefined) {
+    if (typeof o.allowLogCmd !== "boolean") throw new TargetConfigError(`${where}.allowLogCmd must be a boolean`);
+    out.allowLogCmd = o.allowLogCmd;
   }
   if (o.settle !== undefined) {
     if (o.settle === null || typeof o.settle !== "object") throw new TargetConfigError(`${where}.settle must be an object`);
@@ -154,5 +180,11 @@ export function resolveTargetConfig(
     settle: { ...(ignoreRequests.length === 0 ? {} : { ignoreRequests }), ...(longPollMs === undefined ? {} : { longPollMs }) },
     hangs: ignoreNoProgress.length === 0 ? {} : { ignoreNoProgress },
     ...(base.fixtures === undefined ? {} : { fixtures: base.fixtures }),
+    // #142 follow-up: pass-through only — no CLI flag merges into these (a `--log-source` on the
+    // command line is already handled by the caller; this is purely the operator's file-declared
+    // default for callers that have none of their own, i.e. the queue drain and verify_fix over MCP).
+    ...(base.logSources === undefined ? {} : { logSources: base.logSources }),
+    ...(base.logDefect === undefined ? {} : { logDefect: base.logDefect }),
+    ...(base.allowLogCmd === undefined ? {} : { allowLogCmd: base.allowLogCmd }),
   };
 }

@@ -43,6 +43,7 @@ import { join } from "node:path";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { runVerifyFix, type VerifyFixReport } from "./verify-fix-api.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { loadTargetsFile } from "./target-config.js";
 
 /**
  * The MCP stdio server behind `jevitate mcp`. It exposes ONLY the tools in
@@ -405,7 +406,10 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   // verify_fix: replays a persisted finding by (result id, fingerprint) — never a caller-supplied
   // recording or path (invariant #5 analogue). Passes only if the defect signal is absent; an
   // unreachable replay is `inconclusive` and returned as an error result, never as "fixed".
-  const verifyFixImpl = deps.verifyFix ?? ((a: { resultPath: string; fingerprint: string }) => runVerifyFix(a));
+  // #142 follow-up: a `cmd:` server-log source may only be re-run when the OPERATOR opted in for
+  // this origin in ~/.jevitate/targets.json (`allowLogCmd: true`) — never via an MCP argument.
+  const verifyFixImpl =
+    deps.verifyFix ?? ((a: { resultPath: string; fingerprint: string }) => runVerifyFix({ ...a, targets: loadTargetsFile() }));
   const verifyFixTool = async (args: Record<string, unknown>): Promise<McpToolResult> => {
     if (!deps.recordingsDir) {
       return errorResult({ error: "not_configured", message: "verify_fix requires recordingsDir" });

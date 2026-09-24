@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "@jevitate/explore";
-import { armMissionKillSwitch, setKillSwitchOutput, __resetKillSwitchForTests, type KillSwitchDeps } from "./kill-signal.js";
+import {
+  armMissionKillSwitch,
+  armedMissionCount,
+  onMissionKilled,
+  runWithMissionKillListener,
+  setKillSwitchOutput,
+  __resetKillSwitchForTests,
+  type KillSwitchDeps,
+} from "./kill-signal.js";
 
 /** A fake `KillSwitchDeps`: captures the registered handlers so a test can "fire" a signal without
  *  touching the real process, and records every call the handler makes so behavior is asserted
@@ -238,5 +246,87 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
     handlers.SIGTERM?.();
     await vi.waitFor(() => expect(calls.exit).toEqual([143]));
     expect(out).toEqual([]);
+  });
+});
+
+describe("kill-signal — several missions in one process (shared browser pool)", () => {
+  const entry = (step: number): TranscriptEntry => ({ step }) as unknown as TranscriptEntry;
+
+  it("one signal flushes EVERY armed mission with its own steps, closes browsers once and exits once", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch({ recordingPath: "/out/a.json", transcript: () => [entry(1), entry(2)] }, deps);
+    armMissionKillSwitch({ recordingPath: "/out/b.json", transcript: () => [entry(1)] }, deps);
+    expect(armedMissionCount()).toBe(2);
+    handlers.SIGTERM?.();
+    await Promise.resolve();
+    expect(calls.writeResult.map(([path]) => path)).toEqual(["/out/a.json", "/out/b.json"]);
+    const reasons = calls.writeResult.map(([, , , result]) => (result as { reason: string }).reason);
+    expect(reasons).toEqual(["interrupted by SIGTERM after 2 steps", "interrupted by SIGTERM after 1 step"]);
+    expect(calls.closeBrowsers).toBe(1);
+    expect(calls.exit).toEqual([143]);
+    expect(armedMissionCount()).toBe(0);
+  });
+
+  it("disarming one mission leaves the others armed", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    const disarmA = armMissionKillSwitch({ recordingPath: "/out/a.json", transcript: () => [] }, deps);
+    armMissionKillSwitch({ recordingPath: "/out/b.json", transcript: () => [] }, deps);
+    disarmA();
+    handlers.SIGINT?.();
+    await Promise.resolve();
+    expect(calls.writeResult.map(([path]) => path)).toEqual(["/out/b.json"]);
+    expect(calls.exit).toEqual([130]);
+  });
+
+  it("a scoped listener hears only about the mission armed inside its own context; process-wide ones hear all", async () => {
+    const { deps, handlers } = fakeDeps();
+    const heardA: string[] = [];
+    const heardB: string[] = [];
+    const heardAll: string[] = [];
+    onMissionKilled(({ resultPath }) => heardAll.push(resultPath));
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const runA = runWithMissionKillListener(
+      ({ resultPath }) => heardA.push(resultPath),
+      async () => {
+        await Promise.resolve();
+        armMissionKillSwitch({ recordingPath: "/out/a.json", transcript: () => [] }, deps);
+        await new Promise<void>((r) => (releaseA = r));
+      },
+    );
+    const runB = runWithMissionKillListener(
+      ({ resultPath }) => heardB.push(resultPath),
+      async () => {
+        await Promise.resolve();
+        armMissionKillSwitch({ recordingPath: "/out/b.json", transcript: () => [] }, deps);
+        await new Promise<void>((r) => (releaseB = r));
+      },
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(armedMissionCount()).toBe(2);
+    handlers.SIGTERM?.();
+    expect(heardA).toEqual(["/out/a.json.result.json"]);
+    expect(heardB).toEqual(["/out/b.json.result.json"]);
+    expect(heardAll).toEqual(["/out/a.json.result.json", "/out/b.json.result.json"]);
+    releaseA();
+    releaseB();
+    await Promise.all([runA, runB]);
+  });
+
+  it("a failed flush of one mission never keeps the others from being flushed", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    const failing: KillSwitchDeps = {
+      ...deps,
+      writeResult: (recordingPath, missionOutcome, exitCode, result) => {
+        if (recordingPath === "/out/a.json") throw new Error("disk full");
+        return deps.writeResult(recordingPath, missionOutcome, exitCode, result);
+      },
+    };
+    armMissionKillSwitch({ recordingPath: "/out/a.json", transcript: () => [] }, failing);
+    armMissionKillSwitch({ recordingPath: "/out/b.json", transcript: () => [] }, failing);
+    handlers.SIGTERM?.();
+    await Promise.resolve();
+    expect(calls.writeResult.map(([path]) => path)).toEqual(["/out/b.json"]);
+    expect(calls.exit).toEqual([143]);
   });
 });

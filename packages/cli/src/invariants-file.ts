@@ -27,6 +27,8 @@ export interface LoadInvariantsOptions {
   readonly allowlist: readonly string[];
   /** What relative probe paths resolve against (the run's start URL). */
   readonly baseUrl: string;
+  /** #147: the registered observer actors (every `--actor` but the primary) cross-actor checks may name. */
+  readonly observers?: readonly string[];
 }
 
 /** Loads, validates and merges invariant files. Returns undefined for no files. Throws `InvariantsFileError`. */
