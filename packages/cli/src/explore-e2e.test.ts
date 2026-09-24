@@ -186,6 +186,13 @@ describe("jevitate explore — --fake-ai smoke answers the candidate-action ques
         const transcript = await readTranscript(parsed.data.transcriptPath);
         expect(transcript).toHaveLength(3);
         expect(transcript.every((e) => e.op === "done" && e.actOk === false)).toBe(true);
+        // #100: --fake-ai still threads a usage tracker end to end — 0 tokens (deterministic fake),
+        // but at least one judgment counted (so a test can assert the shape without a live key).
+        expect(parsed.data.usage.generations).toBe(0);
+        expect(parsed.data.usage.judgments).toBeGreaterThanOrEqual(1);
+        expect(parsed.data.usage.inputTokens).toBe(0);
+        expect(parsed.data.usage.outputTokens).toBe(0);
+        expect(parsed.data.usage.usd).toBeUndefined();
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }
