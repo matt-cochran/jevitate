@@ -37,7 +37,7 @@ export class MissionSessions {
     return this.#actor;
   }
 
-  /** How many times the mission reset after a hang. */
+  /** How many times the mission moved to a fresh page (after a hang, or after leaving its scope). */
   get resets(): number {
     return this.#resets;
   }
@@ -53,12 +53,26 @@ export class MissionSessions {
    */
   async reset(hang: HangSignal): Promise<boolean> {
     if (this.#openFresh === undefined) return hang.kind !== "main-thread-unresponsive";
+    await this.fresh();
+    return true;
+  }
+
+  /**
+   * Moves the mission to a FRESH page when it can open one (a new context: no state left behind by
+   * the page it leaves), else keeps the current page. The session this holder opened before is
+   * closed — nothing works in it any more — so repeated resets never pile up open contexts. The
+   * caller re-navigates to its start URL afterwards. Returns whether a fresh page was opened.
+   */
+  async fresh(): Promise<boolean> {
+    if (this.#openFresh === undefined) return false;
     const fresh = await this.#openFresh();
+    const previous = this.#owned.splice(0);
     this.#owned.push(fresh);
     this.#page = fresh.page;
     this.#actor = fresh.actor;
     this.#resets += 1;
     for (const l of this.#listeners) l(fresh.page);
+    for (const s of previous) await s.close().catch(() => undefined);
     return true;
   }
 

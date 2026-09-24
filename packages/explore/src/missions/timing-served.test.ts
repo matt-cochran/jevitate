@@ -81,8 +81,11 @@ describe("page timing — the slow endpoint is found and measured (owner ruling 
         origin,
       );
 
-      // Measurements are not verdicts: a slow endpoint is not a defect.
-      expect(result.outcome).toBe("clean");
+      // Measurements are not verdicts: a slow endpoint is not a defect. (The run never touched the
+      // page's one control, so its silence proves nothing either: inconclusive, never clean.)
+      expect(result.defects).toEqual([]);
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.coverage.shortfalls).toContain("no target control was exercised");
 
       const slow = result.timing.endpoints["GET /api/slow/:id"];
       expect(slow).toBeDefined();

@@ -4,7 +4,7 @@ import { Navigate } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { combineOutcomes, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
-import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
+import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
@@ -16,7 +16,7 @@ import { hostProbe, type HostPressure, type HostProbe } from "../host-pressure.j
 import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
 import { NOT_REPLAYED, hangFinding, hangOutcome, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
-import { act } from "../act.js";
+import { act, type ActResult } from "../act.js";
 import { buildJudgmentState } from "../redact.js";
 import { PROMPT_INJECTION_GUARD } from "../decide.js";
 import {
@@ -37,7 +37,16 @@ import {
   messageClass,
   normalizeRoute,
 } from "../adversarial/defect-fingerprint.js";
-import { pickMisuseAction, type MisuseDecision, type MisuseStrategy } from "../adversarial/misuse.js";
+import type { MisuseStrategy } from "../adversarial/misuse.js";
+import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
+import { planMisuseEpisode, type LastAction, type MisuseStep } from "../adversarial/form-misuse.js";
+import {
+  CoverageTracker,
+  resolveCoverageThresholds,
+  type AdversarialCoverage,
+  type CoverageThresholds,
+} from "../adversarial/run-coverage.js";
+import { descriptorToLocator } from "@jevitate/recorder";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -118,6 +127,8 @@ export type AdversarialStop =
   | "time-budget"
   | "strategies-exhausted"
   | "not-rendered"
+  /** The start URL did not stay in scope (it redirected elsewhere), so the target could not be tested. */
+  | "scope-unreachable"
   | "hang"
   | "crashed";
 
@@ -140,6 +151,10 @@ export interface AdversarialOutcome {
   readonly crash?: CrashReport;
   /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
   readonly timing: TimingSummary;
+  /** The target scope and every departure from it. */
+  readonly scope: AdversarialScope;
+  /** What the run exercised on its target, and whether that was enough for silence to mean clean. */
+  readonly coverage: AdversarialCoverage;
 }
 
 export interface AdversarialMissionParams {
@@ -188,7 +203,41 @@ export interface AdversarialMissionParams {
   readonly settle?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
   readonly hangs?: HangConfig;
+  /**
+   * Extra in-scope route globs (CLI `--route`, the feature mission's glob syntax). The scope is
+   * always the start URL's route and everything under it; these add to it.
+   */
+  readonly routeGlobs?: readonly string[];
+  /**
+   * How much of the target a run must exercise before "found nothing" may be reported `clean`.
+   * Default `DEFAULT_COVERAGE_THRESHOLDS` (25% of the target's controls, and a submitted form when
+   * there is one). Below them a silent run is `inconclusive`, with its coverage attached.
+   */
+  readonly coverageThresholds?: Partial<CoverageThresholds>;
 }
+
+/** One time the run left its target scope (and was reset to the start URL). */
+export interface ScopeDeparture {
+  /** The transcript step whose action left the scope. */
+  readonly step: number;
+  /** The (redacted) URL it landed on. */
+  readonly url: string;
+  /** What was acted on (control name or op). */
+  readonly action: string;
+}
+
+/** Where the run was allowed to hunt, and how often it left. Out-of-scope steps never count as coverage. */
+export interface AdversarialScope {
+  readonly routeGlobs: string[];
+  /** Steps whose result landed outside the scope (each was followed by a reset). */
+  readonly outOfScopeSteps: number;
+  /** The first departures (up to 50), in order. */
+  readonly departures: ScopeDeparture[];
+  /** Times the run moved to a fresh page (after a departure or a hang). */
+  readonly resets: number;
+}
+
+const MAX_LISTED_DEPARTURES = 50;
 
 export const DEFAULT_ADVERSARIAL_TIME_BUDGET_MS = 10 * 60_000;
 
@@ -241,6 +290,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const now = params.now ?? Date.now;
   const timeBudgetMs = params.timeBudgetMs ?? DEFAULT_ADVERSARIAL_TIME_BUDGET_MS;
   if (params.strategies.length === 0) throw new Error("runAdversarialMission: at least one strategy is required");
+  // Scope containment (#64): the start route (and below it) plus the caller's globs.
+  const routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
+  const inScope = scopePredicate(params.allowlist, routeGlobs);
+  const departures: ScopeDeparture[] = [];
+  let outOfScopeSteps = 0;
+  const thresholds = resolveCoverageThresholds(params.coverageThresholds);
+  const cov = new CoverageTracker(inScope);
 
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
   const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
@@ -288,9 +344,18 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     const recordingFailure: MissionFailure | undefined = finished.ok
       ? undefined
       : { kind: "exception", message: `recording rejected: ${finished.reason}` };
-    const finalFailure = failure ?? recordingFailure;
+    const coverage = cov.report(thresholds, outOfScopeSteps);
+    // A run that found nothing only means something if it tried: below the coverage thresholds a
+    // silent run proved nothing about its target, so it is `inconclusive` — never `clean`.
+    const thin = outcome === "clean" && !coverage.sufficient;
+    const coverageFailure: MissionFailure | undefined = thin
+      ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${coverage.shortfalls.join("; ")}` }
+      : undefined;
+    const finalFailure = failure ?? recordingFailure ?? coverageFailure;
+    const honest: MissionOutcome = thin ? "inconclusive" : outcome;
     return {
-      outcome: finished.ok ? outcome : "crashed",
+      coverage,
+      outcome: finished.ok ? honest : "crashed",
       stop: finished.ok ? stop : "crashed",
       defects: [...defects.values()].map((d) => freeze(d, later)),
       hangs: [...hangs.values()],
@@ -299,6 +364,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
       heap: heap.samples(),
       timing: summarizeTimings(timings),
+      scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
             crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
@@ -377,13 +443,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   };
 
   /**
-   * After a hang: reset to a known state — a fresh page when the mission can open one (a hung page
-   * may not even navigate), else the same page — re-navigate to the start URL in a NEW Recording
-   * segment, and keep hunting. False when the mission cannot continue (an unresponsive page with no
-   * way to open a fresh one, or a start page that itself hangs).
+   * Starts a NEW Recording segment at the start URL on the current session page (after a reset):
+   * its findings replay from there, never through what ended the previous segment. Returns the
+   * perceived start page, or why the run cannot go on (the start page hangs, or does not stay in
+   * scope — e.g. the session was lost and it redirects to a login page).
    */
-  const resetAfterHang = async (h: HangSignal): Promise<{ snapshot: Snapshot; timing: PageTiming } | null> => {
-    if (!(await sessions.reset(h))) return null;
+  const restartAtSeed = async (): Promise<
+    { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }
+  > => {
     await monitorFor(sessions.page).instrument();
     recorder = new RunRecorder(site, undefined, secrets);
     segments.push(recorder);
@@ -393,9 +460,23 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     recorder.observed(back.snapshot.url, now(), back.timing);
     if (back.hang !== null) {
       await recordHang(back.hang, back.snapshot, back.timing);
-      return null;
+      return { ok: false, stop: "hang" };
     }
-    return { snapshot: back.snapshot, timing: back.timing };
+    if (!inScope(back.snapshot.url)) return { ok: false, stop: "scope-unreachable" };
+    return { ok: true, snapshot: back.snapshot, timing: back.timing };
+  };
+
+  /**
+   * After a hang: reset to a known state — a fresh page when the mission can open one (a hung page
+   * may not even navigate), else the same page — re-navigate to the start URL in a NEW Recording
+   * segment, and keep hunting. Null when the mission cannot continue (an unresponsive page with no
+   * way to open a fresh one, or a start page that itself hangs or leaves the scope).
+   */
+  const resetAfterHang = async (
+    h: HangSignal,
+  ): Promise<{ ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }> => {
+    if (!(await sessions.reset(h))) return { ok: false, stop: "hang" };
+    return restartAtSeed();
   };
 
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
@@ -541,6 +622,23 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         message: seed.reason ?? "seed page did not render",
       });
     }
+    if (!inScope(seed.snapshot.url)) {
+      // The start URL did not stay on the target (a redirect to a login page, another route): the
+      // run cannot test what it was asked to — it proves nothing, so it is never `clean`.
+      const message = `the start URL left the target scope (landed on ${redactUrl(seed.snapshot.url)})`;
+      transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "seed-load",
+        actOk: false,
+        reason: `${message} (inconclusive)`,
+        snapshot: seed.snapshot,
+        timing: seed.timing,
+      });
+      return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
+    }
     let snap = seed.snapshot;
     // A perception's timing is reported ONCE — on the first step decided on it — so a run whose
     // strategies found nothing to do on a page does not count that page's load several times.
@@ -567,15 +665,132 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       if (verdict !== null) await fold(step, verdict.findings);
     }
 
-    let lastDecision: MisuseDecision | undefined;
+    let last: LastAction | null = null;
     let lastRecordedTarget: string | null = null;
     let actions = 0;
     let strategySteps = 0;
     let idleStreak = 0;
     const visitedLinks = new Set<string>();
-    let stop: AdversarialStop;
+    /** How many episodes each strategy has run (rotates its form, field and value). */
+    const rounds = new Map<MisuseStrategy, number>();
+    let stop: AdversarialStop | null = null;
 
-    for (;;) {
+    /**
+     * SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
+     * transcript — it is never read into the defect decision. Wiring this answer into the defect
+     * condition would be the single most dangerous regression this mission can suffer. The state is
+     * redacted and carries the prompt-injection guard like every other prompt. It is advisory, so an
+     * unavailable judgment is recorded and the run goes on.
+     */
+    const softJudgment = async (
+      on: Snapshot,
+    ): Promise<{ judgments?: Record<string, TranscriptJudgment>; note?: string }> => {
+      try {
+        const answers = await params.judgment.systemOne({
+          state: buildJudgmentState({
+            goal: "try to break it",
+            url: sessions.page.url(),
+            controls: [PROMPT_INJECTION_GUARD, ...on.controls.map((c) => c.summary)],
+            history: [],
+          }),
+          questions: { looksBroken: { kind: "noul" } },
+        });
+        const looksBroken = answers.looksBroken;
+        return looksBroken?.kind === "noul"
+          ? { judgments: { looksBroken: { value: looksBroken.value, probability: looksBroken.probability } } }
+          : {};
+      } catch (e) {
+        return { note: `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}` };
+      }
+    };
+
+    /** One planned step through the gated act(). A select with no chosen option takes another option. */
+    const execute = async (s: MisuseStep): Promise<{ result: ActResult; value?: string }> => {
+      if (s.op === "select" && s.control !== null && s.fillText === undefined) {
+        const option = await otherOption(sessions.page, s.control);
+        if (option === null) return { result: { ok: false, mutated: false, reason: "no other option to choose" } };
+        return { result: await act(sessions.actor, { op: "select", control: s.control, value: option }), value: option };
+      }
+      const result = await act(sessions.actor, { op: s.op, control: s.control, value: s.fillText ?? null });
+      return s.fillText === undefined ? { result } : { result, value: s.fillText };
+    };
+
+    /** Appends an executed step to the Recording (the defect's repro path). */
+    const recordAction = (s: MisuseStep, value: string | undefined, at: number): void => {
+      if (s.control === null) {
+        if (s.op === "reload") {
+          recorder.navigate(sessions.page.url(), at);
+          lastRecordedTarget = null;
+        }
+        return;
+      }
+      if (s.op === "click") recorder.click(s.control.descriptor, at);
+      else if (s.op === "type") recorder.fill(s.control.descriptor, value ?? "", at);
+      else if (s.op === "select") recorder.select(s.control.descriptor, value ?? "", at);
+      else return;
+      lastRecordedTarget = JSON.stringify(s.control.descriptor);
+    };
+
+    /**
+     * Perceives what an action produced and checks it: a hang is recorded, then the mission resets
+     * to a known state and hunts on; an off-origin page sends it back to the seed. "reset" means the
+     * page the episode was planned on is gone; "stop" means the mission cannot continue.
+     */
+    const observeAfter = async (
+      step: number,
+      action: string,
+    ): Promise<{ kind: "ok" } | { kind: "reset" } | { kind: "stop"; stop: AdversarialStop }> => {
+      const next = await perceiveNow();
+      await drainLate(step);
+      snap = next.snapshot;
+      snapTiming = next.timing;
+      const target = lastRecordedTarget;
+      recorder.observed(
+        snap.url,
+        now(),
+        next.timing,
+        target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
+      );
+      lastRecordedTarget = null;
+      let restarted: Awaited<ReturnType<typeof restartAtSeed>>;
+      if (next.hang !== null) {
+        await recordHang(next.hang, next.snapshot, next.timing);
+        // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
+        // budget. The hung route is not followed again (visit-route remembers it).
+        restarted = await resetAfterHang(next.hang);
+      } else if (!inScope(snap.url)) {
+        // Scope containment (#64; guardrail #1 for another origin): the action left the target.
+        // Record the departure, then reset to the start URL in a fresh page and hunt on there.
+        // The step spent out of scope counts as out-of-scope, never as coverage.
+        outOfScopeSteps += 1;
+        const landed = redactUrl(snap.url);
+        departures.push({ step, url: landed, action });
+        const fresh = params.openFreshSession !== undefined;
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "scope-reset",
+          actOk: true,
+          reason: `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+          snapshot: snap,
+          ...(snapTiming === undefined ? {} : { timing: snapTiming }),
+        });
+        snapTiming = undefined;
+        await sessions.fresh();
+        restarted = await restartAtSeed();
+      } else {
+        return { kind: "ok" };
+      }
+      last = null;
+      if (!restarted.ok) return { kind: "stop", stop: restarted.stop };
+      snap = restarted.snapshot;
+      snapTiming = restarted.timing;
+      return { kind: "reset" };
+    };
+
+    while (stop === null) {
       if (strategySteps >= bounds.maxDecisions) {
         stop = "step-budget";
         break;
@@ -591,134 +806,104 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       const strategy = params.strategies[strategySteps % params.strategies.length];
       if (strategy === undefined) throw new Error("adversarial: strategy index out of range");
       strategySteps += 1;
+      const round = rounds.get(strategy) ?? 0;
 
-      const decidedOn = snap;
-      const decidedOnTiming = snapTiming;
+      // A perception's timing is reported once — on the first step decided on it.
+      let stepSnap = snap;
+      let stepTiming = snapTiming;
       snapTiming = undefined;
-      const decision = pickMisuseAction({ snapshot: snap, strategy, lastDecision, rng: Math.random, visitedLinks });
-      let acted = false;
-      let control: Control | null = null;
-      let actOk = false;
-      let actReason: string | undefined = "strategy found no applicable action";
-      if (decision) {
-        control =
-          decision.targetIndex !== undefined
-            ? snap.controls.find((c) => c.index === decision.targetIndex) ?? null
-            : null;
-        const at = now();
-        const result = await act(sessions.actor, { op: decision.op, control, value: decision.fillText ?? null });
-        actions += 1;
-        acted = true;
-        actOk = result.ok;
-        actReason = result.reason;
-        if (result.ok && control !== null) {
-          if (decision.op === "click") recorder.click(control.descriptor, at);
-          else if (decision.op === "type") recorder.fill(control.descriptor, decision.fillText ?? "", at);
-          else if (decision.op === "select") recorder.select(control.descriptor, decision.fillText ?? "", at);
-          lastRecordedTarget = JSON.stringify(control.descriptor);
-        }
-        if (strategy === "visit-route" && control !== null) visitedLinks.add(control.name);
-        lastDecision = decision;
-      }
-      idleStreak = decision ? 0 : idleStreak + 1;
+      cov.observe(snap);
+      const episode = planMisuseEpisode({
+        snapshot: snap,
+        strategy,
+        round,
+        last,
+        visitedLinks,
+        exercised: cov.exercisedKeys,
+        inScope,
+        rng: Math.random,
+      });
 
-      const step = transcript.nextStep;
-      const recordStep = (extra: { reason?: string; judgments?: Record<string, TranscriptJudgment> }): void => {
-        const reason = extra.reason ?? actReason;
+      cov.strategy(strategy, episode !== null);
+      if (episode === null) {
+        idleStreak += 1;
+        // Independent oracle — runs EVERY step, even when a strategy chose no action: the user
+        // invariant is an independent probe of live page state, and hard signals may have accrued.
+        const step = transcript.nextStep;
+        const verdict = await adjudicate();
+        const soft = verdict === null ? await softJudgment(stepSnap) : {};
         transcript.record({
-          op: decision ? decision.op : null,
-          control,
+          op: null,
+          control: null,
           confidence: null,
           chosenBy: "strategy",
           strategy,
-          actOk,
-          ...(reason === undefined ? {} : { reason }),
-          snapshot: decidedOn,
-          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
-          ...(extra.judgments === undefined ? {} : { judgments: extra.judgments }),
+          actOk: false,
+          reason: verdict?.reason ?? joinReasons(["strategy found no applicable action", soft.note]),
+          snapshot: stepSnap,
+          ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
         });
-      };
-
-      // Independent oracle — runs EVERY step, even when a strategy chose no action: the user
-      // invariant is an independent probe of live page state, and hard signals may have accrued.
-      const verdict = await adjudicate();
-      if (verdict !== null) {
-        recordStep({ reason: verdict.reason });
-        await fold(step, verdict.findings);
-      } else {
-        // SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
-        // transcript — it is never read into the defect decision above. Wiring this answer into
-        // the defect condition would be the single most dangerous regression this mission can
-        // suffer. The state is redacted and carries the prompt-injection guard like every other
-        // prompt. It is advisory, so an unavailable judgment is recorded and the run goes on.
-        let judgments: Record<string, TranscriptJudgment> | undefined;
-        let judgmentNote: string | undefined;
-        try {
-          const answers = await params.judgment.systemOne({
-            state: buildJudgmentState({
-              goal: "try to break it",
-              url: sessions.page.url(),
-              controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
-              history: [],
-            }),
-            questions: { looksBroken: { kind: "noul" } },
-          });
-          const looksBroken = answers.looksBroken;
-          if (looksBroken?.kind === "noul") {
-            judgments = { looksBroken: { value: looksBroken.value, probability: looksBroken.probability } };
-          }
-        } catch (e) {
-          judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
-        }
-        recordStep({
-          ...(judgments === undefined ? {} : { judgments }),
-          ...(judgmentNote === undefined
-            ? {}
-            : { reason: actReason === undefined ? judgmentNote : `${actReason}; ${judgmentNote}` }),
-        });
+        if (verdict !== null) await fold(step, verdict.findings);
+        // A whole cycle of strategies found nothing to do on this page: there is nothing left.
+        if (idleStreak >= params.strategies.length) stop = "strategies-exhausted";
+        continue;
       }
+      idleStreak = 0;
+      rounds.set(strategy, round + 1);
 
-      if (acted) {
-        const next = await perceiveNow();
-        await drainLate(step);
-        snap = next.snapshot;
-        snapTiming = next.timing;
-        const target = lastRecordedTarget;
-        recorder.observed(
-          snap.url,
-          now(),
-          next.timing,
-          target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
-        );
-        lastRecordedTarget = null;
-        if (next.hang !== null) {
-          await recordHang(next.hang, next.snapshot, next.timing);
-          // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
-          // budget. The hung route is not followed again (visit-route remembers it).
-          const fresh = await resetAfterHang(next.hang);
-          if (fresh === null) {
-            stop = "hang";
-            break;
-          }
-          snap = fresh.snapshot;
-          snapTiming = fresh.timing;
-          lastDecision = undefined;
+      for (const s of episode.steps) {
+        if (actions >= bounds.maxActions) break;
+        const at = now();
+        const { result, value } = await execute(s);
+        actions += 1;
+        if (result.ok) recordAction(s, value, at);
+        if (result.ok) cov.acted(stepSnap.url, s.control, s.submitsForm);
+        if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
+        last = { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
+        // Evidence for "act while the submit is pending": how many requests the action left in flight.
+        const inFlight = !s.settle && result.ok ? monitorFor(sessions.page).pending().length : 0;
+        const reason = joinReasons([
+          s.note,
+          result.ok ? result.note : result.reason,
+          inFlight > 0 ? `${inFlight} request(s) in flight` : undefined,
+        ]);
+        const entry = {
+          op: s.op,
+          control: s.control,
+          confidence: null,
+          chosenBy: "strategy" as const,
+          strategy,
+          actOk: result.ok,
+          snapshot: stepSnap,
+          ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+        };
+        stepTiming = undefined;
+        const step = transcript.nextStep;
+        if (!s.settle) {
+          // The next step fires at once, without waiting for this one to settle (that is the misuse).
+          transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
           continue;
         }
-        if (!isAuthorizedExploreTarget(snap.url, params.allowlist)) {
-          // Guardrail #1: never act off an authorized origin — go back to the seed and hunt on.
-          await Navigate.to(params.seedUrl).performAs(sessions.actor);
-          recorder.navigate(params.seedUrl, now());
-          const back = await perceiveNow();
-          snap = back.snapshot;
-          snapTiming = back.timing;
-          recorder.observed(snap.url, now(), back.timing);
+        const verdict = await adjudicate();
+        const soft = verdict === null ? await softJudgment(stepSnap) : {};
+        const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
+        transcript.record({
+          ...entry,
+          ...(full === undefined ? {} : { reason: full }),
+          ...(soft.judgments === undefined ? {} : { judgments: soft.judgments }),
+        });
+        if (verdict !== null) await fold(step, verdict.findings);
+        const after = await observeAfter(step, s.control?.name ?? s.op);
+        if (after.kind === "stop") {
+          stop = after.stop;
+          break;
         }
-      }
-      if (idleStreak >= params.strategies.length) {
-        // A whole cycle of strategies found nothing to do on this page: there is nothing left.
-        stop = "strategies-exhausted";
-        break;
+        // The rest of the episode was planned for a page that is gone.
+        if (after.kind === "reset") break;
+        stepSnap = snap;
+        stepTiming = snapTiming;
+        snapTiming = undefined;
       }
     }
 
@@ -730,5 +915,24 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));
   } finally {
     await sessions.closeOwned();
+  }
+}
+
+/** Joins the non-empty parts of a transcript reason; undefined when there are none. */
+function joinReasons(parts: ReadonlyArray<string | undefined>): string | undefined {
+  const kept = parts.filter((p): p is string => p !== undefined && p !== "");
+  return kept.length === 0 ? undefined : kept.join("; ");
+}
+
+/** A native select's first enabled option other than the current one (null: none, or not a select). */
+async function otherOption(page: Page, control: Control): Promise<string | null> {
+  try {
+    return await descriptorToLocator(page, control.descriptor).evaluate((el) => {
+      if (!(el instanceof HTMLSelectElement)) return null;
+      const other = Array.from(el.options).find((o) => !o.disabled && o.value !== el.value);
+      return other === undefined ? null : other.value;
+    });
+  } catch {
+    return null;
   }
 }

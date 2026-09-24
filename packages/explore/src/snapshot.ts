@@ -4,6 +4,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { contentHash } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
+import { redactUrl } from "./redact.js";
 
 /**
  * perceive: turn a live `Page` into an indexed table of interactive controls,
@@ -44,6 +45,15 @@ export interface Control {
   readonly options?: readonly string[];
   /** Model-facing one-liner (role/name/state). Never a raw secret value. */
   readonly summary: string;
+  /**
+   * The form the control belongs to (`form#<id>` or `form@<n>`, the form's position in the
+   * document), or null when it sits in no `<form>`. Absent on controls built outside `snapshot`.
+   */
+  readonly form?: string | null;
+  /** True for a control that submits its form (a submit button / `<input type=submit|image>`). */
+  readonly submits?: boolean;
+  /** A link's resolved destination (`a[href]`), so a mission can tell where it leads without clicking. */
+  readonly href?: string | null;
 }
 
 export interface Snapshot {
@@ -98,6 +108,12 @@ interface ControlFacts {
   readonly options: string[] | null;
   /** A `<select>`'s selected option label; null for every other control. */
   readonly selected: string | null;
+  /** The owning form's key (`form#<id>` / `form@<n>`), or null. */
+  readonly form: string | null;
+  /** Whether activating the control submits its form. */
+  readonly submits: boolean;
+  /** A link's resolved `href`, or null. */
+  readonly href: string | null;
 }
 
 /**
@@ -205,7 +221,19 @@ function readControlFacts(node: Node): ControlFacts {
     selected = cur === undefined ? null : norm(cur.label || cur.text);
   }
 
-  return { tag, inputType, role, name, enabled, checked, autocomplete, valueBearing, visible, accept, options, selected };
+  // Form membership: the element's own form owner (honours the `form=` attribute), else the
+  // nearest enclosing <form>. Keyed by id when it has one, else by its position in the document.
+  const owner = (el as HTMLInputElement).form ?? el.closest("form");
+  let form: string | null = null;
+  if (owner !== null) {
+    form = owner.id !== "" ? `form#${owner.id}` : `form@${Array.from(document.forms).indexOf(owner)}`;
+  }
+  const buttonType = tag === "button" ? (el.getAttribute("type") ?? "submit").toLowerCase() : null;
+  const submits =
+    owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
+  const href = tag === "a" ? (el as HTMLAnchorElement).href || null : null;
+
+  return { tag, inputType, role, name, enabled, checked, autocomplete, valueBearing, visible, accept, options, selected, form, submits, href };
 }
 
 /** BROWSER CODE — reads a (non-secret, value-bearing) control's current value. */
@@ -305,6 +333,10 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         enabled: facts.enabled,
         ...(facts.options === null ? {} : { options: facts.options }),
         summary: summarize(facts),
+        form: facts.form,
+        submits: facts.submits,
+        // Only the path matters (scope checks); sensitive query values are masked like every URL.
+        href: facts.href === null ? null : redactUrl(facts.href),
       });
       keptFacts.push(facts);
     } catch {

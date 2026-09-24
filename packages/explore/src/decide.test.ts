@@ -96,7 +96,7 @@ describe("decide — one candidate-action head", () => {
     };
     await decide(judge, { goal: "x", snapshot: snap, history: [] });
     // "Username" is a form field, not a message composer: no `send` for it.
-    expect(asked?.options).toEqual(["type:0", "click:1", "wait", "scroll_down", "scroll_up", "done", "blocked"]);
+    expect(asked?.options).toEqual(["type:0", "click:1", "wait", "scroll_down", "scroll_up", "reload", "done", "blocked"]);
     expect(asked?.descriptions?.["type:0"]).toBe('type into textbox "Username"');
     expect(asked?.descriptions?.["click:1"]).toBe('click button "Sign in"');
     expect(asked?.instructions).toMatch(/single action/);

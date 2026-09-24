@@ -20,6 +20,8 @@ export type Op =
   | "scroll_up"
   | "scroll_down"
   | "wait"
+  /** Reload the current page — proves whether what the page shows survived (persistence). */
+  | "reload"
   | "done"
   | "blocked";
 
@@ -32,6 +34,7 @@ export const OPS: readonly Op[] = [
   "scroll_up",
   "scroll_down",
   "wait",
+  "reload",
   "done",
   "blocked",
 ];
@@ -113,6 +116,10 @@ export const TARGET_FREE_ACTIONS: ReadonlyArray<{ readonly op: Exclude<Op, Targe
   { op: "wait", description: "wait for the page to finish updating" },
   { op: "scroll_down", description: "scroll down to reveal more of the page" },
   { op: "scroll_up", description: "scroll up" },
+  {
+    op: "reload",
+    description: "reload the page (shows whether what was saved actually persisted; unsaved edits are discarded)",
+  },
   { op: "done", description: "the goal is achieved on the current page" },
   { op: "blocked", description: "the goal cannot be advanced from here" },
 ];
