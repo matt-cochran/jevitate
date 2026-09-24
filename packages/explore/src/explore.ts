@@ -558,7 +558,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const record = (
         actOk: boolean,
         reason?: string,
-        extra: { message?: string; reply?: ReplyResult; judgments?: Record<string, { value: boolean; probability: number }>; op?: typeof decision.op } = {},
+        extra: { message?: string; value?: string; reply?: ReplyResult; judgments?: Record<string, { value: boolean; probability: number }>; op?: typeof decision.op } = {},
       ): void => {
         transcript.record({
           op: extra.op ?? decision.op,
@@ -570,6 +570,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           snapshot: snap,
           timing: perception.timing,
           ...(extra.message === undefined ? {} : { message: extra.message }),
+          ...(extra.value === undefined ? {} : { value: extra.value }),
           ...(extra.reply === undefined ? {} : { reply: extra.reply }),
           ...(extra.judgments === undefined ? {} : { judgments: extra.judgments }),
         });
@@ -764,7 +765,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } else {
           history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
         }
-        record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder));
+        record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder), {
+          value: placeholder,
+        });
         lastActedOp = decision.op;
         continue;
       }
@@ -925,7 +928,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } else {
           history.push(`select failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: option });
         lastActedOp = op;
         continue;
       }
@@ -987,7 +990,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         } else {
           history.push(`${decision.op} failed: ${failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
+        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: text });
       } else if (decision.op === "click") {
         // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
         // latest reply is a conversation turn: its reply is awaited like a `send`'s.

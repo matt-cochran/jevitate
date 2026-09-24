@@ -1361,13 +1361,13 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--secret-field <binding>",
-      "goal strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
+      "goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
     .option(
       "--totp <binding>",
-      "goal strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
+      "goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1557,8 +1557,8 @@ export function buildProgram(deps: CliDeps): Command {
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
-        if (o.feature !== undefined || strategy !== "goal") {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal"));
+        if (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability")) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal or usability"));
           return;
         }
         try {
@@ -1769,6 +1769,7 @@ export function buildProgram(deps: CliDeps): Command {
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
+            ...(secretFields.length > 0 ? { secretFields } : {}),
             fixture: o.fixture,
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
