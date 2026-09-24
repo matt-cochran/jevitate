@@ -31,6 +31,24 @@ export interface CredentialStore {
   read(key: CredentialKey): string | undefined;
 }
 
+/**
+ * Extra env var name(s) accepted for a credential key, alongside its own name (issue #83):
+ * TypeSafe's own docs and other apps set `TYPESAFE_JEV_API_KEY`, where jevitate has
+ * historically read `TYPESAFE_API_KEY` — accepting both means a shell profile shared across
+ * tools just works, with no rename. The alias is checked only when the primary name is unset;
+ * `read`/`detect` never say which name the value actually came from (the caller only ever
+ * needs the canonical `CredentialKey`).
+ */
+const ENV_ALIASES: Partial<Record<CredentialKey, readonly string[]>> = {
+  TYPESAFE_API_KEY: ["TYPESAFE_JEV_API_KEY"],
+};
+
+/** The env var alias(es) also accepted for `key`, for surfacing to a user (`init`/`ai status`
+ *  prompts) — empty for a key with no alias. */
+export function envAliasesFor(key: CredentialKey): readonly string[] {
+  return ENV_ALIASES[key] ?? [];
+}
+
 export function envCredentialStore(
   env: Record<string, string | undefined> = process.env,
   localConfig: Partial<Record<CredentialKey, string>> = {},
@@ -44,7 +62,16 @@ export function envCredentialStore(
     const trimmed = v?.trim();
     return trimmed && trimmed.length > 0 ? trimmed : undefined;
   };
-  const resolve = (k: CredentialKey) => nonBlank(env[k]) ?? nonBlank(localConfig[k]);
+  const fromEnv = (k: CredentialKey) => {
+    const direct = nonBlank(env[k]);
+    if (direct !== undefined) return direct;
+    for (const alias of ENV_ALIASES[k] ?? []) {
+      const aliased = nonBlank(env[alias]);
+      if (aliased !== undefined) return aliased;
+    }
+    return undefined;
+  };
+  const resolve = (k: CredentialKey) => fromEnv(k) ?? nonBlank(localConfig[k]);
   return { detect: (k) => resolve(k) !== undefined, read: (k) => resolve(k) };
 }
 

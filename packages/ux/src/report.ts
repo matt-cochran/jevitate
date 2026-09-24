@@ -158,7 +158,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
   }
   const ranked = kept.sort(compareRank);
   const suppressed = summarize([...(outcome.suppressed ?? []), ...below]);
-  const summary = `${coverageSummary(outcome.coverage)}; ${ranked.length} finding(s) at confidence ≥ ${minConfidence}; ${suppressed.total} suppressed (${Object.entries(
+  const summary = `${coverageSummary(outcome.coverage)}; ${ranked.length} finding(s) at finding-confidence ≥ ${minConfidence}; ${suppressed.total} suppressed (${Object.entries(
     suppressed.byReason,
   )
     .filter(([, n]) => n > 0)
@@ -169,8 +169,12 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     .sort((a, b) => b[1] - a[1])
     .map(([id, n]) => `${id} ${n}`)
     .join(", ");
+  // "finding-confidence" (not bare "confidence"): --min-confidence gates each finding's OWN
+  // confidence (violation/applicability/grounding), never its separate quality.confidence (the
+  // independent grader's confidence in the actionable/relevant-minor/... label) — the two read
+  // as one number if this says just "confidence" (issue #83 item 6).
   const headline =
-    `${ranked.length} finding(s) graded ${policy.show.join("/")} at confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
+    `${ranked.length} finding(s) graded ${policy.show.join("/")} at finding-confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
     (suppressed.total > 0 ? `; ${suppressed.total} suppressed (by rubric item: ${byItem})` : "; none suppressed");
   return {
     headline,

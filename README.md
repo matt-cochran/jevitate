@@ -65,6 +65,19 @@ jevitate --help                                       # everything else
 Autonomous runs are always bounded and restricted to origins you authorize;
 credentials are never sent to a model. See [SECURITY.md](./SECURITY.md).
 
+### Build identity
+
+`jevitate --version` prints the published version, plus the commit and build time whenever
+the build could determine them (`0.1.0 (commit d63c55b, built 2026-09-24T04:11:32.000Z)`) — a
+plain version number alone doesn't change between rebuilds of an `npm link`ed working tree, so
+two results from different builds in one dogfooding session were otherwise indistinguishable.
+When they can't be determined (no `.git`, `git` unavailable), the field reads `unknown` —
+never a fabricated commit or time.
+
+The same `{version, commit, builtAt}` (as `engine`) is on every mission's result — the
+persisted `*.result.json`, the `--json` envelope, and every issue draft's `## Environment`
+section — so a result on disk always says which build produced it.
+
 ### Mission outcomes and exit codes
 
 A mission never answers with a crash: every run ends in a typed outcome, and its
@@ -100,6 +113,77 @@ session; only absence across EVERY replay that reached the defect's step is `fix
 
 The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same, always with the default replay count.
 
+#### Every `outcome`, `stop` and `missionOutcome` value
+
+The table above is the canonical `MissionOutcome` — every mission's typed verdict and the
+process exit code it maps to (`missionExitCode()`, `packages/domain/src/mission-outcome.ts`).
+Every mission's result also carries a `missionOutcome: MissionOutcome` (and `exitCode`) field —
+the canonical, exit-coded verdict from that table — so a caller that only cares "did this run
+prove something clean, or not" never needs to interpret a mission-specific `outcome`/`stop`
+below. Those mission-specific fields exist for diagnosis: why the run stopped, in that mission's
+own terms.
+
+**Goal mission (`--goal`) — its own `outcome: GoalBasedOutcome`, with its own exit codes
+(`goalExitCode()`, `packages/cli/src/mission-exit.ts`) instead of the generic table above:**
+
+| `outcome` | Exit code | Meaning |
+|---|---|---|
+| `succeeded` | 0 | the success assertion held |
+| `exhausted` | 1 | the action/decision budget ran out before the assertion held |
+| `blocked` | 1 | the model decided it could not proceed (e.g. no matching control) |
+| `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) |
+| `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
+| `hang` | 3 | the app under test hung, and it reproduced on replay |
+| `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+
+**Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
+the `outcome` above; not separately exit-coded):
+
+| `stop` | Meaning |
+|---|---|
+| `done` | the model decided the goal was complete |
+| `blocked` | the model decided it could not proceed |
+| `exhausted` | the action or decision budget ran out |
+| `no-progress` | the same state repeated with no forward movement (the no-progress detector) |
+| `hang` | the app under test hung |
+| `inconclusive` | a required decision round-trip stayed unavailable |
+| `crashed` | the engine failed |
+
+**Adversarial mission (`--strategy adversarial`) — `stop: AdversarialStop`**, why the hunt
+ended (its own top-level `outcome` is already the canonical `MissionOutcome` from the table
+above, so it needs no separate exit-code mapping):
+
+| `stop` | Meaning |
+|---|---|
+| `step-budget` | the max-actions budget ran out |
+| `action-budget` | the max-decisions budget ran out |
+| `time-budget` | the mission's time budget ran out |
+| `strategies-exhausted` | every misuse strategy was tried with nothing left to do |
+| `not-rendered` | the target page never rendered |
+| `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
+| `hang` | the app under test hung |
+| `crashed` | the engine failed |
+
+**Coverage mission (`--strategy coverage`) — its own `outcome`**, before it's folded into
+`missionOutcome`:
+
+| `outcome` | Meaning |
+|---|---|
+| `exhausted` | the state frontier was fully explored |
+| `cap` | the action budget ran out before the frontier was exhausted |
+| `crashed` | the engine failed |
+| `hang` | stopped at a hang it could not reset from |
+
+**Feature mission (`--feature`) — its own `outcome`**, same idea plus its own path cap:
+
+| `outcome` | Meaning |
+|---|---|
+| `exhausted` | the state frontier was fully explored |
+| `cap` | the action budget ran out |
+| `path-cap` | the max-discovered-paths budget ran out |
+| `crashed` | the engine failed |
+| `hang` | stopped at a hang it could not reset from |
+
 ### Success checks (goal mission)
 
 A goal run succeeds only if its independent checks hold. The model's "done" never
@@ -122,7 +206,9 @@ In these specs:
   (`[data-testid=x]` is read as the test id).
 - The last `|` separates the descriptor from the text or value.
 - Path globs match the request path: `*` within one segment, `**` across segments.
-  A method of `*` matches any method.
+  A method of `*` matches any method. **The glob must start with `/`** (it matches the
+  request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
+  `path glob must start with "/" (got "*/Foo")`, not the generic shape error.
 - Network checks look only at the requests the run itself made. The reload that
   `reloadThen` performs is not counted.
 - The goal loop can also choose a `reload` step itself.

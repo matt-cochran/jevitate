@@ -11,8 +11,16 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { cpSync, rmSync } from "node:fs";
+import { writeBuildInfoModule } from "./scripts/generate-build-info.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// Build identity (issue #83): the commit/build-time this bundle was made from, injected as
+// literals via esbuild `define` — never fabricated, `"unknown"` when `git rev-parse` fails
+// (see generate-build-info.mjs). Also (re)writes `src/build-info.generated.ts`, the fallback
+// `./engine.ts` reads when `__JEVITATE_*__` isn't defined (the plain `tsc --build` dist that
+// `npm link` runs never goes through esbuild, so it never gets this `define` substitution).
+const { commit, builtAt } = writeBuildInfoModule();
 
 const EXTERNAL = [
   "playwright",
@@ -37,6 +45,10 @@ await build({
   target: "node20",
   external: EXTERNAL,
   logLevel: "info",
+  define: {
+    __JEVITATE_BUILD_COMMIT__: JSON.stringify(commit),
+    __JEVITATE_BUILT_AT__: JSON.stringify(builtAt),
+  },
 });
 
 // `@jevitate/skills` is `private: true` and cannot be published as an external

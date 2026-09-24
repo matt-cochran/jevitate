@@ -1,4 +1,11 @@
-import { MissingCredentialError, type CredentialKey, type Feature, type CredentialStore, requireKeys } from "./credentials.js";
+import { MissingCredentialError, envAliasesFor, type CredentialKey, type Feature, type CredentialStore, requireKeys } from "./credentials.js";
+
+/** `TYPESAFE_API_KEY` -> `TYPESAFE_API_KEY (or TYPESAFE_JEV_API_KEY)`; unchanged for a key with
+ *  no accepted alias (issue #83). */
+function withAliasHint(key: CredentialKey): string {
+  const aliases = envAliasesFor(key);
+  return aliases.length === 0 ? key : `${key} (or ${aliases.join(", ")})`;
+}
 
 /** MCP surface: a typed precondition result the HOST reads to collect keys.
  *  The agent/model never types or sees the key — it only sees "setup required"
@@ -13,7 +20,7 @@ export interface SetupRequiredResult {
 export function toSetupRequiredResult(err: MissingCredentialError): SetupRequiredResult {
   return {
     ok: false, precondition: "setup_required", feature: err.feature, missing: err.missing,
-    hint: `Set ${err.missing.join(", ")} via the host's secure credential entry, then retry.`,
+    hint: `Set ${err.missing.map(withAliasHint).join(", ")} via the host's secure credential entry, then retry.`,
   };
 }
 
@@ -42,7 +49,7 @@ export async function collectMissingKeys(
 ): Promise<CredentialKey[]> {
   const missing = requireKeysSafe(feature, store);
   for (const k of missing) {
-    const v = await io.promptSecret(`Enter ${k} (input hidden; stored locally, never sent to a model):`);
+    const v = await io.promptSecret(`Enter ${withAliasHint(k)} (input hidden; stored locally, never sent to a model):`);
     if (!v || v.trim().length === 0) throw new Error(`${k} not provided — aborting (fail-closed)`);
     await io.persist(k, v.trim());
   }

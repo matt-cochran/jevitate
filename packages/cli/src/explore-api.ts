@@ -56,6 +56,7 @@ import {
 } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
 import { readCliVersion } from "./version.js";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
@@ -136,10 +137,13 @@ function draftContext(
   journal: MissionJournal,
   secrets: readonly string[],
   browserVersion: string | undefined,
+  engine: EngineInfo,
 ): DraftContext {
   return {
     environment: currentEnvironment(origin, {
       jevitateVersion: readCliVersion(),
+      commit: engine.commit,
+      builtAt: engine.builtAt,
       ...(browserVersion === undefined ? {} : { browser: browserVersion }),
     }),
     recordingPath: journal.recordingPath,
@@ -212,6 +216,8 @@ export interface RunExplorationResult {
   readonly target: MissionTarget;
   /** The persisted typed result (`<recording>.result.json`). */
   readonly resultPath: string;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -269,7 +275,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
     journal.writeRecording(mission.recording);
     journal.writeTranscript(mission.transcript);
-    const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page));
+    const engine = currentEngineInfo();
+    const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page), engine);
     const resultPath = resultPathFor(journal.recordingPath);
     const drafts: IssueDraft[] = [];
     if (mission.run.crash !== undefined) drafts.push(draftForCrash(mission.run.crash, mission.transcript, ctx));
@@ -312,6 +319,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording: mission.recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      engine,
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
     };
@@ -510,6 +518,8 @@ export interface RunCoverageMissionResult {
   readonly recordingPaths: string[];
   /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -578,6 +588,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(result.failure === undefined ? {} : { failure: result.failure }),
       recordingPaths,
       transcriptPath: journal.transcriptPath,
+      engine: currentEngineInfo(),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
@@ -648,6 +659,8 @@ export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly transcriptPath: string;
   /** Process exit code for `outcome` (see `missionExitCode`). */
   readonly exitCode: number;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 };
 
 /**
@@ -703,7 +716,8 @@ export async function runAdversarialCliMission(
     journal.writeTranscript(outcome.transcript);
     const exitCode = missionExitCode(outcome.outcome);
     const resultPath = resultPathFor(journal.recordingPath);
-    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const engine = currentEngineInfo();
+    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page), engine);
     const drafts: IssueDraft[] = outcome.defects.map((d) =>
       draftForDefect(d, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${d.fingerprint}` }),
     );
@@ -731,6 +745,7 @@ export async function runAdversarialCliMission(
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      engine,
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
@@ -768,6 +783,8 @@ export interface RunFeatureCliMissionOptions {
 export type FeatureCliMissionResult = FeatureRunResult & {
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -798,7 +815,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       result.outcome === "crashed" ? "crashed" : "clean",
       ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
     ]);
-    return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
+    return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome), engine: currentEngineInfo() };
   } finally {
     await closeQuietly(session);
   }
@@ -875,13 +892,23 @@ export function parseAssertionSpec(spec: string): Assertion {
 
 const HTTP_METHOD = /^(?:[A-Za-z]+|\*)$/;
 
-/** `<METHOD> <path-glob>` — the request half of a network check. */
+/**
+ * `<METHOD> <path-glob>` — the request half of a network check. Two distinct
+ * failure modes get two distinct messages: a missing/malformed method (or no
+ * space at all) doesn't match the shape at all, while a present-but-unrooted
+ * path glob is the far more common mistake (issue #83) and deserves to say
+ * exactly what's wrong instead of re-printing the whole shape as if nothing
+ * was recognized.
+ */
 function parseRequestSpec(kind: string, text: string): { method: string; pathGlob: string } {
   const sp = text.indexOf(" ");
   const method = sp === -1 ? "" : text.slice(0, sp);
   const pathGlob = sp === -1 ? "" : text.slice(sp + 1).trim();
-  if (!HTTP_METHOD.test(method) || !pathGlob.startsWith("/")) {
+  if (!HTTP_METHOD.test(method) || pathGlob.length === 0) {
     throw new Error(`${kind} requires "<METHOD> <path-glob>", e.g. ${kind}:PUT /api/profile/*`);
+  }
+  if (!pathGlob.startsWith("/")) {
+    throw new Error(`${kind}: path glob must start with "/" (got ${JSON.stringify(pathGlob)})`);
   }
   return { method: method.toUpperCase(), pathGlob };
 }

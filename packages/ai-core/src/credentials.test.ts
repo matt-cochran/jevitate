@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { envCredentialStore, requireKeys, MissingCredentialError } from "./index.js";
+import { envCredentialStore, requireKeys, MissingCredentialError, envAliasesFor } from "./index.js";
 
 describe("requireKeys (fail-closed)", () => {
   it("throws MissingCredentialError naming the missing key when absent", () => {
@@ -17,6 +17,27 @@ describe("requireKeys (fail-closed)", () => {
     const store = envCredentialStore({ TYPESAFE_API_KEY: "  " }, { TYPESAFE_API_KEY: "ts-key" });
     expect(store.detect("TYPESAFE_API_KEY")).toBe(true);
     expect(requireKeys("judgment", store)).toEqual(["TYPESAFE_API_KEY"]);
+  });
+});
+
+describe("TYPESAFE_JEV_API_KEY env alias (issue #83)", () => {
+  it("accepts TYPESAFE_JEV_API_KEY when TYPESAFE_API_KEY is unset", () => {
+    const store = envCredentialStore({ TYPESAFE_JEV_API_KEY: "ts-aliased" }, {});
+    expect(store.detect("TYPESAFE_API_KEY")).toBe(true);
+    expect(store.read("TYPESAFE_API_KEY")).toBe("ts-aliased");
+  });
+  it("prefers the canonical TYPESAFE_API_KEY over the alias when both are set", () => {
+    const store = envCredentialStore({ TYPESAFE_API_KEY: "canonical", TYPESAFE_JEV_API_KEY: "aliased" }, {});
+    expect(store.read("TYPESAFE_API_KEY")).toBe("canonical");
+  });
+  it("trims a padded alias value, and treats a whitespace-only alias as unset", () => {
+    expect(envCredentialStore({ TYPESAFE_JEV_API_KEY: "  padded  " }, {}).read("TYPESAFE_API_KEY")).toBe("padded");
+    const blank = envCredentialStore({ TYPESAFE_JEV_API_KEY: "   " }, {});
+    expect(blank.detect("TYPESAFE_API_KEY")).toBe(false);
+  });
+  it("has no alias for a key that doesn't declare one", () => {
+    expect(envAliasesFor("OPENROUTER_API_KEY")).toEqual([]);
+    expect(envAliasesFor("TYPESAFE_API_KEY")).toEqual(["TYPESAFE_JEV_API_KEY"]);
   });
 });
 
