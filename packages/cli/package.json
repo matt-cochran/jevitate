@@ -71,7 +71,7 @@
     "esbuild": "^0.28.2"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "node scripts/generate-build-info.mjs && tsc --build",
     "bundle": "node ./build.mjs"
   }
 }

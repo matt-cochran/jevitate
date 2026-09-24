@@ -43,6 +43,7 @@ import { loadUxMinConfidence, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
@@ -299,6 +300,8 @@ export interface RunUsabilityMissionResult {
   readonly analysisUnavailable?: string;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
   readonly timing: TimingSummary;
+  /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
+  readonly engine: EngineInfo;
 }
 
 /**
@@ -385,6 +388,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       outcome: run.outcome,
       screensObserved: collected.length,
       transcriptPath: journal.transcriptPath,
+      engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
     };
     if (outcome.kind === "failed") {

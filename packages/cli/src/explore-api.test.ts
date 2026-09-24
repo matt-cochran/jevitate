@@ -92,7 +92,14 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
 
   it("rejects malformed --success checks", () => {
     expect(() => parseSuccessSpec("requestMade:/api/profile")).toThrow(/<METHOD> <path-glob>/);
-    expect(() => parseSuccessSpec("requestMade:PUT api/profile")).toThrow(/<METHOD> <path-glob>/);
+    // Method and glob both present, but the glob isn't rooted at "/" — a distinct, more
+    // specific error than the generic shape mismatch above (issue #83).
+    expect(() => parseSuccessSpec("requestMade:PUT api/profile")).toThrow(
+      /path glob must start with "\/" \(got "api\/profile"\)/,
+    );
+    expect(() => parseSuccessSpec("requestMade:POST */ReverseEngineerStream")).toThrow(
+      /path glob must start with "\/" \(got "\*\/ReverseEngineerStream"\)/,
+    );
     expect(() => parseSuccessSpec("responseStatus:PUT /api/profile")).toThrow(/=<2xx\|4xx\|code>/);
     expect(() => parseSuccessSpec("responseStatus:PUT /api/profile=ok")).toThrow(/2xx, 4xx/);
     expect(() => parseSuccessSpec("responseStatus:PUT /api/profile=600")).toThrow(/2xx, 4xx/);

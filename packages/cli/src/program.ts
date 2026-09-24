@@ -75,7 +75,7 @@ import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
-import { readCliVersion } from "./version.js";
+import { currentEngineInfo } from "./engine.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -405,9 +405,46 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
   process.exitCode = envelope.ok ? 0 : 1;
 }
 
+/**
+ * `explore --help` trailer documenting every `outcome`/`stop`/`missionOutcome` value and its
+ * exit code (issue #83 item 2) — mirrors the README "Mission outcomes and exit codes" /
+ * "Every outcome, stop and missionOutcome value" sections, derived from the same sources:
+ * `MISSION_EXIT_CODES` (@jevitate/domain) and `goalExitCode`/`missionExitCode` (./mission-exit.ts).
+ */
+const EXPLORE_OUTCOME_HELP = `
+Outcomes, stop reasons and exit codes:
+  Every result carries a canonical missionOutcome (and exitCode):
+    clean 0 · defects-found 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
+  --strategy goal's own "outcome" has its own exit codes instead:
+    succeeded 0 · exhausted 1 · blocked 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
+  --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
+    done | blocked | exhausted | no-progress | hang | inconclusive | crashed
+  --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
+    step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
+    | scope-unreachable | hang | crashed
+  --strategy coverage's own "outcome" (folds into missionOutcome above):
+    exhausted | cap | crashed | hang
+  --feature's own "outcome" (folds into missionOutcome above):
+    exhausted | cap | path-cap | crashed | hang
+  See README.md "Mission outcomes and exit codes" for what each value means.
+`;
+
+/**
+ * `--version`'s display string: the published semver alone once that alone identifies the
+ * build (a real npm install), plus commit/builtAt whenever the build could determine them (a
+ * dev checkout / `npm link`ed working tree) — issue #83, "`jevitate --version` stays `0.1.0`
+ * across 3 rebuilds in one hour ... nothing says which commit produced a result." `"unknown"`
+ * (never shown here at all — omitted instead) rather than a fabricated commit/time.
+ */
+function versionString(): string {
+  const engine = currentEngineInfo();
+  if (engine.commit === "unknown" && engine.builtAt === "unknown") return engine.version;
+  return `${engine.version} (commit ${engine.commit}, built ${engine.builtAt})`;
+}
+
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("jevitate").description("Local browser automation platform").version(readCliVersion());
+  program.name("jevitate").description("Local browser automation platform").version(versionString());
 
   program
     .command("init")
@@ -1280,7 +1317,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--min-confidence <n>",
-      "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
+      "(--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option(
       "--success <spec>",
@@ -1290,6 +1327,7 @@ export function buildProgram(deps: CliDeps): Command {
         "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
         "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
         "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
+        "<path-glob> must start with \"/\" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method.",
         "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'",
       ].join(" "),
       (v, prev: string[]) => [...prev, v],
@@ -1370,6 +1408,7 @@ export function buildProgram(deps: CliDeps): Command {
       "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
     )
     .option("--json", "emit a JSON envelope")
+    .addHelpText("after", EXPLORE_OUTCOME_HELP)
     .action(async function (this: Command) {
       const o = this.opts<{
         minControlCoverage?: string;
@@ -2277,7 +2316,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--min-confidence <n>",
-      "UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
+      "findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option("--persona <p>", "optional persona for calibration")
     .option("--job <text>", "the job the flow pursues (improves relevance)")

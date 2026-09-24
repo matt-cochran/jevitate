@@ -225,6 +225,9 @@ describe("shared decision transcript — every model-deciding strategy writes on
           exitCode: 2,
           result: { coverage: { sufficient: false, shortfalls: ["no form was submitted (1 found)"] } },
         });
+        // Build identity (issue #83): every result says which build produced it, on disk too.
+        expect(result.engine).toMatchObject({ version: expect.any(String), commit: expect.any(String), builtAt: expect.any(String) });
+        expect(persisted).toMatchObject({ result: { engine: result.engine } });
         const transcript = await readTranscript(result.transcriptPath);
         expect(transcript).toEqual(result.transcript);
         expect(transcript.map((e) => e.strategy)).toEqual(["seed-load", "ordering-violation", "boundary-input"]);
