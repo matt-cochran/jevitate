@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -15,7 +15,7 @@ import { BrowseTheWeb, CastActor, type BrowserSession } from "@jevitate/screenpl
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
-import { runAdversarialCliMission, runCoverageMission } from "./explore-api.js";
+import { runAdversarialCliMission, runCoverageMission, runFeatureCliMission } from "./explore-api.js";
 
 /**
  * P1 acceptance (Task 12): `jevitate explore --url <fixture> --goal ... --success ...`
@@ -225,6 +225,9 @@ describe("shared decision transcript — every model-deciding strategy writes on
           exitCode: 2,
           result: { coverage: { sufficient: false, shortfalls: ["no form was submitted (1 found)"] } },
         });
+        // Build identity (issue #83): every result says which build produced it, on disk too.
+        expect(result.engine).toMatchObject({ version: expect.any(String), commit: expect.any(String), builtAt: expect.any(String) });
+        expect(persisted).toMatchObject({ result: { engine: result.engine } });
         const transcript = await readTranscript(result.transcriptPath);
         expect(transcript).toEqual(result.transcript);
         expect(transcript.map((e) => e.strategy)).toEqual(["seed-load", "ordering-violation", "boundary-input"]);
@@ -257,6 +260,143 @@ describe("shared decision transcript — every model-deciding strategy writes on
         expect(transcript.length).toBe(result.coverage.transitionsExercised);
         expect(transcript.every((e) => e.op === "click" && e.strategy === "coverage-frontier" && e.actOk)).toBe(true);
         expect(transcript[0]?.judgments?.isDefect).toEqual({ value: false, probability: 0.1 });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
+    "coverage: a seed that redirects to /login (a lost --storage-state session) is inconclusive, never clean (#82)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-cov-redirect-"));
+      try {
+        // No --storage-state: a fresh, unauthenticated context, exactly like a lost/expired session.
+        const result = await runCoverageMission({
+          url: `${site.url}/inbox`,
+          allowlist: [site.url],
+          judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+          gen: new FakeGenerationGateway(),
+          outDir,
+        });
+        expect(result.outcome).toBe("scope-unreachable");
+        expect(result.missionOutcome).toBe("inconclusive");
+        expect(result.exitCode).toBe(2);
+        expect(result.failure).toEqual({
+          kind: "target-unreachable",
+          message: "seed /inbox redirected to /login — the --storage-state session is not authenticated",
+        });
+        expect(result.coverage.statesVisited).toBe(0);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "coverage: --save-storage-state writes the context's storageState at the end, mode 0600 (#82)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-cov-save-state-"));
+      const saveTo = join(outDir, "state.json");
+      try {
+        const result = await runCoverageMission({
+          url: `${site.url}/whoami`,
+          allowlist: [site.url],
+          judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+          gen: new FakeGenerationGateway(),
+          outDir,
+          saveStorageState: saveTo,
+        });
+        expect(result.outcome).toBe("exhausted");
+        const written = JSON.parse(await readFile(saveTo, "utf8"));
+        expect(written).toHaveProperty("cookies");
+        expect(written).toHaveProperty("origins");
+        // Owner read/write only — the file holds live session credentials.
+        const mode = (await stat(saveTo)).mode & 0o777;
+        expect(mode).toBe(0o600);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+});
+
+describe("runFeatureCliMission — ranked, honest --out (ticket #78)", () => {
+  it(
+    "exercises the in-scope 'Buy pack' buttons, is reported clean, and writes recordings + transcript + a typed result",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-out-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/shop`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: ["/feature-mission/shop"],
+          outDir,
+          nowIso: () => "2026-09-23T00:00:00.000Z",
+        });
+
+        expect(result.missionOutcome).toBe("clean");
+        expect(result.exitCode).toBe(0);
+        expect(result.failure).toBeUndefined();
+        expect(result.coverage.inScopeActionsExercised).toBeGreaterThan(0);
+        expect(new Set(result.coverage.boundaryEdges).size).toBe(result.coverage.boundaryEdges.length);
+
+        // --out receives the recordings, the transcript and a typed result.json — none of
+        // this was written before ticket #78.
+        expect(result.recordingPaths.length).toBeGreaterThan(0);
+        expect(result.recordingPaths.every((p) => p.startsWith(join(outDir, "feature-2026-09-23T00-00-00-000Z-path-")))).toBe(
+          true,
+        );
+        for (const p of result.recordingPaths) {
+          expect(JSON.parse(await readFile(p, "utf8"))).toMatchObject({ version: "1.0.0" });
+        }
+        expect(result.transcriptPath).toBe(join(outDir, "feature-2026-09-23T00-00-00-000Z.transcript.json"));
+        const transcript = await readTranscript(result.transcriptPath);
+        expect(transcript).toEqual(result.transcript);
+        expect(transcript.every((e) => e.strategy === "feature-frontier" && e.chosenBy === "strategy")).toBe(true);
+        const buyClick = transcript.find((e) => e.op === "click" && e.target !== null && /buy pack/i.test(e.target));
+        expect(buyClick?.actOk).toBe(true);
+
+        expect(result.resultPath).toBe(join(outDir, "feature-2026-09-23T00-00-00-000Z.result.json"));
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
+        expect(persisted).toMatchObject({ missionOutcome: "clean", exitCode: 0 });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
+    "a chrome-only page (nothing but the shared header nav) is reported inconclusive with a shortfall — never clean",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-chrome-only-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/chrome-only`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: ["/feature-mission/chrome-only"],
+          outDir,
+          nowIso: () => "2026-09-23T00:00:00.000Z",
+        });
+
+        expect(result.coverage.inScopeActionsExercised).toBe(0);
+        expect(result.missionOutcome).toBe("inconclusive");
+        expect(result.exitCode).toBe(2);
+        expect(result.failure).toMatchObject({ kind: "insufficient-coverage" });
+        expect(result.failure?.message).toContain("buy a pack");
+
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
+        expect(persisted).toMatchObject({
+          missionOutcome: "inconclusive",
+          exitCode: 2,
+          result: { failure: { kind: "insufficient-coverage" } },
+        });
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }

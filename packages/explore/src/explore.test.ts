@@ -67,7 +67,7 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
         "explore-exhaust-",
         async (session) => {
           const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
-          const judge = new ScriptedJudge([{ op: "wait" }]); // never done
+          const judge = new ScriptedJudge([{ op: "wait" }]); // never done (a cap below MAX_QUIET_WAITS, so the budget ends it first)
           return explore({
             actor,
             judge,
@@ -75,13 +75,13 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
             goal: "loop forever",
             allowlist: [site.url],
             startUrl: `${site.url}/login`,
-            bounds: { maxDecisions: 4 },
+            bounds: { maxDecisions: 2 },
           });
         },
         site.url,
       );
       expect(run.stop).toBe("exhausted");
-      expect(run.decisions).toBe(4);
+      expect(run.decisions).toBe(2);
     },
     120_000,
   );

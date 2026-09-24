@@ -1,19 +1,33 @@
 import { z } from "zod";
 import { contentHash } from "@jevitate/domain";
 
+/**
+ * The model-facing brief for a `form.value` (#71): the value for ONE field, never the whole goal.
+ * Carried in the input (the schema default) so every adapter shows it; a `<select>` sends its own.
+ */
+export const FORM_VALUE_INSTRUCTIONS =
+  "Return in `text` ONLY the literal characters to type into the single field named `fieldLabel` " +
+  "(its HTML input type is `fieldType` when given) — nothing else: no explanation, no steps, no " +
+  "JSON, no other field's value, and never the field's label or a `Label:` prefix. When `goal` " +
+  "states the value for this field, copy it verbatim. Otherwise invent a short, plausible value " +
+  "of the right kind (an email address for an email field, an absolute URL for a url field). " +
+  "Return null only when the goal gives no value and none can be invented safely.";
+
 /** Text-only generation tasks (form values / triage). Closed set. */
 export const FormValueInput = z.object({
   fieldLabel: z.string(),
   goal: z.string(),
   visibleContext: z.string().max(4000),
   history: z.array(z.string()).default([]),
+  /** The field's HTML input type (`text`, `email`, `url`, `password`, `textarea`…), when known. */
+  fieldType: z.string().max(40).optional(),
   /**
    * For a `<select>`: its actual option labels. The answer must be one of them verbatim — the
    * caller checks it and never selects a guessed option.
    */
   options: z.array(z.string().max(200)).max(100).optional(),
-  /** Task guidance shown to the model (e.g. "answer with exactly one of `options`"). */
-  instructions: z.string().max(1000).optional(),
+  /** Task guidance shown to the model (default `FORM_VALUE_INSTRUCTIONS`; a select sends its own). */
+  instructions: z.string().max(1000).default(FORM_VALUE_INSTRUCTIONS),
 }).strict();
 export const FormValueOutput = z.object({ text: z.string().nullable() }).strict();
 
@@ -107,7 +121,7 @@ export const UxSpecificsItem = z
 export const UxSpecificsOutput = z.object({ items: z.array(UxSpecificsItem) }).strict();
 
 export const GEN_TASKS = {
-  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "2" },
+  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "3" },
   "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "1" },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
@@ -140,6 +154,14 @@ export interface GenerationPort {
   generate<K extends GenTaskKind>(kind: K, input: GenInput<K>): Promise<GenerationResult<K>>;
 }
 
+/** The fake's value for a field whose input type constrains its format. */
+const FAKE_TYPED_VALUES: Readonly<Record<string, string>> = {
+  email: "user@example.com",
+  url: "https://example.com/",
+  number: "1",
+  tel: "5550100",
+};
+
 /** Deterministic fake — used by ALL CI tests; no network, no key. */
 export class FakeGenerationGateway implements GenerationPort {
   constructor(private readonly canned?: Partial<Record<GenTaskKind, unknown>>) {}
@@ -158,10 +180,13 @@ export class FakeGenerationGateway implements GenerationPort {
   }
   private defaultFor(kind: GenTaskKind, input: unknown): unknown {
     if (kind === "form.value") {
-      const i = input as { fieldLabel: string; options?: string[] };
+      const i = input as { fieldLabel: string; fieldType?: string; options?: string[] };
       // A select answers with a real option (the first non-empty one), deterministically.
       const option = i.options?.find((o) => o.trim() !== "");
-      return { text: option ?? `value:${i.fieldLabel}` };
+      if (option !== undefined) return { text: option };
+      // A typed field gets a value of its kind (the loop rejects a malformed email/url/number).
+      const typed = i.fieldType === undefined ? undefined : FAKE_TYPED_VALUES[i.fieldType];
+      return { text: typed ?? `value:${i.fieldLabel}` };
     }
     if (kind === "chat.reply") {
       const i = input as { fieldLabel: string; sentMessages: string[]; latestReply: string | null };

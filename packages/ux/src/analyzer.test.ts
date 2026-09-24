@@ -351,6 +351,55 @@ describe("UxAnalyzer", () => {
     expect(outcome).toMatchObject({ kind: "failed", screenId: "s1", rubricItemId: "primary-action" });
   });
 
+  it("(#85) a vocabulary-sensitive finding whose quote matches a value the run itself typed is suppressed, not reported", async () => {
+    const vocab: RubricEntry = {
+      id: "nielsen-2",
+      principle: "Match between system and the real world",
+      citation: { source: "NN/g", ref: "nngroup" },
+      tier: "semantic",
+      requiredEvidence: ["controls", "visibleText"],
+      vocabularySensitive: true,
+      questions: [{ id: "real-world-language", instruction: "jargon?", criteria: "c", kind: "noul", flag: { when: "noul-false" }, severity: "minor" }],
+    };
+    const analyzer = new UxAnalyzer({
+      judge: flaggingJudge(0.1, 0.9),
+      gen: scriptedGen(() => ({ ...grounded(), quotes: ["Jevitate CLI"], implicatedControls: [] })),
+    });
+    const outcome = await analyzer.analyze({
+      screens: [screen({ controls: twoButtons, visibleText: "Jevitate CLI\nPay for your order.", typedValues: ["Jevitate CLI"] })],
+      rubric: loadRubric([vocab]),
+      appContext,
+      judgmentBudget: 10,
+    });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(0);
+    expect(outcome.suppressed?.[0]).toMatchObject({ rubricItemId: "nielsen-2", reason: "user-authored-content" });
+  });
+
+  it("(#85) a vocabulary-sensitive finding whose quote does NOT match anything typed is still reported", async () => {
+    const vocab: RubricEntry = {
+      id: "nielsen-2",
+      principle: "Match between system and the real world",
+      citation: { source: "NN/g", ref: "nngroup" },
+      tier: "semantic",
+      requiredEvidence: ["controls", "visibleText"],
+      vocabularySensitive: true,
+      questions: [{ id: "real-world-language", instruction: "jargon?", criteria: "c", kind: "noul", flag: { when: "noul-false" }, severity: "minor" }],
+    };
+    const analyzer = new UxAnalyzer({
+      judge: flaggingJudge(0.1, 0.9),
+      gen: scriptedGen(() => ({ ...grounded(), quotes: ["Pay for your order"], implicatedControls: [] })),
+    });
+    const outcome = await analyzer.analyze({
+      screens: [screen({ controls: twoButtons, visibleText: "Pay for your order.", typedValues: ["Jevitate CLI"] })],
+      rubric: loadRubric([vocab]),
+      appContext,
+      judgmentBudget: 10,
+    });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(outcome.findings).toHaveLength(1);
+  });
+
   it("a positive property (no problem) yields no finding but still counts as evaluated", async () => {
     const judge: JudgmentPort = {
       systemOne: async () => {

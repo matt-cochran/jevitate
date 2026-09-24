@@ -99,3 +99,14 @@ describe("--storage-state reaches BrowserPort.open", () => {
     expect("storageState" in opens[0]!).toBe(false);
   });
 });
+
+describe("--save-storage-state (#82)", () => {
+  it("is documented in --help, including the rotating-refresh-token caveat", async () => {
+    const { program, lines } = capture();
+    await expect(program.parseAsync(["explore", "--help"], { from: "user" })).rejects.toThrow();
+    const help = lines.join("").replace(/\s+/g, " ");
+    expect(help).toContain("--save-storage-state <file>");
+    expect(help).toMatch(/rotating refresh token/i);
+    expect(help).toContain("stale after one authenticated run refreshes it");
+  });
+});

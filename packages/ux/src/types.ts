@@ -71,6 +71,14 @@ export interface UxEvidence {
   readonly history: readonly ScreenRef[];
   readonly behavior: BehaviorSignals;
   readonly a11yFacts: A11yFacts;
+  /**
+   * Values the RUN ITSELF typed or selected (from the Recording's own `fill`/
+   * `select` steps — never a secret; those are always `{redacted:true}` and
+   * never surface here). #85: lets the vocabulary/jargon tier (nielsen-2)
+   * tell the app's own copy apart from user-authored content (e.g. a piece
+   * title) that merely got echoed back onto the screen.
+   */
+  readonly typedValues?: readonly string[];
 }
 
 /**
@@ -135,6 +143,14 @@ export interface RubricEntry {
    * finding (e.g. choice overload cannot apply to a two-button consent screen).
    */
   readonly applicability?: RubricApplicability;
+  /**
+   * Marks a "match between system and the real world" / vocabulary-jargon
+   * style entry (#85): an accepted finding whose grounding quotes/controls
+   * match something the run itself typed is a false positive on
+   * user-authored content, not the app's own copy, and is suppressed
+   * (counted as `user-authored-content`) rather than reported.
+   */
+  readonly vocabularySensitive?: boolean;
 }
 
 export interface RubricApplicability {
@@ -250,7 +266,9 @@ export type SuppressionReason =
   /** Grounded, but confidence fell below the report's `minConfidence` cutoff. */
   | "below-min-confidence"
   /** The quality grade (e.g. generic / wrong) is not in the report's quality policy. */
-  | "quality-policy";
+  | "quality-policy"
+  /** A vocabulary-sensitive entry's quoted/cited evidence matches a value the run itself typed. */
+  | "user-authored-content";
 
 /** A suppressed candidate — counted and summarized in the report, never silently dropped. */
 export interface SuppressedItem {

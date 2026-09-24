@@ -64,6 +64,7 @@ export const RubricEntrySchema = z
     requiredEvidence: z.array(z.enum(UX_EVIDENCE_KEYS)).min(1),
     attentionProvenance: z.string().min(1).optional(),
     applicability: z.object({ minControls: z.number().int().min(1).optional() }).strict().optional(),
+    vocabularySensitive: z.boolean().optional(),
   })
   .strict();
 

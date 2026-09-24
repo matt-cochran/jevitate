@@ -6,6 +6,7 @@ import {
   requireKeys,
   MissingCredentialError,
   collectMissingKeys,
+  envAliasesFor,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
   openRouterProviderSettings,
@@ -173,9 +174,16 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
         emitJsonLine(program, envelope);
       } else {
         const out = program.configureOutput().writeOut;
+        // `withAliasHint`: e.g. "TYPESAFE_API_KEY (or TYPESAFE_JEV_API_KEY)" — an accepted env
+        // alias (issue #83) is worth surfacing here since this is exactly where a user decides
+        // what to set; unchanged for a key with no alias.
+        const withAliasHint = (k: CredentialKey) => {
+          const aliases = envAliasesFor(k);
+          return aliases.length === 0 ? k : `${k} (or ${aliases.join(", ")})`;
+        };
         for (const feature of FEATURES) {
           const { missing } = data[feature];
-          out?.(`${feature}: ${missing.length === 0 ? "ready" : `missing ${missing.join(", ")}`}\n`);
+          out?.(`${feature}: ${missing.length === 0 ? "ready" : `missing ${missing.map(withAliasHint).join(", ")}`}\n`);
         }
         process.exitCode = 0;
       }

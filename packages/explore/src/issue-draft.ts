@@ -21,6 +21,11 @@ export interface DraftEnvironment {
   readonly node: string;
   readonly browser?: string;
   readonly jevitateVersion?: string;
+  /** The build this run came from (issue #83): which commit, and when it was built. "unknown"
+   *  when the build couldn't determine one — never fabricated. Lets two results from a
+   *  `npm link`ed working tree rebuilt mid-session be told apart. */
+  readonly commit?: string;
+  readonly builtAt?: string;
   /** The system under test's origin. */
   readonly target: string;
 }
@@ -36,13 +41,18 @@ export interface DraftContext {
 }
 
 /** The portable environment line (no OS-specific APIs: `process.platform`/`arch`/`version`). */
-export function currentEnvironment(target: string, extra: { browser?: string; jevitateVersion?: string } = {}): DraftEnvironment {
+export function currentEnvironment(
+  target: string,
+  extra: { browser?: string; jevitateVersion?: string; commit?: string; builtAt?: string } = {},
+): DraftEnvironment {
   return {
     os: `${process.platform} ${process.arch}`,
     node: process.version,
     target,
     ...(extra.browser === undefined ? {} : { browser: extra.browser }),
     ...(extra.jevitateVersion === undefined ? {} : { jevitateVersion: extra.jevitateVersion }),
+    ...(extra.commit === undefined ? {} : { commit: extra.commit }),
+    ...(extra.builtAt === undefined ? {} : { builtAt: extra.builtAt }),
   };
 }
 
@@ -64,13 +74,17 @@ function stepLine(e: TranscriptEntry): string {
 }
 
 function environmentSection(env: DraftEnvironment): string {
+  const jevitateLine =
+    env.jevitateVersion === undefined
+      ? []
+      : [`- jevitate: ${env.jevitateVersion}${env.commit === undefined ? "" : ` (commit ${env.commit}${env.builtAt === undefined ? "" : `, built ${env.builtAt}`})`}`];
   return [
     "## Environment",
     `- Target: \`${env.target}\``,
     `- OS: ${env.os}`,
     `- Node: ${env.node}`,
     ...(env.browser === undefined ? [] : [`- Browser: ${env.browser}`]),
-    ...(env.jevitateVersion === undefined ? [] : [`- jevitate: ${env.jevitateVersion}`]),
+    ...jevitateLine,
   ].join("\n");
 }
 

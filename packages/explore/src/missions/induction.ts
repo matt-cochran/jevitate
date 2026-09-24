@@ -29,9 +29,24 @@ import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
-import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
+import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { reachFrontierState } from "../coverage/reach.js";
+import { isNavControl } from "../coverage/nav.js";
+import {
+  assessCoverageSufficiency,
+  resolveCoverageSufficiencyThresholds,
+  type CoverageSufficiency,
+  type CoverageSufficiencyThresholds,
+} from "../coverage/sufficiency.js";
+import { seedRedirectReason } from "../seed-redirect.js";
+
+/** A failed act whose reason names a timeout, or a target this gate refused as not actionable
+ *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
+function isUnactionableFailure(reason: string | undefined): boolean {
+  if (reason === undefined) return false;
+  return /timeout|not actionable|no longer present/i.test(reason);
+}
 
 /**
  * Proof-by-induction (state-coverage) mission — spec §3.3.
@@ -65,15 +80,22 @@ export interface CoverageReport {
   readonly transitionsExercised: number;
   readonly frontierExhausted: boolean;
   readonly defects: DefectRecord[];
+  /** Actions the frontier attempted that did not land (gate refusal, action failure) — #75. */
+  readonly failedActions: number;
+  /** What the run exercised vs. its thresholds, and whether silence here may read as `clean` (#75,
+   *  mirroring the adversarial coverage thresholds from #69). */
+  readonly sufficiency: CoverageSufficiency;
 }
 
 export interface InductionRunResult {
   /** `crashed`: the engine failed; everything discovered up to the failure is still returned. */
   /** `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session). */
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  /** `scope-unreachable`: the seed redirected elsewhere (e.g. a lost `--storage-state` session
+   *  bounced to a login page) — the run never got to test what it was asked to (#82). */
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
-  /** Why the run crashed — present only for `crashed`. */
+  /** Why the run crashed/could not reach its target — present for `crashed` and `scope-unreachable`. */
   readonly failure?: MissionFailure;
   readonly coverage: CoverageReport;
   /** One replayable repro Recording per distinct state visited (discovery order). */
@@ -111,6 +133,9 @@ export interface InductionMissionParams {
   readonly hangReplays?: number;
   /** The target's timing configuration (API path prefixes). */
   readonly timingConfig?: TimingConfig;
+  /** How much of the target a run must exercise before "found nothing" may be reported `clean`
+   *  (#75). Default `DEFAULT_COVERAGE_SUFFICIENCY_THRESHOLDS`. */
+  readonly sufficiencyThresholds?: Partial<CoverageSufficiencyThresholds>;
 }
 
 /**
@@ -225,18 +250,50 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const statePaths = new Map<string, Recording>();
   const defects: DefectRecord[] = [];
   let transitionsExercised = 0;
+  let actions = 0;
+  let failedActions = 0;
+  let nonNavActionsExercised = 0;
+  const sufficiencyThresholds = resolveCoverageSufficiencyThresholds(params.sufficiencyThresholds);
 
   const report = (frontierExhausted: boolean): CoverageReport => ({
     statesVisited: visited.size,
     transitionsExercised,
     frontierExhausted,
     defects,
+    failedActions,
+    sufficiency: assessCoverageSufficiency({ actions, failedActions, nonNavActionsExercised }, sufficiencyThresholds),
   });
 
   try {
     await monitorFor(sessions.page).instrument();
     await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await takeSnapshot();
+
+    // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most
+    // often) — the run cannot test what it was asked to, so it is never `clean` (#82).
+    const redirect = seedRedirectReason(params.seedUrl, snap.url);
+    if (redirect !== null) {
+      transcript.record({
+        op: null,
+        control: null,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "seed-load",
+        actOk: false,
+        reason: `${redirect.reason} (inconclusive)`,
+        snapshot: snap,
+      });
+      return {
+        outcome: "scope-unreachable",
+        coverage: report(false),
+        recordings: [],
+        transcript: transcript.entries(),
+        timing: summarizeTimings(timings),
+        hangs: [...hangs.values()],
+        failure: { kind: "target-unreachable", message: redirect.reason },
+      };
+    }
+
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
     const frontier = new Frontier();
@@ -244,8 +301,6 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     const seedRecording: Recording = { version: "1", site, pages: [] };
     statePaths.set(currentFingerprint, seedRecording);
     enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
-
-    let actions = 0;
 
     while (!frontier.isExhausted()) {
       // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
@@ -292,6 +347,11 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     const decidedOnTiming = lastTiming;
     lastTiming = undefined;
       if (!result.ok) {
+        failedActions += 1;
+        // A control that failed with a timeout (or was refused as not actionable — a clipped/
+        // offscreen skip link, an occluded target) is never re-chosen for the rest of the run
+        // (#75): every OTHER state that re-offers the same control identity drops it at `push`.
+        if (isUnactionableFailure(result.reason)) frontier.blacklist(controlIdentity(liveControl));
         transcript.record({
           op: item.op,
           control: liveControl,
@@ -305,6 +365,9 @@ export async function runInductionMission(params: InductionMissionParams): Promi
         });
         continue;
       }
+
+      frontier.markExercised(controlIdentity(liveControl));
+      if (!isNavControl(liveControl, decidedOn.url)) nonNavActionsExercised += 1;
 
       snap = await takeSnapshot();
       const newFingerprint = stateFingerprint(snap);

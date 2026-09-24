@@ -332,7 +332,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         fingerprint: args.fingerprint,
       });
       const body = { id: args.id, status: report.verdict, ...report };
-      return report.verdict === "inconclusive" ? errorResult(body) : jsonResult(body);
+      // Neither is a pass: `inconclusive` proved nothing either way, `intermittent` (#74) means the
+      // signal fired on SOME but not all fresh-context replays — never trustworthy as "fixed".
+      return report.verdict === "inconclusive" || report.verdict === "intermittent" ? errorResult(body) : jsonResult(body);
     } catch (err) {
       return errorResult({ error: "verify_fix_refused", message: err instanceof Error ? err.message : String(err) });
     }
@@ -341,7 +343,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   const wired: Record<string, Omit<McpTool, "name">> = {
     verify_fix: {
       description:
-        "Replay a finding's reproduction (by mission result id + fingerprint) in a fresh browser. status: fixed (signal absent) | still-reproduces | inconclusive (replay could not reach the step — never a pass).",
+        "Replay a finding's reproduction (by mission result id + fingerprint) N times in fresh browsers (default 3). status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass).",
       inputSchema: {
         type: "object",
         properties: { id: { type: "string" }, fingerprint: { type: "string" } },

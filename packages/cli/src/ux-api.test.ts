@@ -11,6 +11,8 @@ import {
   runUsabilityMission,
   runUxReview,
   UxAnalysisFailedError,
+  extractTypedValues,
+  type MissionTranscriptEntryLike,
 } from "./ux-api.js";
 
 const APP = { appClass: "consumer", job: "buy a widget" } as const;
@@ -63,6 +65,50 @@ describe("recordingToEvidence", () => {
   });
 });
 
+describe("extractTypedValues (#85 item 1)", () => {
+  it("collects unredacted fill/select values, skipping redacted and var-bound ones", () => {
+    const rec: Recording = {
+      version: "1.0",
+      site: "https://app.test",
+      pages: [
+        {
+          url: "https://app.test/new",
+          steps: [
+            { step: { kind: "fill", target: { testId: "title" }, value: { redacted: false, value: "Jevitate CLI: npm run a first goal mission" }, expect: { kind: "visible", target: { testId: "title" } } } },
+            { step: { kind: "fill", target: { testId: "password" }, value: { redacted: true, length: 8 }, expect: { kind: "visible", target: { testId: "password" } } } },
+            { step: { kind: "select", target: { testId: "plan" }, value: { var: "chosenPlan" }, expect: { kind: "visible", target: { testId: "plan" } } } },
+            { step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { testId: "saved" } } } },
+          ],
+        },
+      ],
+    };
+    expect(extractTypedValues(rec)).toEqual(["Jevitate CLI: npm run a first goal mission"]);
+  });
+});
+
+describe("recordingToEvidence — blocked-target evidence from a mission transcript (#85 item 2)", () => {
+  it("adds a disabled control on the screen matching the blocked action's url", () => {
+    const transcript: MissionTranscriptEntryLike[] = [
+      { op: "click", actOk: true, url: "https://shop.test/cart", descriptor: { role: "button", name: "Checkout" } },
+      { op: "click", actOk: false, reason: "target not enabled", url: "https://shop.test/cart", descriptor: { role: "button", name: "Pay" } },
+    ];
+    const screens = recordingToEvidence(recording(), APP, APP.job, transcript);
+    const cartScreen = screens.find((s) => s.url === "https://shop.test/cart")!;
+    const blocked = cartScreen.controls.find((c) => c.name === "Pay");
+    expect(blocked).toBeDefined();
+    expect(blocked?.enabled).toBe(false);
+    expect(blocked?.summary).toContain("target not enabled");
+    // The successfully-recorded "Checkout" control is unaffected.
+    expect(cartScreen.controls.find((c) => c.name === "Checkout")?.enabled).toBe(true);
+  });
+
+  it("without a transcript, no blocked control is added (baseline unchanged)", () => {
+    const screens = recordingToEvidence(recording(), APP, APP.job);
+    const cartScreen = screens.find((s) => s.url === "https://shop.test/cart")!;
+    expect(cartScreen.controls.find((c) => c.name === "Pay")).toBeUndefined();
+  });
+});
+
 describe("snapshotToEvidence", () => {
   it("maps a live snapshot's controls + extracted text + honest a11y facts", () => {
     const snap = {
@@ -89,6 +135,28 @@ describe("runUxReview (offline)", () => {
     expect(report.coverage.totalItems).toBeGreaterThan(0);
     const written = JSON.parse(await readFile(reportPath, "utf8"));
     expect(written.coverage.totalItems).toBe(report.coverage.totalItems);
+  });
+
+  it("(#85) with no mission transcript, the report states what it cannot see", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "ux-report-"));
+    const { report } = await runUxReview({ recording: recording(), appContext: APP, judge: benignJudge, gen: new FakeGenerationGateway(), outDir, env: {}, configPath: join(outDir, "no-config.json"), nowIso: () => "2026-09-21T00:00:00Z" });
+    expect(report.evidenceCaveats?.[0]).toMatch(/blocked|disabled/i);
+  });
+
+  it("(#85) a mission transcript suppresses the evidence caveat", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "ux-report-"));
+    const { report } = await runUxReview({
+      recording: recording(),
+      appContext: APP,
+      judge: benignJudge,
+      gen: new FakeGenerationGateway(),
+      outDir,
+      env: {},
+      configPath: join(outDir, "no-config.json"),
+      nowIso: () => "2026-09-21T00:00:00Z",
+      missionTranscript: [],
+    });
+    expect(report.evidenceCaveats).toBeUndefined();
   });
 
   it("FAILS FAST: an analysis failure throws UxAnalysisFailedError — never a fabricated clean report", async () => {

@@ -40,6 +40,8 @@ export interface RedactedEvidence {
   readonly a11yFacts: A11yFacts;
   /** Ref tokens that resolve into this evidence (for the finding gate). */
   readonly refs: ReadonlySet<string>;
+  /** Scrubbed values the run itself typed (see `UxEvidence.typedValues`). */
+  readonly typedValues: readonly string[];
 }
 
 export class RedactionUnavailableError extends Error {
@@ -106,6 +108,7 @@ export function redactEvidence(
       behavior: evidence.behavior,
       a11yFacts: evidence.a11yFacts,
       refs: deriveRefs(evidence),
+      typedValues: (evidence.typedValues ?? []).map((v) => scrub(v, secrets)),
     };
   } catch (cause) {
     // A redactor that throws mid-object (e.g. the proof step inside redactContext)

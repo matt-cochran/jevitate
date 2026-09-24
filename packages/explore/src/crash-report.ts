@@ -16,33 +16,44 @@ import type { HostPressure } from "./host-pressure.js";
  * crash signals, and the page's JS heap across steps, and is ATTRIBUTED from that evidence by the
  * pure `attributeCrash` rule (domain).
  *
- * The heap is read portably from the page (`performance.memory`, exposed by Chromium on every OS);
- * a CDP `Performance.getMetrics` read is an optional enrichment used only when the page API is not
- * there. A page that cannot answer within the bound (a hung main thread) simply yields no sample.
+ * The heap is read via a CDP `Runtime.getHeapUsage` call when the page is on Chromium (byte-exact
+ * `usedSize`, no fallback needed). The page's own `performance.memory` is NOT a reliable primary
+ * source: Chromium buckets/quantizes it to coarse (megabyte-scale) increments for fingerprinting
+ * resistance unless the page opts into precise memory info, which jevitate's pages never do — every
+ * sample from it can land on the exact same bucket boundary for an entire run (issue #83 item 4),
+ * which silently defeats `isUnboundedHeapGrowth`'s "strictly increasing across steps" check. It's
+ * kept only as a fallback (non-Chromium, or CDP unavailable) and as the source of `limitBytes`,
+ * which CDP doesn't report. A page that cannot answer within the bound (a hung main thread) simply
+ * yields no sample.
  */
+
+/** The page's `performance.memory` reading — bucketed by Chromium, see module doc above. */
+async function readPageMemory(page: Page): Promise<Omit<HeapSample, "step"> | null> {
+  return page.evaluate(() => {
+    const mem = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+    return mem === undefined ? null : { usedBytes: mem.usedJSHeapSize, limitBytes: mem.jsHeapSizeLimit };
+  });
+}
 
 /** Reads the page's JS heap, or null when it cannot be read within `timeoutMs`. */
 export async function sampleHeap(page: Page, timeoutMs = 2_000): Promise<Omit<HeapSample, "step"> | null> {
   const read = async (): Promise<Omit<HeapSample, "step"> | null> => {
-    const fromPage = await page.evaluate(() => {
-      const mem = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
-      return mem === undefined ? null : { usedBytes: mem.usedJSHeapSize, limitBytes: mem.jsHeapSizeLimit };
-    });
-    if (fromPage !== null) return fromPage;
-    // Optional enrichment (Chromium only): CDP Performance.getMetrics.
+    // Primary (Chromium only): CDP `Runtime.getHeapUsage` — real, unbucketed bytes.
     try {
       const cdp = await page.context().newCDPSession(page);
       try {
-        await cdp.send("Performance.enable");
-        const { metrics } = await cdp.send("Performance.getMetrics");
-        const used = metrics.find((m) => m.name === "JSHeapUsedSize")?.value;
-        return used === undefined ? null : { usedBytes: used };
+        const usage = await cdp.send("Runtime.getHeapUsage");
+        // `limitBytes` has no CDP equivalent; borrow it from the page (fine even if bucketed —
+        // it's a near-constant ceiling, not the per-step value growth detection depends on).
+        const limitBytes = (await readPageMemory(page).catch(() => null))?.limitBytes;
+        return { usedBytes: usage.usedSize, ...(limitBytes === undefined ? {} : { limitBytes }) };
       } finally {
         await cdp.detach().catch(() => undefined);
       }
     } catch {
-      return null;
+      // Not Chromium, or CDP unavailable — fall back to the page's own (bucketed) reading.
     }
+    return await readPageMemory(page);
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => {

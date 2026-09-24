@@ -48,7 +48,10 @@ import {
   FixtureNotFoundError,
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
+  parseSecretField,
+  SecretFieldSpecError,
   type CoverageThresholds,
+  type SecretField,
   type SuccessCheck,
 } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
@@ -75,7 +78,7 @@ import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
-import { readCliVersion } from "./version.js";
+import { currentEngineInfo } from "./engine.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -101,7 +104,7 @@ import {
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
-import { runUsabilityMission, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
+import { runUsabilityMission, runUxReview, UxAnalysisFailedError, type MissionTranscriptEntryLike } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
@@ -405,9 +408,46 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
   process.exitCode = envelope.ok ? 0 : 1;
 }
 
+/**
+ * `explore --help` trailer documenting every `outcome`/`stop`/`missionOutcome` value and its
+ * exit code (issue #83 item 2) — mirrors the README "Mission outcomes and exit codes" /
+ * "Every outcome, stop and missionOutcome value" sections, derived from the same sources:
+ * `MISSION_EXIT_CODES` (@jevitate/domain) and `goalExitCode`/`missionExitCode` (./mission-exit.ts).
+ */
+const EXPLORE_OUTCOME_HELP = `
+Outcomes, stop reasons and exit codes:
+  Every result carries a canonical missionOutcome (and exitCode):
+    clean 0 · defects-found 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
+  --strategy goal's own "outcome" has its own exit codes instead:
+    succeeded 0 · exhausted 1 · blocked 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
+  --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
+    done | blocked | exhausted | no-progress | hang | inconclusive | crashed
+  --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
+    step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
+    | scope-unreachable | hang | crashed
+  --strategy coverage's own "outcome" (folds into missionOutcome above):
+    exhausted | cap | crashed | hang
+  --feature's own "outcome" (folds into missionOutcome above):
+    exhausted | cap | path-cap | crashed | hang
+  See README.md "Mission outcomes and exit codes" for what each value means.
+`;
+
+/**
+ * `--version`'s display string: the published semver alone once that alone identifies the
+ * build (a real npm install), plus commit/builtAt whenever the build could determine them (a
+ * dev checkout / `npm link`ed working tree) — issue #83, "`jevitate --version` stays `0.1.0`
+ * across 3 rebuilds in one hour ... nothing says which commit produced a result." `"unknown"`
+ * (never shown here at all — omitted instead) rather than a fabricated commit/time.
+ */
+function versionString(): string {
+  const engine = currentEngineInfo();
+  if (engine.commit === "unknown" && engine.builtAt === "unknown") return engine.version;
+  return `${engine.version} (commit ${engine.commit}, built ${engine.builtAt})`;
+}
+
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("jevitate").description("Local browser automation platform").version(readCliVersion());
+  program.name("jevitate").description("Local browser automation platform").version(versionString());
 
   program
     .command("init")
@@ -1280,7 +1320,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--min-confidence <n>",
-      "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
+      "(--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option(
       "--success <spec>",
@@ -1290,10 +1330,15 @@ export function buildProgram(deps: CliDeps): Command {
         "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
         "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
         "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
+        "<path-glob> must start with \"/\" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method.",
         "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'",
       ].join(" "),
       (v, prev: string[]) => [...prev, v],
       [] as string[],
+    )
+    .option(
+      "--success-when <when>",
+      "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast). reloadThen is always final",
     )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
@@ -1310,7 +1355,19 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--secret <value>",
-      "a secret/PII value to keep out of every model call (repeatable)",
+      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--secret-field <binding>",
+      "goal strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--totp <binding>",
+      "goal strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1321,6 +1378,12 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
+    )
+    .option(
+      "--save-storage-state <file>",
+      "write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. " +
+        "Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, " +
+        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run.",
     )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
@@ -1370,6 +1433,19 @@ export function buildProgram(deps: CliDeps): Command {
       "adversarial: do not require a submitted form for a clean result (default: required when the target has a form)",
     )
     .option("--json", "emit a JSON envelope")
+    .addHelpText(
+      "after",
+      [
+        "",
+        "Authenticated missions:",
+        "  --secret only REDACTS a value; it is never typed. Prefer starting logged in: save a Playwright",
+        "  storageState once (e.g. `npx playwright codegen --save-storage=auth.json <url>`) and pass",
+        "  --storage-state auth.json. To drive a login/signup form, bind fields to environment variables:",
+        "  --secret-field 'label=Password=env:APP_PASSWORD' and, for MFA, --totp 'label=Code=env:APP_TOTP_SEED'.",
+        "  See 'Authenticated missions' in the README.",
+      ].join("\n"),
+    )
+    .addHelpText("after", EXPLORE_OUTCOME_HELP)
     .action(async function (this: Command) {
       const o = this.opts<{
         minControlCoverage?: string;
@@ -1389,12 +1465,16 @@ export function buildProgram(deps: CliDeps): Command {
         minConfidence?: string;
         show?: string;
         success: string[];
+        successWhen?: string;
         feature?: string;
         route: string[];
         allow: string[];
         secret: string[];
+        secretField: string[];
+        totp: string[];
         fixture?: string;
         storageState?: string;
+        saveStorageState?: string;
         maxActions?: string;
         maxDecisions?: string;
         replyWaitMs?: string;
@@ -1474,6 +1554,24 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
+      // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
+      let secretFields: SecretField[] = [];
+      if (o.secretField.length > 0 || o.totp.length > 0) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal"));
+          return;
+        }
+        try {
+          secretFields = [
+            ...o.secretField.map((s) => parseSecretField(s, "value", process.env)),
+            ...o.totp.map((s) => parseSecretField(s, "totp", process.env)),
+          ];
+        } catch (err) {
+          if (!(err instanceof SecretFieldSpecError)) throw err;
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+      }
 
       // Additive coverage/exploratory strategy: proof-by-induction state coverage.
       // It takes no goal/success (the frontier itself is the objective), so it is
@@ -1516,6 +1614,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           });
           const envelope = ok(result);
           if (o.json) {
@@ -1608,6 +1707,7 @@ export function buildProgram(deps: CliDeps): Command {
             browser,
             outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -1702,14 +1802,21 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
         const featAllowlist = resolveExploreAllowlist(o.url, o.allow);
+        const featBounds: Record<string, number> = {};
+        if (o.maxActions !== undefined) featBounds.maxActions = Number(o.maxActions);
+        if (o.maxDecisions !== undefined) featBounds.maxDecisions = Number(o.maxDecisions);
         try {
           const result = await runFeatureCliMission({
             seedUrl: o.url,
             allowlist: featAllowlist,
             capability: o.feature,
             routeGlobs: o.route ?? [],
+            bounds: Object.keys(featBounds).length > 0 ? featBounds : undefined,
+            outDir: o.out,
+            browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           });
           emitJson(program, ok(result));
           process.exitCode = result.exitCode;
@@ -1734,6 +1841,11 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
+      if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
+        emitJson(program, fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+        return;
+      }
+      const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
       const allowlist = resolveExploreAllowlist(o.url, o.allow);
       const bounds: Record<string, number> = {};
       if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
@@ -1758,16 +1870,19 @@ export function buildProgram(deps: CliDeps): Command {
           url: o.url,
           goal: o.goal,
           successChecks,
+          ...(successWhen === undefined ? {} : { successWhen }),
           allowlist,
           judge,
           gen,
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
+          ...(secretFields.length > 0 ? { secretFields } : {}),
           fixture: o.fixture,
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           ...(filing === undefined ? {} : { filing }),
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
@@ -1792,25 +1907,30 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  // `verify-fix`: replays a finding's reproduction in a FRESH browser and reports whether its
-  // fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive.
+  // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
+  // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
+  // 4 intermittent (fired on some but not all replays — never reported as fixed).
   withBrowserLaunchFlags(
     program
       .command("verify-fix")
-      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent"),
+      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
   )
     .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
     .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
     .option("--storage-state <file>", "override the storageState the mission ran with")
+    .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const o = this.opts<{ result: string; fingerprint: string; storageState?: string; json?: boolean } & BrowserLaunchFlags>();
+      const o = this.opts<
+        { result: string; fingerprint: string; storageState?: string; replays?: string; json?: boolean } & BrowserLaunchFlags
+      >();
       try {
         const report = await runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
           resultPath: o.result,
           fingerprint: o.fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });
@@ -2029,14 +2149,24 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "reproduction attempts before labeling flaky", "3")
     .option("--summary <text>", "optional human-readable bug summary recorded in the meta sidecar")
+    .option(
+      "--result <file>",
+      "mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay",
+    )
+    .option(
+      "--fingerprint <stepSignature>",
+      "pin the required failure fingerprint — alone, restricts --from to failing at exactly this structural step; with --result, cross-checks the derived oracle",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { from, id, dir, attempts, summary, json } = this.opts<{
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, json } = this.opts<{
         from: string;
         id: string;
         dir?: string;
         attempts: string;
         summary?: string;
+        result?: string;
+        fingerprint?: string;
         json?: boolean;
       }>();
       const opened: Array<() => Promise<void>> = [];
@@ -2050,6 +2180,8 @@ export function buildProgram(deps: CliDeps): Command {
           regressionsDir: resolveRegressionsDir(dir),
           attempts: Number(attempts),
           bugSummary: summary,
+          resultPath,
+          fingerprint,
           makeActor: async () => {
             const { actor, close } = await makeRealBrowserActor(recording.site);
             opened.push(close);
@@ -2277,11 +2409,15 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--min-confidence <n>",
-      "UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
+      "findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option("--persona <p>", "optional persona for calibration")
     .option("--job <text>", "the job the flow pursues (improves relevance)")
     .option("--out <dir>", "directory to write the UX report")
+    .option(
+      "--result <file>",
+      "mission result JSON (as written alongside the Recording by `jevitate explore`) — supplies blocked/disabled-target evidence the Recording alone cannot carry",
+    )
     .option("--real", "use live Jev gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways", false)
     .option("--json", "emit a JSON envelope")
@@ -2293,6 +2429,7 @@ export function buildProgram(deps: CliDeps): Command {
         persona?: string;
         job?: string;
         out?: string;
+        result?: string;
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
@@ -2307,6 +2444,24 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         emitJson(program, fail("E_UX_RECORDING", String(err instanceof Error ? err.message : err)));
         return;
+      }
+      // #85 item 2: --result supplies blocked/disabled-target evidence a Recording alone cannot
+      // carry (a failed action is never recorded as a step — see #81). Absent or unreadable, the
+      // report says so (`report.evidenceCaveats`) rather than silently seeing less.
+      let missionTranscript: MissionTranscriptEntryLike[] | undefined;
+      let missionTranscriptUnavailable: string | undefined;
+      if (o.result) {
+        try {
+          const raw = JSON.parse(await readFile(o.result, "utf8")) as { result?: { transcript?: unknown }; transcript?: unknown };
+          const transcript = raw.result?.transcript ?? raw.transcript;
+          if (Array.isArray(transcript)) {
+            missionTranscript = transcript as MissionTranscriptEntryLike[];
+          } else {
+            missionTranscriptUnavailable = `--result ${o.result} has no transcript`;
+          }
+        } catch (err) {
+          missionTranscriptUnavailable = `could not read --result ${o.result}: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
       let uxJudge: JudgmentPort;
       let uxGen: GenerationPort;
@@ -2333,6 +2488,8 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
           outDir: o.out,
+          missionTranscript,
+          ...(missionTranscriptUnavailable !== undefined ? { missionTranscriptUnavailable } : {}),
         });
         emitJson(program, ok(result));
       } catch (err) {

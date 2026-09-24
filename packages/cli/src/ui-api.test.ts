@@ -84,6 +84,9 @@ afterEach(async () => {
     const s = servers.pop()!;
     await s.close();
   }
+  // Every server binds the same default port: let fetch's connection pool observe the closed
+  // sockets before the next test's server reuses that port.
+  await new Promise((resolve) => setTimeout(resolve, 20));
 });
 
 describe("startUiServer — bind + token", () => {

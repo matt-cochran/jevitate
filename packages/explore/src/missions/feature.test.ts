@@ -31,8 +31,15 @@ afterAll(async () => {
 
 describe("runFeatureMission — single path", () => {
   test(
-    "a sign-in submit exhausts the scope without discovering a new in-scope state",
+    "the sign-in capability's own field/button are exercised and the run exhausts",
     async () => {
+      // ticket #78: candidates are ranked by lexical relevance to the feature
+      // name, so the "Sign in" submit button (which literally echoes "sign")
+      // now outranks the unlabeled-by-that-word "Username" field and is tried
+      // first. Submitting empty surfaces a genuine second in-scope state (the
+      // server's validation response, still on /login) before the field ever
+      // gets filled — both states stay in scope, so the run still exhausts
+      // without ever crossing the boundary via a captured control.
       const scope: CapabilityScope = { name: "sign in", originAllowlist: [site.url], routeGlobs: ["/login"] };
       const result = await runFeatureMission({
         page: session.page as Page,
@@ -42,8 +49,10 @@ describe("runFeatureMission — single path", () => {
         scope,
       });
       expect(result.outcome).toBe("exhausted");
-      expect(result.coverage.statesExercised).toBe(1);
+      expect(result.coverage.statesExercised).toBeGreaterThanOrEqual(1);
       expect(result.coverage.pathsDiscovered).toBeGreaterThanOrEqual(1);
+      // The capability's own field/button were genuinely exercised in scope.
+      expect(result.coverage.inScopeActionsExercised).toBeGreaterThan(0);
     },
     120_000,
   );
@@ -135,6 +144,84 @@ describe("runFeatureMission — boundary states and scope edges", () => {
       expect(result.coverage.statesExercised).toBe(1); // only /inbox is ever in scope
       expect(result.coverage.boundaryEdges.length).toBeGreaterThanOrEqual(2); // both thread links hit
       expect(result.coverage.boundaryEdges.every((u) => u.includes("/thread/"))).toBe(true);
+    },
+    120_000,
+  );
+});
+
+describe("runFeatureMission — ranking + honest outcome (ticket #78)", () => {
+  test(
+    "exercises the in-scope 'Buy pack' buttons and never counts a nav departure as a discovered path",
+    async () => {
+      const scope: CapabilityScope = {
+        name: "buy a pack",
+        originAllowlist: [site.url],
+        routeGlobs: ["/feature-mission/shop"],
+      };
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/feature-mission/shop`,
+        allowlist: [site.url],
+        scope,
+      });
+
+      // The 5 header-nav links all leave `/feature-mission/shop` — every one
+      // of them must land as a boundary edge, never as a new in-scope path.
+      expect(result.coverage.boundaryEdges.length).toBeGreaterThanOrEqual(5);
+      expect(result.coverage.boundaryEdges.every((u) => !u.includes("/feature-mission/shop"))).toBe(true);
+
+      // The 3 "Buy pack" buttons stay in scope (no navigation) and are
+      // genuinely capability-relevant — they must have been exercised.
+      expect(result.coverage.inScopeActionsExercised).toBeGreaterThan(0);
+      const clickedBuyPack = result.transcript.some(
+        (t) => t.op === "click" && t.actOk && t.target !== null && /buy pack/i.test(t.target) && /inScope=true/.test(t.reason ?? ""),
+      );
+      expect(clickedBuyPack).toBe(true);
+    },
+    120_000,
+  );
+
+  test(
+    "boundaryEdges are deduplicated even when the same off-scope url is hit more than once",
+    async () => {
+      const scope: CapabilityScope = {
+        name: "buy a pack",
+        originAllowlist: [site.url],
+        routeGlobs: ["/feature-mission/shop"],
+      };
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/feature-mission/shop`,
+        allowlist: [site.url],
+        scope,
+      });
+      expect(new Set(result.coverage.boundaryEdges).size).toBe(result.coverage.boundaryEdges.length);
+    },
+    120_000,
+  );
+
+  test(
+    "a chrome-only page (nothing but the shared header nav) exercises no in-scope capability control",
+    async () => {
+      const scope: CapabilityScope = {
+        name: "buy a pack",
+        originAllowlist: [site.url],
+        routeGlobs: ["/feature-mission/chrome-only"],
+      };
+      const result = await runFeatureMission({
+        page: session.page as Page,
+        actor,
+        seedUrl: `${site.url}/feature-mission/chrome-only`,
+        allowlist: [site.url],
+        scope,
+      });
+      // Nothing on this page serves "buy a pack" — every candidate is a nav
+      // link that immediately leaves scope, so nothing was ever genuinely
+      // exercised. This is the honest signal `runFeatureCliMission` turns
+      // into `missionOutcome: "inconclusive"` rather than a fabricated "clean".
+      expect(result.coverage.inScopeActionsExercised).toBe(0);
     },
     120_000,
   );

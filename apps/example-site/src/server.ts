@@ -83,5 +83,52 @@ export function buildServer(): FastifyInstance {
     );
   });
 
+  // Additive fixture for the feature-testing mission's ranking + scope
+  // guardrails (ticket #78): a header `<nav>` of 5 links — global chrome,
+  // present byte-identically on every page under this fixture — plus, on the
+  // `/shop` page only, an in-scope `<section>` of 3 "Buy pack" buttons that
+  // mutate the page in place (no navigation, so they never leave scope). The
+  // nav links all point OUTSIDE the `/feature-mission/shop` route glob, so a
+  // correct mission must record them as boundary edges (never expanded, never
+  // counted as a discovered feature path) while still exercising the buttons.
+  // `/feature-mission/chrome-only` carries the same nav and nothing else — no
+  // control there serves any capability, so a mission scoped to it alone must
+  // end `inconclusive`, never `clean`.
+  const FEATURE_MISSION_NAV: readonly [string, string][] = [
+    ["home", "Home"],
+    ["docs", "Docs"],
+    ["pricing", "Pricing"],
+    ["about", "About"],
+    ["contact", "Contact"],
+  ];
+  const featureMissionChrome = (): string =>
+    `<header><nav data-testid="global-nav">${FEATURE_MISSION_NAV.map(
+      ([slug, label]) => `<a href="/feature-mission/${esc(slug)}" data-testid="nav-${esc(slug)}">${esc(label)}</a>`,
+    ).join("")}</nav></header>`;
+
+  app.get("/feature-mission/shop", async (_req, reply) => {
+    const packs = [1, 2, 3]
+      .map(
+        (n) =>
+          `<button data-testid="buy-pack-${n}" onclick="this.textContent='Added pack ${n}'">Buy pack ${n}</button>`,
+      )
+      .join("");
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${featureMissionChrome()}<section data-testid="packs"><h1>Buy a pack</h1>${packs}</section></body></html>`,
+    );
+  });
+
+  for (const [slug] of FEATURE_MISSION_NAV) {
+    app.get(`/feature-mission/${slug}`, async (_req, reply) => {
+      reply.type("text/html").send(
+        `<!doctype html><html><body>${featureMissionChrome()}<main><h1>${esc(slug)}</h1></main></body></html>`,
+      );
+    });
+  }
+
+  app.get("/feature-mission/chrome-only", async (_req, reply) => {
+    reply.type("text/html").send(`<!doctype html><html><body>${featureMissionChrome()}</body></html>`);
+  });
+
   return app;
 }

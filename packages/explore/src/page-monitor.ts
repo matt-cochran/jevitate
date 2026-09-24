@@ -61,6 +61,14 @@ export interface CompletedRequest extends InflightRequest {
   readonly durationMs: number;
   readonly failed: boolean;
   readonly endedAt: number;
+  /**
+   * `failed` fired AFTER a response had already been received (#73) — connect-web/gRPC-web clients
+   * abort their fetch once the body is read, which Chromium reports as `requestfailed:
+   * net::ERR_ABORTED` for an otherwise-successful request. `status` is the response that was
+   * actually received; this just flags that the request's own end event was an abort, not a
+   * clean finish.
+   */
+  readonly abortedAfterResponse?: boolean;
 }
 
 export interface SettleResult {
@@ -129,6 +137,8 @@ export interface CapturedRequest {
   /** The response status; null when the request failed without a response. */
   readonly status: number | null;
   readonly failed: boolean;
+  /** See `CompletedRequest.abortedAfterResponse` (#73): `failed` fired after `status` was received. */
+  readonly abortedAfterResponse?: boolean;
 }
 
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
@@ -219,12 +229,32 @@ export class PageMonitor {
       const ignored = this.#background.get(r) === "ignored";
       this.#background.delete(r);
       if (started !== undefined) {
-        const status = failed ? null : (this.#statuses.get(r) ?? null);
+        // A response already received is NEVER discarded just because the request later "failed"
+        // (#73): connect-web/gRPC-web clients abort their fetch once the body is read, which
+        // Chromium reports as `requestfailed: net::ERR_ABORTED` for an otherwise-successful request.
+        // Keep the status that was actually received; flag the abort as evidence, not as a failure.
+        const status = this.#statuses.get(r) ?? null;
+        const abortedAfterResponse = failed && status !== null;
         const endedAt = this.#now();
         const contentType = this.#contentTypes.get(r) ?? null;
-        this.#completed.push({ ...started, status, contentType, failed, endedAt, durationMs: Math.max(0, endedAt - started.startedAt) });
+        this.#completed.push({
+          ...started,
+          status,
+          contentType,
+          failed,
+          abortedAfterResponse,
+          endedAt,
+          durationMs: Math.max(0, endedAt - started.startedAt),
+        });
         for (const c of this.#captures) {
-          c.add({ method: started.method.toUpperCase(), url: redactUrl(started.url), path: pathOf(started.url), status, failed });
+          c.add({
+            method: started.method.toUpperCase(),
+            url: redactUrl(started.url),
+            path: pathOf(started.url),
+            status,
+            failed,
+            abortedAfterResponse,
+          });
         }
       }
       if (!ignored) this.#touch();

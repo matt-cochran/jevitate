@@ -22,6 +22,7 @@ import { Frontier } from "../feature/frontier.js";
 import { reachFrontierState } from "../feature/reach.js";
 import { isInScope, type CapabilityScope } from "../feature/capability-scope.js";
 import { boundaryValueCandidates, isSecretLike } from "../feature/boundary-values.js";
+import { featureWords, relevanceScore, ChromeTracker } from "../feature/relevance.js";
 import type { MissionFailure } from "@jevitate/domain";
 import type { SettleConfig } from "../settle-config.js";
 import type { HangSignal } from "../hang.js";
@@ -30,6 +31,8 @@ import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
+import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
+import { seedRedirectReason } from "../seed-redirect.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -67,22 +70,35 @@ export interface FeatureCoverage {
   pathsDiscovered: number;
   statesExercised: number;
   transitionsExercised: number;
-  /** urls that were reached but fell outside scope (the feature's perimeter). */
+  /** urls that were reached but fell outside scope (the feature's perimeter). Deduplicated. */
   boundaryEdges: string[];
+  /**
+   * Count of executed actions that (a) succeeded, (b) landed in scope, and
+   * (c) were not flagged as global chrome (`feature/relevance.ts`'s
+   * `ChromeTracker`) — i.e. actions that genuinely exercised the named
+   * capability. Zero means the run proved nothing about `scope.name`,
+   * whatever the loop's own stop reason was — `runFeatureCliMission` turns
+   * that into `missionOutcome: "inconclusive"`, never a fabricated `"clean"`.
+   */
+  inScopeActionsExercised: number;
 }
 
 export interface FeatureRunResult {
   /**
    * `crashed`: the engine failed; the paths discovered up to the failure are still returned.
    * `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session).
+   * `scope-unreachable`: the seed redirected elsewhere (e.g. a lost `--storage-state` session
+   * bounced to a login page) — the run never got to test the capability it was asked to (#82).
    */
-  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang";
+  outcome: "exhausted" | "cap" | "path-cap" | "crashed" | "hang" | "scope-unreachable";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   hangs: HangFinding[];
   /** Why the run crashed — present only for `crashed`. */
   failure?: MissionFailure;
   coverage: FeatureCoverage;
   recordings: Recording[];
+  /** The shared decision transcript: each ranked frontier action, whether it landed, in/out of scope, and chrome. */
+  transcript: TranscriptEntry[];
 }
 
 const TIMING: StepTiming = { atMs: 0, durationMs: 0, gapBeforeMs: 0 };
@@ -100,6 +116,31 @@ function frontierCandidates(controls: readonly Control[]): Array<{ control: Cont
     if (c.op === "click" || c.op === "type" || c.op === "select") out.push({ control: c.control, op: c.op });
   }
   return out;
+}
+
+/**
+ * The same candidates, RANKED by relevance to the feature words (ticket #78):
+ * highest-scoring first, so a capability-relevant control (e.g. "Buy pack" for
+ * `--feature "buy a pack"`) is tried well before de-prioritised global chrome
+ * (header/nav landmarks, theme toggles, account menus, command palettes — see
+ * `ChromeTracker`). A stable sort keeps original DOM order among equal scores.
+ */
+function rankedFrontierCandidates(
+  controls: readonly Control[],
+  words: readonly string[],
+  chrome: ChromeTracker,
+): Array<{ control: Control; op: FrontierOp }> {
+  return frontierCandidates(controls)
+    .map((c, i) => ({ ...c, i, score: relevanceScore(c.control, words, chrome) }))
+    .sort((a, b) => b.score - a.score || a.i - b.i);
+}
+
+function pathnameOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
 }
 
 function seedRecording(seedUrl: string, site: string): Recording {
@@ -162,6 +203,8 @@ export async function runFeatureMission(params: {
   openFreshSession?: () => Promise<VerifySession>;
   /** Fresh-context replays that confirm a hang. Default 2. */
   hangReplays?: number;
+  /** Incremental-flush seam: every transcript entry, as it is recorded. */
+  onTranscriptEntry?: TranscriptListener;
 }): Promise<FeatureRunResult> {
   // Guardrail #1 — authorize BEFORE touching the page (fail-closed).
   assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
@@ -192,31 +235,51 @@ export async function runFeatureMission(params: {
     crashWatch = new CrashWatch(page);
   });
   const visited = new Set<string>();
-  const boundaryEdges: string[] = [];
+  const boundaryEdgeSet = new Set<string>();
   const leaves = new Map<string, Recording>();
   const extended = new Set<string>();
   let transitionsExercised = 0;
   let pathsDiscovered = 1; // the seed state counts as the first path
+  let inScopeActionsExercised = 0;
+
+  // Ranking inputs (ticket #78): feature words drive lexical relevance; the
+  // chrome tracker accumulates cross-page control repetition as it's observed.
+  const words = featureWords(params.scope.name);
+  const chrome = new ChromeTracker();
+  const transcript = new TranscriptLog([], params.onTranscriptEntry);
 
   const endRun = (outcome: FeatureRunResult["outcome"], failure?: MissionFailure): FeatureRunResult => ({
     outcome,
     ...(failure === undefined ? {} : { failure }),
-    coverage: { pathsDiscovered, statesExercised: visited.size, transitionsExercised, boundaryEdges },
+    coverage: {
+      pathsDiscovered,
+      statesExercised: visited.size,
+      transitionsExercised,
+      boundaryEdges: [...boundaryEdgeSet],
+      inScopeActionsExercised,
+    },
     recordings: [...leaves.entries()].filter(([fp]) => !extended.has(fp)).map(([, r]) => r),
     hangs: [...hangs.values()],
+    transcript: transcript.entries(),
   });
 
   try {
     await monitorFor(sessions.page).instrument();
     await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
     let snap = await snapshotNow();
+
+    // The seed redirected elsewhere — most often a lost/expired `--storage-state` session bounced
+    // to a login page (#82): the run cannot exercise the capability it was asked to.
+    const redirect = seedRedirectReason(params.seedUrl, snap.url);
+    if (redirect !== null) return endRun("scope-unreachable", { kind: "target-unreachable", message: redirect.reason });
+    chrome.observe(pathnameOf(snap.url), snap.controls);
     let currentFingerprint = stateFingerprint(snap);
     visited.add(currentFingerprint);
     const frontier = new Frontier();
 
     const seedRec = seedRecording(params.seedUrl, site);
     leaves.set(currentFingerprint, seedRec);
-    for (const { control, op } of frontierCandidates(snap.controls)) {
+    for (const { control, op } of rankedFrontierCandidates(snap.controls, words, chrome)) {
       frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
     }
 
@@ -230,11 +293,16 @@ export async function runFeatureMission(params: {
       if (item === undefined) break;
       const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
       if (depth >= maxDepth) continue;
+      // A link to a boundary already recorded proves nothing new: shared nav repeated on every
+      // in-scope state would otherwise be re-clicked once per state (the states multiply as
+      // in-scope controls toggle), so the run never exhausts.
+      if (item.control.href != null && !isInScope(item.control.href, params.scope) && boundaryEdgeSet.has(item.control.href)) continue;
 
       if (item.fromFingerprint !== currentFingerprint) {
         const reached = await reachFrontierState({ actor: sessions.actor, item, snapshotNow });
         if (!reached.ok) continue;
         snap = reached.snapshot;
+        chrome.observe(pathnameOf(snap.url), snap.controls);
         currentFingerprint = item.fromFingerprint;
       }
 
@@ -244,11 +312,28 @@ export async function runFeatureMission(params: {
       if (item.op === "type" && fillText === undefined) continue;
 
       const beforeUrl = snap.url;
+      const decidedOn = snap;
+      const itemScore = relevanceScore(item.control, words, chrome);
+      const itemWasChrome = chrome.isChrome(item.control);
+      const rankReason = `relevance=${itemScore} chrome=${itemWasChrome}`;
       const result = await act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null });
       actions += 1;
-      if (!result.ok) continue;
+      if (!result.ok) {
+        transcript.record({
+          op: item.op,
+          control: item.control,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "feature-frontier",
+          actOk: false,
+          reason: result.reason === undefined ? rankReason : `${rankReason}; ${result.reason}`,
+          snapshot: decidedOn,
+        });
+        continue;
+      }
 
       snap = await snapshotNow();
+      chrome.observe(pathnameOf(snap.url), snap.controls);
       const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
       const newFingerprint = stateFingerprint(snap);
       const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
@@ -259,6 +344,16 @@ export async function runFeatureMission(params: {
       // exploring the rest of the frontier. The hung state is never expanded.
       const hang = seenHang.last;
       if (hang !== null) {
+        transcript.record({
+          op: item.op,
+          control: item.control,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "feature-frontier",
+          actOk: true,
+          reason: `${rankReason}; hang (${hang.kind}): ${hang.detail}`,
+          snapshot: decidedOn,
+        });
         await recordCoverageHang({
           hang,
           recording: { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) },
@@ -278,19 +373,34 @@ export async function runFeatureMission(params: {
         continue;
       }
 
-      if (!isInScope(snap.url, params.scope)) {
-        // Out of scope — recorded as a boundary edge, never expanded (guardrail #4).
-        boundaryEdges.push(snap.url);
+      const landedInScope = isInScope(snap.url, params.scope);
+      transcript.record({
+        op: item.op,
+        control: item.control,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "feature-frontier",
+        actOk: true,
+        reason: `${rankReason}; inScope=${landedInScope}`,
+        snapshot: decidedOn,
+      });
+
+      if (!landedInScope) {
+        // Out of scope — recorded as a boundary edge (deduplicated), never
+        // expanded (guardrail #4). Never counted as a discovered feature path.
+        boundaryEdgeSet.add(snap.url);
         leaves.set(newFingerprint, branch);
         currentFingerprint = newFingerprint;
         continue;
       }
 
+      if (!itemWasChrome) inScopeActionsExercised += 1;
+
       if (!visited.has(newFingerprint)) {
         visited.add(newFingerprint);
         leaves.set(newFingerprint, branch);
         pathsDiscovered += 1;
-        for (const { control, op } of frontierCandidates(snap.controls)) {
+        for (const { control, op } of rankedFrontierCandidates(snap.controls, words, chrome)) {
           frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
         }
       }
