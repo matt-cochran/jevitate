@@ -36,10 +36,11 @@ const PAGES: Record<string, string> = {
     <form onsubmit="event.preventDefault(); document.getElementById('echo').textContent = this.e.value">
       <input name="e" type="email" aria-label="Email" /><button>Sign up</button></form>
     <p data-testid="echo"></p></body></html>`,
-  // #84: an HTML5-invalid email blocks the submit.
+  // #84: an HTML5-invalid field blocks the submit. A `pattern` constraint (not type=email): the typed
+  // value passes the pre-type value check (#71) — only the browser's own validation rejects it.
   "/invalid": `<!doctype html><html><body><h1>Sign up</h1>
     <form onsubmit="event.preventDefault(); document.getElementById('echo').textContent = 'welcome'">
-      <input name="e" type="email" aria-label="Email" /><button>Sign up</button></form>
+      <input name="e" type="text" pattern="[^ ]+@[^ ]+" aria-label="Email" /><button>Sign up</button></form>
     <p data-testid="echo"></p></body></html>`,
 };
 
