@@ -76,6 +76,19 @@ export interface GoalBasedResult {
   readonly finalUrl: string;
   /** The hang finding (with its reproduction k/N), for a `hang`/`intermittent` outcome. */
   readonly hang?: HangFinding;
+  /**
+   * Why the mission did not succeed, in one line — set for EVERY outcome but `succeeded`
+   * (`blocked`/`exhausted` included, which carry no engine `failure`): how the loop ended and
+   * which success check did not hold.
+   */
+  readonly reason?: string;
+}
+
+/** The one-line account of an unsuccessful run: how the loop ended, then the checks that failed. */
+function whyNot(run: ExploreRun, results: readonly SuccessCheckResult[]): string {
+  const ended = run.outcome.status === "incomplete" ? run.outcome.reason : `the run stopped (${run.stop})`;
+  const failed = results.filter((r) => !r.passed).map((r) => `${r.check} ${r.detail}`);
+  return failed.length === 0 ? ended : `${ended}; success check failed: ${failed.join("; ")}`;
 }
 
 const DEFAULT_ORACLE_SETTLE_MS = 10_000;
@@ -157,6 +170,7 @@ async function adjudicated(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       hang: finding,
+      reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
     };
   }
 
@@ -170,6 +184,7 @@ async function adjudicated(
       recording: run.recording,
       transcript: run.transcript,
       finalUrl: run.finalUrl,
+      reason: whyNot(run, []),
     };
   }
 
@@ -193,6 +208,7 @@ async function adjudicated(
       recording: run.recording,
       transcript: run.transcript,
       finalUrl: run.finalUrl,
+      reason: `success oracle failed: ${message}`,
     };
   }
 
@@ -211,6 +227,7 @@ async function adjudicated(
     recording: run.recording,
     transcript: run.transcript,
     finalUrl: run.finalUrl,
+    ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
   };
 }
 

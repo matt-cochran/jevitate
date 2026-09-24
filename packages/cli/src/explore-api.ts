@@ -185,6 +185,8 @@ export interface RunExplorationResult {
   readonly exitCode: number;
   /** Why the run ended `crashed`/`inconclusive`. */
   readonly failure?: MissionFailure;
+  /** Why the mission did not succeed (every outcome but `succeeded`, `blocked`/`exhausted` included). */
+  readonly reason?: string;
   /** Issue drafts (a crash) written next to the Recording, and what filing did with them. */
   readonly issues: FindingsIssues;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
@@ -293,6 +295,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       recording: mission.recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
+      ...(mission.reason === undefined ? {} : { reason: mission.reason }),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
