@@ -87,7 +87,7 @@ export interface ServerLogOptions {
   readonly drainMs?: number;
 }
 
-function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
+export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
   serverLogs?: ServerLogsSummary;
   serverLogDefects?: ServerLogDefect[];
 } {

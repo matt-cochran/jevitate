@@ -1889,13 +1889,12 @@ export function buildProgram(deps: CliDeps): Command {
         ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
       };
       // Backend log sources (#142): validated (spec shape, --allow-log-cmd gate, matcher regexes)
-      // BEFORE any browser opens — the same fail-closed discipline as --invariants above.
+      // BEFORE any browser opens — the same fail-closed discipline as --invariants above. Supported
+      // on every strategy, INCLUDING usability (#142 follow-up): lines attach to usability steps the
+      // same way, though a UX run's own outcome stays advisory (a server-log defect is still reported,
+      // never gates the exit code — the same rule as every other UX finding).
       let serverLog: ServerLogOptions | undefined;
       if (o.logSource.length > 0 || o.logDefect.length > 0) {
-        if (strategy === "usability" && o.feature === undefined) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--log-source/--log-defect is not supported with --strategy usability"));
-          return;
-        }
         try {
           const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
           const logDefect = parseLogDefectSpecs(o.logDefect);
@@ -2151,6 +2150,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
