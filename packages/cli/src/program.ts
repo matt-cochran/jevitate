@@ -101,7 +101,7 @@ import {
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
-import { runUsabilityMission, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
+import { runUsabilityMission, runUxReview, UxAnalysisFailedError, type MissionTranscriptEntryLike } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
@@ -2029,14 +2029,24 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "reproduction attempts before labeling flaky", "3")
     .option("--summary <text>", "optional human-readable bug summary recorded in the meta sidecar")
+    .option(
+      "--result <file>",
+      "mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay",
+    )
+    .option(
+      "--fingerprint <stepSignature>",
+      "pin the required failure fingerprint — alone, restricts --from to failing at exactly this structural step; with --result, cross-checks the derived oracle",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const { from, id, dir, attempts, summary, json } = this.opts<{
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, json } = this.opts<{
         from: string;
         id: string;
         dir?: string;
         attempts: string;
         summary?: string;
+        result?: string;
+        fingerprint?: string;
         json?: boolean;
       }>();
       const opened: Array<() => Promise<void>> = [];
@@ -2050,6 +2060,8 @@ export function buildProgram(deps: CliDeps): Command {
           regressionsDir: resolveRegressionsDir(dir),
           attempts: Number(attempts),
           bugSummary: summary,
+          resultPath,
+          fingerprint,
           makeActor: async () => {
             const { actor, close } = await makeRealBrowserActor(recording.site);
             opened.push(close);
@@ -2282,6 +2294,10 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--persona <p>", "optional persona for calibration")
     .option("--job <text>", "the job the flow pursues (improves relevance)")
     .option("--out <dir>", "directory to write the UX report")
+    .option(
+      "--result <file>",
+      "mission result JSON (as written alongside the Recording by `jevitate explore`) — supplies blocked/disabled-target evidence the Recording alone cannot carry",
+    )
     .option("--real", "use live Jev gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways", false)
     .option("--json", "emit a JSON envelope")
@@ -2293,6 +2309,7 @@ export function buildProgram(deps: CliDeps): Command {
         persona?: string;
         job?: string;
         out?: string;
+        result?: string;
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
@@ -2307,6 +2324,24 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         emitJson(program, fail("E_UX_RECORDING", String(err instanceof Error ? err.message : err)));
         return;
+      }
+      // #85 item 2: --result supplies blocked/disabled-target evidence a Recording alone cannot
+      // carry (a failed action is never recorded as a step — see #81). Absent or unreadable, the
+      // report says so (`report.evidenceCaveats`) rather than silently seeing less.
+      let missionTranscript: MissionTranscriptEntryLike[] | undefined;
+      let missionTranscriptUnavailable: string | undefined;
+      if (o.result) {
+        try {
+          const raw = JSON.parse(await readFile(o.result, "utf8")) as { result?: { transcript?: unknown }; transcript?: unknown };
+          const transcript = raw.result?.transcript ?? raw.transcript;
+          if (Array.isArray(transcript)) {
+            missionTranscript = transcript as MissionTranscriptEntryLike[];
+          } else {
+            missionTranscriptUnavailable = `--result ${o.result} has no transcript`;
+          }
+        } catch (err) {
+          missionTranscriptUnavailable = `could not read --result ${o.result}: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
       let uxJudge: JudgmentPort;
       let uxGen: GenerationPort;
@@ -2333,6 +2368,8 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
           outDir: o.out,
+          missionTranscript,
+          ...(missionTranscriptUnavailable !== undefined ? { missionTranscriptUnavailable } : {}),
         });
         emitJson(program, ok(result));
       } catch (err) {

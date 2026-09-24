@@ -27,6 +27,13 @@ export interface BuildReportOptions {
   readonly minConfidence?: number;
   /** Which quality grades are shown. Default `DEFAULT_QUALITY_POLICY` (actionable + relevant-minor). */
   readonly quality?: QualityPolicy;
+  /**
+   * What this analysis honestly could NOT see (#85), e.g. an offline `jevitate ux` run with no
+   * mission result/transcript to source blocked/disabled-target evidence from — the same evidence
+   * a live usability run sees via `Control.enabled`. Surfaced verbatim on the report, never
+   * silently omitted.
+   */
+  readonly evidenceCaveats?: readonly string[];
 }
 
 export interface UxReport {
@@ -52,6 +59,8 @@ export interface UxReport {
   /** Flagged per-screen occurrences before adjudication/dedupe/cutoff (volume accounting). */
   readonly rawOccurrences: number;
   readonly failed?: { readonly reason: string; readonly screenId?: string; readonly rubricItemId?: string };
+  /** What this analysis honestly could not see (see `BuildReportOptions.evidenceCaveats`). */
+  readonly evidenceCaveats?: readonly string[];
 }
 
 const SEVERITY_WEIGHT = { info: 1, minor: 2, major: 3 } as const;
@@ -90,6 +99,7 @@ function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
     "not-confirmed": 0,
     "below-min-confidence": 0,
     "quality-policy": 0,
+    "user-authored-content": 0,
   };
   const byRubricItem: Record<string, number> = {};
   const byRubricItemRoute: Record<string, number> = {};
@@ -120,6 +130,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
       suppressed: summarize([]),
       rawOccurrences: 0,
       failed: { reason: outcome.reason, screenId: outcome.screenId, rubricItemId: outcome.rubricItemId },
+      ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
     };
   }
 
@@ -190,5 +201,6 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     qualityDistribution,
     suppressed,
     rawOccurrences: outcome.rawOccurrences ?? outcome.findings.length,
+    ...(options.evidenceCaveats && options.evidenceCaveats.length > 0 ? { evidenceCaveats: options.evidenceCaveats } : {}),
   };
 }

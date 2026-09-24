@@ -1,3 +1,4 @@
+import type { TargetDescriptor } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control, Snapshot } from "./snapshot.js";
 import { redactText, redactUrl } from "./redact.js";
@@ -8,6 +9,20 @@ import type { PageTiming, RequestTiming } from "./timing.js";
  * (count, pending and the slowest requests stay) — the samples feed the run summary only, so a busy
  * page's hundreds of requests are not copied into every transcript file.
  */
+/** Redacts every string field of a `TargetDescriptor`, recursively into `container`. */
+function redactDescriptor(d: TargetDescriptor, secrets: readonly string[]): TargetDescriptor {
+  return {
+    ...d,
+    ...(d.testId === undefined ? {} : { testId: redactText(d.testId, secrets) }),
+    ...(d.role === undefined ? {} : { role: redactText(d.role, secrets) }),
+    ...(d.name === undefined ? {} : { name: redactText(d.name, secrets) }),
+    ...(d.label === undefined ? {} : { label: redactText(d.label, secrets) }),
+    ...(d.text === undefined ? {} : { text: redactText(d.text, secrets) }),
+    ...(d.frameUrl === undefined ? {} : { frameUrl: redactText(redactUrl(d.frameUrl), secrets) }),
+    ...(d.container === undefined ? {} : { container: redactDescriptor(d.container, secrets) }),
+  };
+}
+
 function transcriptTiming(t: PageTiming, secrets: readonly string[]): PageTiming {
   const r = (v: string): string => (secrets.length === 0 ? v : redactText(v, secrets));
   const req = (q: RequestTiming): RequestTiming => ({ ...q, endpoint: r(q.endpoint), url: r(q.url) });
@@ -64,6 +79,16 @@ export interface TranscriptEntry {
   readonly message?: string;
   /** The conversational reply awaited after the message was sent (redacted, bounded). */
   readonly reply?: TranscriptReply;
+  /**
+   * The chosen control's durable, replay-valid descriptor (redacted, same as
+   * every other field here) — additive (#81/#85): a failed action never
+   * becomes a Recording step (only successful ones are), so this is the only
+   * place a blocked/disabled target's structural identity survives the run.
+   * Consumed by `regression capture --result` to build a failure oracle and
+   * by offline `ux --result` to see the same blocked-action evidence a live
+   * usability run sees.
+   */
+  readonly descriptor?: TargetDescriptor;
 }
 
 /** What came back after a message was sent. */
@@ -125,6 +150,7 @@ export class TranscriptLog {
       ...(step.timing === undefined ? {} : { timing: transcriptTiming(step.timing, this.#secrets) }),
       ...(step.message === undefined ? {} : { message: redactText(step.message, this.#secrets) }),
       ...(step.reply === undefined ? {} : { reply: { ...step.reply, text: redactText(step.reply.text, this.#secrets) } }),
+      ...(step.control === null ? {} : { descriptor: redactDescriptor(step.control.descriptor, this.#secrets) }),
     };
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);
