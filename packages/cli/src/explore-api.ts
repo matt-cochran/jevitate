@@ -1044,6 +1044,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /** Per-mission viewport/device emulation (#149); see `RunExplorationOptions.emulation`. */
   readonly emulation?: EmulationSpec;
+  /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
+  readonly overflow?: OverflowFlags;
 }
 
 /** The adversarial outcome plus where its Recording and decision transcript were written. */
@@ -1146,6 +1148,12 @@ export async function runAdversarialCliMission(
       onRecording: journal.onRecording,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
+      overflow: {
+        ...(opts.overflow?.checkOverflow === undefined ? {} : { checkOverflow: opts.overflow.checkOverflow }),
+        ...(opts.overflow?.toleranceCss === undefined ? {} : { toleranceCss: opts.overflow.toleranceCss }),
+        ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+        ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+      },
     });
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(outcome.transcript);
     // `AdversarialOutcome.transcript` is a mutable `TranscriptEntry[]`; the correlated array only

@@ -384,3 +384,55 @@ describe("runAdversarialMission — the outcome is a typed result, never a throw
     120_000,
   );
 });
+
+describe("runAdversarialMission — horizontal-overflow hard signal (#149)", () => {
+  test(
+    "at a 375px viewport, /responsive/overflow is a hard defect attributed to [data-testid=wide], with a stable fingerprint",
+    async () => {
+      const browserPort = new PlaywrightBrowserPort();
+      const narrowSession = await browserPort.open({
+        headless: true,
+        allowedOrigins: [site.url],
+        baseUrl: site.url,
+        viewport: { width: 375, height: 812 },
+      });
+      try {
+        const narrowActor = CastActor.named("responsive-adversary").whoCan(new BrowseTheWeb(narrowSession, [site.url]));
+        const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+        const result = await runAdversarialMission({
+          page: narrowSession.page,
+          actor: narrowActor,
+          judgment,
+          generation: new FakeGenerationGateway(),
+          seedUrl: `${site.url}/responsive/overflow`,
+          allowlist: [site.url],
+          bounds: { maxDecisions: 1 },
+          strategies: ["exercise-controls"],
+        });
+        const overflowDefects = result.defects.filter((d) => d.kind === "horizontal-overflow");
+        expect(overflowDefects).toHaveLength(1);
+        expect(overflowDefects[0]!.title).toContain("[data-testid=wide]");
+        expect(overflowDefects[0]!.route).toBe("/responsive/overflow");
+        expect(overflowDefects[0]!.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+      } finally {
+        await narrowSession.close();
+      }
+    },
+    30_000,
+  );
+
+  test("at a 1280px viewport, the same page is clean (no horizontal-overflow defect)", async () => {
+    const judgment = new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } });
+    const result = await runAdversarialMission({
+      page: session.page,
+      actor,
+      judgment,
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/responsive/overflow`,
+      allowlist: [site.url],
+      bounds: { maxDecisions: 1 },
+      strategies: ["exercise-controls"],
+    });
+    expect(result.defects.filter((d) => d.kind === "horizontal-overflow")).toEqual([]);
+  }, 30_000);
+});

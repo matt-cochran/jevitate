@@ -93,6 +93,9 @@ export function signalKey(signal: DefectSignal): string {
     case "console-error":
     case "page-error":
       return `${signal.kind}|${normalizeRoute(signal.pageUrl ?? "")}|${messageClass(signal.detail)}`;
+    case "horizontal-overflow":
+      // `route`/`descriptor` are already the finding's own (redacted, route-templated) values.
+      return `horizontal-overflow|${signal.route}|${signal.descriptor}`;
   }
 }
 
@@ -133,6 +136,9 @@ const PRIORITY: Readonly<Record<DefectSignal["kind"], number>> = {
   "http-5xx": 1,
   "failed-request": 2,
   "console-error": 3,
+  // Lowest: a real, independently-detected defect, but a crash/network signal co-occurring on the
+  // same step is the more actionable primary (#149).
+  "horizontal-overflow": 4,
 };
 
 /** One step's hard signals as ONE defect: its primary signal plus every signal's fingerprint. */
@@ -180,5 +186,7 @@ export function defectTitle(signal: DefectSignal): string {
       return `Console error on ${normalizeRoute(signal.pageUrl ?? "")}: ${messageClass(signal.detail).slice(0, 80)}`;
     case "page-error":
       return `Uncaught page error on ${normalizeRoute(signal.pageUrl ?? "")}: ${messageClass(signal.detail).slice(0, 80)}`;
+    case "horizontal-overflow":
+      return `Horizontal overflow on ${signal.route}: ${signal.descriptor} (${signal.overflowPx}px)`;
   }
 }
