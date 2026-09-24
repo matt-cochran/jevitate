@@ -372,7 +372,17 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
 
 - `dom`: the text of the first match of a `selector` (CSS) or a `target` descriptor.
   Add `read: "value"` for a form value, `read: "count"` for the number of matches, and
-  `number: true` to parse the first number (`"≈ 1,240 credits"` becomes `1240`).
+  `number: true` to parse the first number (`"≈ 1,240 credits"` becomes `1240`; a Unicode
+  minus `−` (U+2212) or dash and thousands separators are handled, e.g. `"−40 credits"`
+  is `-40`, not `40`). `number: { "index": <n> }` picks a different one (0-based;
+  negative counts from the end), and `number: "all"` reads every number in the text as a
+  LIST observable — e.g. a range `"≈ 30–90 credits"` (the en-dash stays a separator, never
+  a sign) is unreadable as a single scalar with plain `number: true` (`30`, the low bound);
+  `number: { "index": 1 }` (or `{ "index": -1 }`) reads `90`, its upper bound, and
+  `number: "all"` reads `[30, 90]`. A list observable works the same as a `[*]`
+  network/probe read (below): never a valid scalar for `before`/`after`/`delta` or a
+  budget, and a leaked list is never re-leaked item by item — only its size is shown in a
+  finding.
   Visual state: `read: "inViewport"` (the first match's visible fraction, 0..1),
   `read: { "attr": "<name>" }`, or `read: { "style": "<prop>", "channel": "alpha", "reduce": "min" }`
   (a computed style from the allowlist above; with a `channel` it is a number, and `reduce`
