@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeSync } from "node:fs";
 import type { UsageCounts } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
@@ -27,6 +28,13 @@ import { transcriptPathFor } from "./transcript-file.js";
  * (`writeFileSync`, already the case) and exiting before yielding the event loop makes this
  * deterministic. Idempotent: a second signal (the wrapper/operator escalating) force-exits
  * immediately.
+ *
+ * Several missions can be armed at once — one process may run many browser contexts on the shared
+ * pool (a daemon, a long-lived MCP server, a watch-mode queue drain). A signal flushes a partial
+ * result for EVERY armed mission, each with its own steps/usage, and tells each one's own scoped
+ * listener (`runWithMissionKillListener`) — never another mission's. Only then does the process exit,
+ * once. A mission's own outcome never exits the process: that is `process.exitCode`, set by the CLI
+ * command after the mission returns.
  */
 
 export interface KillableMission {
@@ -104,11 +112,17 @@ const realDeps: KillSwitchDeps = {
   },
 };
 
+type KilledListener = (killed: { resultPath: string; exitCode: number }) => void;
+
 let installed = false;
-let active: KillableMission | undefined;
+/** Every armed mission, in arming order, with the kill listener scoped to the context that ran it. */
+const armed = new Map<KillableMission, KilledListener | undefined>();
 let terminating = false;
 let output: KillSwitchOutput = "none";
-const killedListeners = new Set<(killed: { resultPath: string; exitCode: number }) => void>();
+/** Process-wide listeners: told about every killed mission. */
+const killedListeners = new Set<KilledListener>();
+/** The listener for missions armed inside `runWithMissionKillListener` (e.g. one queue-drain item). */
+const scopedListener = new AsyncLocalStorage<KilledListener>();
 
 /** A getter that throws (or a missing one) yields `undefined` — a flush must never block the exit. */
 function safely<T>(read: (() => T) | undefined): T | undefined {
@@ -171,19 +185,20 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     return;
   }
   terminating = true;
-  const mission = active;
-  if (mission !== undefined) {
+  for (const [mission, scoped] of [...armed]) {
     let partial: Record<string, unknown> | undefined;
     let resultPath: string | undefined;
     try {
       partial = partialResult(mission, signal, code, deps);
       resultPath = deps.writeResult(mission.recordingPath, "inconclusive", code, partial);
     } catch {
-      // Best-effort: a failed flush must never keep the process from honoring the signal.
+      // Best-effort: a failed flush must never keep the process from honoring the signal — nor keep
+      // the OTHER armed missions from being flushed.
     }
-    // Whoever ran the mission (e.g. the queue drain, #117) records where its result went — synchronously.
+    // Whoever ran THIS mission (e.g. its queue-drain item, #117) records where its result went —
+    // synchronously; process-wide listeners hear about every mission.
     if (resultPath !== undefined) {
-      for (const listener of killedListeners) {
+      for (const listener of [...(scoped === undefined ? [] : [scoped]), ...killedListeners]) {
         try {
           listener({ resultPath, exitCode: code });
         } catch {
@@ -191,8 +206,8 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
         }
       }
     }
-    // A `--json` caller gets its envelope even from a killed run (#120) — written synchronously,
-    // before the exit below.
+    // A `--json` caller gets its envelope even from a killed run (#120) — one line per mission,
+    // written synchronously, before the exit below.
     if (partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
       try {
         deps.writeStdout(`${JSON.stringify(output === "envelope" ? ok(partial) : partial)}\n`);
@@ -201,6 +216,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
       }
     }
   }
+  armed.clear();
   deps.closeBrowsers().catch(() => {
     // Best-effort: a failed teardown must never keep the process from having honored the signal.
   });
@@ -241,10 +257,24 @@ export function installMissionKillSwitch(deps: KillSwitchDeps = realDeps): void 
  */
 export function armMissionKillSwitch(mission: KillableMission, deps: KillSwitchDeps = realDeps): () => void {
   install(deps);
-  active = mission;
+  armed.set(mission, scopedListener.getStore());
   return () => {
-    if (active === mission) active = undefined;
+    armed.delete(mission);
   };
+}
+
+/**
+ * Runs `fn` so that any mission armed inside it (at any await depth) reports a kill to `listener` —
+ * and ONLY that mission does. This is how a runner that owns one mission among several running
+ * concurrently in the process (e.g. a queue-drain item) learns where ITS result went, never another's.
+ */
+export function runWithMissionKillListener<T>(listener: KilledListener, fn: () => Promise<T>): Promise<T> {
+  return scopedListener.run(listener, fn);
+}
+
+/** How many missions are armed right now (diagnostics and tests). */
+export function armedMissionCount(): number {
+  return armed.size;
 }
 
 /**
@@ -256,11 +286,12 @@ export function setKillSwitchOutput(mode: KillSwitchOutput): void {
 }
 
 /**
- * Registers a SYNCHRONOUS listener told where a killed mission's partial result was written, just
- * before the process exits — e.g. the queue drain marks the running mission done with that result
- * instead of leaving it `running` forever. Returns the unregister function.
+ * Registers a process-wide SYNCHRONOUS listener told where EVERY killed mission's partial result was
+ * written, just before the process exits. A runner that owns one specific mission should use
+ * `runWithMissionKillListener` instead, so it never records another mission's result. Returns the
+ * unregister function.
  */
-export function onMissionKilled(listener: (killed: { resultPath: string; exitCode: number }) => void): () => void {
+export function onMissionKilled(listener: KilledListener): () => void {
   killedListeners.add(listener);
   return () => {
     killedListeners.delete(listener);
@@ -270,7 +301,7 @@ export function onMissionKilled(listener: (killed: { resultPath: string; exitCod
 /** Test seam: resets all module state (a real run never needs this — one process, one exit). */
 export function __resetKillSwitchForTests(): void {
   installed = false;
-  active = undefined;
+  armed.clear();
   terminating = false;
   output = "none";
   killedListeners.clear();

@@ -17,7 +17,7 @@ import {
   runFeatureCliMission,
   type ServerLogOptions,
 } from "./explore-api.js";
-import { onMissionKilled } from "./kill-signal.js";
+import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs } from "./log-correlation.js";
@@ -121,7 +121,9 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
     // Killed mid-mission (SIGTERM/SIGINT): the kill switch writes the run's partial `inconclusive`
     // result; record it on the queue record in the same synchronous turn, so the mission reads as
     // done-with-that-result rather than `running` forever.
-    const stopListening = onMissionKilled(({ resultPath, exitCode }) => {
+    // Scoped to THIS item: with several missions in one process, a kill records each queue item
+    // with its own mission's result, never another's.
+    const onKilled = ({ resultPath, exitCode }: { resultPath: string; exitCode: number }): void => {
       opts.queue.updateSync({
         ...running,
         status: "done",
@@ -130,10 +132,12 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
         missionOutcome: "inconclusive",
         exitCode,
       });
-    });
+    };
     try {
       const target = await opts.targets.resolve(mission.target); // promoted-only, re-checked at run time
-      const run = await opts.execute({ mission: running, target, allowlist: targetAllowlist(target) });
+      const run = await runWithMissionKillListener(onKilled, () =>
+        opts.execute({ mission: running, target, allowlist: targetAllowlist(target) }),
+      );
       const resultId = resultIdFromPath(run.resultPath);
       await opts.queue.update({
         ...running,
@@ -155,8 +159,6 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
       const error = err instanceof Error ? err.message : String(err);
       await opts.queue.update({ ...running, status: "failed", finishedAtIso: now(), error });
       drained = { missionId: mission.id, strategy: mission.strategy, status: "failed", error };
-    } finally {
-      stopListening();
     }
     ran.push(drained);
     opts.onMission?.(drained);
