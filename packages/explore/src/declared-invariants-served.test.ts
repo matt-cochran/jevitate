@@ -447,6 +447,110 @@ describe("declared invariants in adversarial and coverage missions (#86)", () =>
   );
 });
 
+describe("#135: authFrom threads into every mission type (secret source, via each mission's invariantAuthTokens/authTokens)", () => {
+  const AUTH_TOKENS = new Map([["env:JEV_TEST_AUTH_TOKEN", "SECRET-LS-TOKEN-abc"]]);
+  const AUTH_SPEC = (): InvariantSpec =>
+    validateInvariantSpec(
+      {
+        observe: { secure: { probe: { get: "/api/secure", json: "$.secure", authFrom: { secret: "env:JEV_TEST_AUTH_TOKEN" } } } },
+        invariants: [{ id: "secure-ok", require: "secure == true" }],
+      },
+      { allowlist: [origin], baseUrl: `${origin}/app` },
+    );
+
+  it("adversarial: the probe authenticates and the invariant holds (no defect)", async () => {
+    const s = await openSession();
+    try {
+      const r = await runAdversarialMission({
+        page: s.page,
+        actor: s.actor,
+        judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } }),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${origin}/app`,
+        allowlist: [origin],
+        bounds: { maxDecisions: 3 },
+        strategies: ["exercise-controls"],
+        invariants: AUTH_SPEC(),
+        invariantAuthTokens: AUTH_TOKENS,
+      });
+      expect(r.defects.some((x) => x.kind === "invariant")).toBe(false);
+      expect(r.invariants?.find((i) => i.id === "secure-ok")?.held).toBeGreaterThan(0);
+      const probes = requests.filter((q) => q.path === "/api/secure");
+      expect(probes.length).toBeGreaterThan(0);
+      for (const p of probes) expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+    } finally {
+      await s.close();
+    }
+  }, 180_000);
+
+  it("coverage: the probe authenticates and the invariant holds (no defect)", async () => {
+    const s = await openSession();
+    try {
+      const r = await runInductionMission({
+        page: s.page,
+        actor: s.actor,
+        judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0.1 } }),
+        seedUrl: `${origin}/app`,
+        allowlist: [origin],
+        bounds: { maxActions: 3 },
+        invariants: AUTH_SPEC(),
+        invariantAuthTokens: AUTH_TOKENS,
+      });
+      expect(r.invariantDefects ?? []).toEqual([]);
+      const probes = requests.filter((q) => q.path === "/api/secure");
+      expect(probes.length).toBeGreaterThan(0);
+      for (const p of probes) expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+    } finally {
+      await s.close();
+    }
+  }, 180_000);
+
+  it("feature: the probe authenticates and the invariant holds (no defect)", async () => {
+    const s = await openSession();
+    try {
+      const r = await runFeatureMission({
+        page: s.page,
+        actor: s.actor,
+        seedUrl: `${origin}/app`,
+        allowlist: [origin],
+        scope: { name: "import", originAllowlist: [origin], routeGlobs: ["/app**"] },
+        bounds: { maxActions: 3 },
+        invariants: AUTH_SPEC(),
+        invariantAuthTokens: AUTH_TOKENS,
+      });
+      expect(r.invariantDefects ?? []).toEqual([]);
+      const probes = requests.filter((q) => q.path === "/api/secure");
+      expect(probes.length).toBeGreaterThan(0);
+      for (const p of probes) expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+    } finally {
+      await s.close();
+    }
+  }, 180_000);
+
+  it("verify-fix: authTokens on VerifyInvariant authenticates the re-check probe", async () => {
+    const recording: Recording = {
+      version: "1.0.0",
+      site: "test",
+      pages: [{ url: "/app", steps: [{ step: { kind: "navigate", url: "/app", expect: { kind: "urlIncludes", text: "/app" } } }] }],
+    };
+    const r = await verifyFix({
+      recording,
+      recordingStepIndex: 0,
+      fingerprint: invariantFingerprint(`${origin}/app`, "", "secure-ok"),
+      defectKind: "invariant",
+      invariant: { spec: AUTH_SPEC(), id: "secure-ok", allowlist: [origin], baseUrl: `${origin}/app`, authTokens: AUTH_TOKENS },
+      openSession,
+      replays: 1,
+      settleCeilingMs: 3_000,
+    });
+    // The invariant HOLDS (authenticated), so the original "defect" never re-fires: fixed.
+    expect(r.verdict).toBe("fixed");
+    const probes = requests.filter((q) => q.path === "/api/secure");
+    expect(probes.length).toBeGreaterThan(0);
+    for (const p of probes) expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+  }, 180_000);
+});
+
 describe("verify-fix re-checks a declared invariant (#86)", () => {
   const recording: Recording = {
     version: "1.0.0",

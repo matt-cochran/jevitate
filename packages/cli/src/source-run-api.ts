@@ -17,6 +17,7 @@ import {
   type SourceEntry,
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
+import { JourneyRequiresAuthError } from "./journey-api.js";
 
 /**
  * The runner seam for a source-resolved Journey. Takes the ALREADY-GATED
@@ -29,6 +30,12 @@ export type RunResolvedJourney = (
   file: SharedJourneyFile,
   params: Record<string, string>,
   policy: RunPolicy,
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`, #118) — the
+   * deterministic authenticated pre-step. Contains live session cookies: handed only to the
+   * browser, never logged, never sent to a model.
+   */
+  storageState?: string,
 ) => Promise<JourneyRunResult>;
 
 /**
@@ -43,7 +50,15 @@ export type RunResolvedJourney = (
  * A `SharedJourneyFile` IS a `Journey` (+ `declaredOrigins`), so it runs
  * through the standard `JourneyRunner` unchanged.
  */
-export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy) => {
+export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState) => {
+  // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
+  // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
+  if (file.metadata.requiresAuth === true && storageState === undefined) {
+    throw new JourneyRequiresAuthError(
+      `journey '${file.metadata.id}' requires auth (metadata.requiresAuth) — run with --storage-state <file>`,
+    );
+  }
+
   validateParams(deriveParamSchema(file.recording), params);
 
   // The browser allowlist is the Journey's authorized origin set — the base
@@ -55,6 +70,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     headless: true,
     allowedOrigins,
     baseUrl: file.recording.site,
+    ...(storageState !== undefined ? { storageState } : {}),
   });
   try {
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins));
@@ -83,6 +99,12 @@ export interface RunSourceJourneyRequest {
   params: Record<string, string>;
   /** Defaults to `safeRunPolicy()` (Slice 1 fail-closed secret mode). */
   policy?: RunPolicy;
+  /**
+   * Playwright storageState JSON to seed the session from (CLI `--storage-state`, #118) — the
+   * deterministic authenticated pre-step. Contains live session cookies: handed only to the
+   * browser, never logged, never sent to a model.
+   */
+  storageState?: string;
 }
 
 /** Resolves a registered source's recorded pin, or throws `UnknownSourceError`
@@ -137,5 +159,5 @@ export async function runSourceJourney(
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
-  return run(file, req.params, req.policy ?? safeRunPolicy());
+  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState);
 }

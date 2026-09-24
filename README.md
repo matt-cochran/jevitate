@@ -35,9 +35,13 @@ an unsafe or unbounded move.
   deterministic, replayable regression.
 - **Self-healing.** Repair a broken step under policy — never auto-healing a
   write or irreversible action.
-- **UX review.** Ranked, cited, evidence-anchored usability findings (Nielsen +
-  cognitive-science heuristics), advisory only.
+- **UX review.** Usability findings grounded in what the run observed (run
+  signals and journey friction), ranked by impact on the job and cited to Nielsen
+  and cognitive-science heuristics. Heuristic-only findings go in an appendix.
+  Advisory only.
 - **Load testing** of a Journey against an authorized origin.
+- **CI gate.** `jevitate check --suite` runs Journeys, invariants, goals and missions within a
+  budget; JUnit + SARIF + JSON; `report` and `diff` give one deduped defect list and a baseline diff.
 - **MCP server** exposing only an allowlisted, safe tool surface.
 - **Distributed Journey sources** with an explicit trust/run gate.
 
@@ -76,7 +80,16 @@ never a fabricated commit or time.
 
 The same `{version, commit, builtAt}` (as `engine`) is on every mission's result — the
 persisted `*.result.json`, the `--json` envelope, and every issue draft's `## Environment`
-section — so a result on disk always says which build produced it.
+section — so a result on disk always says which build produced it. So is every other command's
+result envelope (`ux`, `journey run`, `load run`, `source run`, `verify-fix`, `regression capture`,
+`mission run`), a killed run's partial result, `jevitate mcp`'s `initialize` (`serverInfo.version`,
+with the commit in its description), MCP `get_site_health`, and `jevitate ui`'s `/api/health`.
+
+A run killed by SIGTERM/SIGINT (`timeout -s TERM 900 jevitate explore …`) exits 143/130 and still
+writes `<stem>.result.json`: `missionOutcome: "inconclusive"`, `stop: "terminated"`, the real step
+count and transcript, the `transcriptPath` that exists, `engine`, the `usage` spent so far, and any
+partial report (a usability review's observed screens). With `--json` the same result is printed
+as the envelope before the process exits.
 
 ### Mission outcomes and exit codes
 
@@ -94,7 +107,36 @@ clean.
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
 The MCP tool `get_mission_result` returns the same status and code for a
-finished run; a broken run comes back as an error result.
+finished run; a broken run comes back as an error result. Its `id` is a result stem —
+`explore-<stamp>` (a goal run; its own `succeeded`/`exhausted`/`blocked` comes back as
+`goalOutcome`, folded onto `clean`/`defects-found`), `coverage-`, `adversarial-`, `feature-` or
+`usability-<stamp>` — or a `queue_exploration` `missionId`.
+
+### Queued missions (MCP)
+
+`queue_exploration` only enqueues a mission (`~/.jevitate/missions/queue/<missionId>.json`).
+`jevitate mission run` drains the queue: each mission runs through the runner its strategy uses on
+the CLI, its result lands in `~/.jevitate/recordings`, and its queue record moves
+`queued → running → done | failed`. `get_mission_result {id: missionId}` reports `queued`/`running`
+(`pending: true`), the finished result, or `failed` (an error: it could not run, e.g. its target was
+unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
+
+```bash
+jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \
+  --api-origin http://127.0.0.1:18582 --base-url http://127.0.0.1:5193/settings --json
+jevitate mission target promote spa --json          # a human act: only promoted targets are queueable
+jevitate mission run --once --real --json           # drain what is queued now (--watch keeps polling)
+```
+
+A mission may reach only its target's `--authorized-origin` plus its `--api-origin`s (each a bare
+http(s) origin — the queued-mission form of a second `explore --allow`); the target is re-resolved
+(promoted-only) when the mission runs. Queueable strategies: `goal-based` (a goal and a
+`successAssertion`), `coverage` and `adversarial` (an optional in-scope `route` glob), and
+`feature` (a `feature` name, optional `route`). A usability review needs an app class the request
+cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven missions stay queued
+(reported as `skipped`) and only feature missions run. The exit code is 1 only when a mission could
+not run at all; each mission's own outcome is in its result. A drain killed mid-mission records
+that mission `done` with its partial `inconclusive` result, never leaves it `running`.
 
 The adversarial mission keeps hunting after a defect until its step, action or
 time budget runs out. Defects are deduplicated by a stable fingerprint, and each
@@ -164,13 +206,15 @@ above, so it needs no separate exit-code mapping):
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |
 
-**Coverage mission (`--strategy coverage`) — its own `outcome`**, before it's folded into
-`missionOutcome`:
+**Coverage and exploratory missions (`--strategy coverage` / `exploratory`) — their own
+`outcome`**, before it's folded into `missionOutcome`:
 
 | `outcome` | Meaning |
 |---|---|
 | `exhausted` | the state frontier was fully explored |
 | `cap` | the action budget ran out before the frontier was exhausted |
+| `scope-unreachable` | the start URL redirected elsewhere, or the run could not return to it after a departure (e.g. the session was lost after "Sign out") — `inconclusive` |
+| `stalled` | no step completed within `--stall-timeout` seconds (default 120) — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
 
@@ -181,8 +225,19 @@ above, so it needs no separate exit-code mapping):
 | `exhausted` | the state frontier was fully explored |
 | `cap` | the action budget ran out |
 | `path-cap` | the max-discovered-paths budget ran out |
+| `scope-unreachable` | as above — `inconclusive` |
+| `stalled` | as above — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+
+**Coverage vs exploratory.** Both expand the same state frontier. `coverage` sweeps it
+breadth-first: every control of a state, in page order, before the controls a click revealed.
+`exploratory` seeks novelty: it tries the control that appeared most recently first (a panel
+that just opened, a page just reached), so it follows the UI deeper before it sweeps siblings.
+In all three frontier missions (coverage, exploratory, `--feature`), global chrome — controls
+inside `<nav>` or a page-level `<header>`/`<footer>`, or repeated unchanged across pages — is
+tried only after the target's own controls, each destination at most once per run. Chrome that
+leaves the target scope never takes more than 20% of the run's actions.
 
 ### Success checks (goal mission)
 
@@ -193,7 +248,7 @@ decides it. `--success` can be repeated, and every check must hold:
 |---|---|
 | `urlIncludes:<text>` | the final URL contains the text |
 | `visible:<d>` | the element is visible |
-| `textIncludes:<d>\|<text>` | the element's text contains the text |
+| `textIncludes:<d>\|<text>` | the element's text contains the text (case-insensitive) |
 | `count:<d>\|min=<n>,max=<n>` | the number of matching elements is within the bounds |
 | `valueEquals:<d>\|<value>` | a form control's **value** (input, textarea, select) equals the value exactly |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
@@ -303,7 +358,11 @@ pass: it is counted in the result's `invariants` report.
 
 - `require`: an expression checked after each action that matches `when` (every
   action when `when` is left out). `when` can match `control.name` (an exact string or
-  a `/regex/flags` pattern), `route` (a path glob) and `op`.
+  a `/regex/flags` pattern), `route` (a path glob) and `op` — `op` is an ARRAY of one
+  or more action-op names (e.g. `"op": ["click", "type"]`, not a bare string), matched
+  if the action's op is any one of them. The op vocabulary: `click`, `type`, `send`
+  (type-and-submit, e.g. a chat composer), `select`, `upload`, `scroll_up`,
+  `scroll_down`, `wait`, `reload`.
 - `never`: `pageText` (a pattern) or `assertion` (a success-check assertion) that must
   never hold. It is checked after every action.
 - `always`: an assertion that must hold after every action.
@@ -363,6 +422,41 @@ transcript, Recording and issue draft, but it is never typed into a field.
 
 The bound value and the seed are registered as run secrets, so the existing
 redaction seams scrub them everywhere.
+
+**Replaying an authenticated Journey.** A Journey `explore-author-journey` authors
+with `--storage-state` needs the SAME authenticated pre-step to replay: pass
+`--storage-state <file>` to `jevitate journey run`, `jevitate load run` and
+`jevitate source run`. Over MCP, `run_journey`'s optional `storageState` argument is
+the same thing — a file PATH on the machine running the MCP server; its contents are
+read only by that server's own browser session, never returned or logged. A Journey
+can also declare `metadata.requiresAuth: true` so a run given no `storageState` fails
+fast, before any browser opens, with a clear message — instead of a confusing
+`replay-target-not-found` partway into the steps.
+
+### Usage accounting
+
+An exploration mission's result carries `usage: { judgments, generations,
+inputTokens, outputTokens, usd? }` when the CLI command was built with usage
+tracking (a `--real` run). `usd` is populated ONLY when the underlying provider
+itself reports a cost — today, that is OpenRouter's usage-accounting `cost` on a
+**generation** call (the model that writes form text). It is never estimated or
+derived from a price table. **Jev's own judgment calls are not priced**: they have
+no cost-reporting path today, so `usage.usd` is absent whenever a run made only
+judgments and no generations (`generations: 0`), even though `judgments` is
+non-zero and those calls cost real money against your provider account. Read
+`usage.usd`'s absence as "not priced by this build," never as "free."
+
+### Persistent browser profiles (`jevitate profile`)
+
+`jevitate profile create <name>` / `jevitate profile status <name>` provision and
+check a directory under `~/.jevitate/profiles/<name>` — an on-disk Chromium
+user-data directory (Playwright's `persistentProfile`, distinct from a
+`--storage-state` JSON snapshot: a real profile directory instead of a serialized
+cookie/localStorage file). **No `jevitate` command consumes one yet** — there is no
+`--profile` flag on `explore`, `journey run`, `record` or `load run` today. Treat
+`jevitate profile` as reserved surface: it prepares the directory a future
+`--profile` flag would point a browser session at, not a currently wired
+authentication path. Use `--storage-state` (above) for authenticated runs today.
 
 ### Stateful and conversational runs: sequential only, one tenant at a time
 
@@ -576,6 +670,182 @@ Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API wit
 `GITHUB_TOKEN` from jevitate's credential store. Before it opens an issue, it
 searches for an open issue carrying the same fingerprint marker and comments on
 that one instead.
+
+### CI mode: `jevitate check`
+
+`jevitate check --suite <file.json>` runs a suite of promoted Journeys, invariant files, goals and
+missions against one or more targets, one after another, within a total budget. It then decides
+pass or fail:
+
+- **Hard failures fail the gate:** a Journey assertion fails, an invariant is violated, a goal
+  success check fails, a `verify-fix` replay still reproduces (or is intermittent), or a
+  hard-signal defect or hang is found.
+- **Advisory findings never fail the gate** (UX findings, 4xx-correlated console errors, Jev
+  flags), unless the suite sets `"gateAdvisory": true`.
+- **Fail closed:** an item that crashed, was inconclusive or was refused is an error, never a
+  pass. So is going over the budget. An item is skipped once the budget is spent, and the skipped
+  item counts as an error.
+- `--baseline <run|tag|last>`: only findings **not** in the baseline gate. That includes a new
+  finding that is flaky. Findings already in the baseline are listed but do not gate.
+- `--changed-routes '/settings/**,/cart/*'`: only Journeys and goals that touch those routes run.
+  A Journey's routes are its Recording's pages, or the `routes` you give it. A goal's routes are
+  its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
+- `--target-build <id>` stamps your build/commit on every result, next to `engine`.
+
+Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored,
+the budget was exceeded, or the suite was refused. Outputs go under `--out` (default
+`jevitate-check/`):
+
+| File | What |
+| --- | --- |
+| `results/` | every run's persisted result (what `report`, `diff` and `baseline tag` read) |
+| `junit.xml` | one `<testsuite>` per target, one `<testcase>` per item (`--junit` to move it) |
+| `jevitate.sarif` | SARIF 2.1.0, one result per finding, keyed by its finding key (`--sarif`) |
+| `check.json` | the JSON envelope, also a run reference for `diff`/`baseline tag` (`--json-out`) |
+| `report.md` | the consolidated defect list, with the baseline diff |
+
+The suite schema (validated in full before any browser opens; an unknown field is refused, and
+relative paths resolve against the suite file):
+
+```json
+{
+  "version": 1,
+  "name": "shop-ci",
+  "budget": { "maxActions": 400, "maxMinutes": 20, "maxUsd": 2 },
+  "ai": "real",
+  "gateAdvisory": false,
+  "targets": [
+    {
+      "name": "shop",
+      "url": "https://staging.shop.example/",
+      "allow": ["https://staging.shop.example"],
+      "storageState": "auth.json",
+      "invariants": ["invariants/credits.json"],
+      "journeysDir": "journeys",
+      "journeys": ["login", { "id": "checkout", "params": { "sku": "A1" }, "routes": ["/cart/**"] }],
+      "goals": [
+        { "name": "export", "goal": "export the report as CSV", "success": ["requestMade:GET /api/export"], "routes": ["/reports/**"], "maxActions": 40 }
+      ],
+      "missions": [
+        { "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60 },
+        { "strategy": "feature", "feature": "import", "routes": ["/imports/**"] },
+        { "strategy": "coverage", "routes": ["/**"] },
+        { "strategy": "usability", "goal": "invite a teammate", "appClass": "admin" }
+      ],
+      "verifyFix": [{ "result": "baseline/adversarial-2026-09-20T10-00-00-000Z.result.json", "fingerprint": "3fa2c1d09b7e4a55" }]
+    }
+  ]
+}
+```
+
+- `budget`: the total over every item. `maxActions` counts executed browser actions, and each item
+  is capped at what is left. `maxMinutes` is wall-clock time. `maxUsd` is the provider-reported
+  model spend. If a model call reports no cost, the spend cannot be measured, so the check fails.
+  Fake gateways cost nothing.
+- `ai`: the gateway for goals and model-driven missions (`coverage`, `adversarial`, `usability`).
+  `--real` or `--fake-ai` override it. If a suite needs a model and none is selected, it is refused
+  before anything runs. Journeys, `feature` missions and verify-fix are model-free.
+- `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
+- `invariants`: checked around every action of every goal and mission of the target. A target that
+  has invariants but no goals and no missions gets a model-free invariant sweep: the feature
+  frontier from `url`.
+- `verifyFix`: replays a finding from an earlier result. `still-reproduces` and `intermittent` fail.
+
+A GitHub Actions example:
+
+```yaml
+name: jevitate
+on: [pull_request]
+permissions: { contents: read, security-events: write, checks: write }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i -g @jevitate/cli && npx playwright install --with-deps chromium
+      - name: Changed routes
+        id: routes
+        run: echo "globs=$(git diff --name-only origin/${{ github.base_ref }}... | ./scripts/routes-for-files.sh)" >> "$GITHUB_OUTPUT"
+      - name: jevitate check
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: >
+          jevitate check --suite ci/jevitate-suite.json --real
+          --target-build ${{ github.sha }}
+          --baseline ci/baseline-check.json
+          ${{ steps.routes.outputs.globs && format('--changed-routes {0}', steps.routes.outputs.globs) || '' }}
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: jevitate-check/jevitate.sarif, category: jevitate }
+      - if: always()
+        uses: mikepenz/action-junit-report@v4
+        with: { report_paths: jevitate-check/junit.xml }
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: jevitate-check, path: jevitate-check/ }
+```
+
+`scripts/routes-for-files.sh` is your own mapping from changed files to route globs (a comma
+list); leave `--changed-routes` off to run everything. `--baseline` takes a committed `check.json`
+from a main-branch run, a `jevitate baseline tag` name, or `last`. With `last`, `--baseline-dir`
+points at a restored results cache.
+
+### Consolidated defect report and baseline diff
+
+Each run writes its own result: goal, coverage/exploratory, adversarial, feature, usability,
+verify-fix and invariants. `jevitate report` merges them into **one deduped defect list** per
+target:
+
+```bash
+jevitate report --target https://app.example.test            # markdown
+jevitate report --target shop --since 2026-09-20 --json       # the JSON envelope
+jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baseline last --out ./report
+```
+
+`--target` takes an origin (or any URL on it), a suite target name, or a registered mission
+target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
+(default `~/.jevitate/recordings` and `~/.jevitate/ux-reports`). Each defect lists:
+
+- every mode and run that observed it, with occurrence counts;
+- evidence refs (step, screenshot, request, URL, transcript);
+- its reproduction command, the `verify-fix` input.
+
+Advisory findings are listed separately. The report only reads results that were already
+redacted: it adds no page data and makes no model call.
+
+**Finding identity.** Findings are matched across modes, runs and builds by a stable key. When
+the finding has an engine fingerprint (a hard-signal defect, a hang, an invariant, a 4xx
+advisory), the key is that fingerprint. The fingerprint already folds in the signal, the templated
+route or endpoint, and the message class. Otherwise (a UX finding, a failed Journey step, a failed
+goal check) the key is the signal, the templated route (`/items/42` → `/items/:id`), the control
+and the request. Two findings whose fingerprint cascades overlap are merged: for example, the same
+broken call surfacing as a 503 in one run and as its page error in another.
+
+**Baselines and diffs.**
+
+```bash
+jevitate diff adversarial-2026-09-20T10-00-00-000Z adversarial-2026-09-22T10-00-00-000Z
+jevitate baseline tag release-1 jevitate-check/check.json   # run ids, result files, check records or other tags
+jevitate report --target shop --baseline release-1
+```
+
+Each finding is classified as one of:
+
+- **new:** in no baseline run.
+- **resolved:** in every comparable baseline run and in no current run.
+- **still-present:** in every comparable run on both sides.
+- **flaky:** in some but not all comparable runs of a side, or a run itself saw it come and go.
+- **not-rerun:** a baseline finding that no current run could have seen. It is never reported as
+  resolved without evidence.
+
+"Comparable" runs are runs of the modes that observed the finding: a goal run's silence is not
+evidence that an adversarial-only defect is gone. `last` means the previous run on the same
+target, per mode. A tag is a snapshot stored under `~/.jevitate/baselines/<name>.json`, so it
+survives pruned result files.
 
 ## How it's packaged
 

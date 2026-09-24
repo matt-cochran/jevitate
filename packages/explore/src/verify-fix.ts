@@ -99,6 +99,8 @@ export interface VerifyInvariant {
   /** What relative probe paths resolve against (the mission's start URL). */
   readonly baseUrl: string;
   readonly secrets?: readonly string[];
+  /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
+  readonly authTokens?: ReadonlyMap<string, string>;
 }
 
 export type VerifyFixVerdict = "fixed" | "still-reproduces" | "intermittent" | "inconclusive";
@@ -264,6 +266,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
       allowlist: inv.allowlist,
       baseUrl: inv.baseUrl,
       ...(inv.secrets === undefined ? {} : { secrets: inv.secrets }),
+      ...(inv.authTokens === undefined ? {} : { authTokens: inv.authTokens }),
     });
     monitor.attach(session.page);
     await monitorFor(session.page).instrument();

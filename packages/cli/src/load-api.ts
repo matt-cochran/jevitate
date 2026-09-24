@@ -5,6 +5,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
 import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitate/load";
+import { JourneyRequiresAuthError } from "./journey-api.js";
 
 /** Distinct from `@jevitate/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
 export class UnknownLoadJourneyError extends Error {}
@@ -34,6 +35,13 @@ export interface RunJourneyLoadTestOptions {
    * to `() => new PlaywrightBrowserPort()`.
    */
   browserPortFactory?: () => BrowserPort;
+  /**
+   * Playwright storageState JSON to seed EVERY pool member's session from (CLI `--storage-state`,
+   * #118) — the deterministic authenticated pre-step a Journey authored behind a login needs.
+   * Contains live session cookies: handed only to the browser, never logged, never returned in
+   * the report.
+   */
+  storageState?: string;
 }
 
 /**
@@ -60,6 +68,14 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     throw new UnknownLoadJourneyError(`unknown journey '${opts.id}'`);
   }
 
+  // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
+  // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
+  if (journey.metadata.requiresAuth === true && opts.storageState === undefined) {
+    throw new JourneyRequiresAuthError(
+      `journey '${opts.id}' requires auth (metadata.requiresAuth) — run with --storage-state <file>`,
+    );
+  }
+
   validateParams(deriveParamSchema(journey.recording), opts.params);
 
   const policy = opts.policy ?? safeRunPolicy();
@@ -77,6 +93,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
         headless: true,
         allowedOrigins: [journey.recording.site],
         baseUrl: journey.recording.site,
+        ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       });
       const actor = CastActor.named(`load-actor-${actorIndex}`).whoCan(
         new BrowseTheWeb(session, [journey.recording.site]),

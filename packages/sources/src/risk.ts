@@ -5,6 +5,17 @@ export type RiskClass = "read-only" | "risky";
 
 const READ_ONLY_KINDS = new Set<Step["kind"]>(["navigate", "waitFor", "extract", "assert"]);
 
+/**
+ * A `click` whose target has ARIA role `link` (#125) — `<a href>`/`<area>` per
+ * `ROLE_BY_TAG` in `@jevitate/recorder`'s descriptor builder — is a navigation, not a
+ * mutation: following a link reads a page, it does not submit or change anything. Any OTHER
+ * click (a button, an unrecognized/absent role, anything that isn't provably a link) stays
+ * conservatively `risky` — the classifier never guesses in the permissive direction.
+ */
+function isReadOnlyClick(step: Extract<Step, { kind: "click" }>): boolean {
+  return step.target.role === "link";
+}
+
 /** Flattens steps recursively into `forEach.steps` — a write nested inside a
  * loop is still a write; risk is a property of every step that will run,
  * not just top-level ones. `forEach` is a control-flow container, not an
@@ -37,10 +48,11 @@ function originOf(url: string): string | null {
  * The manifest/file can never set or downgrade `riskClass` — there is no
  * "riskClass" field this function reads from the file at all.
  *
- * `read-only` iff EVERY step is one of `navigate`/`waitFor`/`extract`/
- * `assert` AND every absolute `navigate.url` resolves to a declared origin.
- * Anything else (any `click`/`fill`/`select`/`press`/`handback`, or a
- * navigate that could leave `declaredOrigins`) is conservatively `risky`.
+ * `read-only` iff EVERY step is one of `navigate`/`waitFor`/`extract`/`assert`/a link `click`
+ * (#125: ARIA role `link` — following a link reads a page, it does not mutate anything) AND
+ * every absolute `navigate.url` resolves to a declared origin. Anything else (a non-link
+ * `click`/`fill`/`select`/`press`/`handback`, or a navigate that could leave `declaredOrigins`)
+ * is conservatively `risky`.
  */
 export function classifyRisk(file: SharedJourneyFile): RiskClass {
   const declaredOriginSet = new Set(file.declaredOrigins.map((o) => new URL(o).origin));
@@ -48,6 +60,9 @@ export function classifyRisk(file: SharedJourneyFile): RiskClass {
 
   for (const step of allSteps) {
     if (!READ_ONLY_KINDS.has(step.kind)) {
+      if (step.kind === "click" && isReadOnlyClick(step)) {
+        continue;
+      }
       return "risky";
     }
     if (step.kind === "navigate") {

@@ -52,6 +52,8 @@ export interface InflightRequest {
   readonly method: string;
   readonly resourceType: string;
   readonly startedAt: number;
+  /** The REQUEST's `content-type` header, when it sent one (tells an RPC-over-POST read, #110). */
+  readonly requestContentType?: string;
 }
 
 export interface CompletedRequest extends InflightRequest {
@@ -141,8 +143,12 @@ export interface CapturedRequest {
   readonly abortedAfterResponse?: boolean;
   /** Playwright's resource type (`xhr`, `fetch`, `document`, `script`, …) — classifies asset vs API (#130c). */
   readonly resourceType?: string;
-  /** The response's `content-type`, when known — also used to classify asset vs API (#130c). */
+  /** The RESPONSE's `content-type`, when known — also used to classify asset vs API (#130c). */
   readonly contentType?: string | null;
+  /** When it started (the monitor's clock) — attributes a write to the action that fired it. */
+  readonly startedAt?: number;
+  /** The REQUEST's `content-type` header, when it sent one (#110). */
+  readonly requestContentType?: string;
 }
 
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
@@ -185,6 +191,16 @@ function pathOf(url: string): string {
   }
 }
 
+/** A request's own `content-type` header (never throws: a stub request may not expose headers). */
+function requestContentTypeOf(r: Request): string | undefined {
+  try {
+    const v = r.headers()["content-type"];
+    return typeof v === "string" && v !== "" ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class PageMonitor {
   readonly #page: Page;
   readonly #inflight = new Map<Request, InflightRequest>();
@@ -209,7 +225,14 @@ export class PageMonitor {
     page.on("request", (r) => {
       const startedAt = this.#now();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.#documentNavStartedAt = startedAt;
-      this.#inflight.set(r, { url: r.url(), method: r.method(), resourceType: r.resourceType(), startedAt });
+      const requestContentType = requestContentTypeOf(r);
+      this.#inflight.set(r, {
+        url: r.url(),
+        method: r.method(),
+        resourceType: r.resourceType(),
+        startedAt,
+        ...(requestContentType === undefined ? {} : { requestContentType }),
+      });
       if (this.#ignore(r.url())) {
         this.#background.set(r, "ignored"); // the target's own background traffic: no activity either
         return;
@@ -260,6 +283,8 @@ export class PageMonitor {
             abortedAfterResponse,
             resourceType: started.resourceType,
             contentType,
+            startedAt: started.startedAt,
+            ...(started.requestContentType === undefined ? {} : { requestContentType: started.requestContentType }),
           });
         }
       }

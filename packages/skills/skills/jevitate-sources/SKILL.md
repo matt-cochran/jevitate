@@ -18,6 +18,36 @@ invokable surface, not a programmatic-only capability.
   "risky"`), and `trusted` (whether this project has acknowledged that exact
   content). Trust is LOCAL and per-user; it is bound to a content hash, so any
   change to a Journey's content invalidates its trust until re-approved.
+- `riskClass` is engine-derived, not author-declared: a Journey is
+  `"read-only"` iff every step is a `navigate`/`waitFor`/`extract`/`assert`, or
+  a `click` whose target has ARIA role `link` (following a link reads a page,
+  it does not mutate anything), AND every absolute `navigate` stays within
+  `declaredOrigins`. Anything else — a non-link `click` (e.g. a button),
+  `fill`/`select`/`press`/`handback`, or a navigate that could leave
+  `declaredOrigins` — is conservatively `"risky"` and needs `source trust`
+  before it can run.
+
+## The source manifest shape
+
+A source repo (what `source add <name> <gitUrl>` clones) needs exactly this at
+its root, or `source add`/`source update` refuse with `E_SOURCE_INVALID_MANIFEST`:
+
+- `jevitate.json` — `{ "version": 1, "source": "<name>", "sites": [{ "origin":
+  "<https://...>", "automationPolicy": "allowed", "touBasis": "<free text>" }, ...] }`.
+  `sites` declares every origin this source's Journeys are authorized to touch
+  and the Terms-of-Use basis for each; `source add --accept-tou` acknowledges
+  ALL of them together.
+- `journeys/*.journey.json` — one file per shared Journey: an ordinary
+  `Journey` (`{ metadata, recording }`, same shape `jevitate journey list`
+  reads) PLUS a top-level `declaredOrigins: string[]` (at least one absolute
+  URL) — the origins THIS Journey is authorized to touch, which must all
+  appear in the manifest's `sites`. `jevitate journey publish` writes this
+  file for you (deriving `declaredOrigins` from the Journey's absolute
+  `navigate` steps, or from `recording.site` when its navigates are relative —
+  e.g. an `explore-author-journey`-authored Journey — or from an explicit
+  `--declare-origin`); a hand-authored source repo must match this shape
+  exactly, `.strict()` — unknown/missing keys fail the whole load, one bad
+  file at a time (never a silent partial list).
 
 ## Add and manage sources
 
@@ -42,10 +72,12 @@ invokable surface, not a programmatic-only capability.
 
 ## Run a trusted remote Journey (through the run-gate)
 
-- `jevitate source run <name> <journeyId> --param k=v ... --json` runs a
-  remote-source Journey THROUGH `@jevitate/sources`' `resolveForRun` gate. Every
-  refusal is a typed error thrown BEFORE any browser launches, each with its own
-  code so a caller knows WHY:
+- `jevitate source run <name> <journeyId> --param k=v ... [--storage-state
+  <file>] --json` runs a remote-source Journey THROUGH `@jevitate/sources`'
+  `resolveForRun` gate. `--storage-state` is the same authenticated pre-step
+  as `jevitate journey run` (see `jevitate-run-journey`), for a source Journey
+  that needs one. Every refusal is a typed error thrown BEFORE any browser
+  launches, each with its own code so a caller knows WHY:
   - `E_SOURCE_RUN_HASH_MISMATCH` — the pinned content no longer matches what was
     trusted.
   - `E_SOURCE_RUN_UNTRUSTED` — a `risky` Journey that was never trusted.
@@ -63,10 +95,16 @@ invokable surface, not a programmatic-only capability.
 - `jevitate journey publish <id> --to <source> [--declare-origin <origin> ...]
   [--as <newId>] --json` pushes a PROMOTED local Journey up to a registered
   source. It preserves every publish-side guard (promoted-only,
-  secret-references-only, declared-origin coverage), writes onto a new
-  `publish/<id>` branch, and opens a PR when `gh` is present (degrading to
-  printed instructions when it is not). It refuses an unpromoted Journey
-  (`E_JOURNEY_PUBLISH_NOT_PROMOTED`) and an embedded secret
+  secret-references-only, declared-origin coverage — derived from the
+  Journey's absolute `navigate` steps, or from `recording.site` when they are
+  relative), writes onto a new `publish/<id>` branch, and opens a PR when `gh`
+  is present. The branch push is reported as `pushed: true` regardless of
+  whether a PR could be opened: when `gh` is absent, OR `gh` is present but
+  `gh pr create` fails (e.g. the remote isn't GitHub), the result still comes
+  back `ok: true` with `pushed: true` and no `prUrl`, plus printed
+  instructions to open the PR manually — the push already happened by that
+  point, so a PR failure is never reported as a publish failure. It refuses an
+  unpromoted Journey (`E_JOURNEY_PUBLISH_NOT_PROMOTED`) and an embedded secret
   (`E_JOURNEY_PUBLISH_SECRET`).
 
 ## What you must never do
