@@ -3,6 +3,7 @@ import { affordedOp, sendable, type Op } from "../actions.js";
 import { isSecretLike } from "../feature/boundary-values.js";
 import { pickMisuseAction, type MisuseStrategy } from "./misuse.js";
 import { valueFor, type InputStrategy } from "./input-strategy.js";
+import { DESTRUCTIVE, SESSION_END } from "../safety.js";
 
 /**
  * Form-aware misuse (#64). Ordinary apps are mostly forms: fields plus a Save / Submit control.
@@ -83,13 +84,9 @@ export interface FormModel {
 /** Generic submit-like names, used for pages that do not use `<form>` (and to rank submit buttons). */
 const SUBMIT_NAME = /\b(?:save|submit|update|apply|create|confirm|send|publish|register|sign ?(?:in|up)|log ?in)\b/i;
 const CANCEL_NAME = /\b(?:cancel|discard|revert|reset|undo)\b/i;
-/** Ending the session would end the run's authentication: never a misuse target. */
-const SESSION_END = /\b(?:log ?out|sign ?out|log ?off|sign ?off)\b/i;
-/**
- * Irreversible actions on a real account: a misuse run against a live app must never click them.
- * Matched on the control's accessible name; a false positive only costs coverage of that control.
- */
-export const DESTRUCTIVE = /\b(?:delete|remove|destroy|erase|purge|wipe|drop|deactivate|terminate|revoke|unsubscribe|close (?:my |your |the )?account|cancel (?:my |your |the )?(?:subscription|plan|membership|order))\b/i;
+// Ending the session (it would end the run's authentication) and irreversible actions on a real
+// account are never misuse targets: the shared safety policy's own patterns (#116, `../safety.ts`),
+// matched on the control's accessible name; a false positive only costs coverage of that control.
 
 /**
  * A control that reveals more UI when clicked (a "Create new key" button opening a dialog with a

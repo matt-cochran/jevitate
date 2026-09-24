@@ -53,6 +53,7 @@ import {
   resolveCoverageThresholds,
   parseSecretField,
   SecretFieldSpecError,
+  validateDenyPatterns,
   type CoverageThresholds,
   type SecretField,
   type SuccessCheck,
@@ -1432,6 +1433,29 @@ export function buildProgram(deps: CliDeps): Command {
       "--reply-max-chars <n>",
       "conversational pages: cap on each generated chat message (goal and usability; default 300)",
     )
+    .option(
+      "--job-wait-ms <ms>",
+      "goal and usability: while the page shows an in-progress status (\"Simulating…\", aria-busy, a job \"is running\"), " +
+        "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000)",
+    )
+    .option(
+      "--deny <pattern>",
+      "a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. " +
+        "Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--allow-destructive",
+      "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
+    )
+    .option(
+      "--read-rpc <glob>",
+      "a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). " +
+        "gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--out <dir>", "directory to write the emitted Recording")
@@ -1526,6 +1550,10 @@ export function buildProgram(deps: CliDeps): Command {
         replyWaitMs?: string;
         replyCeilingMs?: string;
         replyMaxChars?: string;
+        jobWaitMs?: string;
+        deny: string[];
+        allowDestructive?: boolean;
+        readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
         out?: string;
@@ -1542,6 +1570,7 @@ export function buildProgram(deps: CliDeps): Command {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
         ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
         ...(o.replyMaxChars === undefined ? {} : { replyMaxChars: Number(o.replyMaxChars) }),
+        ...(o.jobWaitMs === undefined ? {} : { jobWaitMs: Number(o.jobWaitMs) }),
       };
       if (
         (conversation.replyWaitMs !== undefined && !(Number.isInteger(conversation.replyWaitMs) && conversation.replyWaitMs > 0)) ||
@@ -1551,6 +1580,16 @@ export function buildProgram(deps: CliDeps): Command {
           !(Number.isInteger(conversation.replyMaxChars) && conversation.replyMaxChars >= 20 && conversation.replyMaxChars <= 2000))
       ) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms and --reply-ceiling-ms must be positive integers; --reply-max-chars an integer in 20..2000"));
+        return;
+      }
+      if (conversation.jobWaitMs !== undefined && !(Number.isInteger(conversation.jobWaitMs) && conversation.jobWaitMs > 0)) {
+        emitJson(program, fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
+        return;
+      }
+      try {
+        validateDenyPatterns(o.deny);
+      } catch (err) {
+        emitJson(program, fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       const browser = browserLaunchFromFlags(o);
@@ -1584,6 +1623,9 @@ export function buildProgram(deps: CliDeps): Command {
             settleIgnore: o.settleIgnore,
             ignoreNoProgress: o.ignoreNoProgress,
             apiPrefixes: o.apiPrefix,
+            deny: o.deny,
+            readRpc: o.readRpc,
+            ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
             ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
           });
         } catch (err) {
@@ -1905,6 +1947,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...(target?.safety === undefined ? {} : { safety: target.safety }),
           });
           emitJson(program, ok(result));
           process.exitCode = result.exitCode;

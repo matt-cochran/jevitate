@@ -1,7 +1,8 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import type { Recording, ValueOrVar } from "@jevitate/recording";
+import type { Page } from "playwright";
+import { writeClassifier, type Recording, type ValueOrVar } from "@jevitate/recording";
 import {
   BoundsTracker,
   NoProgressDetector,
@@ -36,7 +37,7 @@ import {
   secretPlaceholder,
 } from "./secret-fields.js";
 import { act } from "./act.js";
-import { SideEffectGuard, awaitWrites } from "./side-effects.js";
+import { SideEffectGuard, SideEffectLog, awaitWrites, type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { ObservedPages, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
@@ -67,7 +68,16 @@ import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, describeFailure } from "./mission-failure.js";
-import { EMPTY_STATUS, describeStatus, isEmptyStatus, readPageStatus, statusDelta, type PageStatus } from "./status.js";
+import {
+  EMPTY_STATUS,
+  describeStatus,
+  isEmptyStatus,
+  readInProgressStatus,
+  readPageStatus,
+  statusDelta,
+  type PageStatus,
+} from "./status.js";
+import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
@@ -188,6 +198,14 @@ export interface ExploreConfig {
   readonly replyMaxChars?: number;
   /** Bound (ms) a `wait` decision waits for the page to change. Default `WAIT_OP_MS`. */
   readonly waitOpMs?: number;
+  /**
+   * Job-wait budget (ms, #92): how long `wait`s keep waiting, with backoff, while the page shows an
+   * in-progress status ("Simulating…", `aria-busy`, a job "is running") — and how long a model
+   * `blocked` is deferred into such a wait. Default `replyCeilingMs`.
+   */
+  readonly jobWaitMs?: number;
+  /** The shared safety policy (#116) and write classifier (#110) configuration. */
+  readonly safety?: SafetyConfig;
 }
 
 export interface ExploreRun {
@@ -224,6 +242,34 @@ export interface ExploreRun {
    * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
    */
   readonly blockingCause?: string;
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  /** Writes past the listed cap (`MAX_SIDE_EFFECTS`), counted — present only when some were. */
+  readonly sideEffectsTruncated?: number;
+}
+
+/** The longest single slice (ms) of one job wait: the model re-perceives the page between slices. */
+const JOB_WAIT_SLICE_MS = 60_000;
+
+/**
+ * Waits, with backoff, while the page shows an in-progress status (#92): until it clears (the job
+ * finished — then the page is given a moment to settle), the page navigates, or `budgetMs` passes.
+ */
+async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: boolean; waitedMs: number }> {
+  const started = Date.now();
+  const url = safeUrl(page);
+  let delay = 1_000;
+  for (;;) {
+    const left = budgetMs - (Date.now() - started);
+    if (left <= 0) return { cleared: false, waitedMs: Date.now() - started };
+    await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
+    delay = Math.min(delay * 2, 15_000);
+    if (safeUrl(page) !== url || (await readInProgressStatus(page)) === null) {
+      const rest = budgetMs - (Date.now() - started);
+      if (rest > 0) await monitorFor(page).waitSettled({ ceilingMs: Math.min(rest, 5_000) }).catch(() => undefined);
+      return { cleared: true, waitedMs: Date.now() - started };
+    }
+  }
 }
 
 /**
@@ -418,10 +464,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
   /** The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. */
-  const sideEffects = new SideEffectGuard(monitorFor(page));
-  const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
-    // Any input change (type/select/send/upload) makes a repeat send something new.
-    if (!label.startsWith("click ")) sideEffects.inputChanged();
+  // A write is classified by the shared classifier (#110): a gRPC-web/Connect read is never guarded.
+  const isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
+  const sideEffects = new SideEffectGuard(monitorFor(page), { isWrite });
+  /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */
+  const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
+  /** The writes the run's actions fire (#116: the result's `sideEffects`). */
+  const effectLog = new SideEffectLog({ isWrite, now });
+  const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
+  /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
+  let jobWaitedMs = 0;
+  const noteMutation = (
+    label: string,
+    descriptor: unknown,
+    before: string,
+    at: number,
+    input?: { readonly field: string; readonly value: string },
+  ): void => {
+    // An input change (type/select/send/upload) makes a repeat send something new — unless it set
+    // the same value again (#123): the guard compares the values.
+    if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
@@ -430,6 +492,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
     await monitorFor(page).instrument();
+    effectLog.attach(monitorFor(page));
     // Initial navigation (authorized above).
     await Navigate.to(cfg.startUrl).performAs(cfg.actor);
     recorder.navigate(cfg.startUrl, now());
@@ -806,6 +869,24 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         continue;
       }
       if (decision.op === "blocked") {
+        // The page says work is under way (#92): "blocked" is premature while a job the page reports
+        // is still running. Code defers it into a bounded job wait; past the budget it stands.
+        const job = await readInProgressStatus(page);
+        if (job !== null && jobWaitedMs < jobWaitMs) {
+          const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
+          jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
+          const note = `blocked deferred: the page shows ${job} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          history.push(note);
+          record(true, note, { op: "wait" });
+          idleSteps = 0;
+          idleSince = null;
+          quietWaits = 0;
+          lastActedOp = "wait";
+          statusAfter = "waiting";
+          continue;
+        }
         record(true, "model blocked");
         incomplete = "the model reported the goal cannot be advanced from this page";
         stop = "blocked";
@@ -835,6 +916,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           changed = true;
           quietWaits = 0;
           record(true, note, reply.received ? { reply } : {});
+        } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && (await readInProgressStatus(page)) !== null) {
+          // The page shows an in-progress status (#92: "Simulating…", aria-busy, a job "is running")
+          // — pending work even with no request in flight (the app polls). Wait it out with backoff,
+          // bounded by the job-wait budget: patience, never "nothing is pending".
+          const job = (await readInProgressStatus(page)) ?? "an in-progress status";
+          const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
+          jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
+          note = `waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.cleared
+              ? `the in-progress status ${job} cleared`
+              : `the page still shows ${job} — the app is still working; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          changed = true;
+          quietWaits = 0;
+          record(true, note);
         } else if (decision.op === "wait") {
           const t0 = now();
           changed = await waitForChange(page, waitOpMs);
@@ -842,7 +938,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // a slow reply — not idleness: it does not count toward the idle cap.
           // Bounded: patience lasts as long as a conversational reply may take (`replyWaitMs`).
           // A sent message whose reply has not arrived yet is also still in flight.
-          const pending = !changed && (awaitingReply || (await stillBusy(page)));
+          const pending =
+            !changed && (awaitingReply || (await stillBusy(page)) || (await readInProgressStatus(page)) !== null);
           const busy = pending && busyWaitedMs < replyWaitMs;
           busyWaitedMs = busy ? busyWaitedMs + (now() - t0) : 0;
           // Nothing changed and nothing is pending: waiting again cannot help (#79).
@@ -921,6 +1018,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           continue;
         }
         const at = now();
+        effectLog.mark(transcript.nextStep, "reload");
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
           recorder.navigate(page.url(), at);
@@ -947,7 +1045,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         stop = "exhausted";
         break;
       }
+      // The shared safety policy (#116): a session-ending, destructive, paid or --deny'd control is
+      // never clicked unless the goal itself asks for it (or --allow-destructive). Refused, recorded.
+      if (decision.op === "click") {
+        const unsafe = safety.refuses(control);
+        if (unsafe !== null) {
+          history.push(unsafe.reason);
+          record(false, unsafe.reason);
+          lastActedOp = decision.op;
+          continue;
+        }
+      }
       const at = now();
+      effectLog.mark(transcript.nextStep, control.name || control.summary, safety.riskOf(control));
 
       // An EMPTY bound secret field (#111) is typed by code on its own — before a submit of its form,
       // or once a validation message names it: the model cannot see the value and was seen never
@@ -993,7 +1103,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const r = await act(cfg.actor, { op: "type", control, value });
         if (r.ok) {
           recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
           tracker.countAction();
           history.push(`typed ${placeholder} into ${control.name} (bound secret, typed by code)`);
         } else {
@@ -1095,7 +1205,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           const via = r.submittedVia;
           if (via !== undefined && via.kind === "click") recorder.click(via.control.descriptor, now());
           else recorder.press("Enter", control.descriptor, now());
-          noteMutation(`send ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`send ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
           tracker.countAction();
           unsent.submitted();
           conversation.sent.push(message);
@@ -1118,7 +1228,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const r = await act(cfg.actor, { op: "type", control, value: message });
         if (r.ok) {
           recorder.fill(control.descriptor, message, at);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
           tracker.countAction();
           unsent.typed(keyOf(control), control.name, message, true);
           history.push(`typed ${quote(message, 80)} into ${control.name} — NOT sent yet (send it)`);
@@ -1170,7 +1280,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const r = await act(cfg.actor, { op: "select", control, value: option });
         if (r.ok) {
           recorder.select(control.descriptor, option, at);
-          noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: option });
           tracker.countAction();
           fillHelper.commit();
           history.push(`selected ${quote(option, 80)} in ${control.name}`);
@@ -1236,7 +1346,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             recorder.fill(control.descriptor, text, at);
             valueLog.typed(control.name || control.summary, text);
           } else recorder.select(control.descriptor, text, at);
-          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
           tracker.countAction();
           fillHelper.commit();
           history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
@@ -1287,7 +1397,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           if (buttonLike(control) || control.submits === true) valueLog.submitted();
           // Toggling an input (a checkbox, a radio, a switch) changes what a repeat would send (#92).
           if (TOGGLE_ROLES.has(control.role) || (control.tag === "input" && control.inputType !== "submit" && control.inputType !== "button")) {
-            sideEffects.inputChanged();
+            // A radio/option now holds "selected"; a checkbox/switch flips — so toggling twice is no
+            // change (#123). Clicking into a text input changes nothing it would send.
+            const picks = ["radio", "option", "menuitemradio"].includes(control.role) || control.inputType === "radio";
+            const flips = ["checkbox", "switch", "menuitemcheckbox"].includes(control.role) || control.inputType === "checkbox";
+            if (picks) sideEffects.inputChanged(keyOf(control), "selected");
+            else if (flips) sideEffects.inputChanged(keyOf(control), { toggled: true });
           }
           if (turn) {
             message = submits ? pendingTexts.join("\n") : control.name;
@@ -1358,7 +1473,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     failure = failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
     stop = "crashed";
   }
+  const fired = effectLog.entries();
+  effectLog.close();
   return {
+    sideEffects: fired.sideEffects,
+    ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
     stop,
     recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
     transcript: transcript.entries(),

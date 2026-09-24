@@ -36,6 +36,9 @@ import { CrashWatch, describeFailure } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
+import { MissionSafety } from "../mission-safety.js";
+import type { SafetyConfig } from "../safety.js";
+import type { SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantDefectLog,
@@ -116,6 +119,9 @@ export interface FeatureRunResult {
   invariantDefects?: InvariantDefect[];
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
   invariants?: InvariantReport[];
+  /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
+  sideEffects?: SideEffect[];
+  sideEffectsTruncated?: number;
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
@@ -238,6 +244,8 @@ export type FeatureMissionParams = {
   stallTimeoutMs?: number;
   /** Bound (ms) on one reset-and-replay back to a queued state. Default `DEFAULT_REACH_TIMEOUT_MS`. */
   reachTimeoutMs?: number;
+  /** The shared safety policy (#116): session-ending / destructive / paid / --deny'd controls are never clicked. */
+  safety?: SafetyConfig;
 };
 
 export async function runFeatureMission(params: FeatureMissionParams): Promise<FeatureRunResult> {
@@ -254,11 +262,14 @@ export async function runFeatureMission(params: FeatureMissionParams): Promise<F
           }),
           log: new InvariantDefectLog(),
         };
-  const result = await runFeatureFrontier(params, declared);
+  // The named capability is the mission's goal: a risky control whose verb it names ("buy a pack"
+  // → "Buy pack 1") is what the operator asked to test; any other stays refused (#116).
+  const safety = new MissionSafety(params.safety, { goal: params.scope.name });
+  const result = { ...(await runFeatureFrontier(params, declared, safety)), ...safety.result() };
   return declared === null ? result : { ...result, invariantDefects: declared.log.defects(), invariants: declared.monitor.report() };
 }
 
-async function runFeatureFrontier(params: FeatureMissionParams, declared: Declared | null): Promise<FeatureRunResult> {
+async function runFeatureFrontier(params: FeatureMissionParams, declared: Declared | null, safety: MissionSafety): Promise<FeatureRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const maxPaths = params.maxPaths ?? 20;
@@ -325,6 +336,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
   try {
     watchdog.during("loading the seed");
     await guard(monitorFor(sessions.page).instrument());
+    safety.attach(monitorFor(sessions.page));
     await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
     let snap = await guard(snapshotNow());
 
@@ -403,8 +415,27 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
       const itemScore = relevanceScore(item.control, words, chrome);
       const itemWasChrome = chrome.isChrome(item.control);
       const rankReason = `relevance=${itemScore} chrome=${itemWasChrome}`;
+      // The shared safety policy (#116): a session-ending / destructive / paid control is never
+      // clicked; the refusal is recorded once per control.
+      const unsafe = safety.gate(item.op, item.control);
+      if (unsafe !== null) {
+        if (unsafe.first) {
+          transcript.record({
+            op: null,
+            control: item.control,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "safety-policy",
+            actOk: false,
+            reason: unsafe.reason,
+            snapshot: decidedOn,
+          });
+        }
+        continue;
+      }
       watchdog.during(`acting on "${item.control.name || item.op}"`);
       if (declared !== null) await guard(declared.monitor.before(sessions.actor));
+      safety.mark(transcript.nextStep, item.op, item.control);
       const result = await guard(act(sessions.actor, { op: item.op, control: item.control, value: fillText ?? null }));
       actions += 1;
       frontier.recordAttempt();
@@ -470,6 +501,7 @@ async function runFeatureFrontier(params: FeatureMissionParams, declared: Declar
         watchdog.kick("resetting after a hang");
         if (!(await guard(sessions.reset(hang)))) return endRun("hang");
         await guard(monitorFor(sessions.page).instrument());
+        safety.attach(monitorFor(sessions.page));
         currentFingerprint = ""; // the next item is reached afresh from the seed
         continue;
       }
