@@ -14,9 +14,11 @@ mission and reading the result honestly.
 
 - The target must already be authorized. This tool refuses an unknown or
   unauthorized target by design (`E_UNAUTHORIZED_EXPLORE_TARGET` — authoring/test
-  plane only, never production writes). The allowlist defaults to the `--url`'s
-  own origin; widen it only with explicit `--allow <origin>` values the human
-  gave you. If you don't know whether a target is authorized, ask.
+  plane only, never production writes). The allowlist is the `--url`'s own
+  origin ONLY WHEN `--allow` is omitted entirely — any `--allow <origin>`
+  REPLACES that default rather than adding to it, so include the URL's own
+  origin explicitly in your `--allow` list if the mission still needs to
+  navigate there too. If you don't know whether a target is authorized, ask.
 - Pick a strategy deliberately (default is `goal`):
   - `--strategy goal` (default): needs `--goal` and `--success`. Reaches a
     stated end state.
@@ -58,8 +60,15 @@ mission and reading the result honestly.
   <authorized-url> --json` (model-free).
 - Authoring a promotable Journey: `jevitate explore-author-journey --url
   <authorized-url> --goal "<goal>" --success <assertion> --id <journey-id>
-  --name "<name>" --real --json` — drives the goal-based mission and writes an
-  UNPROMOTED, parameterized Journey to the store. It is never auto-promoted.
+  --name "<name>" [--storage-state <file>] --real --json` — drives the
+  goal-based mission and writes an UNPROMOTED, parameterized Journey to the
+  store. It is never auto-promoted (`jevitate journey promote <id>` promotes
+  it once a human is ready). The `--success` assertion is baked in as the
+  authored Journey's FINAL step (an `assert`), so a replay of it proves the
+  outcome it was authored to reach — not just that navigation got there.
+  `--storage-state` authors against an already-logged-in session for a target
+  behind a login; replaying that Journey later needs the SAME flag on `journey
+  run`/`load run`/`source run` (see `jevitate-run-journey`).
 - MCP: the `queue_exploration` tool — `queue_exploration({ target, goal, ... })`
   — enqueues a bounded mission and returns a `missionId` immediately (it does
   not run inline). `target` must be a pre-registered mission target id, not a
@@ -117,9 +126,3 @@ mission and reading the result honestly.
 - `queue_exploration` enqueues but does not itself run the mission; nothing
   runs until `jevitate mission run` drains the queue. Treat the returned
   `missionId` as "accepted," not "finished."
-- The MCP server also registers 8 inbox/command-queue tools
-  (`queue_retrieval`, `queue_action`, `get_command`, `list_incoming`,
-  `get_thread`, `approve_action`, `cancel_command`, `get_site_health`) that
-  currently return a typed `not_implemented` error — they are reserved surface,
-  not usable yet. The four wired tools are `find_capabilities`, `run_journey`,
-  `queue_exploration`, and `ai_generate_text`.

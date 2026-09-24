@@ -329,7 +329,11 @@ pass: it is counted in the result's `invariants` report.
 
 - `require`: an expression checked after each action that matches `when` (every
   action when `when` is left out). `when` can match `control.name` (an exact string or
-  a `/regex/flags` pattern), `route` (a path glob) and `op`.
+  a `/regex/flags` pattern), `route` (a path glob) and `op` — `op` is an ARRAY of one
+  or more action-op names (e.g. `"op": ["click", "type"]`, not a bare string), matched
+  if the action's op is any one of them. The op vocabulary: `click`, `type`, `send`
+  (type-and-submit, e.g. a chat composer), `select`, `upload`, `scroll_up`,
+  `scroll_down`, `wait`, `reload`.
 - `never`: `pageText` (a pattern) or `assertion` (a success-check assertion) that must
   never hold. It is checked after every action.
 - `always`: an assertion that must hold after every action.
@@ -389,6 +393,41 @@ transcript, Recording and issue draft, but it is never typed into a field.
 
 The bound value and the seed are registered as run secrets, so the existing
 redaction seams scrub them everywhere.
+
+**Replaying an authenticated Journey.** A Journey `explore-author-journey` authors
+with `--storage-state` needs the SAME authenticated pre-step to replay: pass
+`--storage-state <file>` to `jevitate journey run`, `jevitate load run` and
+`jevitate source run`. Over MCP, `run_journey`'s optional `storageState` argument is
+the same thing — a file PATH on the machine running the MCP server; its contents are
+read only by that server's own browser session, never returned or logged. A Journey
+can also declare `metadata.requiresAuth: true` so a run given no `storageState` fails
+fast, before any browser opens, with a clear message — instead of a confusing
+`replay-target-not-found` partway into the steps.
+
+### Usage accounting
+
+An exploration mission's result carries `usage: { judgments, generations,
+inputTokens, outputTokens, usd? }` when the CLI command was built with usage
+tracking (a `--real` run). `usd` is populated ONLY when the underlying provider
+itself reports a cost — today, that is OpenRouter's usage-accounting `cost` on a
+**generation** call (the model that writes form text). It is never estimated or
+derived from a price table. **Jev's own judgment calls are not priced**: they have
+no cost-reporting path today, so `usage.usd` is absent whenever a run made only
+judgments and no generations (`generations: 0`), even though `judgments` is
+non-zero and those calls cost real money against your provider account. Read
+`usage.usd`'s absence as "not priced by this build," never as "free."
+
+### Persistent browser profiles (`jevitate profile`)
+
+`jevitate profile create <name>` / `jevitate profile status <name>` provision and
+check a directory under `~/.jevitate/profiles/<name>` — an on-disk Chromium
+user-data directory (Playwright's `persistentProfile`, distinct from a
+`--storage-state` JSON snapshot: a real profile directory instead of a serialized
+cookie/localStorage file). **No `jevitate` command consumes one yet** — there is no
+`--profile` flag on `explore`, `journey run`, `record` or `load run` today. Treat
+`jevitate profile` as reserved surface: it prepares the directory a future
+`--profile` flag would point a browser session at, not a currently wired
+authentication path. Use `--storage-state` (above) for authenticated runs today.
 
 ### Stateful and conversational runs: sequential only, one tenant at a time
 

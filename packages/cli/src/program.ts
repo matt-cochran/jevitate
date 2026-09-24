@@ -63,7 +63,7 @@ import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
-import { runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
+import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { runRegressionCapture } from "./regression-api.js";
 import {
@@ -704,6 +704,36 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
+  /**
+   * Reads one "take file" for `recording diff`/`recording postdoc` (#124): a JSON object written
+   * by `jevitate record` — `{ recording, values }` (`AuthoringTakeSchema`). A raw `Recording` — the
+   * kind `explore`/`explore-author-journey`/a usability run emits directly, `{version, site, pages,
+   * ...}` at the TOP level, no `recording`/`values` wrapper — is a common, easy mistake to hand
+   * here; `AuthoringTakeSchema`'s `.strict()` rejects it with an opaque `Unrecognized keys: version,
+   * site, intent, pages` zod dump. Detected BEFORE the schema parse so the caller gets a message
+   * that names the actual problem and how to fix it, not a zod dump.
+   */
+  async function readAuthoringTake(file: string): Promise<AuthoringRecording> {
+    const raw = await readFile(file, "utf8");
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`'${file}' is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (json !== null && typeof json === "object" && !Array.isArray(json) && "pages" in json && !("recording" in json)) {
+      throw new Error(
+        `'${file}' looks like a Recording (it has a top-level "pages"), not a take file. ` +
+          `'recording diff'/'recording postdoc' need a take file written by 'jevitate record' — shape ` +
+          `{ recording, values } — not a raw Recording from 'explore', 'explore-author-journey', or a ` +
+          `usability run. Wrap it as { "recording": <the Recording>, "values": {} } if you want to ` +
+          `diff/postdoc it anyway.`,
+      );
+    }
+    const parsed = AuthoringTakeSchema.parse(json);
+    return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
+  }
+
   const recording = program.command("recording");
 
   recording
@@ -731,13 +761,7 @@ export function buildProgram(deps: CliDeps): Command {
       const { json } = this.opts<{ json?: boolean }>();
       try {
         const files = [takeA, takeB, ...more];
-        const takes: AuthoringRecording[] = await Promise.all(
-          files.map(async (f) => {
-            const raw = await readFile(f, "utf8");
-            const parsed = AuthoringTakeSchema.parse(JSON.parse(raw));
-            return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
-          })
-        );
+        const takes: AuthoringRecording[] = await Promise.all(files.map(readAuthoringTake));
         const diffResult = diffTakes(takes);
         const envelope = ok(diffResult);
         if (json) {
@@ -791,13 +815,7 @@ export function buildProgram(deps: CliDeps): Command {
       }>();
       try {
         const files = [take, ...more];
-        const takes: AuthoringRecording[] = await Promise.all(
-          files.map(async (f) => {
-            const raw = await readFile(f, "utf8");
-            const parsed = AuthoringTakeSchema.parse(JSON.parse(raw));
-            return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
-          })
-        );
+        const takes: AuthoringRecording[] = await Promise.all(files.map(readAuthoringTake));
         const diff = diffTakes(takes);
 
         let decisions: PostdocDecision[];
@@ -903,6 +921,10 @@ export function buildProgram(deps: CliDeps): Command {
     .command("run <id>")
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option(
+      "--storage-state <file>",
+      "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
+    )
     // Ticket #7 (additive): opt a run into scoped self-healing. Default
     // `fail-closed` preserves Slice 1 behavior exactly (no healer wired). A
     // write/irreversible step NEVER auto-heals in any mode (enforced by the
@@ -914,14 +936,20 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, param, selfHeal, real, fakeAi, json } = this.opts<{
+      const { dir, param, storageState, selfHeal, real, fakeAi, json } = this.opts<{
         dir?: string;
         param: Record<string, string>;
+        storageState?: string;
         selfHeal: string;
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
       }>();
+
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
 
       if (selfHeal !== "fail-closed" && selfHeal !== "hybrid" && selfHeal !== "full") {
         emitJson(program, fail("E_SELF_HEAL_MODE", `--self-heal must be one of fail-closed | hybrid | full (got '${selfHeal}')`));
@@ -963,6 +991,8 @@ export function buildProgram(deps: CliDeps): Command {
           params: param,
           policy,
           selfHealer,
+          browserPortFactory: deps.explore?.browserPortFactory,
+          ...(storageState !== undefined ? { storageState } : {}),
         }).then((r) => withEngine(r));
         const envelope = ok(result);
         if (json) {
@@ -977,10 +1007,42 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof JourneyRequiresAuthError) {
+          emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
         } else {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
+        }
+      }
+    });
+
+  // #124 — promote a local Journey so it becomes discoverable/runnable (journey
+  // find / MCP find_capabilities / run_journey), mirroring `mission target
+  // promote`'s human-approval-gate semantics: promoting is a deliberate,
+  // explicit act, never automatic (an authored Journey's `metadata.promoted`
+  // always starts `false` — see `explore-author-journey`/`jevitate record`).
+  journey
+    .command("promote <id>")
+    .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable")
+    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const journeyResult = await promoteJourney(resolveJourneysDir(deps, dir), id);
+        const envelope = ok(journeyResult.metadata);
+        if (json) {
+          emitJson(program, envelope);
+        } else {
+          program.configureOutput().writeOut?.(`promoted journey '${journeyResult.metadata.id}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownJourneyError) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else {
+          emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
       }
     });
@@ -1220,15 +1282,32 @@ export function buildProgram(deps: CliDeps): Command {
     .command("run <name> <journeyId>")
     .description("run a Journey from a trusted remote source through the run-gate")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option(
+      "--storage-state <file>",
+      "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string, journeyId: string) {
-      const { param, json } = this.opts<{ param: Record<string, string>; json?: boolean }>();
+      const { param, storageState, json } = this.opts<{
+        param: Record<string, string>;
+        storageState?: string;
+        json?: boolean;
+      }>();
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_SOURCE_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
       try {
         const apiDeps: SourceRunApiDeps = {
           ...resolveSourceApiDeps(deps),
           runJourney: deps.sources?.runJourney ?? realResolvedJourneyRunner,
         };
-        const result = withEngine(await runSourceJourney(apiDeps, { sourceName: name, journeyId, params: param }));
+        const result = withEngine(await runSourceJourney(apiDeps, {
+          sourceName: name,
+          journeyId,
+          params: param,
+          ...(storageState !== undefined ? { storageState } : {}),
+        }));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1256,6 +1335,8 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, fail("E_SOURCE_RUN_INVALID_MANIFEST", err.message));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", err.message));
+        } else if (err instanceof JourneyRequiresAuthError) {
+          emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", err.message));
         } else {
           emitJson(program, fail("E_SOURCE_RUN", String(err instanceof Error ? err.message : err)));
         }
@@ -1281,15 +1362,20 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--concurrency <n>", "pool size", "1")
     .option("--iterations <n>", "iterations per actor", "1")
     .option("--seed <n>", "master RNG seed", "1")
+    .option(
+      "--storage-state <file>",
+      "Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { dir, param, authorizedOrigin, concurrency, iterations, seed, json } = this.opts<{
+      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState, json } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         authorizedOrigin: string[];
         concurrency: string;
         iterations: string;
         seed: string;
+        storageState?: string;
         json?: boolean;
       }>();
       if (authorizedOrigin.length === 0) {
@@ -1297,6 +1383,10 @@ export function buildProgram(deps: CliDeps): Command {
           program,
           fail("E_LOAD_RUN", "at least one --authorized-origin is required (refusing to load-test with an empty allowlist)"),
         );
+        return;
+      }
+      if (storageState !== undefined && !existsSync(storageState)) {
+        emitJson(program, fail("E_LOAD_RUN_ARGS", `storage state not found: ${storageState}`));
         return;
       }
       try {
@@ -1308,6 +1398,8 @@ export function buildProgram(deps: CliDeps): Command {
           iterationsPerActor: Number(iterations),
           seed: Number(seed),
           authorizedOrigins: authorizedOrigin,
+          browserPortFactory: deps.explore?.browserPortFactory,
+          ...(storageState !== undefined ? { storageState } : {}),
         }).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
@@ -1319,6 +1411,8 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         if (err instanceof UnknownLoadJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
+        } else if (err instanceof JourneyRequiresAuthError) {
+          emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
         } else {
           emitJson(program, fail("E_LOAD_RUN", String(err instanceof Error ? err.message : err)));
         }
@@ -1377,7 +1471,7 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--allow <origin>",
-      "authorized origin (repeatable); defaults to the URL's own origin",
+      "authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2112,7 +2206,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--journeys-dir <dir>", "journeys store directory (default: ~/.jevitate/journeys)")
     .option(
       "--allow <origin>",
-      "authorized origin (repeatable); defaults to the URL's own origin",
+      "authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2219,7 +2313,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--retro <text>", "optional retrospective note (carried to Recording.retro)")
     .option(
       "--allow <origin>",
-      "authorized origin (repeatable); defaults to the URL's own origin",
+      "authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )

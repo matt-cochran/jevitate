@@ -80,8 +80,11 @@ export interface McpApiDeps {
   /**
    * Test seam. Defaults to `runJourneyProgrammatically` with a fail-closed
    * `safeRunPolicy()` (invariant #5: PUBLISHED-id-only, never inline steps).
+   * `storageState` (#118) is a PATH to a Playwright storageState JSON file — the file is
+   * read only by the server's own browser launch; its contents never enter this handler,
+   * an MCP result, or a log.
    */
-  runJourney?: (id: string, params: Record<string, string>) => Promise<unknown>;
+  runJourney?: (id: string, params: Record<string, string>, storageState?: string) => Promise<unknown>;
   /**
    * Promoted mission-target store directory (`~/.jevitate/missions/targets` in
    * production — the SAME store `jevitate mission target` writes). Required for
@@ -206,8 +209,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
 
   const runJourney =
     deps.runJourney ??
-    ((id: string, params: Record<string, string>) =>
-      runJourneyProgrammatically({ dir: deps.journeysDir, id, params, policy: safeRunPolicy() }));
+    ((id: string, params: Record<string, string>, storageState?: string) =>
+      runJourneyProgrammatically({
+        dir: deps.journeysDir,
+        id,
+        params,
+        policy: safeRunPolicy(),
+        ...(storageState !== undefined ? { storageState } : {}),
+      }));
 
   // queue_exploration: enqueue over the SAME promoted fs store `jevitate
   // mission target` writes. The store is built lazily inside the closure so
@@ -465,12 +474,17 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     run_journey: {
       description:
-        "Run a PUBLISHED Journey by id with string params (fail-closed policy). Never accepts inline steps.",
+        "Run a PUBLISHED Journey by id with string params (fail-closed policy). Never accepts inline steps. " +
+        "Optional 'storageState': a PATH (on the machine running this MCP server) to a Playwright storageState " +
+        "JSON file, for a Journey authored behind a login (#118) — the file's contents are read only by the " +
+        "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
+        "with a clear error when no storageState is given.",
       inputSchema: {
         type: "object",
         properties: {
           id: { type: "string" },
           params: { type: "object", additionalProperties: { type: "string" } },
+          storageState: { type: "string" },
         },
         required: ["id"],
       },
@@ -478,13 +492,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         if (typeof args.id !== "string" || args.id.length === 0) {
           return errorResult({ error: "invalid_args", message: "run_journey requires a non-empty string 'id'" });
         }
-        // Invariant #5: only id + params are threaded through — any inline
+        // Invariant #5: only id + params (+ storageState PATH) are threaded through — any inline
         // `steps`/`recording` in the arguments is deliberately ignored.
         const params =
           args.params && typeof args.params === "object" && !Array.isArray(args.params)
             ? (args.params as Record<string, string>)
             : {};
-        return jsonResult(await runJourney(args.id, params));
+        const storageState = typeof args.storageState === "string" ? args.storageState : undefined;
+        return jsonResult(await runJourney(args.id, params, storageState));
       },
     },
     queue_exploration: {
