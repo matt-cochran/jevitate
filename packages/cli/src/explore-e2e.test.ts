@@ -15,7 +15,7 @@ import { BrowseTheWeb, CastActor, type BrowserSession } from "@jevitate/screenpl
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
-import { runAdversarialCliMission, runCoverageMission } from "./explore-api.js";
+import { runAdversarialCliMission, runCoverageMission, runFeatureCliMission } from "./explore-api.js";
 
 /**
  * P1 acceptance (Task 12): `jevitate explore --url <fixture> --goal ... --success ...`
@@ -260,6 +260,87 @@ describe("shared decision transcript — every model-deciding strategy writes on
         expect(transcript.length).toBe(result.coverage.transitionsExercised);
         expect(transcript.every((e) => e.op === "click" && e.strategy === "coverage-frontier" && e.actOk)).toBe(true);
         expect(transcript[0]?.judgments?.isDefect).toEqual({ value: false, probability: 0.1 });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+});
+
+describe("runFeatureCliMission — ranked, honest --out (ticket #78)", () => {
+  it(
+    "exercises the in-scope 'Buy pack' buttons, is reported clean, and writes recordings + transcript + a typed result",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-out-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/shop`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: ["/feature-mission/shop"],
+          outDir,
+          nowIso: () => "2026-09-23T00:00:00.000Z",
+        });
+
+        expect(result.missionOutcome).toBe("clean");
+        expect(result.exitCode).toBe(0);
+        expect(result.failure).toBeUndefined();
+        expect(result.coverage.inScopeActionsExercised).toBeGreaterThan(0);
+        expect(new Set(result.coverage.boundaryEdges).size).toBe(result.coverage.boundaryEdges.length);
+
+        // --out receives the recordings, the transcript and a typed result.json — none of
+        // this was written before ticket #78.
+        expect(result.recordingPaths.length).toBeGreaterThan(0);
+        expect(result.recordingPaths.every((p) => p.startsWith(join(outDir, "feature-2026-09-23T00-00-00-000Z-path-")))).toBe(
+          true,
+        );
+        for (const p of result.recordingPaths) {
+          expect(JSON.parse(await readFile(p, "utf8"))).toMatchObject({ version: "1.0.0" });
+        }
+        expect(result.transcriptPath).toBe(join(outDir, "feature-2026-09-23T00-00-00-000Z.transcript.json"));
+        const transcript = await readTranscript(result.transcriptPath);
+        expect(transcript).toEqual(result.transcript);
+        expect(transcript.every((e) => e.strategy === "feature-frontier" && e.chosenBy === "strategy")).toBe(true);
+        const buyClick = transcript.find((e) => e.op === "click" && e.target !== null && /buy pack/i.test(e.target));
+        expect(buyClick?.actOk).toBe(true);
+
+        expect(result.resultPath).toBe(join(outDir, "feature-2026-09-23T00-00-00-000Z.result.json"));
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
+        expect(persisted).toMatchObject({ missionOutcome: "clean", exitCode: 0 });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
+    "a chrome-only page (nothing but the shared header nav) is reported inconclusive with a shortfall — never clean",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-chrome-only-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/chrome-only`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: ["/feature-mission/chrome-only"],
+          outDir,
+          nowIso: () => "2026-09-23T00:00:00.000Z",
+        });
+
+        expect(result.coverage.inScopeActionsExercised).toBe(0);
+        expect(result.missionOutcome).toBe("inconclusive");
+        expect(result.exitCode).toBe(2);
+        expect(result.failure).toMatchObject({ kind: "insufficient-coverage" });
+        expect(result.failure?.message).toContain("buy a pack");
+
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
+        expect(persisted).toMatchObject({
+          missionOutcome: "inconclusive",
+          exitCode: 2,
+          result: { failure: { kind: "insufficient-coverage" } },
+        });
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }
