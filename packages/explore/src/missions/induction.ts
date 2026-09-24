@@ -54,6 +54,7 @@ import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
+import { detectOverflow, shouldCheckOverflow, type OverflowFinding } from "../overflow.js";
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
@@ -87,6 +88,8 @@ export interface DefectRecord {
   readonly reason: string;
   /** A replayable repro path from the seed to the flagged state. */
   readonly recording: Recording;
+  /** Present for a horizontal-overflow hard signal (#149): the structured finding `reason` summarizes. */
+  readonly overflow?: OverflowFinding;
 }
 
 /** One transition whose result landed outside the mission's target scope (#89) — recorded, never
@@ -210,6 +213,21 @@ export interface InductionMissionParams {
   readonly reachTimeoutMs?: number;
   /** The shared safety policy (#116): session-ending / destructive / paid / --deny'd controls are never clicked. */
   readonly safety?: SafetyConfig;
+  /**
+   * Horizontal-overflow hard signal (#149): checked after every settled state (and on the seed
+   * page) and, when it fires, recorded as a `DefectRecord` — a hard defect, never a Jev judgment
+   * (guardrail #4). Runs by default only when the emulated viewport is narrower than 1024px, or
+   * always when `checkOverflow` is set (CLI `--check-overflow`).
+   */
+  readonly overflow?: {
+    readonly checkOverflow?: boolean;
+    readonly toleranceCss?: number;
+    /** `--ignore-overflow <selector>` (repeatable): intentional overflow, never a defect. */
+    readonly ignoreSelectors?: readonly string[];
+    /** The device name (`--device`), recorded on a finding for context. */
+    readonly device?: string;
+    readonly secrets?: readonly string[];
+  };
 }
 
 /**
@@ -378,6 +396,29 @@ async function runInductionFrontier(
   const visited = new Set<string>();
   const statePaths = new Map<string, Recording>();
   const defects: DefectRecord[] = [];
+  // Horizontal-overflow (#149): one defect per distinct fingerprint (route + element) — a wide table
+  // seen across many visited states is still ONE finding, never a defect per occurrence.
+  const seenOverflow = new Set<string>();
+  const checkOverflow = async (stateFp: string, url: string, recording: Recording): Promise<void> => {
+    const vp = sessions.page.viewportSize();
+    if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return;
+    const finding = await detectOverflow(sessions.page, {
+      viewport: vp ?? { width: 1280, height: 720 },
+      ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
+      ...(params.overflow?.toleranceCss === undefined ? {} : { toleranceCss: params.overflow.toleranceCss }),
+      ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
+      ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
+    });
+    if (finding === null || seenOverflow.has(finding.fingerprint)) return;
+    seenOverflow.add(finding.fingerprint);
+    defects.push({
+      stateFingerprint: stateFp,
+      url,
+      reason: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
+      recording,
+      overflow: finding,
+    });
+  };
   let transitionsExercised = 0;
   let actions = 0;
   let failedActions = 0;
@@ -484,6 +525,8 @@ async function runInductionFrontier(
     const seedRecording: Recording = { version: "1", site, pages: [] };
     statePaths.set(currentFingerprint, seedRecording);
     enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
+    // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
+    await guard(checkOverflow(currentFingerprint, snap.url, withSeed(seedRecording, params.seedUrl)));
 
     while (!frontier.isExhausted()) {
       // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
@@ -685,6 +728,9 @@ async function runInductionFrontier(
         departed = true;
         continue;
       }
+
+      // Horizontal-overflow hard signal (#149) — pure DOM geometry, never a Jev judgment.
+      await guard(checkOverflow(newFingerprint, snap.url, withSeed(branch, params.seedUrl)));
 
       // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
       // (guardrail #3, via buildJudgmentState) and carries the prompt-injection

@@ -255,3 +255,51 @@ describe("runInductionMission — bounds", () => {
     expect(result.coverage.frontierExhausted).toBe(false);
   }, 30_000);
 });
+
+describe("runInductionMission — horizontal-overflow hard signal (#149)", () => {
+  async function runAt(seedPath: string, viewport: { width: number; height: number }, checkOverflow = false) {
+    const browserPort = new PlaywrightBrowserPort();
+    const narrowSession = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url, viewport });
+    try {
+      const narrowActor = CastActor.named("responsive-tester").whoCan(new BrowseTheWeb(narrowSession, [site.url]));
+      return await runInductionMission({
+        page: narrowSession.page,
+        actor: narrowActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}${seedPath}`,
+        allowlist: [site.url],
+        overflow: { checkOverflow },
+      });
+    } finally {
+      await narrowSession.close();
+    }
+  }
+
+  test("--viewport 375x812 on /responsive/overflow gives a horizontal-overflow defect attributed to [data-testid=wide]", async () => {
+    const result = await runAt("/responsive/overflow", { width: 375, height: 812 });
+    expect(result.outcome).toBe("exhausted");
+    const overflowDefects = result.coverage.defects.filter((d) => d.overflow !== undefined);
+    expect(overflowDefects).toHaveLength(1);
+    const finding = overflowDefects[0]!.overflow!;
+    expect(finding.kind).toBe("horizontal-overflow");
+    expect(finding.element.descriptor).toBe("[data-testid=wide]");
+    expect(finding.overflowPx).toBeGreaterThanOrEqual(200);
+    expect(finding.overflowPx).toBeLessThanOrEqual(250);
+  }, 30_000);
+
+  test("/responsive/ok is clean at 375px (no overflow defect)", async () => {
+    const result = await runAt("/responsive/ok", { width: 375, height: 812 });
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+
+  test("/responsive/contained is clean at 375px (overflow is inside a scroll container, never page-level)", async () => {
+    const result = await runAt("/responsive/contained", { width: 375, height: 812 });
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+
+  test("/responsive/overflow is clean at 1280px (the same page fits at a desktop width)", async () => {
+    const result = await runAt("/responsive/overflow", { width: 1280, height: 800 }, true);
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+});
