@@ -1,15 +1,23 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
+import { appendFileSync } from "node:fs";
 import { SEED_THREADS } from "./data.js";
+import { registerTenancy, type TenancyOptions } from "./tenancy.js";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const authed = (req: { cookies: Record<string, string | undefined> }) => req.cookies.sid === "ok";
 
-export function buildServer(): FastifyInstance {
+export interface ServerOptions {
+  /** The `/tenancy/*` two-tenant fixture (#147); the object is kept, so `leaky` can be flipped at runtime. */
+  readonly tenancy?: TenancyOptions;
+}
+
+export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   const app = Fastify();
   app.register(cookie);
   app.register(formbody);
+  registerTenancy(app, opts.tenancy);
 
   app.get("/login", async (_req, reply) => {
     reply.type("text/html").send(`<!doctype html><html><body><h1>Sign in</h1>
@@ -54,6 +62,48 @@ export function buildServer(): FastifyInstance {
   // even though Chromium logs it to the console as "Failed to load resource".
   app.get("/adversarial/notfound", async (_req, reply) => {
     reply.code(404).send("not found");
+  });
+
+  // Additive fixture for @jevitate/cli's backend log correlation (#142): each route returns 200
+  // immediately (the browser/mission sees nothing wrong) and appends a backend log line to
+  // $EXAMPLE_SITE_LOG, if set — a test points --log-source at that file. Namespaced under
+  // /server-log-mission to stay clear of other fixtures edited in parallel.
+  app.get("/server-log-mission/warn", async (_req, reply) => {
+    const logFile = process.env.EXAMPLE_SITE_LOG;
+    if (logFile !== undefined) {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({ level: "warn", time: new Date().toISOString(), message: "Not Authorized for feature AllOrganizations_View" })}\n`,
+      );
+    }
+    reply.send({ ok: true });
+  });
+
+  // The error line embeds a fixture "secret" value (a fake bearer token) so a test can assert the
+  // run's `--secret` redaction reaches server-log evidence too, never just page/model-facing text.
+  app.get("/server-log-mission/error", async (_req, reply) => {
+    const logFile = process.env.EXAMPLE_SITE_LOG;
+    if (logFile !== undefined) {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({
+          level: "error",
+          time: new Date().toISOString(),
+          message: "GetActiveRatePlanForOffer failed for token tok_live_FIXTURE_SECRET_42: no resolvable active subscription tier yet",
+        })}\n`,
+      );
+    }
+    reply.send({ ok: true });
+  });
+
+  // Two buttons, nothing else clickable (deterministic control order for a scripted test): the
+  // first hits /server-log-mission/warn, the second /server-log-mission/error, each updating
+  // #status so a --success check can require BOTH to have fired.
+  app.get("/server-log-mission/page", async (_req, reply) => {
+    reply.type("text/html").send(`<!doctype html><html><body><h1>Server log mission</h1>
+<button data-testid="warn-btn" onclick="fetch('/server-log-mission/warn').then(()=>{document.querySelector('[data-testid=status]').textContent+=' warn-done'})">Trigger warn</button>
+<button data-testid="error-btn" onclick="fetch('/server-log-mission/error').then(()=>{document.querySelector('[data-testid=status]').textContent+=' error-done'})">Trigger error</button>
+<div data-testid="status"></div></body></html>`);
   });
 
   app.get<{ Params: { id: string } }>("/thread/:id", async (req, reply) => {
@@ -210,5 +260,68 @@ export function buildServer(): FastifyInstance {
     );
   });
 
+  // Rich-text editor fixture (#148): three contenteditable prose blocks (persisted per server
+  // instance, so `reloadThen` proves an edit saved), `[data-heat]` highlight spans, and an SVG
+  // minimap whose cells scroll their block into view and flash it for 800 ms.
+  //   ?broken=heat    — the heat spans render with alpha 0 (text and count unchanged)
+  //   ?broken=minimap — a cell scrolls to the WRONG block and never flashes
+  const blocks = new Map<string, string>(EDITOR_BLOCKS);
+  app.get<{ Querystring: { broken?: string } }>("/editor-fixture", async (req, reply) => {
+    const broken = req.query.broken ?? "";
+    const heatAlpha = broken === "heat" ? "0" : "0.4";
+    const ids = [...blocks.keys()];
+    const cells = ids
+      .map(
+        (id, i) =>
+          `<rect data-cell="${i + 1}" data-target="${id}" role="button" aria-label="Jump to block ${i + 1}" x="0" y="${i * 40}" width="40" height="36" fill="#8ab"></rect>`,
+      )
+      .join("");
+    const prose = ids.map((id) => `<p id="${id}" class="block" contenteditable="true">${blocks.get(id) ?? ""}</p>`).join("\n");
+    reply.type("text/html").send(`<!doctype html><html><head><title>Editor fixture</title><style>
+body { font: 16px/1.5 sans-serif; margin: 0; padding: 16px 80px 16px 16px; }
+.block { margin: 0 0 150vh; padding: 8px; }
+[data-heat] { background-color: rgba(255, 200, 0, ${heatAlpha}); }
+.flash { outline: 3px solid orange; }
+#minimap { position: fixed; top: 10px; right: 10px; }
+</style></head><body><h1>Editor</h1>
+<svg id="minimap" width="40" height="${ids.length * 40}">${cells}</svg>
+${prose}
+<script>
+const broken = ${JSON.stringify(broken)};
+const ids = ${JSON.stringify(ids)};
+for (const p of document.querySelectorAll(".block")) {
+  p.addEventListener("input", () => {
+    fetch("/editor-fixture/blocks/" + p.id, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ html: p.innerHTML }), keepalive: true });
+  });
+}
+for (const cell of document.querySelectorAll("rect[data-cell]")) {
+  cell.addEventListener("click", () => {
+    let id = cell.getAttribute("data-target");
+    if (broken === "minimap") id = ids[(ids.indexOf(id) + 1) % ids.length];
+    const block = document.getElementById(id);
+    block.scrollIntoView({ block: "center" });
+    if (broken === "minimap") return;
+    block.classList.add("flash");
+    setTimeout(() => block.classList.remove("flash"), 800);
+  });
+}
+</script></body></html>`);
+  });
+  app.put<{ Params: { id: string }; Body: { html?: string } }>("/editor-fixture/blocks/:id", async (req, reply) => {
+    if (!blocks.has(req.params.id) || typeof req.body?.html !== "string") {
+      reply.code(400).send({ ok: false });
+      return;
+    }
+    blocks.set(req.params.id, req.body.html);
+    reply.send({ ok: true });
+  });
+
   return app;
 }
+
+/** The editor fixture's initial prose blocks (#148), by id. */
+export const EDITOR_BLOCKS: ReadonlyArray<readonly [string, string]> = [
+  ["b1", 'The draft opens with <span data-heat="3">three risky claims</span> and <span data-heat="1">a soft hedge</span>.'],
+  ["b2", "Paragraph two says the quick brown fox jumps over the lazy dog."],
+  ["b3", "The closing paragraph thanks the reader for their time."],
+];

@@ -32,6 +32,7 @@ import {
   type HangFinding,
   type VerifySession,
   type SideEffect,
+  type TranscriptEntry,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import {
@@ -68,6 +69,8 @@ import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult } from 
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
+import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import { serverLogResult, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
@@ -583,6 +586,12 @@ export interface RunUsabilityMissionOptions {
   readonly target?: TargetConfig;
   /** Test seam: extract a page's visible text. Default reads the live page. */
   readonly extractText?: (session: { page: { evaluate: (fn: () => string) => Promise<string> } }) => Promise<string>;
+  /**
+   * Backend log sources (`--log-source`/`--log-defect`, #142), already validated. Lines attach to
+   * usability steps the same way as every other strategy; a `server-log` defect is reported in the
+   * result but — like every UX finding — never gates `missionOutcome`/`exitCode` (advisory-only).
+   */
+  readonly serverLog?: ServerLogOptions;
 }
 
 export interface RunUsabilityMissionResult {
@@ -634,6 +643,10 @@ export interface RunUsabilityMissionResult {
   readonly hang?: HangFinding;
   /** The persisted typed result (`usability-<stamp>.recording.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath?: string;
+  /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
+  readonly serverLogs?: ServerLogsSummary;
+  /** `server-log` defects (#142, `--log-defect`) — advisory here, like every UX finding; never gates the outcome. */
+  readonly serverLogDefects?: ServerLogDefect[];
 }
 
 /**
@@ -715,6 +728,20 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     ...(opts.usage === undefined ? {} : { usage: opts.usage }),
     partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
   });
+  // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
+  // chain; a server-log runtime (#142) is inserted in FRONT of it (never replacing it) so every step
+  // still gets its screenshot/flush exactly as before, whether or not --log-source was given.
+  const journalListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    capture.noteEntry(entry, all);
+    journal.onTranscriptEntry(entry, capture.withScreenshots(all));
+  };
+  const serverLog = openServerLogRuntime({
+    sources: opts.serverLog?.sources ?? [],
+    logDefect: opts.serverLog?.logDefect ?? [],
+    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    secrets,
+    onTranscriptEntry: journalListener,
+  });
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const run = await explore({
@@ -722,10 +749,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
-      onTranscriptEntry: (entry, all) => {
-        capture.noteEntry(entry, all);
-        journal.onTranscriptEntry(entry, capture.withScreenshots(all));
-      },
+      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journalListener,
       onRecording: journal.onRecording,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       actor,
@@ -755,8 +779,10 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         await capture.observe(snap, visibleText);
       },
     });
+    // Never blocks the mission itself: the drain wait happens AFTER `explore()` returned.
+    const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(run.transcript);
     journal.writeRecording(run.recording);
-    journal.writeTranscript(capture.withScreenshots(run.transcript));
+    journal.writeTranscript(capture.withScreenshots(serverLogRun?.transcript ?? run.transcript));
 
     // #85 item 1: the live run's own typed values (from its emitted Recording's fill/select
     // steps — never a secret), so the vocabulary/jargon tier can tell the app's own copy apart
@@ -843,6 +869,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.failure === undefined ? {} : { failure: run.failure }),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
+      // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
+      // always advisory, and a `server-log` defect here is treated the same way.
+      ...serverLogResult(serverLogRun),
     };
     if (outcome.kind === "failed") {
       // The analysis is the review's product: without it the review is inconclusive (never a
@@ -871,6 +900,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   } finally {
     capture.detach();
     disarmKillSwitch();
+    // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
+    // (no drain wait) rather than leaving them open until process exit.
+    await serverLog?.abort();
     await closeQuietly(session);
   }
 }

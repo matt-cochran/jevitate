@@ -104,7 +104,16 @@ function assertionKey(assertion: Assertion): string {
     case "textIncludes":
     case "count":
     case "valueEquals":
+    case "inViewport":
+    case "box":
+    case "attr":
+    case "flashed":
       return `${assertion.kind}:${targetDescriptorKey(assertion.target)}`;
+    case "style":
+      // Which property is checked is authored/structural; the compared value is not.
+      return `style:${targetDescriptorKey(assertion.target)}|${assertion.property}`;
+    case "overlap":
+      return `overlap:${targetDescriptorKey(assertion.target)}|${targetDescriptorKey(assertion.other)}`;
   }
 }
 
@@ -169,6 +178,7 @@ function strictKey(step: Step): string {
     case "fill":
     case "select":
     case "upload":
+    case "editText":
     case "waitFor":
     case "extract":
       return targetDescriptorStrictKey(step.target);
@@ -201,6 +211,12 @@ function assertionStrictKey(assertion: Assertion): string {
     case "textIncludes":
     case "count":
     case "valueEquals":
+    case "style":
+    case "inViewport":
+    case "box":
+    case "overlap":
+    case "attr":
+    case "flashed":
       return targetDescriptorStrictKey(assertion.target);
   }
 }
@@ -225,6 +241,9 @@ function structuralKey(step: Step): string {
       // which must stay OUT of the key. `?? ""` distinguishes "omitted"
       // from a present-but-different value so they never collide.
       return `${targetDescriptorKey(step.target)}|attr:${step.attr ?? ""}`;
+    case "editText":
+      // The action is authored/structural; the anchor quote and the typed value are content.
+      return `${targetDescriptorKey(step.target)}|action:${step.action}`;
     case "forEach":
       return targetDescriptorKey(step.items);
     case "press":

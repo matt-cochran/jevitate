@@ -2,7 +2,8 @@ import type { Dialog, ElementHandle, Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Target } from "@jevitate/screenplay";
 import { descriptorToLocator } from "@jevitate/recorder";
-import type { TargetDescriptor } from "@jevitate/recording";
+import { applyTextEdit } from "@jevitate/interpreter";
+import type { TargetDescriptor, TextEdit } from "@jevitate/recording";
 import type { Op } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { occluderOf, srOnlyLabelOf } from "./occlusion.js";
@@ -43,6 +44,11 @@ export interface ActArgs {
    * nearest the field in the DOM), so a click is always on a control the snapshot described.
    */
   readonly candidates?: readonly Control[];
+  /**
+   * For `edit_text` (#148): the edit, already validated by code (a quote present in the target's
+   * text, no secret). Placed and typed by the SAME function Recording replay uses.
+   */
+  readonly edit?: TextEdit | null;
 }
 
 /** How a `send` submitted its message. */
@@ -467,6 +473,18 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
         // Bounded: an option that is not there fails in seconds, not Playwright's 30s default.
         await descriptorToLocator(page, descriptor).selectOption(option, { timeout: SELECT_TIMEOUT_MS });
       });
+    }
+    case "edit_text": {
+      if (args.control === null) return { ok: false, mutated: false, reason: "edit_text needs a target" };
+      if (args.edit === null || args.edit === undefined) {
+        return { ok: false, mutated: false, reason: "edit_text has no edit (fail-closed)" };
+      }
+      const bad = await gate(actor, args.control);
+      if (bad !== null) return { ok: false, mutated: false, reason: bad };
+      const edit = args.edit;
+      const descriptor = args.control.descriptor;
+      // A quote no longer in the element fails here (thrown → a failed act), never a whole retype.
+      return dispatch(() => applyTextEdit(page, descriptorToLocator(page, descriptor), edit));
     }
     case "upload": {
       if (args.control === null) return { ok: false, mutated: false, reason: "upload needs a target" };

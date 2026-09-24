@@ -139,9 +139,14 @@ import {
   parseSuccessSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
+  type ServerLogOptions,
 } from "./explore-api.js";
+import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
+import { parseLogDefectSpecs } from "./log-correlation.js";
+import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
+import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import {
   discoverRecordingSidecars,
   loadRecordingSidecars,
@@ -1547,6 +1552,11 @@ export function buildProgram(deps: CliDeps): Command {
         "independent success check (repeatable; every one must hold). Kinds:",
         "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> (case-insensitive) | count:<d>|min=<n>,max=<n>",
         "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
+        "| visual state (#148, read and decided by code): style:<d>|<prop><op><value> (computed style of every match;",
+        "<prop> an allowlisted CSS property or a channel of one, e.g. alpha(background-color)>0, color=rgb(255, 0, 0); op = != > >= < <=)",
+        "| inViewport:<d>[|min=<ratio>] (visible fraction, default 0.5) | box:<d>|minWidth=<n>,maxWidth=<n>,minHeight=<n>,maxHeight=<n>",
+        "| overlaps:<d>|<d2> | noOverlap:<d>|<d2> | attr:<d>|<name>=<value> (or <name> present, !<name> absent)",
+        "| flashed:<d>|class=<cls> (or attr=<name>, animation)[|withinMs=<n>] (a transient state gained after the last user input)",
         "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
         "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
         "<path-glob> must start with \"/\" (it matches the request's path, e.g. /api/profile/* or /api/**); * as METHOD matches any method.",
@@ -1603,6 +1613,14 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
+    )
+    .option(
+      "--actor <name=storageState>",
+      "multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, " +
+        "from its own storageState); every other actor is an observer in its OWN fresh context that only runs the " +
+        "--invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state",
+      (v: string, prev: string[]) => [...prev, v],
+      [] as string[],
     )
     .option(
       "--save-storage-state <file>",
@@ -1697,6 +1715,27 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--log-source <spec>",
+      "backend log source (repeatable; every strategy, incl. usability): file:<path> (tailed from its current end) | docker:<container> (docker logs -f --since 0s) | cmd:<command> (needs --allow-log-cmd). Read-only, operator-declared, never the model's choice. Error/warning lines are correlated to the step they landed during and attached to its transcript evidence, redacted",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--allow-log-cmd",
+      "opt-in: a --log-source cmd:<command> may run as a subprocess (operator-declared only; refused otherwise)",
+      false,
+    )
+    .option(
+      "--log-defect <level|/regex/>",
+      "backend log lines matching this (repeatable) become a server-log defect: a level (error|warn|info|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--server-log-drain-ms <ms>",
+      "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
+    )
+    .option(
       "--repeat <n>",
       "run the mission N times, one after another, each in a fresh browser context, and vote (#141): findings seen in fewer than --min-agreement runs are reported as flaky, not counted",
     )
@@ -1748,6 +1787,11 @@ export function buildProgram(deps: CliDeps): Command {
     .action(async function (this: Command) {
       const o = this.opts<{
         invariants: string[];
+        logSource: string[];
+        allowLogCmd?: boolean;
+        logDefect: string[];
+        serverLogDrainMs?: string;
+        actor: string[];
         repeat?: string;
         minAgreement?: string;
         persona: string[];
@@ -1912,6 +1956,27 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
+      // Multi-actor missions (#147): the first --actor is the primary, the rest are observers.
+      let actors: MissionActors | null;
+      try {
+        actors = resolveMissionActors(o.actor);
+      } catch (err) {
+        if (!(err instanceof MultiRunArgsError)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      if (actors !== null) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--actor is supported only with --strategy goal"));
+          return;
+        }
+        if (o.storageState !== undefined) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "--storage-state cannot be combined with --actor (the first --actor is the primary's session)"));
+          return;
+        }
+      }
+      // The primary's session: its --actor state, else --storage-state.
+      const primaryStorageState = actors?.primary.storageState ?? o.storageState;
       // App-declared invariants (#86): validated (schema, observables, probe origins) BEFORE any browser.
       let invariants: InvariantSpec | undefined;
       // #135: authFrom.secret refs (env:VAR), resolved from the environment HERE — the one place this
@@ -1924,20 +1989,59 @@ export function buildProgram(deps: CliDeps): Command {
         }
         if (o.url !== undefined) {
           try {
-            const loaded = loadInvariantFiles(o.invariants, { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url });
+            const loaded = loadInvariantFiles(o.invariants, {
+              allowlist: resolveExploreAllowlist(o.url, o.allow),
+              baseUrl: o.url,
+              observers: actors?.observers.map((a) => a.name) ?? [],
+            });
             invariants = loaded;
             invariantAuthTokens = loaded === undefined ? undefined : resolveInvariantAuthTokens(loaded, process.env);
+            checkActorsAgainstSpec(actors, loaded);
           } catch (err) {
+            if (err instanceof MultiRunArgsError) {
+              emitJson(program, fail(err.code, err.message));
+              return;
+            }
             if (!(err instanceof InvariantsFileError)) throw err;
             emitJson(program, fail(err.code, err.message));
             return;
           }
+        }
+        // #147: captures and cross-actor checks run in the goal loop only — never silently skipped elsewhere.
+        if (invariants?.capture !== undefined && (o.feature !== undefined || strategy !== "goal")) {
+          emitJson(program, fail("E_EXPLORE_ARGS", "invariants with capture (cross-actor checks) are supported only with --strategy goal"));
+          return;
         }
       }
       const withInvariants = {
         ...(invariants === undefined ? {} : { invariants }),
         ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
       };
+      // Backend log sources (#142): validated (spec shape, --allow-log-cmd gate, matcher regexes)
+      // BEFORE any browser opens — the same fail-closed discipline as --invariants above. Supported
+      // on every strategy, INCLUDING usability (#142 follow-up): lines attach to usability steps the
+      // same way, though a UX run's own outcome stays advisory (a server-log defect is still reported,
+      // never gates the exit code — the same rule as every other UX finding).
+      let serverLog: ServerLogOptions | undefined;
+      if (o.logSource.length > 0 || o.logDefect.length > 0) {
+        try {
+          const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
+          const logDefect = parseLogDefectSpecs(o.logDefect);
+          serverLog = {
+            sources,
+            logDefect,
+            allowLogCmd: o.allowLogCmd ?? false,
+            ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
+          };
+        } catch (err) {
+          if (err instanceof LogSourceSpecError || err instanceof LogSpecError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          throw err;
+        }
+      }
+      const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
@@ -2026,6 +2130,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           const envelope = ok(result);
           if (o.json) {
@@ -2107,6 +2212,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
@@ -2176,6 +2282,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...withServerLog,
           });
           emitJson(program, ok(result));
           // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
@@ -2227,6 +2334,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
+            ...withServerLog,
             ...(target?.safety === undefined ? {} : { safety: target.safety }),
           });
           emitJson(program, ok(result));
@@ -2268,7 +2376,7 @@ export function buildProgram(deps: CliDeps): Command {
         fx = buildMissionFixtures(o, {
           allowlist,
           baseUrl: o.url.replace(SETUP_REF, "0"),
-          ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
+          ...(primaryStorageState === undefined ? {} : { storageState: primaryStorageState }),
           secretFields,
           secrets: o.secret,
           ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
@@ -2338,13 +2446,15 @@ export function buildProgram(deps: CliDeps): Command {
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(emulation === undefined ? {} : { emulation }),
-          ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(primaryStorageState !== undefined ? { storageState: primaryStorageState } : {}),
           ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
+          ...(actors === null ? {} : { actors }),
           ...(filing === undefined ? {} : { filing }),
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
           ...withInvariants,
+          ...withServerLog,
           ...(fx === undefined ? {} : { fixtures: fx }),
         });
         const envelope = ok(result);
@@ -2396,6 +2506,11 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--allow-log-cmd",
+      "re-checking a server-log defect whose --log-source includes cmd:<command> needs this too (operator-declared only)",
+      false,
+    )
+    .option(
       "--secret <value>",
       "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
       (v, prev: string[]) => [...prev, v],
@@ -2411,6 +2526,7 @@ export function buildProgram(deps: CliDeps): Command {
           replays?: string;
           allowEmulationOverride?: boolean;
           invariants: string[];
+          allowLogCmd?: boolean;
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
@@ -2432,6 +2548,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
+          ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
           fixtureFlags: o,
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
@@ -2974,6 +3091,10 @@ export function buildProgram(deps: CliDeps): Command {
       }
       const queue = new FsMissionQueueStore(o.dir ?? resolveDataDir(["missions", "queue"]));
       const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
+      // #142 follow-up: ~/.jevitate/targets.json's per-origin logSources/logDefect/allowLogCmd — a
+      // queued mission never carries its own (never an MCP argument); this is the operator's only
+      // way to declare one for a mission drained here.
+      const targetConfigs = loadTargetsFile(deps.explore?.targetsConfigPath);
       const execute =
         deps.missions?.execute ??
         realQueuedMissionExecutor({
@@ -2981,6 +3102,7 @@ export function buildProgram(deps: CliDeps): Command {
           gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
+          targets: targetConfigs,
         });
       const drainOnce = () =>
         drainMissionQueue({

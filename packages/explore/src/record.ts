@@ -8,6 +8,7 @@ import {
   type StepTiming,
   type PageTimingRecord,
   type TargetDescriptor,
+  type TextEdit,
   type ValueOrVar,
 } from "@jevitate/recording";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
@@ -228,6 +229,30 @@ export class RunRecorder {
     this.#ensureSegment("/");
     const descriptor = this.#target(rawField);
     this.#append({ kind: "press", key, expect: { kind: "count", target: { ...descriptor }, min: 0 } }, atMs, durationMs);
+  }
+
+  /**
+   * Record a rich-text edit (#148): the anchor (a quote the loop already proved secret-free) and
+   * the typed value (same `ValueOrVar` discipline as `fill`), so replay places the SAME anchor.
+   * Provisional postcondition: the target still resolves or is gone (`count` min 0) — an edit changes
+   * the very text a text-rung descriptor names, so `visible` would be a guess.
+   */
+  editText(rawDescriptor: TargetDescriptor, edit: TextEdit, atMs: number, durationMs = 0): void {
+    this.#ensureSegment("/");
+    const descriptor = this.#target(rawDescriptor);
+    this.#append(
+      {
+        kind: "editText",
+        target: { ...descriptor },
+        anchor: { ...edit.anchor },
+        action: edit.action,
+        ...(edit.value === undefined ? {} : { value: { redacted: false, value: edit.value } }),
+        ...(edit.format === undefined ? {} : { format: edit.format }),
+        expect: { kind: "count", target: { ...descriptor }, min: 0 },
+      },
+      atMs,
+      durationMs,
+    );
   }
 
   /** Record a select. Same value discipline as `fill`. */

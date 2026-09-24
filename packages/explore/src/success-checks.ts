@@ -9,7 +9,9 @@ import { classifyRequest } from "./timing.js";
  * these kinds catch it:
  *
  *  - `page`        — a recording `Assertion` on the final page (`urlIncludes`, `visible`,
- *                    `textIncludes`, `count`, `valueEquals` — a form control's VALUE);
+ *                    `textIncludes`, `count`, `valueEquals` — a form control's VALUE — and the
+ *                    visual-state kinds (#148): `style`, `inViewport`, `box`, `overlap`, `attr`,
+ *                    `flashed`);
  *  - `reloadThen`  — reload the page, THEN check the assertion: proves the state persisted, not
  *                    just that the UI shows it;
  *  - `requestMade` — the run issued a request `METHOD <path-glob>` (catches a silent no-op save);
@@ -65,6 +67,23 @@ export function describeAssertionSpec(a: Assertion): string {
     }
     case "valueEquals":
       return `valueEquals:${descriptorSpec(a.target)}|${a.value}`;
+    case "style":
+      return `style:${descriptorSpec(a.target)}|${a.channel === undefined ? a.property : `${a.channel}(${a.property})`}${a.op}${a.value}`;
+    case "inViewport":
+      return `inViewport:${descriptorSpec(a.target)}${a.min === undefined ? "" : `|min=${a.min}`}`;
+    case "box": {
+      const keys = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;
+      const bounds = keys.filter((k) => a[k] !== undefined).map((k) => `${k}=${a[k]}`);
+      return `box:${descriptorSpec(a.target)}${bounds.length === 0 ? "" : `|${bounds.join(",")}`}`;
+    }
+    case "overlap":
+      return `${a.overlapping ? "overlaps" : "noOverlap"}:${descriptorSpec(a.target)}|${descriptorSpec(a.other)}`;
+    case "attr":
+      return `attr:${descriptorSpec(a.target)}|${a.absent === true ? `!${a.name}` : a.value === undefined ? a.name : `${a.name}=${a.value}`}`;
+    case "flashed": {
+      const what = a.className !== undefined ? `class=${a.className}` : a.attr !== undefined ? `attr=${a.attr}` : "animation";
+      return `flashed:${descriptorSpec(a.target)}|${what}${a.withinMs === undefined ? "" : `|withinMs=${a.withinMs}`}`;
+    }
   }
 }
 

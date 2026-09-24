@@ -1,5 +1,5 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion, readAssertionText } from "@jevitate/interpreter";
+import { checkAssertion, installFlashRecorder, readAssertionEvidence, readAssertionText } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import { reloadPage } from "../act.js";
@@ -18,6 +18,7 @@ import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantDefectLog,
   InvariantMonitor,
+  type ObserverSessions,
   recordingStepCount,
   type InvariantAction,
   type InvariantDefect,
@@ -95,6 +96,14 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
    * by the CLI dispatch from the environment (this package never reads `process.env`).
    */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * #147: the observer actors' own sessions (fresh contexts, never driven by the model) that the
+   * spec's cross-actor invariants check from. A cross-actor invariant left undecided (nothing
+   * captured, the observer's session lost) keeps a passing run from being `succeeded`.
+   */
+  readonly observers?: ObserverSessions;
+  /** #147: the primary actor's name (the owner in a cross-actor finding). */
+  readonly primaryActor?: string;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -198,6 +207,11 @@ export async function runGoalBasedMission(
     throw new Error(`runGoalBasedMission: successWhen must be "held" or "final", got ${JSON.stringify(cfg.successWhen)}`);
   }
   const capture = needsNetwork ? monitorFor(page).startCapture() : null;
+  // A transient-state check (#148 `flashed`) needs the flash recorder BEFORE the triggering action:
+  // installed now, for every document the run loads.
+  if (checks.some((c) => (c.kind === "page" || c.kind === "reloadThen") && c.assertion.kind === "flashed")) {
+    await installFlashRecorder(page);
+  }
   try {
     return await adjudicated(cfg, checks, page, capture);
   } finally {
@@ -240,6 +254,8 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     baseUrl: cfg.startUrl,
     ...(cfg.secrets === undefined ? {} : { secrets: cfg.secrets }),
     ...(cfg.invariantAuthTokens === undefined ? {} : { authTokens: cfg.invariantAuthTokens }),
+    ...(cfg.observers === undefined ? {} : { observers: cfg.observers }),
+    ...(cfg.primaryActor === undefined ? {} : { primaryActor: cfg.primaryActor }),
   });
   monitor.attach(page);
   const log = new InvariantDefectLog();
@@ -270,13 +286,24 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
     settled,
     finish: async (run) => {
       // Never on a broken or hung page: an unresponsive page proves nothing either way.
-      if (pending === null || run.stop === "crashed" || run.stop === "hang") return;
-      await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
-      await settled().catch(() => undefined);
+      if (run.stop === "crashed" || run.stop === "hang") return;
+      if (pending !== null) {
+        await monitorFor(page).waitSettled({ ceilingMs: cfg.oracleSettleMs ?? DEFAULT_ORACLE_SETTLE_MS }).catch(() => undefined);
+        await settled().catch(() => undefined);
+      }
+      // #147: a resource the LAST action created is still checked from the observers.
+      const cross = await monitor.settleCrossActor(cfg.actor).catch(() => null);
+      for (const v of cross?.violations ?? []) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
     },
     fold: (result) => {
       const invariantDefects = log.defects();
       const invariants = monitor.report();
+      // #147 fail closed: a cross-actor invariant that never decided cannot let the run read as clean.
+      const undecided = monitor.undecidedCrossActor();
+      if (invariantDefects.length === 0 && undecided.length > 0 && result.outcome === "succeeded") {
+        const why = `cross-actor invariant(s) undecided: ${undecided.map((u) => `${u.id} (${u.reason})`).join("; ")}`;
+        return { ...result, outcome: "inconclusive", reason: why, invariantDefects, invariants };
+      }
       if (invariantDefects.length === 0) return { ...result, invariantDefects, invariants };
       // A violated invariant is a hard defect: it overrides a pass or a plain miss — never a broken
       // run or a hang, whose own verdict is more severe (the defects are still reported).
@@ -534,6 +561,13 @@ async function evaluateChecks(
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
+    // A visual-state check (#148) always says what it observed — the ratio, the computed values, the
+    // flash timing — pass or fail (bounded, redacted: it is page-derived).
+    const evidence = await readAssertionEvidence(actor, assertion).catch(() => null);
+    if (evidence !== null) {
+      const seen = redactText(evidence, cfg.secrets ?? []).slice(0, READ_TEXT_MAX_CHARS);
+      return { check: describeCheck(check), passed, detail: `${passed ? "held" : "did not hold"} ${when} (${seen})` };
+    }
     if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
     // #113 — a `textIncludes` mismatch is otherwise invisible ("did not hold" alone doesn't say
     // whether the text is wrong or just differently cased). What was actually read, bounded and

@@ -65,6 +65,8 @@ import {
   type RunOutcome,
 } from "./conversation.js";
 import { RunRecorder, emptyRecording } from "./record.js";
+import { planTextEdit, readEditableText } from "./rich-text.js";
+import { describeTextEdit } from "@jevitate/interpreter";
 import { resolveMissionFixture } from "./fixture.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
@@ -1184,6 +1186,38 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder), {
           value: placeholder,
         });
+        lastActedOp = decision.op;
+        continue;
+      }
+
+      // An edit INSIDE rich text (#148): the generator proposes an anchored edit, code validates it
+      // (see ./rich-text.ts) and the shared page function performs it — never a whole retype.
+      if (decision.op === "edit_text") {
+        const planned =
+          boundSecretField(control, cfg.secretFields) !== null
+            ? { refused: "a bound secret field is never edited as rich text" }
+            : await readEditableText(page, control).then((currentText) =>
+                currentText === null
+                  ? { refused: "the element's text could not be read" }
+                  : planTextEdit(cfg.gen, { goal: cfg.goal, control, currentText, history, secrets }),
+              ).catch((e: unknown) => ({ refused: `edit generation unavailable: ${firstLine(e)}` }));
+        if ("refused" in planned) {
+          history.push(`edit in ${control.name || control.summary} refused: ${planned.refused}`);
+          record(false, planned.refused, { origin: "engine" });
+        } else {
+          const r = await act(cfg.actor, { op: "edit_text", control, edit: planned.edit });
+          const what = describeTextEdit(planned.edit);
+          if (r.ok) {
+            recorder.editText(control.descriptor, planned.edit, at);
+            noteMutation(`edit ${control.name}`, control.descriptor, snap.signature, at);
+            tracker.countAction();
+            history.push(`${what} in ${control.summary.slice(0, 80)}`);
+            cleared(control);
+          } else {
+            history.push(`edit failed: ${failNote(r.reason, control)}`);
+          }
+          record(r.ok, r.ok ? what : failNote(r.reason, control), planned.edit.value === undefined ? {} : { value: planned.edit.value });
+        }
         lastActedOp = decision.op;
         continue;
       }
