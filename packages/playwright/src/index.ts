@@ -1,4 +1,5 @@
 export * from "./browser-port.js";
+export * from "./emulation.js";
 export * from "./playwright-browser-port.js";
 export * from "./browser-pool.js";
 export * from "./resource-signals.js";
