@@ -438,11 +438,13 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
   });
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
@@ -572,11 +574,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
           : { reason: mission.reason }
         : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
-    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result);
+    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result, runUsage);
     return result;
   } finally {
     disarmKillSwitch();
@@ -849,11 +851,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
   // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
   });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
@@ -957,10 +961,10 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
-    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
+    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed, runUsage) };
   } finally {
     disarmKillSwitch();
     await serverLog?.abort();
@@ -1115,11 +1119,13 @@ export async function runAdversarialCliMission(
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
   });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
@@ -1208,10 +1214,10 @@ export async function runAdversarialCliMission(
       },
       engine,
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
-    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result) };
+    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) };
   } finally {
     disarmKillSwitch();
     await serverLog?.abort();
@@ -1452,6 +1458,8 @@ export interface ExploreCliDeps {
   judge?: JudgmentPort;
   /** Injected generation gateway (tests). */
   gen?: GenerationPort;
+  /** Injected usage tracker (tests): injected gateways that record into it report known costs (#163). */
+  usage?: UsageTracker;
   browserPortFactory?: () => BrowserPort;
   env?: Record<string, string | undefined>;
   localConfig?: Partial<Record<CredentialKey, string>>;

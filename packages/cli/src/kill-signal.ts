@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeSync } from "node:fs";
-import type { UsageCounts } from "@jevitate/ai-core";
+import type { UsageCounts, UsageLedger } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { closeSharedBrowserPool } from "@jevitate/playwright";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -56,7 +56,7 @@ export interface KillableMission {
    */
   readonly transcript?: () => readonly TranscriptEntry[] | undefined;
   /** The run's usage tracker: the tokens already spent are part of the killed run's result (#120). */
-  readonly usage?: { snapshot(): UsageCounts };
+  readonly usage?: { snapshot(): UsageCounts; calls?(): ReturnType<UsageLedger["calls"]> };
   /**
    * Whatever partial report the mission has so far (e.g. a usability run's observed screens and
    * screenshots). Read synchronously on the signal; absent/throwing means no partial report.
@@ -78,7 +78,7 @@ type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
 export interface KillSwitchDeps {
   readonly exit: (code: number) => void;
   readonly closeBrowsers: () => Promise<void>;
-  readonly writeResult: (recordingPath: string, missionOutcome: string, exitCode: number, result: unknown) => string;
+  readonly writeResult: (recordingPath: string, missionOutcome: string, exitCode: number, result: unknown, usage?: UsageLedger) => string;
   readonly readTranscript: (transcriptPath: string) => { steps: number; transcript: readonly TranscriptEntry[] };
   readonly onSignal: (signal: KillSignal, handler: () => void) => void;
   /** This build's identity, stamped on the killed run's result like every other result (#112). */
@@ -190,7 +190,10 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     let resultPath: string | undefined;
     try {
       partial = partialResult(mission, signal, code, deps);
-      resultPath = deps.writeResult(mission.recordingPath, "inconclusive", code, partial);
+      // #163: a killed run's per-call usage sidecar too (the calls it made before the signal).
+      const u = mission.usage;
+      const ledger: UsageLedger | undefined = u?.calls === undefined ? undefined : { snapshot: () => u.snapshot(), calls: () => u.calls?.() ?? [] };
+      resultPath = deps.writeResult(mission.recordingPath, "inconclusive", code, partial, ledger);
     } catch {
       // Best-effort: a failed flush must never keep the process from honoring the signal — nor keep
       // the OTHER armed missions from being flushed.

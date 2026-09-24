@@ -130,6 +130,23 @@ describe("check budget fails closed (#137)", () => {
     priced.recordGeneration({ inputTokens: 10, outputTokens: 5, usd: 1.5 });
     expect(new BudgetMeter({ maxUsd: 1 }).charge(0, priced.snapshot())).toBe("usd budget exceeded: $1.5000 > $1");
   });
+
+  it("#163: maxUsd counts Jev + generation, and fails closed when the total is partial (an unknown model)", () => {
+    const full = new UsageTracker();
+    full.recordJudgment({ inputTokens: 10_000_000, outputTokens: 0, model: "jev-1.13.0" }); // $0.42 from the Jev table
+    full.recordGeneration({ inputTokens: 10, outputTokens: 5, usd: 0.7, model: "openai/gpt-4o-mini" });
+    // Generation alone ($0.70) is under $1 — only the full total ($1.12) exceeds it.
+    expect(new BudgetMeter({ maxUsd: 1 }).charge(0, full.snapshot())).toBe("usd budget exceeded: $1.1200 > $1");
+
+    const partial = new UsageTracker();
+    partial.recordJudgment({ inputTokens: 10, outputTokens: 0, model: "jev-9.0.0" });
+    partial.recordGeneration({ inputTokens: 10, outputTokens: 5, usd: 0.01, model: "openai/gpt-4o-mini" });
+    expect(partial.snapshot().priced).toBe("partial");
+    const meter = new BudgetMeter({ maxUsd: 100 });
+    expect(meter.blocked(partial.snapshot())).toMatch(/only partially priced — missing: jev: no price for model jev-9\.0\.0/);
+    expect(meter.charge(0, partial.snapshot())).toMatch(/usd budget set but the model spend is only partially priced .*\(spend not measurable\)$/);
+    expect(meter.report(partial.snapshot(), undefined).used.usd).toBeUndefined();
+  });
 });
 
 describe("check gating (#137)", () => {

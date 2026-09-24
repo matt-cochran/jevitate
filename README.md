@@ -603,16 +603,69 @@ fast, before any browser opens, with a clear message — instead of a confusing
 
 ### Usage accounting
 
-An exploration mission's result carries `usage: { judgments, generations,
-inputTokens, outputTokens, usd? }` when the CLI command was built with usage
-tracking (a `--real` run). `usd` is populated ONLY when the underlying provider
-itself reports a cost — today, that is OpenRouter's usage-accounting `cost` on a
-**generation** call (the model that writes form text). It is never estimated or
-derived from a price table. **Jev's own judgment calls are not priced**: they have
-no cost-reporting path today, so `usage.usd` is absent whenever a run made only
-judgments and no generations (`generations: 0`), even though `judgments` is
-non-zero and those calls cost real money against your provider account. Read
-`usage.usd`'s absence as "not priced by this build," never as "free."
+Every result that made model calls carries `usage`: exploration missions (goal,
+coverage, adversarial, usability), `ux`, a self-healing `journey run`,
+`explore-author-journey`, `ai generate --real`, and a run killed by SIGTERM/SIGINT
+(the calls it made before the signal).
+
+```json
+"usage": {
+  "judgments": 398, "generations": 12,
+  "inputTokens": 701200, "outputTokens": 3900,
+  "jevUsd": 0.0294, "generationUsd": 0.0187, "totalUsd": 0.0481,
+  "priced": "full",
+  "priceSource": ["table:typesafe-models@2026-09-24 (https://docs.typesafe.ai/models.md)",
+                  "provider:openrouter usage.cost"]
+}
+```
+
+- `totalUsd` is `jevUsd + generationUsd`: the cost of every call that could be priced.
+  Retries and failed attempts are counted as calls too.
+- `priced` says whether that is everything. `full` means every call was priced. `partial`
+  means at least one call could not be priced, and `missing` names it (for example
+  `jev: no price for model jev-9.0.0`). `none` means nothing could be priced. A `partial`
+  total is a lower bound, never the real cost, and a `check` `maxUsd` budget fails on it.
+- `failedCalls` counts attempts that threw. A failed attempt that reported no token usage
+  (an HTTP error, for example) is left unpriced, so it makes the total `partial`.
+
+Each call is priced by the first of these that applies:
+
+1. The cost the provider reported for that call (OpenRouter's usage-accounting `cost`).
+2. For a Jev judgment, a configured price per judgment: `JEVITATE_JEV_UNIT_PRICE_USD` (env),
+   or `usage.jevUnitPriceUsd` in `~/.jevitate/config.json`.
+3. A configured price per million tokens for that model: `usage.modelPrices` in
+   `~/.jevitate/config.json`.
+4. The built-in, dated price tables. Jev comes from TypeSafe's
+   [model page](https://docs.typesafe.ai/models.md), retrieved 2026-09-24: `jev-1.13.0`
+   (and the `jev-latest` / `jev-preview` aliases) costs $0.042 per million input tokens,
+   and output tokens are free. Generation comes from OpenRouter's model catalog, retrieved
+   2026-09-24: `openai/gpt-4o-mini` costs $0.15 per million input tokens and $0.60 per
+   million output tokens. Any other model is unpriced until you configure it.
+
+```json
+{ "usage": {
+    "jevUnitPriceUsd": 0.00005,
+    "modelPrices": {
+      "jev-1.14.0":    { "inputUsdPerMtok": 0.042, "outputUsdPerMtok": 0 },
+      "openai/gpt-4o": { "inputUsdPerMtok": 2.5,   "outputUsdPerMtok": 10 } } } }
+```
+
+A malformed price fails the run's setup; it is never ignored. `priceSource` lists every
+source that priced a call.
+
+Next to each result, `<run>.usage.json` lists every call: `seq`, `kind`
+(`judgment`/`generation`), `task` (for example `form.value` or `chat.reply`), `model`,
+`ok`, tokens, `usd` and its `source`, or `failure` (an error class such as `http-429`).
+It never holds prompts, answers, error messages or credentials.
+
+Totals across runs have the same fields, plus `runs` and `tokens`. They appear in the
+`--repeat` / `--persona` multi-run result (a run that reported no usage makes the total
+`partial`), in the `check` result, and in `jevitate report` (with a "Model cost"
+section in the markdown). `explore` (including a multi-run), `ux`, `journey run` and
+`explore-author-journey` print a one-line cost summary to stderr, so stdout stays the
+JSON you parse. For example: `usage: cost $0.0481 (jev $0.0294 + generation $0.0187) ·
+398 judgments, 12 generations, 705,100 tokens`. When the total is incomplete, it adds
+`(partial: …)`.
 
 ### Persistent browser profiles (`jevitate profile`)
 
@@ -939,9 +992,11 @@ relative paths resolve against the suite file):
 ```
 
 - `budget`: the total over every item. `maxActions` counts executed browser actions, and each item
-  is capped at what is left. `maxMinutes` is wall-clock time. `maxUsd` is the provider-reported
-  model spend. If a model call reports no cost, the spend cannot be measured, so the check fails.
-  Fake gateways cost nothing.
+  is capped at what is left. `maxMinutes` is wall-clock time. `maxUsd` is the full model spend:
+  Jev judgments plus generation (`usage.totalUsd`, see [Usage accounting](#usage-accounting)). If
+  any call cannot be priced (`usage.priced` is `partial` or `none`), the spend cannot be measured,
+  so the check fails. Fake gateways cost nothing. The check result's `usage` sums every item that
+  ran, and the human summary prints it on a `COST` line.
 - `ai`: the gateway for goals and model-driven missions (`coverage`, `adversarial`, `usability`).
   `--real` or `--fake-ai` override it. If a suite needs a model and none is selected, it is refused
   before anything runs. Journeys, `feature` missions and verify-fix are model-free.

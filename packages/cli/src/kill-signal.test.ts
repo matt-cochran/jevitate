@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "@jevitate/explore";
+import { UsageTracker } from "@jevitate/ai-core";
 import {
   armMissionKillSwitch,
   armedMissionCount,
@@ -27,8 +28,8 @@ function fakeDeps(opts: { transcript?: readonly TranscriptEntry[] } = {}) {
     closeBrowsers: async () => {
       calls.closeBrowsers += 1;
     },
-    writeResult: (recordingPath, missionOutcome, exitCode, result) => {
-      calls.writeResult.push([recordingPath, missionOutcome, exitCode, result]);
+    writeResult: (recordingPath, missionOutcome, exitCode, result, usage) => {
+      calls.writeResult.push([recordingPath, missionOutcome, exitCode, result, usage]);
       return `${recordingPath}.result.json`;
     },
     readTranscript: () => ({ steps: opts.transcript?.length ?? 0, transcript: opts.transcript ?? [] }),
@@ -166,6 +167,22 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
       usage: { judgments: 6, generations: 2, inputTokens: 900, outputTokens: 120 },
       partialReport: { screensObserved: 6 },
     });
+  });
+
+  it("#163: a killed run carries the full usage (Jev + generation) spent so far, and hands its calls to the sidecar", async () => {
+    const { deps, handlers, calls } = fakeDeps({ transcript: [] });
+    const tracker = new UsageTracker();
+    tracker.recordJudgment({ inputTokens: 5, outputTokens: 0, usd: 9 }); // an earlier run's call: not this run's
+    const run = tracker.scope();
+    tracker.recordJudgment({ inputTokens: 1_000_000, outputTokens: 0, model: "jev-1.13.0" });
+    tracker.recordGeneration({ inputTokens: 10, outputTokens: 10, usd: 0.02, model: "openai/gpt-4o-mini", task: "form.value" });
+    armMissionKillSwitch({ recordingPath: "/out/explore-X.json", transcript: () => [], usage: run }, deps);
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    const [, , , result, ledger] = calls.writeResult[0]!;
+    expect((result as { usage: { totalUsd: number } }).usage).toMatchObject({ judgments: 1, generations: 1, priced: "full" });
+    expect((result as { usage: { totalUsd: number } }).usage.totalUsd).toBeCloseTo(0.042 + 0.02, 12);
+    expect(ledger?.calls().map((c) => c.kind)).toEqual(["judgment", "generation"]);
   });
 
   it("without a live reference, reads the flushed transcript at the mission's own transcriptPath", async () => {

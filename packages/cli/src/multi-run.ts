@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { MISSION_EXIT_CODES } from "@jevitate/domain";
+import { sumUsage, usageCountsFrom, type UsageAggregate, type UsageCounts } from "@jevitate/ai-core";
 import { normalizeRoute } from "@jevitate/explore";
 
 /**
@@ -280,6 +281,8 @@ export interface RunSummary {
   /** The run's envelope, as written next to its artifacts. */
   readonly envelopePath?: string;
   readonly error?: { readonly code: string; readonly message: string };
+  /** The run's model usage (#163), as its envelope reported it. */
+  readonly usage?: UsageCounts;
 }
 
 export interface AggregatedFinding {
@@ -523,6 +526,11 @@ export interface MultiRunResult {
   readonly resultPath: string;
   /** False while runs are still pending (the file is rewritten after every run). */
   readonly complete: boolean;
+  /**
+   * Model usage summed over every run so far (#163): equals the sum of the runs' own `usage`. A run
+   * whose envelope carried none (it crashed outside the mission) makes the total `partial`.
+   */
+  readonly usage: UsageAggregate;
 }
 
 export interface RunMultiRunOptions {
@@ -551,6 +559,7 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
   }
   const data = isRecord(envelope.data) ? envelope.data : {};
   const resultPath = typeof data.resultPath === "string" ? data.resultPath : typeof data.reportPath === "string" ? data.reportPath : undefined;
+  const usage = usageCountsFrom(data.usage);
   return {
     ...base,
     ok: true,
@@ -560,6 +569,7 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
     requests: extractRequests(data),
     controls: extractControls(readTranscript(data)),
     ...(resultPath === undefined ? {} : { resultPath }),
+    ...(usage === undefined ? {} : { usage }),
   };
 }
 
@@ -594,6 +604,7 @@ export function aggregateCells(
     ...(personas ? { diff: diffPersonas(cells) } : {}),
     resultPath,
     complete,
+    usage: sumUsage(cells.flatMap((c) => c.runs.map((r) => r.usage))),
   };
 }
 

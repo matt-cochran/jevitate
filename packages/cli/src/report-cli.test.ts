@@ -119,6 +119,33 @@ describe("jevitate report (#139)", () => {
     expect(env.data.markdown).toContain("reproduce: `jevitate verify-fix --result");
   });
 
+  it("#163: sums the runs' persisted usage (Jev + generation) into one total, and flags a partial one", async () => {
+    const usage = (jevUsd: number, generationUsd: number, priced = "full", missing?: string[]) => ({
+      judgments: 10,
+      generations: 2,
+      inputTokens: 1000,
+      outputTokens: 50,
+      jevUsd,
+      generationUsd,
+      totalUsd: jevUsd + generationUsd,
+      priced,
+      ...(missing === undefined ? {} : { missing }),
+    });
+    writeResult("adversarial-2026-09-20T10-00-00-000Z", "clean", { defects: [], usage: usage(0.01, 0.02) });
+    writeResult("adversarial-2026-09-21T10-00-00-000Z", "clean", { defects: [], usage: usage(0.03, 0.04) });
+    const { out } = await cli(["report", "--target", ORIGIN, "--dir", results, "--json"]);
+    const env = JSON.parse(out) as { data: { usage: Record<string, unknown>; markdown: string } };
+    expect(env.data.usage).toMatchObject({ runs: 2, judgments: 20, generations: 4, tokens: 2100, priced: "full" });
+    expect(env.data.usage.totalUsd).toBeCloseTo(0.1, 12);
+    expect(env.data.markdown).toContain("## Model cost");
+    expect(env.data.markdown).toContain("cost $0.1000 (jev $0.0400 + generation $0.0600)");
+
+    writeResult("adversarial-2026-09-22T10-00-00-000Z", "clean", { defects: [], usage: usage(0, 0.01, "partial", ["jev: no price for model jev-9"]) });
+    const partial = JSON.parse((await cli(["report", "--target", ORIGIN, "--dir", results, "--json"])).out) as { data: { usage: Record<string, unknown>; markdown: string } };
+    expect(partial.data.usage).toMatchObject({ runs: 3, priced: "partial", missing: ["jev: no price for model jev-9"] });
+    expect(partial.data.markdown).toContain("(partial: jev: no price for model jev-9)");
+  });
+
   it("prints markdown by default and narrows with --since (a date or a run)", async () => {
     seed();
     const md = await cli(["report", "--target", ORIGIN, "--dir", results]);
