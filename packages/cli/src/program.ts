@@ -1851,25 +1851,30 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  // `verify-fix`: replays a finding's reproduction in a FRESH browser and reports whether its
-  // fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive.
+  // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
+  // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
+  // 4 intermittent (fired on some but not all replays — never reported as fixed).
   withBrowserLaunchFlags(
     program
       .command("verify-fix")
-      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent"),
+      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
   )
     .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
     .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
     .option("--storage-state <file>", "override the storageState the mission ran with")
+    .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
-      const o = this.opts<{ result: string; fingerprint: string; storageState?: string; json?: boolean } & BrowserLaunchFlags>();
+      const o = this.opts<
+        { result: string; fingerprint: string; storageState?: string; replays?: string; json?: boolean } & BrowserLaunchFlags
+      >();
       try {
         const report = await runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
           resultPath: o.result,
           fingerprint: o.fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
         });

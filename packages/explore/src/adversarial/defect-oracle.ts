@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
 
 /**
@@ -52,10 +52,25 @@ export function isNon5xxResourceConsoleError(text: string): boolean {
   return Number(match[1]) < 500;
 }
 
+/**
+ * Chromium's net error for a request the CLIENT cancelled — never a network-level failure. It fires
+ * for two entirely benign cases (#73):
+ *
+ *  - a connect-web/gRPC-web (or plain `fetch`) client that reads the response body and then aborts
+ *    its own request/stream — the request already SUCCEEDED server-side (a response was received);
+ *  - a request abandoned because the page navigated away or unmounted the component that issued it
+ *    (React Query/connect cancel on unmount, a full navigation tearing down the old document).
+ *
+ * Neither is evidence the system under test is broken. A genuine network failure — DNS, connection,
+ * SSL, a timeout — reports a DIFFERENT `errorText` and is unaffected.
+ */
+const ERR_ABORTED = "net::ERR_ABORTED";
+
 export class PageSignalCollector {
   private buffer: DefectSignal[] = [];
 
   constructor(page: Page) {
+    const responseSeen = new WeakSet<Request>();
     page.on("console", (msg) => {
       if (msg.type() !== "error") return;
       const text = msg.text();
@@ -69,6 +84,7 @@ export class PageSignalCollector {
       this.buffer.push({ kind: "page-error", detail: redactUrl(err.message), pageUrl: redactUrl(page.url()) });
     });
     page.on("response", (response) => {
+      responseSeen.add(response.request());
       const status = response.status();
       if (status >= 500) {
         const url = redactUrl(response.url());
@@ -76,9 +92,17 @@ export class PageSignalCollector {
       }
     });
     page.on("requestfailed", (request) => {
+      const errorText = request.failure()?.errorText ?? "request failed";
+      if (errorText === ERR_ABORTED) {
+        // A response was already received: the client aborted after reading it (connect-web/gRPC-web).
+        if (responseSeen.has(request)) return;
+        // No response yet, but the request's own frame is gone: a navigation or component unmount
+        // cancelled it — the page did this to itself, not a network failure.
+        if (request.frame().isDetached()) return;
+      }
       this.buffer.push({
         kind: "failed-request",
-        detail: redactUrl(request.failure()?.errorText ?? "request failed"),
+        detail: redactUrl(errorText),
         url: redactUrl(request.url()),
       });
     });
