@@ -79,7 +79,9 @@ export type MissionFailureKind =
   /** The run found nothing but exercised too little of its target for that to mean `clean`. */
   | "insufficient-coverage"
   /** The operator's configuration failed before the app was exercised — e.g. a fixture setup (#140/#144). Never a SUT finding. */
-  | "configuration";
+  | "configuration"
+  /** No step completed within the mission's stall watchdog: it ended rather than idle (#114). */
+  | "stalled";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;

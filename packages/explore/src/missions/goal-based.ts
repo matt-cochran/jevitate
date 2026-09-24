@@ -1,5 +1,5 @@
 import type { Assertion, Recording } from "@jevitate/recording";
-import { checkAssertion } from "@jevitate/interpreter";
+import { checkAssertion, readAssertionText } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
 import { reloadPage } from "../act.js";
@@ -10,7 +10,8 @@ import {
   type SuccessCheck,
   type SuccessCheckResult,
 } from "../success-checks.js";
-import { explore, type ExploreConfig, type ExploreRun, type TranscriptEntry } from "../explore.js";
+import { redactText } from "../redact.js";
+import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
@@ -153,6 +154,14 @@ function whyNot(run: ExploreRun, results: readonly SuccessCheckResult[]): string
 }
 
 const DEFAULT_ORACLE_SETTLE_MS = 10_000;
+
+/** Bound on the text quoted into a failed check's detail (#113): enough to see the mismatch, never a page dump. */
+const READ_TEXT_MAX_CHARS = 200;
+
+function quoteRead(s: string): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return `"${flat.length > READ_TEXT_MAX_CHARS ? `${flat.slice(0, READ_TEXT_MAX_CHARS)}…` : flat}"`;
+}
 
 /** Every check the oracle must pass, in the order given. Throws (a setup error) when there is none. */
 function successChecksOf(cfg: GoalBasedMissionConfig): SuccessCheck[] {
@@ -400,11 +409,22 @@ async function adjudicatedRun(
       ? "exhausted"
       : "blocked";
 
+  // `runOutcome` and `outcome` must never disagree (#113): the in-run `done` grounding (the
+  // `successCheck` given to `explore` above) evaluates every check EXCEPT `reloadThen` — a mid-run
+  // reload would throw away state the run is still building — so a run can end `completed` there and
+  // this, the final, full evaluation (including `reloadThen`) can still fail. The final verdict
+  // overrides: a mission that did not succeed never carries a `completed` runOutcome.
+  const runOutcome: RunOutcome =
+    !assertionPassed && run.outcome.status === "completed"
+      ? { status: "incomplete", reason: whyNot(run, results) }
+      : run.outcome;
+  const finalRun: ExploreRun = runOutcome === run.outcome ? run : { ...run, outcome: runOutcome };
+
   return {
     outcome,
     assertionPassed,
     checks: results,
-    run,
+    run: finalRun,
     recording: run.recording,
     transcript: run.transcript,
     finalUrl: run.finalUrl,
@@ -433,7 +453,14 @@ async function evaluateChecks(
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
-    return { check: describeCheck(check), passed, detail: passed ? `held ${when}` : `did not hold ${when}` };
+    if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
+    // #113 — a `textIncludes` mismatch is otherwise invisible ("did not hold" alone doesn't say
+    // whether the text is wrong or just differently cased). What was actually read, bounded and
+    // redacted (page text is untrusted, and may carry a secret) — never a full-page dump.
+    const read = await readAssertionText(actor, assertion);
+    const detail =
+      read === null ? `did not hold ${when}` : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;
+    return { check: describeCheck(check), passed, detail };
   };
 
   for (const [i, c] of checks.entries()) {

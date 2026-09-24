@@ -7,6 +7,7 @@ import {
   parseSecretField,
   secretFieldContext,
   secretFieldValue,
+  secretFieldsToFill,
 } from "./secret-fields.js";
 import { decodeBase32, totp } from "./totp.js";
 
@@ -97,10 +98,36 @@ describe("secret field bindings (#72)", () => {
       controls: [control({ name: "Code", summary: 'textbox "Code" (value="287082")' }), control({ index: 1, name: "Other", summary: "o" })],
     };
     const masked = maskSecretFields(snap, fields);
-    expect(masked.controls[0]!.summary).toBe('textbox "Code" (bound: «totp:APP_SEED» — typed by code)');
+    expect(masked.controls[0]!.summary).toBe('textbox "Code" (bound: «totp:APP_SEED» — choose `type` on it; code types the value)');
     expect(masked.controls[1]!.summary).toBe("o");
     expect(masked.signature).toBe("s");
     expect(secretFieldContext(fields)).toContain("label=Code → «totp:APP_SEED»");
     expect(secretFieldContext(fields)).not.toContain(RFC_SEED);
+  });
+});
+
+describe("bound fields code types on its own (#111)", () => {
+  const fields = [parseSecretField("label=Password=env:APP_PW", "value", { APP_PW: "pw-canary-123" })];
+  const pw = control({ index: 1, name: "Password", inputType: "password", form: "form#signup" });
+  const email = control({ index: 0, name: "Email", inputType: "email", form: "form#signup" });
+  const submit = control({ index: 2, name: "Create account", role: "button", tag: "button", inputType: null, form: "form#signup", submits: true });
+  const toggle = control({ index: 3, name: "Sign up", role: "button", tag: "button", inputType: null, form: null });
+  const none = { invalid: [], alerts: [] };
+
+  it("before a submit of its own form — never for a button of another form", () => {
+    const due = secretFieldsToFill([email, pw, submit], fields, { submitting: submit, status: none });
+    expect(due.map((d) => [d.control.name, d.why])).toEqual([["Password", "submit"]]);
+    expect(secretFieldsToFill([email, pw, toggle], fields, { submitting: toggle, status: none })).toEqual([]);
+  });
+
+  it("once a validation message names it — an invalid field or an alert", () => {
+    const invalid = { invalid: [{ name: "Password", message: "Please fill out this field." }], alerts: [] };
+    expect(secretFieldsToFill([pw], fields, { submitting: null, status: invalid }).map((d) => d.why)).toEqual(["invalid"]);
+    const alert = { invalid: [], alerts: ["Password is invalid"] };
+    expect(secretFieldsToFill([pw], fields, { submitting: null, status: alert })).toHaveLength(1);
+    expect(secretFieldsToFill([pw], fields, { submitting: null, status: { invalid: [], alerts: ["Passwords are fun"] } })).toEqual([]);
+    // The control a `type` was chosen on goes through the normal bound path instead.
+    expect(secretFieldsToFill([pw], fields, { submitting: null, status: invalid, exclude: pw })).toEqual([]);
+    expect(secretFieldsToFill([pw], undefined, { submitting: submit, status: invalid })).toEqual([]);
   });
 });

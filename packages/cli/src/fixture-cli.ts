@@ -150,6 +150,8 @@ export function regressionFixtures(
   flags: FixtureFlags,
   recording: { readonly site: string; readonly fixture?: { readonly identity: string } },
   missionResult: unknown,
+  /** `--storage-state` (#129): wins over the one recorded with the mission. */
+  storageState?: string,
 ): MissionFixtures | undefined {
   const result = isObject(missionResult) && isObject(missionResult.result) ? missionResult.result : undefined;
   const target = isObject(result?.target) ? result.target : undefined;
@@ -171,7 +173,11 @@ export function regressionFixtures(
   const fx = buildMissionFixtures(flags, {
     allowlist,
     baseUrl,
-    ...(typeof target?.storageStatePath === "string" ? { storageState: target.storageStatePath } : {}),
+    ...(storageState !== undefined
+      ? { storageState }
+      : typeof target?.storageStatePath === "string"
+        ? { storageState: target.storageStatePath }
+        : {}),
     ...(spec === undefined ? {} : { spec }),
   });
   if (fx === undefined && recording.fixture !== undefined) {

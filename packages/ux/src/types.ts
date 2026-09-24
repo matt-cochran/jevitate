@@ -228,6 +228,42 @@ export interface UxFinding {
   readonly predictedAttention?: PredictedAttention;
   /** A `signal`-tier finding's verifiable evidence: the step(s), request(s), text and screenshot. */
   readonly signal?: SignalEvidence;
+  /**
+   * #132: the observed journey friction this finding is grounded in (friction.ts) — the step range
+   * where the run backtracked, retried, hit a dead end, waited, met an error, abandoned a step or
+   * did not reach the goal. A rubric finding without it is heuristic-only.
+   */
+  readonly journeyEvidence?: JourneyEvidence;
+  /** #132: the observed impact on the job — the report ranks by it (blocked > slowed > confused > cosmetic). */
+  readonly impact?: JobImpact;
+  /**
+   * #132: no behavioral evidence — a screen-level heuristic judgment only. Capped at `info` and
+   * reported in the appendix (`report.heuristicAppendix`), never among the ranked findings.
+   */
+  readonly heuristicOnly?: boolean;
+  /** #132: other findings on the same friction point, collapsed into this one as its rationale. */
+  readonly contributing?: readonly ContributingFinding[];
+}
+
+/** #132: how much an observed problem got in the way of the job. */
+export type JobImpact = "blocked" | "slowed" | "confused" | "cosmetic";
+
+/** #132: the behavioral evidence a finding is grounded in. */
+export interface JourneyEvidence {
+  /** The friction point's id (friction.ts), or `signal:<kind>` for a run-signal finding. */
+  readonly id: string;
+  readonly kind: string;
+  /** The transcript step range the friction was observed over. */
+  readonly steps: readonly number[];
+  readonly detail: string;
+}
+
+/** #132: a finding collapsed into another on the same friction point, kept as rationale. */
+export interface ContributingFinding {
+  readonly rubricItemId: string;
+  readonly observation: string;
+  readonly confidence: number;
+  readonly quality?: UxFinding["quality"];
 }
 
 /** What `makeFinding` needs to resolve refs — anything carrying a ref set. */

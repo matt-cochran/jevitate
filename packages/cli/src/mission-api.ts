@@ -39,6 +39,8 @@ export interface AddMissionTargetInput {
   id: string;
   name: string;
   authorizedOrigin: string;
+  /** Extra origins the app talks to (its API on another origin) — the MCP analogue of a 2nd `--allow`. */
+  apiOrigins?: string[];
   baseUrl: string;
   description?: string;
 }
@@ -60,6 +62,7 @@ export async function addMissionTarget(
     id: input.id,
     name: input.name,
     authorizedOrigin: input.authorizedOrigin,
+    ...(input.apiOrigins !== undefined && input.apiOrigins.length > 0 ? { apiOrigins: [...input.apiOrigins] } : {}),
     baseUrl: input.baseUrl,
     ...(input.description !== undefined ? { description: input.description } : {}),
     promoted: false,

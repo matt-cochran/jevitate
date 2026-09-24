@@ -50,6 +50,14 @@ export interface Control {
    * document), or null when it sits in no `<form>`. Absent on controls built outside `snapshot`.
    */
   readonly form?: string | null;
+  /**
+   * The nearest form-LIKE container (`[role=form]`, `dialog`, `fieldset`, `section`) — computed
+   * only for a control with no `<form>` owner (#121). Lets a field-and-submit pairing survive on a
+   * page built without `<form>` elements (a settings toolbar in a `<section>`) without merging
+   * every unrelated form-less control on the page into one bucket (a global header search must
+   * never be paired with an unrelated "Send feedback" in a different section).
+   */
+  readonly container?: string | null;
   /** True for a control that submits its form (a submit button / `<input type=submit|image>`). */
   readonly submits?: boolean;
   /** A link's resolved destination (`a[href]`), so a mission can tell where it leads without clicking. */
@@ -58,6 +66,18 @@ export interface Control {
   readonly checked?: boolean | null;
   /** The raw `aria-haspopup` value (e.g. `dialog`), or null — marks a control that discloses more UI. */
   readonly ariaHasPopup?: string | null;
+  /** The raw `min` attribute (number/date/range…), or null — for type-appropriate boundary values (#121). */
+  readonly min?: string | null;
+  /** The raw `max` attribute, or null. */
+  readonly max?: string | null;
+  /** The raw `step` attribute, or null. */
+  readonly step?: string | null;
+  /**
+   * The page-chrome landmark the control sits in — `navigation` (`<nav>`), `banner` (a page-level
+   * `<header>`) or `contentinfo` (a page-level `<footer>`) — or null. Frontier missions try such
+   * controls only after the page's own content (#115).
+   */
+  readonly landmark?: "navigation" | "banner" | "contentinfo" | null;
 }
 
 export interface Snapshot {
@@ -114,12 +134,22 @@ interface ControlFacts {
   readonly selected: string | null;
   /** The owning form's key (`form#<id>` / `form@<n>`), or null. */
   readonly form: string | null;
+  /** The nearest form-like container's key, computed only when `form` is null. See `Control.container`. */
+  readonly container: string | null;
   /** Whether activating the control submits its form. */
   readonly submits: boolean;
   /** A link's resolved `href`, or null. */
   readonly href: string | null;
   /** The raw `aria-haspopup` attribute, or null — a disclosure signal (e.g. `dialog`). */
   readonly ariaHasPopup: string | null;
+  /** The raw `min` attribute, or null. */
+  readonly min: string | null;
+  /** The raw `max` attribute, or null. */
+  readonly max: string | null;
+  /** The raw `step` attribute, or null. */
+  readonly step: string | null;
+  /** The enclosing chrome landmark (`navigation` / `banner` / `contentinfo`), or null. */
+  readonly landmark: "navigation" | "banner" | "contentinfo" | null;
 }
 
 /**
@@ -234,11 +264,52 @@ function readControlFacts(node: Node): ControlFacts {
   if (owner !== null) {
     form = owner.id !== "" ? `form#${owner.id}` : `form@${Array.from(document.forms).indexOf(owner)}`;
   }
+  // Form-LIKE container (#121): only computed when the control has no <form> owner. Lets a page
+  // built without <form> elements still pair a field with its OWN submit (a settings section, a
+  // dialog) instead of every form-less control on the page collapsing into one "page" bucket — the
+  // bug behind pairing a global header search with an unrelated "Send feedback" button.
+  let container: string | null = null;
+  if (owner === null) {
+    const CONTAINER_SELECTOR = '[role="form"], dialog, [role="dialog"], fieldset, section';
+    const containerEl = el.closest(CONTAINER_SELECTOR);
+    if (containerEl !== null) {
+      const containerRole = norm(containerEl.getAttribute("role")).toLowerCase();
+      const containerTag = containerEl.tagName.toLowerCase();
+      const kind = containerRole === "form" ? "role-form" : containerRole === "dialog" ? "dialog" : containerTag;
+      if (containerEl.id !== "") container = `${kind}#${containerEl.id}`;
+      else {
+        const all = Array.from(document.querySelectorAll(CONTAINER_SELECTOR));
+        container = `${kind}@${all.indexOf(containerEl)}`;
+      }
+    }
+  }
   const buttonType = tag === "button" ? (el.getAttribute("type") ?? "submit").toLowerCase() : null;
   const submits =
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
   const href = tag === "a" ? (el as HTMLAnchorElement).href || null : null;
   const ariaHasPopup = norm(el.getAttribute("aria-haspopup")).toLowerCase() || null;
+  const min = tag === "input" ? el.getAttribute("min") : null;
+  const max = tag === "input" ? el.getAttribute("max") : null;
+  const step = tag === "input" ? el.getAttribute("step") : null;
+  // Chrome landmark: a <nav>/role=navigation anywhere up the tree, or a PAGE-level <header>/<footer>
+  // (one inside an article/section/main/aside is that region's own header, not page chrome).
+  let landmark: "navigation" | "banner" | "contentinfo" | null = null;
+  for (let a: Element | null = el.parentElement; a !== null; a = a.parentElement) {
+    const r = (a.getAttribute("role") ?? "").toLowerCase();
+    const t = a.tagName.toLowerCase();
+    if (r === "navigation" || t === "nav") {
+      landmark = "navigation";
+      break;
+    }
+    if (r === "banner" || r === "contentinfo") {
+      landmark = r;
+      break;
+    }
+    if ((t === "header" || t === "footer") && (a.parentElement?.closest("article,aside,main,section") ?? null) === null) {
+      landmark = t === "header" ? "banner" : "contentinfo";
+      break;
+    }
+  }
 
   return {
     tag,
@@ -254,9 +325,14 @@ function readControlFacts(node: Node): ControlFacts {
     options,
     selected,
     form,
+    container,
     submits,
     href,
     ariaHasPopup,
+    min,
+    max,
+    step,
+    landmark,
   };
 }
 
@@ -358,11 +434,16 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         ...(facts.options === null ? {} : { options: facts.options }),
         summary: summarize(facts),
         form: facts.form,
+        container: facts.container,
         submits: facts.submits,
         // Only the path matters (scope checks); sensitive query values are masked like every URL.
         href: facts.href === null ? null : redactUrl(facts.href),
         checked: facts.checked,
         ariaHasPopup: facts.ariaHasPopup,
+        min: facts.min,
+        max: facts.max,
+        step: facts.step,
+        landmark: facts.landmark,
       });
       keptFacts.push(facts);
     } catch {

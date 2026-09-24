@@ -359,12 +359,31 @@ describe("#19 jevitate journey publish", () => {
     ).rejects.toMatchObject({ name: "UndeclaredOriginError" });
   });
 
-  test("refuses a journey with no declarable origins (NoDeclaredOriginsError)", async () => {
-    const { base, journeysDir } = await withTargetSource();
-    // Relative-only navigate -> collectNavigateOrigins yields nothing.
+  test("#125: derives the origin from recording.site when navigate urls are all relative (explore-authored journeys)", async () => {
+    const { base, journeysDir, s } = await withTargetSource();
+    // Relative-only navigate -> collectNavigateOrigins yields nothing; the origin is derived
+    // from recording.site instead of refusing.
     await writeLocal(journeysDir, localJourney("rel", { navUrl: "/home" }));
+    const res = await publishJourneyToSource({ ...base, gh: fakeGhAbsent }, { journeysDir, id: "rel", toSource: "shop" });
+    expect(res.pushed).toBe(true);
+    const written = JSON.parse(await readFile(join(s.sourcesDir, "shop", "journeys", "rel.journey.json"), "utf8"));
+    expect(written.declaredOrigins).toEqual([ORIGIN]);
+  });
+
+  test("refuses a journey with no declarable origins at all (NoDeclaredOriginsError)", async () => {
+    const { base, journeysDir } = await withTargetSource();
+    // Relative navigate AND a `site` that isn't a resolvable absolute URL -> nothing to derive.
+    const journey: Journey = {
+      metadata: { id: "norigin", name: "norigin", promoted: true, params: [], createdAtIso: "2026-01-01T00:00:00Z" },
+      recording: {
+        version: "1.0.0",
+        site: "not-a-url",
+        pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/home", expect: { kind: "visible", target: { label: "Home" } } } }] }],
+      },
+    };
+    await writeLocal(journeysDir, journey);
     await expect(
-      publishJourneyToSource({ ...base, gh: fakeGhAbsent }, { journeysDir, id: "rel", toSource: "shop" }),
+      publishJourneyToSource({ ...base, gh: fakeGhAbsent }, { journeysDir, id: "norigin", toSource: "shop" }),
     ).rejects.toBeInstanceOf(NoDeclaredOriginsError);
   });
 });

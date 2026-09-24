@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "@jevitate/explore";
-import { armMissionKillSwitch, __resetKillSwitchForTests, type KillSwitchDeps } from "./kill-signal.js";
+import { armMissionKillSwitch, setKillSwitchOutput, __resetKillSwitchForTests, type KillSwitchDeps } from "./kill-signal.js";
 
 /** A fake `KillSwitchDeps`: captures the registered handlers so a test can "fire" a signal without
  *  touching the real process, and records every call the handler makes so behavior is asserted
@@ -104,5 +104,139 @@ describe("kill-signal — crash-safe SIGTERM/SIGINT (#94)", () => {
     expect(calls.exit).toEqual([143, 130]);
     expect(calls.writeResult).toHaveLength(1);
     expect(calls.closeBrowsers).toBe(1);
+  });
+});
+
+describe("kill-signal — the killed run's result describes the run (#120, #112)", () => {
+  const entry = (step: number): TranscriptEntry => ({
+    step,
+    op: "click",
+    target: "x",
+    confidence: 0.9,
+    chosenBy: "model",
+    actOk: true,
+    url: "http://x.test/",
+    signature: `s${step}`,
+    controlCount: 1,
+  });
+  const engine = { version: "1.2.3", commit: "abc1234", builtAt: "2026-09-24T00:00:00Z" };
+
+  it("prefers the live step list over the file, and carries engine, usage-so-far, the real transcriptPath and a partial report", async () => {
+    const { deps, handlers, calls } = fakeDeps({ transcript: [] });
+    const readPaths: string[] = [];
+    const live = [entry(1), entry(2), entry(3), entry(4), entry(5)];
+    armMissionKillSwitch(
+      {
+        recordingPath: "/out/usability-X.recording.json",
+        transcriptPath: "/out/usability-X.transcript.json",
+        transcript: () => live,
+        usage: { snapshot: () => ({ judgments: 6, generations: 2, inputTokens: 900, outputTokens: 120 }) },
+        partialReport: () => ({ screensObserved: 6 }),
+      },
+      {
+        ...deps,
+        engine: () => engine,
+        readTranscript: (p) => {
+          readPaths.push(p);
+          return { steps: 0, transcript: [] };
+        },
+      },
+    );
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(readPaths).toEqual([]); // the live list was used — no stale file read
+    expect(calls.writeResult[0]?.[3]).toMatchObject({
+      reason: "interrupted by SIGTERM after 5 steps",
+      steps: 5,
+      transcript: live,
+      transcriptPath: "/out/usability-X.transcript.json",
+      recordingPath: "/out/usability-X.recording.json",
+      resultPath: "/out/usability-X.recording.result.json",
+      missionOutcome: "inconclusive",
+      exitCode: 143,
+      engine,
+      usage: { judgments: 6, generations: 2, inputTokens: 900, outputTokens: 120 },
+      partialReport: { screensObserved: 6 },
+    });
+  });
+
+  it("without a live reference, reads the flushed transcript at the mission's own transcriptPath", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    const readPaths: string[] = [];
+    armMissionKillSwitch(
+      { recordingPath: "/out/usability-Y.recording.json", transcriptPath: "/out/usability-Y.transcript.json" },
+      {
+        ...deps,
+        readTranscript: (p) => {
+          readPaths.push(p);
+          return { steps: 2, transcript: [entry(1), entry(2)] };
+        },
+      },
+    );
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(readPaths).toEqual(["/out/usability-Y.transcript.json"]);
+    expect(calls.writeResult[0]?.[3]).toMatchObject({ steps: 2, reason: "interrupted by SIGTERM after 2 steps" });
+  });
+
+  it("a throwing getter never blocks the flush or the exit", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    armMissionKillSwitch(
+      {
+        recordingPath: "/out/explore-Z.json",
+        transcript: () => {
+          throw new Error("boom");
+        },
+        usage: {
+          snapshot: () => {
+            throw new Error("boom");
+          },
+        },
+      },
+      deps,
+    );
+    handlers.SIGINT?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([130]));
+    expect(calls.writeResult).toHaveLength(1);
+    expect(calls.writeResult[0]?.[3]).not.toHaveProperty("usage");
+  });
+
+  it.each([
+    ["envelope", (line: string) => expect(JSON.parse(line)).toMatchObject({ v: 1, ok: true, data: { outcome: "inconclusive", engine } })],
+    ["raw", (line: string) => expect(JSON.parse(line)).toMatchObject({ outcome: "inconclusive", engine })],
+  ] as const)("prints the %s result to stdout before exiting", async (mode, check) => {
+    const { deps, handlers, calls } = fakeDeps();
+    const order: string[] = [];
+    const out: string[] = [];
+    setKillSwitchOutput(mode);
+    armMissionKillSwitch(
+      { recordingPath: "/out/explore-W.json" },
+      {
+        ...deps,
+        engine: () => engine,
+        writeStdout: (text) => {
+          order.push("stdout");
+          out.push(text);
+        },
+        exit: (code) => {
+          order.push("exit");
+          calls.exit.push(code);
+        },
+      },
+    );
+    handlers.SIGTERM?.();
+    expect(order).toEqual(["stdout", "exit"]); // synchronous: printed in the same turn, before the exit
+    expect(out).toHaveLength(1);
+    expect(out[0]!.endsWith("\n")).toBe(true);
+    check(out[0]!);
+  });
+
+  it("prints nothing when no output mode was set (a library caller owns stdout)", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    const out: string[] = [];
+    armMissionKillSwitch({ recordingPath: "/out/explore-V.json" }, { ...deps, writeStdout: (t) => out.push(t) });
+    handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([143]));
+    expect(out).toEqual([]);
   });
 });
