@@ -69,6 +69,8 @@ export interface SignalStep {
   readonly actOk: boolean;
   readonly url: string;
   readonly descriptor?: TargetDescriptor;
+  /** The transcript's reason for the step (e.g. the run's own refusal to repeat a side effect, #92). */
+  readonly reason?: string;
 }
 
 export interface RunSignalCapture {
@@ -337,6 +339,79 @@ export function detectDuplicateWrites(capture: RunSignalCapture): UxFinding[] {
         }),
       );
     }
+  }
+  const reported = new Set(out.flatMap((f) => f.controls ?? []));
+
+  // One click that fired the same write more than once: the app itself double-submits.
+  for (const click of clicks) {
+    const writes = capture.requests.filter((r) => r.step === click.step && WRITE_METHODS.has(r.method.toUpperCase()) && okStatus(r));
+    const byEndpoint = new Map<string, SignalRequest[]>();
+    for (const r of writes) byEndpoint.set(r.endpoint, [...(byEndpoint.get(r.endpoint) ?? []), r]);
+    for (const [endpoint, reqs] of byEndpoint) {
+      const target = click.target ?? "the control";
+      if (reqs.length < 2 || reported.has(target)) continue;
+      reported.add(target);
+      const method = reqs[0]!.method.toUpperCase();
+      const screen = capture.screens.filter((sc) => sc.step <= click.step).pop();
+      out.push(
+        makeSignalFinding({
+          kind: "duplicate-write",
+          confidence: method === "POST" ? 0.8 : 0.6,
+          url: click.url,
+          screenId: screen?.signature ?? `step:${click.step}`,
+          observation: `A single click on ${target} (step ${click.step}) fired ${method} ${endpoint} ${reqs.length} times, and every one succeeded — one action created ${reqs.length} side effects.`,
+          userImpact: "One click launches the same work several times — duplicate records, duplicate charges or duplicate jobs.",
+          recommendation: `Make ${target} submit once per activation, and make ${endpoint} idempotent (an idempotency key, or reject a duplicate).`,
+          controls: [target],
+          occurrences: reqs.length,
+          evidence: {
+            kind: "duplicate-write",
+            steps: [click.step],
+            requests: reqs.map((r) => requestEvidence(r, capture.endedAt)),
+            ...(screen?.screenshot === undefined ? {} : { screenshot: screen.screenshot }),
+            detail: `${reqs.length} successful ${method} ${endpoint} from one click`,
+          },
+        }),
+      );
+    }
+  }
+
+  // The run itself refused to click again (#92: its write already succeeded and the page offers no
+  // retry) — yet the control was still there to click. No duplicate was sent, so the evidence is the
+  // unguarded control plus the successful write, at a lower confidence than an observed duplicate.
+  for (const refusal of capture.steps) {
+    if (!/^repeated side effect refused: .*already sent .*does not offer a retry/.test(refusal.reason ?? "")) continue;
+    const target = refusal.target ?? "the control";
+    if (reported.has(target)) continue;
+    const earlier = clicks.filter((c) => c.step < refusal.step && c.url === refusal.url && controlKey(c) === controlKey(refusal));
+    const first = earlier[earlier.length - 1];
+    if (first === undefined) continue;
+    const reqs = capture.requests.filter((r) => r.step === first.step && WRITE_METHODS.has(r.method.toUpperCase()) && okStatus(r));
+    if (reqs.length === 0) continue;
+    reported.add(target);
+    const method = reqs[0]!.method.toUpperCase();
+    const endpoint = reqs[0]!.endpoint;
+    const screen = capture.screens.filter((sc) => sc.step <= refusal.step).pop();
+    out.push(
+      makeSignalFinding({
+        kind: "duplicate-write",
+        confidence: method === "POST" ? 0.55 : 0.4,
+        url: refusal.url,
+        screenId: screen?.signature ?? `step:${refusal.step}`,
+        observation: `After ${method} ${endpoint} from ${target} succeeded (step ${first.step}), ${target} was still available to click again (step ${refusal.step}) with nothing on the page preventing a second submission; jevitate declined to repeat it.`,
+        userImpact: "A user who clicks again (impatience, a slow response, a double click) would launch the same work twice — duplicate records, duplicate charges or duplicate jobs.",
+        recommendation: `Disable or guard ${target} after its request succeeds, and make ${endpoint} idempotent (an idempotency key, or reject a duplicate).`,
+        controls: [target],
+        occurrences: 1,
+        evidence: {
+          kind: "duplicate-write",
+          steps: [first.step, refusal.step],
+          requests: reqs.map((r) => requestEvidence(r, capture.endedAt)),
+          ...(screen?.screenshot === undefined ? {} : { screenshot: screen.screenshot }),
+          detail: `the control stayed actionable after a successful ${method}; no duplicate was sent (the run refused the repeat), so confidence is lower than for an observed duplicate`,
+        },
+      }),
+    );
   }
   return out;
 }

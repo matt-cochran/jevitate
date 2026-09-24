@@ -109,6 +109,31 @@ describe("detectDuplicateWrites", () => {
     expect(f!.confidence).toBe(0.8);
   });
 
+  it("flags one click that fired the same write twice (the app double-submits)", () => {
+    const c = capture({ steps: [click(1, "Launch")], requests: [post(0, 1), post(1, 1)], screens: [screen(0, 1, 500)] });
+    const [f] = detectDuplicateWrites(c);
+    expect(f).toMatchObject({ rubricItemId: "signal-duplicate-write", occurrences: 2 });
+    expect(f!.signal!.steps).toEqual([1]);
+    expect(f!.confidence).toBe(0.8);
+  });
+
+  it("flags an unguarded control the run refused to re-click after its write succeeded (#92), at lower confidence", () => {
+    const refused = {
+      ...click(2, "Launch"),
+      actOk: false,
+      reason: 'repeated side effect refused: "Launch" already sent POST /api/launches on this page and the page does not offer a retry — clicking it again would repeat that action',
+    };
+    const c = capture({ steps: [click(1, "Launch"), refused], requests: [post(0, 1)], screens: [screen(0, 1, 500), screen(1, 2, 1_500)] });
+    const [f] = detectDuplicateWrites(c);
+    expect(f).toMatchObject({ rubricItemId: "signal-duplicate-write", controls: ['button "Launch"'], occurrences: 1 });
+    expect(f!.signal!.steps).toEqual([1, 2]);
+    expect(f!.confidence).toBe(0.55);
+    expect(f!.observation).toMatch(/jevitate declined to repeat it/);
+    // Still in flight, not "already sent": waiting was right, and nothing is flagged.
+    const inFlight = { ...refused, reason: 'repeated side effect refused: "Launch" already sent POST, still in flight — waiting for it instead of re-clicking' };
+    expect(detectDuplicateWrites(capture({ steps: [click(1, "Launch"), inFlight], requests: [post(0, 1)] }))).toHaveLength(0);
+  });
+
   it("is silent when the repeat was rejected, for reads, and for different controls", () => {
     expect(detectDuplicateWrites(capture({ steps: [click(1, "Launch"), click(2, "Launch")], requests: [post(0, 1), post(1, 2, 409)] }))).toHaveLength(0);
     expect(

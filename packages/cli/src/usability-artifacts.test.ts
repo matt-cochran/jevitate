@@ -138,8 +138,9 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
         expect(result.transcriptPath).toBe(join(outDir, "usability-2026-09-24T00-00-00-000Z.transcript.json"));
         const recording = JSON.parse(readFileSync(result.recordingPath, "utf8")) as Recording;
         const steps = recording.pages.flatMap((p) => p.steps.map((s) => s.step));
-        // Launch, Launch, Double down (the loop's own no-progress rule may end the run after that).
-        expect(steps.filter((s) => s.kind === "click").length, result.stop).toBeGreaterThanOrEqual(3);
+        // Launch, then Double down: the second Launch is refused (#92 — its POST already succeeded and
+        // the page offers no retry), so it never becomes a Recording step.
+        expect(steps.filter((s) => s.kind === "click").length, result.stop).toBeGreaterThanOrEqual(2);
         expect(steps.filter((s) => s.kind === "fill").map((s) => (s.kind === "fill" ? s.value : null))).toEqual([
           { redacted: false, value: "value:Title" },
           { redacted: true, length: KEY.length },
@@ -165,17 +166,17 @@ describe("usability run artifacts (#98) and run-signal findings (#96) — served
         }
 
         // --- #96: signal findings, each citing its evidence ---
-        expect(launches.length).toBe(2);
+        // The run never repeats the side effect itself (#92): exactly one launch reached the server.
+        expect(launches.length).toBe(1);
         const findings = result.report!.findings;
         const byId = (id: string) => findings.find((f) => f.rubricItemId === id);
         const dup = byId("signal-duplicate-write");
         expect(dup, JSON.stringify(findings.map((f) => f.rubricItemId))).toBeDefined();
         expect(dup!.tier).toBe("signal");
-        expect(dup!.signal!.requests.map((r) => [r.method, r.status])).toEqual([
-          ["POST", 201],
-          ["POST", 201],
-        ]);
+        // The evidence is the successful POST plus the unguarded control the run refused to re-click.
+        expect(dup!.signal!.requests.map((r) => [r.method, r.status])).toEqual([["POST", 201]]);
         expect(dup!.signal!.steps).toHaveLength(2);
+        expect(dup!.observation).toMatch(/jevitate declined to repeat it/);
         const id = byId("signal-internal-id");
         expect(id!.quotes[0]).toContain(`Decision maker ${INTERNAL_ID}`);
         expect(id!.signal!.text).toContain(INTERNAL_ID);
