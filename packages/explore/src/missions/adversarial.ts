@@ -894,19 +894,29 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
     };
 
-    /** One planned step through the gated act(). A select with no chosen option takes another option. */
-    const execute = async (s: MisuseStep): Promise<{ result: ActResult; value?: string }> => {
+    /**
+     * One planned step through the gated act(). A select with no chosen option takes another
+     * option. `send` (a chat composer: #121) is given the CURRENT page's controls as its submit
+     * candidates, so it finds its own nearest Send button (or falls back to Enter) exactly as the
+     * goal loop's composer handling does — never a separate detected submit control to plan around.
+     */
+    const execute = async (s: MisuseStep, candidates: readonly Control[]): Promise<{ result: ActResult; value?: string }> => {
       if (s.op === "select" && s.control !== null && s.fillText === undefined) {
         const option = await otherOption(sessions.page, s.control);
         if (option === null) return { result: { ok: false, mutated: false, reason: "no other option to choose" } };
         return { result: await act(sessions.actor, { op: "select", control: s.control, value: option }), value: option };
       }
-      const result = await act(sessions.actor, { op: s.op, control: s.control, value: s.fillText ?? null });
+      const result = await act(sessions.actor, {
+        op: s.op,
+        control: s.control,
+        value: s.fillText ?? null,
+        ...(s.op === "send" ? { candidates } : {}),
+      });
       return s.fillText === undefined ? { result } : { result, value: s.fillText };
     };
 
     /** Appends an executed step to the Recording (the defect's repro path). */
-    const recordAction = (s: MisuseStep, value: string | undefined, at: number): void => {
+    const recordAction = (s: MisuseStep, value: string | undefined, at: number, submittedVia?: ActResult["submittedVia"]): void => {
       if (s.control === null) {
         if (s.op === "reload") {
           recorder.navigate(sessions.page.url(), at);
@@ -921,7 +931,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         const v = value ?? "";
         recorder.fill(s.control.descriptor, s.redacted === true ? { redacted: true, length: v.length } : v, at);
       } else if (s.op === "select") recorder.select(s.control.descriptor, value ?? "", at);
-      else return;
+      else if (s.op === "send") {
+        recorder.fill(s.control.descriptor, value ?? "", at);
+        if (submittedVia !== undefined && submittedVia.kind === "click") recorder.click(submittedVia.control.descriptor, at);
+        else recorder.press("Enter", s.control.descriptor, at);
+      } else return;
       lastRecordedTarget = JSON.stringify(s.control.descriptor);
     };
 
@@ -1082,9 +1096,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           armed = true;
         }
         const at = now();
-        const { result, value } = await execute(s);
+        const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
-        if (result.ok) recordAction(s, value, at);
+        if (result.ok) recordAction(s, value, at, result.submittedVia);
         if (result.ok) cov.acted(stepSnap.url, s.control, s.submitsForm);
         if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
         last = { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };
