@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { CredentialKey } from "@jevitate/ai-core";
+import { ALL_CREDENTIAL_KEYS, type CredentialKey } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
@@ -9,7 +9,7 @@ import { resolveDataDir } from "./data-dir.js";
  * (env vars still win — see `envCredentialStore`).
  */
 
-const KNOWN_KEYS: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"];
+const KNOWN_KEYS: readonly CredentialKey[] = ALL_CREDENTIAL_KEYS;
 
 export class CredentialsFileError extends Error {}
 

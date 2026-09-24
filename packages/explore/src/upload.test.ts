@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FakeGenerationGateway, type Answer, type JudgmentPort, type JudgmentState } from "@jevitate/ai-core";
+import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { Step } from "@jevitate/recording";
@@ -14,10 +14,10 @@ import {
   FixtureNotFoundError,
   resolveMissionFixture,
   snapshot,
+  UPLOAD_OP_GUIDE,
   type Control,
-  type Op,
 } from "./index.js";
-import { withSession } from "./testkit.js";
+import { ScriptedJudge, withSession } from "./testkit.js";
 
 /**
  * The `upload` op end to end against a REAL Chromium: a trivial served page
@@ -61,28 +61,6 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
   await rm(fixtureDir, { recursive: true, force: true });
 });
-
-/** A JudgmentPort that plays a fixed op+target sequence and keeps every state it was shown. */
-class ScriptedJudge implements JudgmentPort {
-  #i = 0;
-  readonly states: JudgmentState[] = [];
-  readonly opOptions: (readonly string[])[] = [];
-  constructor(private readonly seq: ReadonlyArray<{ op: Op; target?: string }>) {}
-  async systemOne(args: {
-    state: JudgmentState;
-    questions: Record<string, { kind: string; options?: readonly string[] }>;
-  }): Promise<Record<string, Answer>> {
-    this.states.push(args.state);
-    this.opOptions.push(args.questions.op?.options ?? []);
-    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)]!;
-    this.#i += 1;
-    const out: Record<string, Answer> = { op: { kind: "choice", value: cur.op, confidence: 0.9 } };
-    if (args.questions.target && cur.target !== undefined) {
-      out.target = { kind: "choice", value: cur.target, confidence: 0.9 };
-    }
-    return out;
-  }
-}
 
 function fileInputOf(controls: readonly Control[]): Control {
   const c = controls.find((x) => x.role === "file-input");
@@ -295,7 +273,10 @@ describe("explore loop — upload is recorded and replays deterministically", ()
 
       expect(run.stop).toBe("done");
       expect(run.actions).toBe(1);
-      expect(judge.opOptions[0]).toContain("upload");
+      expect(judge.actionOptions[0]?.some((o) => o.startsWith("upload:"))).toBe(true);
+      // One fixture ⇒ one upload: once attached, no upload action (nor its guide) is offered again.
+      expect(judge.actionOptions[1]?.some((o) => o.startsWith("upload"))).toBe(false);
+      expect(judge.states[1]?.controls).not.toContain(UPLOAD_OP_GUIDE);
       const steps: Step[] = run.recording.pages.flatMap((p) => p.steps.map((s) => s.step));
       const upload = steps.find((s) => s.kind === "upload");
       expect(upload).toMatchObject({ kind: "upload", file: { redacted: false, value: fixture } });
@@ -348,8 +329,8 @@ describe("explore loop — upload is recorded and replays deterministically", ()
         },
         origin,
       );
-      expect(judge.opOptions[0]).not.toContain("upload");
-      expect(judge.states[0]!.controls.join("\n")).not.toContain("OP upload");
+      expect(judge.actionOptions[0]?.some((o) => o.startsWith("upload"))).toBe(false);
+      expect(judge.states[0]?.controls.join("\n")).not.toContain("OP upload");
     },
     120_000,
   );

@@ -1,12 +1,14 @@
 import type { Command } from "commander";
 import {
   envCredentialStore,
+  ALL_CREDENTIAL_KEYS,
   FEATURE_KEYS,
   requireKeys,
   MissingCredentialError,
   collectMissingKeys,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
+  openRouterProviderSettings,
   GEN_TASKS,
   type CredentialKey,
   type Feature,
@@ -128,13 +130,14 @@ export function realSecureIO(): SecureKeyIO {
 }
 
 /** Lazily imports `ai` + `@openrouter/ai-sdk-provider` so the CLI builds and
- *  runs `--json`/fake paths without either package resolvable. The key is
- *  placed ONLY in the `Authorization` header, never in `body`/`prompt`. */
+ *  runs `--json`/fake paths without either package resolvable. The key goes
+ *  ONLY to the provider's `apiKey` (which it sends as the `Authorization`
+ *  header), never into `body`/`prompt`. */
 async function realOpenRouterCall(): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   return async ({ model, schema, body, authHeader }) => {
-    const openrouter = createOpenRouter({ headers: { Authorization: authHeader } });
+    const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
     const { object } = await generateObject({
       model: openrouter(model),
@@ -281,7 +284,7 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
  *  JSON envelope itself never carries provider error text at all. */
 function redactCredentials(message: string, store: { read(k: CredentialKey): string | undefined }): string {
   let out = message;
-  for (const key of ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"] as const) {
+  for (const key of ALL_CREDENTIAL_KEYS) {
     const value = store.read(key);
     if (value) out = out.split(value).join("***REDACTED***");
   }

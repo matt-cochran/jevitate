@@ -13,13 +13,28 @@ import {
   assertAuthorizedExploreTarget,
   isAuthorizedExploreTarget,
 } from "./authorized-targets.js";
-import { snapshot, type Snapshot } from "./snapshot.js";
-import { decide, OPS_NEEDING_TARGET, type Op } from "./decide.js";
+import type { Snapshot } from "./snapshot.js";
+import { perceive } from "./perceive.js";
+import { monitorFor } from "./page-monitor.js";
+import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
+import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
+import { hostProbe, type HostProbe } from "./host-pressure.js";
+import { HANG_PROBE_MS } from "./perceive.js";
+import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
+import { DEFAULT_STALL_MS } from "./hang-repro.js";
+import { decide } from "./decide.js";
 import { FillHelper } from "./fill.js";
 import { act } from "./act.js";
-import { RunRecorder } from "./record.js";
+import { RunRecorder, emptyRecording } from "./record.js";
 import { resolveMissionFixture } from "./fixture.js";
 import { redactText, redactUrl } from "./redact.js";
+import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
+import type { MissionFailure } from "@jevitate/domain";
+import { CrashWatch, describeFailure } from "./mission-failure.js";
+import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
+import type { HeapSample } from "@jevitate/domain";
+
+export type { TranscriptEntry } from "./transcript.js";
 
 /**
  * explore: the bounded perceive → decide → act → record loop.
@@ -64,17 +79,32 @@ export interface ExploreConfig {
    * only when present is `upload` offered to the model.
    */
   readonly fixture?: string;
-}
-
-export interface TranscriptEntry {
-  readonly step: number;
-  readonly op: Op;
-  readonly target: string | null;
-  readonly confidence: number;
-  readonly actOk: boolean;
-  readonly reason?: string;
-  readonly url: string;
-  readonly signature: string;
+  /**
+   * Bound (ms) on waiting for a rendered page (≥1 interactive control) before each decision.
+   * Default `RENDER_WAIT_MS` (see `perceive`).
+   */
+  readonly renderWaitMs?: number;
+  /** Bound on the main-thread probe (ms). Default `HANG_PROBE_MS`. */
+  readonly hangProbeMs?: number;
+  /** A request pending longer than this (ms) is a hang. Default: half the render ceiling. */
+  readonly requestBoundMs?: number;
+  /**
+   * How long a page must stay stuck in an earlier state after an action before it counts as a
+   * `ui-no-progress` hang (ms). Default `DEFAULT_STALL_MS`.
+   */
+  readonly stallMs?: number;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  readonly settle?: SettleConfig;
+  /** The target's hang configuration (`ui-no-progress` ignores). */
+  readonly hangs?: HangConfig;
+  /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
+  readonly hostProbe?: HostProbe;
+  /** The target's timing configuration (API path prefixes). */
+  readonly timingConfig?: TimingConfig;
+  /** Incremental-flush seam: every transcript entry, as it is recorded. */
+  readonly onTranscriptEntry?: TranscriptListener;
+  /** Incremental-flush seam: the partial Recording after every recorded step. */
+  readonly onRecording?: (recording: Recording) => void;
 }
 
 export interface ExploreRun {
@@ -84,6 +114,26 @@ export interface ExploreRun {
   readonly finalUrl: string;
   readonly decisions: number;
   readonly actions: number;
+  /** Why the run ended `crashed`/`inconclusive` — absent on every other stop. */
+  readonly failure?: MissionFailure;
+  /** The page's JS heap per step (resource evidence for crash attribution). */
+  readonly heap: HeapSample[];
+  /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
+  /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
+  readonly timing: TimingSummary;
+  /** For a `hang` stop: what hung, and the Recording step to replay up to (to reproduce it). */
+  readonly hang?: { readonly signal: HangSignal; readonly recordingStepIndex: number };
+}
+
+/**
+ * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
+ * state is exactly their target state, never a stall.
+ */
+const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit)\b/i;
+
+function firstLine(e: unknown): string {
+  return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
 
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
@@ -92,209 +142,391 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   // Mission fixture: validated before any navigation/decision (fail fast).
   const fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture);
 
+  const secrets = cfg.secrets ?? [];
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
   const fillHelper = new FillHelper(cfg.gen);
-  const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, cfg.secrets ?? []);
+  const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets, cfg.onRecording);
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
+  const crashWatch = new CrashWatch(page);
+  const heap = new HeapLog();
+  const probeHost = cfg.hostProbe ?? hostProbe();
   const now = (): number => Date.now();
 
-  const transcript: TranscriptEntry[] = [];
+  const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
   const history: string[] = [];
 
-  // Initial navigation (authorized above).
-  await Navigate.to(cfg.startUrl).performAs(cfg.actor);
-  recorder.navigate(cfg.startUrl, now());
-
   let stop: StopReason = "exhausted";
+  let failure: MissionFailure | undefined;
   let lastActedOp: string | null = null;
-  let step = 0;
+  let fixtureAttached = false;
+  let hang: ExploreRun["hang"];
+  /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
+  const seen = new Set<string>();
+  /** The last executed page-changing action: when, from which state, and its Recording index. */
+  const track: {
+    lastMutation: {
+      at: number;
+      before: string;
+      seenBefore: Set<string>;
+      label: string;
+      recordIndex: number;
+      /** Did ANY page state never seen before appear since this action? (then it made progress) */
+      sawNewState: boolean;
+    } | null;
+    /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
+    lastRecordedTarget: string | null;
+  } = { lastMutation: null, lastRecordedTarget: null };
+  const perceiveOpts = {
+    maxCandidates: bounds.maxCandidates,
+    ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
+    ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
+    ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
+    ...(cfg.settle === undefined ? {} : { settleConfig: cfg.settle }),
+    ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
+    ...(cfg.timingConfig === undefined ? {} : { timingConfig: cfg.timingConfig }),
+  };
+  const ignoreNoProgress = textMatcher(cfg.hangs?.ignoreNoProgress);
+  const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  const timings: PageTiming[] = [];
+  const noteMutation = (label: string, descriptor: unknown, before: string, at: number): void => {
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
+    track.lastRecordedTarget = JSON.stringify(descriptor);
+  };
 
-  for (;;) {
-    if (!tracker.mayDecide()) {
-      stop = "exhausted";
-      break;
-    }
+  try {
+    // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
+    await monitorFor(page).instrument();
+    // Initial navigation (authorized above).
+    await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+    recorder.navigate(cfg.startUrl, now());
 
-    const snap = await snapshot(page, { maxCandidates: bounds.maxCandidates });
-    // Re-observe the PREVIOUS action's effect: patch its postcondition + open
-    // the next page segment if the URL changed (record-before-reobserve).
-    recorder.observed(snap.url, now());
-
-    // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
-    if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
-      stop = "blocked";
-      break;
-    }
-
-    // Additive observation hook (usability analysis). Advisory: awaited but its
-    // result never gates the loop, bounds, or stop decision.
-    await cfg.onSnapshot?.(snap);
-
-    // #2 — no-progress: the last executed op left the page unchanged N times.
-    if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
-      stop = "no-progress";
-      break;
-    }
-
-    const decision = await decide(cfg.judge, {
-      goal: cfg.goal,
-      snapshot: snap,
-      history,
-      missionContext: cfg.missionContext,
-      secrets: cfg.secrets,
-      uploadAvailable: fixture !== null,
-    });
-    tracker.countDecision();
-    step += 1;
-
-    const pushTranscript = (actOk: boolean, reason?: string): void => {
-      transcript.push({
-        step,
-        op: decision.op,
-        target: decision.control ? redactText(decision.control.summary, cfg.secrets ?? []) : null,
-        confidence: decision.confidence,
-        actOk,
-        reason,
-        url: redactText(redactUrl(snap.url), cfg.secrets ?? []),
-        signature: snap.signature,
-      });
-    };
-
-    // Advisory terminals (guardrail #4: the loop does not adjudicate success).
-    if (decision.op === "done") {
-      pushTranscript(true, "model proposed done (advisory)");
-      stop = "done";
-      break;
-    }
-    if (decision.op === "blocked") {
-      pushTranscript(true, "model blocked");
-      stop = "blocked";
-      break;
-    }
-
-    // Target-requiring op with no valid target → fail-closed.
-    if (OPS_NEEDING_TARGET.has(decision.op) && (decision.control === null || decision.targetMissing)) {
-      pushTranscript(false, "no valid target (fail-closed)");
-      stop = "blocked";
-      break;
-    }
-
-    const control = decision.control;
-    const at = now();
-
-    if (decision.op === "type") {
-      if (!tracker.mayAct()) {
-        pushTranscript(false, "action budget exhausted");
+    for (;;) {
+      if (!tracker.mayDecide()) {
         stop = "exhausted";
         break;
       }
-      const { text } = await fillHelper.valueFor({
-        fieldLabel: control!.name || control!.summary,
-        goal: cfg.goal,
-        visibleContext: snap.controls.map((c) => c.summary).join("; "),
-        history,
-        secrets: cfg.secrets,
-      });
-      if (text === null) {
-        // The generator will not honestly supply a required value → never guess.
-        pushTranscript(false, "no value available (fail-closed)");
+
+      // Shared perception: never decide on an unrendered page (bounded render wait) and never
+      // offer an occluded control (see `perceive`).
+      const perception = await perceive(page, perceiveOpts);
+      timings.push(perception.timing);
+      const snap = perception.snapshot;
+      {
+        const m = track.lastMutation;
+        if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
+      }
+      await heap.sample(page, transcript.nextStep);
+      // Re-observe the PREVIOUS action's effect: patch its postcondition + open
+      // the next page segment if the URL changed (record-before-reobserve).
+      const target = track.lastRecordedTarget;
+      recorder.observed(
+        snap.url,
+        now(),
+        perception.timing,
+        target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
+      );
+      track.lastRecordedTarget = null;
+
+      // A hang is its own first-class stop (owner ruling 7) — detected by perception's rule.
+      if (perception.hang !== null) {
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "hang-check",
+          actOk: false,
+          reason: `hang (${perception.hang.kind}): ${perception.hang.detail}`,
+          snapshot: snap,
+          timing: perception.timing,
+        });
+        const heapNow = await sampleHeap(page, 1_000);
+        const withHost: HangSignal = { ...perception.hang, host: await probeHost() };
+        hang = {
+          signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
+          recordingStepIndex: Math.max(0, recorder.stepCount - 1),
+        };
+        stop = "hang";
+        break;
+      }
+
+      // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
+      if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
         stop = "blocked";
         break;
       }
-      const r = await act(cfg.actor, { op: "type", control, value: text });
-      if (r.ok) {
-        recorder.fill(control!.descriptor, text, at);
-        tracker.countAction();
-        fillHelper.commit();
-        history.push(`typed into ${control!.name}`);
-      } else {
-        history.push(`type failed: ${r.reason ?? "?"}`);
-      }
-      pushTranscript(r.ok, r.reason);
-    } else if (decision.op === "click") {
-      if (!tracker.mayAct()) {
-        pushTranscript(false, "action budget exhausted");
-        stop = "exhausted";
-        break;
-      }
-      const r = await act(cfg.actor, { op: "click", control });
-      if (r.ok) {
-        recorder.click(control!.descriptor, at);
-        tracker.countAction();
-        history.push(`clicked ${control!.name}`);
-      } else {
-        history.push(`click failed: ${r.reason ?? "?"}`);
-      }
-      pushTranscript(r.ok, r.reason);
-    } else if (decision.op === "select") {
-      if (!tracker.mayAct()) {
-        pushTranscript(false, "action budget exhausted");
-        stop = "exhausted";
-        break;
-      }
-      // For P1 the generator supplies the option text (same discipline as type).
-      const { text } = await fillHelper.valueFor({
-        fieldLabel: control!.name || control!.summary,
-        goal: cfg.goal,
-        visibleContext: snap.controls.map((c) => c.summary).join("; "),
-        history,
-        secrets: cfg.secrets,
-      });
-      if (text === null) {
-        pushTranscript(false, "no value available (fail-closed)");
+
+      // Additive observation hook (usability analysis). Advisory: awaited but its
+      // result never gates the loop, bounds, or stop decision.
+      await cfg.onSnapshot?.(snap);
+
+      if (!perception.rendered) {
+        transcript.record({
+          op: "wait",
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          actOk: false,
+          reason: `${perception.reason} (fail-closed)`,
+          snapshot: snap,
+          timing: perception.timing,
+        });
         stop = "blocked";
         break;
       }
-      const r = await act(cfg.actor, { op: "select", control, value: text });
-      if (r.ok) {
-        recorder.select(control!.descriptor, text, at);
-        tracker.countAction();
-        fillHelper.commit();
-        history.push(`selected in ${control!.name}`);
-      } else {
-        history.push(`select failed: ${r.reason ?? "?"}`);
+
+      // #2 — no-progress: the last executed op left the page unchanged N times.
+      if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
+        // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
+        // sent it BACK to a state it had already been in (it changed, then reverted — an action
+        // that silently undid itself, like an import that never starts), and it stays there for
+        // the stall window: a `ui-no-progress` hang, not generic no-progress. An action that simply
+        // did nothing (same state before and after) stays plain no-progress.
+        // The action's target state must NEVER have appeared (no new state since the action), and
+        // the target must not have declared this route/action as expected to return (per-target ignore).
+        const m = track.lastMutation;
+        if (
+          m !== null &&
+          !m.sawNewState &&
+          snap.signature !== m.before &&
+          m.seenBefore.has(snap.signature) &&
+          !EXPECTED_RETURN.test(m.label) &&
+          !ignoreNoProgress(m.label) &&
+          !ignoreNoProgress(hangRoute(snap.url))
+        ) {
+          const waited = now() - m.at;
+          if (waited < stallMs) await page.waitForTimeout(stallMs - waited);
+          const again = await perceive(page, perceiveOpts);
+          timings.push(again.timing);
+          const stuck =
+            again.hang ??
+            (again.snapshot.signature === snap.signature && (await probeResponsive(page, cfg.hangProbeMs ?? HANG_PROBE_MS))
+              ? ({
+                  kind: "ui-no-progress",
+                  detail: `after "${m.label}" the page returned to an earlier state and made no progress for ${Math.round((now() - m.at) / 1000)}s`,
+                  route: hangRoute(snap.url),
+                  url: redactUrl(snap.url),
+                  pending: [],
+                  lastState: { signature: snap.signature, controls: snap.controls.map((c) => c.summary) },
+                } satisfies HangSignal)
+              : null);
+          if (stuck !== null) {
+            transcript.record({
+              op: null,
+              control: null,
+              confidence: null,
+              chosenBy: "strategy",
+              strategy: "hang-check",
+              actOk: false,
+              reason: `hang (${stuck.kind}): ${stuck.detail}`,
+              snapshot: again.snapshot,
+              timing: again.timing,
+            });
+            const heapNow = await sampleHeap(page, 1_000);
+            const withHost: HangSignal = { ...stuck, host: await probeHost() };
+            hang = {
+              signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
+              recordingStepIndex: stuck.kind === "ui-no-progress" ? m.recordIndex : Math.max(0, recorder.stepCount - 1),
+            };
+            stop = "hang";
+            break;
+          }
+        }
+        stop = "no-progress";
+        break;
       }
-      pushTranscript(r.ok, r.reason);
-    } else if (decision.op === "upload") {
+      seen.add(snap.signature);
+
+      let decision: Awaited<ReturnType<typeof decide>>;
+      try {
+        decision = await decide(cfg.judge, {
+          goal: cfg.goal,
+          snapshot: snap,
+          history,
+          missionContext: cfg.missionContext,
+          secrets,
+          // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
+          // model had kept re-choosing it after a successful attach instead of proceeding).
+          uploadAvailable: fixture !== null && !fixtureAttached,
+        });
+      } catch (e) {
+        // The decision IS the goal loop's engine: without it the run can prove nothing more, so it
+        // ends `inconclusive` (typed) with everything recorded so far — never a throw, never clean.
+        failure = { kind: "exception", message: `model decision unavailable: ${firstLine(e)}` };
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "model",
+          actOk: false,
+          reason: failure.message,
+          snapshot: snap,
+          timing: perception.timing,
+        });
+        stop = "inconclusive";
+        break;
+      }
+      tracker.countDecision();
+
+      const record = (actOk: boolean, reason?: string): void => {
+        transcript.record({
+          op: decision.op,
+          control: decision.control,
+          confidence: decision.confidence,
+          chosenBy: "model",
+          actOk,
+          ...(reason === undefined ? {} : { reason }),
+          snapshot: snap,
+          timing: perception.timing,
+        });
+      };
+
+      // Advisory terminals (guardrail #4: the loop does not adjudicate success).
+      if (decision.op === "done") {
+        record(true, "model proposed done (advisory)");
+        stop = "done";
+        break;
+      }
+      if (decision.op === "blocked") {
+        record(true, "model blocked");
+        stop = "blocked";
+        break;
+      }
+
+      const control = decision.control;
+      if (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait") {
+        // No recorded mutation.
+        const r = await act(cfg.actor, { op: decision.op, control: null });
+        record(r.ok, r.reason);
+        lastActedOp = decision.op;
+        continue;
+      }
+
+      // Target-requiring op with no valid target → fail-closed.
+      if (control === null || decision.targetMissing) {
+        record(false, "no valid target (fail-closed)");
+        stop = "blocked";
+        break;
+      }
       if (!tracker.mayAct()) {
-        pushTranscript(false, "action budget exhausted");
+        record(false, "action budget exhausted");
         stop = "exhausted";
         break;
       }
-      // act fails closed without a fixture, so `ok` implies `fixture !== null`.
-      const r = await act(cfg.actor, { op: "upload", control, fixture });
-      if (r.ok && fixture !== null) {
-        // The recorded path goes through the shared redaction seam: a path that
-        // contains a registered secret is recorded redacted (replay then fails
-        // closed) rather than persisting the secret into the artifact.
-        const recordedFile: ValueOrVar =
-          redactText(fixture, cfg.secrets ?? []) === fixture
-            ? { redacted: false, value: fixture }
-            : { redacted: true, length: fixture.length };
-        recorder.upload(control!.descriptor, recordedFile, at);
-        tracker.countAction();
-        history.push(`uploaded the fixture into ${control!.name}`);
-      } else {
-        history.push(`upload failed: ${r.reason ?? "?"}`);
-      }
-      pushTranscript(r.ok, r.reason);
-    } else {
-      // scroll_up / scroll_down / wait — no recorded mutation.
-      const r = await act(cfg.actor, { op: decision.op, control: null });
-      pushTranscript(r.ok, r.reason);
-    }
+      const at = now();
 
-    lastActedOp = decision.op;
+      if (decision.op === "type" || decision.op === "select") {
+        // The generator supplies the text/option (never the model's choice head). It is a HELPER:
+        // when it is unavailable the step fails (recorded, visible to the model) and the run goes on.
+        let text: string | null;
+        try {
+          ({ text } = await fillHelper.valueFor({
+            fieldLabel: control.name || control.summary,
+            goal: cfg.goal,
+            visibleContext: snap.controls.map((c) => c.summary).join("; "),
+            history,
+            secrets: cfg.secrets,
+          }));
+        } catch (e) {
+          const reason = `value generation unavailable: ${firstLine(e)}`;
+          history.push(`${decision.op} skipped: ${reason}`);
+          record(false, reason);
+          lastActedOp = decision.op;
+          continue;
+        }
+        if (text === null) {
+          // The generator will not honestly supply a required value → never guess.
+          record(false, "no value available (fail-closed)");
+          stop = "blocked";
+          break;
+        }
+        const r = await act(cfg.actor, { op: decision.op, control, value: text });
+        if (r.ok) {
+          if (decision.op === "type") recorder.fill(control.descriptor, text, at);
+          else recorder.select(control.descriptor, text, at);
+          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at);
+          tracker.countAction();
+          fillHelper.commit();
+          history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
+        } else {
+          history.push(`${decision.op} failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason);
+      } else if (decision.op === "click") {
+        const r = await act(cfg.actor, { op: "click", control });
+        if (r.ok) {
+          recorder.click(control.descriptor, at);
+          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
+          tracker.countAction();
+          history.push(`clicked ${control.name}`);
+        } else {
+          history.push(`click failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason);
+      } else {
+        // upload — act fails closed without a fixture.
+        const r = await act(cfg.actor, { op: "upload", control, fixture });
+        if (r.ok && fixture !== null) {
+          // The recorded path goes through the shared redaction seam: a path that
+          // contains a registered secret is recorded redacted (replay then fails
+          // closed) rather than persisting the secret into the artifact.
+          const recordedFile: ValueOrVar =
+            redactText(fixture, secrets) === fixture
+              ? { redacted: false, value: fixture }
+              : { redacted: true, length: fixture.length };
+          recorder.upload(control.descriptor, recordedFile, at);
+        noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);
+          tracker.countAction();
+          history.push(`uploaded the fixture into ${control.name}`);
+          fixtureAttached = true;
+        } else {
+          history.push(`upload failed: ${r.reason ?? "?"}`);
+        }
+        record(r.ok, r.reason);
+      }
+
+      lastActedOp = decision.op;
+    }
+  } catch (e) {
+    // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
+    // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
+    failure = describeFailure(e, crashWatch.signals());
+    stop = "crashed";
   }
 
+  const finished = recorder.tryFinish({ intent: cfg.goal });
+  if (!finished.ok) {
+    // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
+    // written; the run is reported crashed so this can never read as a pass.
+    failure = failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
+    stop = "crashed";
+  }
   return {
     stop,
-    recording: recorder.finish({ intent: cfg.goal }),
-    transcript,
-    finalUrl: redactText(redactUrl(page.url()), cfg.secrets ?? []),
+    recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
+    transcript: transcript.entries(),
+    finalUrl: redactText(redactUrl(safeUrl(page)), secrets),
     decisions: tracker.decisions,
     actions: tracker.actions,
+    ...(failure === undefined ? {} : { failure }),
+    heap: heap.samples(),
+    timing: summarizeTimings(timings),
+    ...(hang === undefined ? {} : { hang }),
+    ...(stop === "crashed" && failure !== undefined
+      ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }
+      : {}),
   };
 }
+
+/** `page.url()` survives a closed page, but guard it: winding down must never throw. */
+function safeUrl(page: { url(): string }): string {
+  try {
+    return page.url();
+  } catch {
+    return "about:blank";
+  }
+}
+

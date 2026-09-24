@@ -106,6 +106,7 @@ export function createBrowserPool(options: BrowserPoolOptions): PlaywrightBrowse
 }
 
 let shared: PlaywrightBrowserPool | undefined;
+let sharedOverrides: Partial<BrowserPoolOptions> | undefined;
 
 /**
  * The process-wide pool: ONE browser process per launch configuration per
@@ -115,8 +116,19 @@ export function sharedBrowserPool(): PlaywrightBrowserPool {
   shared ??= createBrowserPool({
     signals: createResourceSignals(),
     ...browserPoolOptionsFromEnv(),
+    ...sharedOverrides,
   });
   return shared;
+}
+
+/**
+ * Sets the options the shared pool is created with (e.g. a test harness's own admission config:
+ * injected resource signals so admission never waits on unrelated host load). Must be called
+ * before the pool is first used; calling it after is a configuration error, never ignored.
+ */
+export function configureSharedBrowserPool(overrides: Partial<BrowserPoolOptions>): void {
+  if (shared !== undefined) throw new Error("configureSharedBrowserPool: the shared pool already exists");
+  sharedOverrides = overrides;
 }
 
 /** Closes the shared pool's browsers now (e.g. at CLI exit) instead of waiting for the idle timer. */

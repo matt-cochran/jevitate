@@ -2,10 +2,12 @@ import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
-import type { GenerationPort, JudgmentPort, NoulAnswer } from "@jevitate/ai-core";
+import type { Answer, GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import {
   assertAuthorizedExploreTarget,
-  snapshot,
+  perceive,
+  targetCandidates,
+  TranscriptLog,
   act,
   toPath,
   resolveBounds,
@@ -14,7 +16,19 @@ import {
   type Bounds,
   type Control,
   type Snapshot,
+  type TargetOp,
+  type TranscriptEntry,
+  type TranscriptListener,
 } from "../index.js";
+import type { MissionFailure } from "@jevitate/domain";
+import type { SettleConfig, TimingConfig } from "../settle-config.js";
+import type { HangSignal } from "../hang.js";
+import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import { MissionSessions } from "../mission-session.js";
+import type { VerifySession } from "../verify-fix.js";
+import { CrashWatch, describeFailure } from "../mission-failure.js";
+import { monitorFor } from "../page-monitor.js";
+import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { actionKey, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { reachFrontierState } from "../coverage/reach.js";
@@ -54,10 +68,20 @@ export interface CoverageReport {
 }
 
 export interface InductionRunResult {
-  readonly outcome: "exhausted" | "cap";
+  /** `crashed`: the engine failed; everything discovered up to the failure is still returned. */
+  /** `hang`: stopped at a hang it could not reset from (an unresponsive page, no fresh session). */
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
+  readonly hangs: HangFinding[];
+  /** Why the run crashed — present only for `crashed`. */
+  readonly failure?: MissionFailure;
   readonly coverage: CoverageReport;
   /** One replayable repro Recording per distinct state visited (discovery order). */
   readonly recordings: Recording[];
+  /** The shared decision transcript: each frontier action, whether it landed, and Jev's advisory `isDefect`. */
+  readonly transcript: TranscriptEntry[];
+  /** Per-run timing summary: slowest pages/transitions and endpoints (p50/max), keyed by route. */
+  readonly timing: TimingSummary;
 }
 
 export interface InductionMissionParams {
@@ -71,6 +95,22 @@ export interface InductionMissionParams {
   readonly allowlist: readonly string[];
   readonly bounds?: Partial<Bounds>;
   readonly maxDepth?: number;
+  /** Bound (ms) on waiting for a rendered page on each perception. Default `RENDER_WAIT_MS` — the shared settle rule
+   *  recognises a control-free leaf state in about the quiet window, so no shorter coverage bound is needed. */
+  readonly renderWaitMs?: number;
+  /** Incremental-flush seam: every transcript entry, as it is recorded. */
+  readonly onTranscriptEntry?: TranscriptListener;
+  /** The target's settle configuration (background requests, long-poll threshold). */
+  readonly settle?: SettleConfig;
+  /**
+   * Opens a FRESH browser session: reproduces a hang and resets to it after one, so the frontier
+   * keeps being explored. Without it the same page is reused (and an unresponsive page ends the run).
+   */
+  readonly openFreshSession?: () => Promise<VerifySession>;
+  /** Fresh-context replays that confirm a hang. Default 2. */
+  readonly hangReplays?: number;
+  /** The target's timing configuration (API path prefixes). */
+  readonly timingConfig?: TimingConfig;
 }
 
 /**
@@ -80,24 +120,10 @@ export interface InductionMissionParams {
  * deliberately excluded. `type`/`select` only mutate a value, so they can never
  * expand the state frontier; enqueuing them would only burn the action budget
  * against guardrail #2 (bounded). Clicks (navigations / control toggles) are
- * the only fingerprint-affecting transitions, so the frontier enqueues clicks.
+ * the only fingerprint-affecting transitions, so the frontier enqueues the
+ * controls whose SHARED afforded op (`affordedOp`, ./actions.ts) is `click`.
  */
-const CLICKABLE_ROLES = new Set([
-  "button",
-  "link",
-  "checkbox",
-  "radio",
-  "tab",
-  "switch",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "option",
-]);
-
-function candidateOpsFor(control: Control): FrontierOp[] {
-  return CLICKABLE_ROLES.has(control.role) ? ["click"] : [];
-}
+const FRONTIER_OPS: ReadonlySet<TargetOp> = new Set<TargetOp>(["click"]);
 
 function enqueueFrom(
   frontier: Frontier,
@@ -105,11 +131,9 @@ function enqueueFrom(
   pathPrefix: Recording,
   controls: readonly Control[],
 ): void {
-  for (const control of controls) {
-    if (!control.enabled) continue; // a disabled control can never be acted on — never enqueue it
-    for (const op of candidateOpsFor(control)) {
-      frontier.push({ key: actionKey(fingerprint, control, op), fromFingerprint: fingerprint, pathPrefix, control, op });
-    }
+  // A disabled control can never be acted on — never enqueue it.
+  for (const { control } of targetCandidates(controls, { ops: FRONTIER_OPS, enabledOnly: true })) {
+    frontier.push({ key: actionKey(fingerprint, control, "click"), fromFingerprint: fingerprint, pathPrefix, control, op: "click" });
   }
 }
 
@@ -171,22 +195,35 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const site = new URL(params.seedUrl).origin;
-  const takeSnapshot = (): Promise<Snapshot> => snapshot(params.page, { maxCandidates: bounds.maxCandidates });
-
-  await params.actor.attemptsTo(Navigate.to(params.seedUrl));
-  let snap = await takeSnapshot();
-  let currentFingerprint = stateFingerprint(snap);
-
-  const visited = new Set<string>([currentFingerprint]);
+  // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
+  // still-rendering frame — including right after a reset-and-replay.
+  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
+  const hangs = new Map<string, HangFinding>();
+  /** The hang the latest perception saw (a holder: it is set inside the perception closure). */
+  const seenHang: { last: HangSignal | null } = { last: null };
+  let lastTiming: PageTiming | undefined;
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  const timings: PageTiming[] = [];
+  const takeSnapshot = async (): Promise<Snapshot> => {
+    const p = await perceive(sessions.page, {
+      maxCandidates: bounds.maxCandidates,
+      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+      ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+      ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
+    });
+    lastTiming = p.timing;
+    seenHang.last = p.hang;
+    timings.push(p.timing);
+    return p.snapshot;
+  };
+  const transcript = new TranscriptLog([], params.onTranscriptEntry);
+  let crashWatch = new CrashWatch(sessions.page);
+  sessions.onReset((page) => {
+    crashWatch = new CrashWatch(page);
+  });
+  const visited = new Set<string>();
   const statePaths = new Map<string, Recording>();
   const defects: DefectRecord[] = [];
-  const frontier = new Frontier();
-
-  const seedRecording: Recording = { version: "1", site, pages: [] };
-  statePaths.set(currentFingerprint, seedRecording);
-  enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
-
-  let actions = 0;
   let transitionsExercised = 0;
 
   const report = (frontierExhausted: boolean): CoverageReport => ({
@@ -196,76 +233,208 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     defects,
   });
 
-  while (!frontier.isExhausted()) {
-    // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
-    if (actions >= bounds.maxActions) {
-      return { outcome: "cap", coverage: report(false), recordings: [...statePaths.values()] };
-    }
+  try {
+    await monitorFor(sessions.page).instrument();
+    await sessions.actor.attemptsTo(Navigate.to(params.seedUrl));
+    let snap = await takeSnapshot();
+    let currentFingerprint = stateFingerprint(snap);
+    visited.add(currentFingerprint);
+    const frontier = new Frontier();
 
-    const item = frontier.popPreferring(currentFingerprint);
-    if (item === undefined) break;
+    const seedRecording: Recording = { version: "1", site, pages: [] };
+    statePaths.set(currentFingerprint, seedRecording);
+    enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
 
-    const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
-    if (depth >= maxDepth) continue; // bounded exploration depth
+    let actions = 0;
 
-    if (item.fromFingerprint !== currentFingerprint) {
-      const reached = await reachFrontierState({
-        actor: params.actor,
-        seedUrl: params.seedUrl,
-        item,
-        snapshotNow: takeSnapshot,
+    while (!frontier.isExhausted()) {
+      // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
+      if (actions >= bounds.maxActions) {
+        return {
+          outcome: "cap",
+          coverage: report(false),
+          recordings: [...statePaths.values()],
+          transcript: transcript.entries(),
+          timing: summarizeTimings(timings),
+          hangs: [...hangs.values()],
+        };
+      }
+
+      const item = frontier.popPreferring(currentFingerprint);
+      if (item === undefined) break;
+
+      const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
+      if (depth >= maxDepth) continue; // bounded exploration depth
+
+      if (item.fromFingerprint !== currentFingerprint) {
+        const reached = await reachFrontierState({
+          actor: sessions.actor,
+          seedUrl: params.seedUrl,
+          item,
+          snapshotNow: takeSnapshot,
+        });
+        if (!reached.ok) continue; // stale frontier item — dropped, never guessed at
+        snap = reached.snapshot;
+        currentFingerprint = item.fromFingerprint;
+      }
+
+      const liveControl = resolveControl(snap, item.control);
+      if (liveControl === null) continue; // control vanished between snapshots — dropped
+
+      const result = await act(sessions.actor, {
+        op: item.op,
+        control: liveControl,
+        value: item.op === "click" ? null : "",
       });
-      if (!reached.ok) continue; // stale frontier item — dropped, never guessed at
-      snap = reached.snapshot;
-      currentFingerprint = item.fromFingerprint;
-    }
+      actions += 1;
+      const decidedOn = snap;
+    // Each perception's timing is reported once (a failed act re-uses the same snapshot).
+    const decidedOnTiming = lastTiming;
+    lastTiming = undefined;
+      if (!result.ok) {
+        transcript.record({
+          op: item.op,
+          control: liveControl,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "coverage-frontier",
+          actOk: false,
+          ...(result.reason === undefined ? {} : { reason: result.reason }),
+          snapshot: decidedOn,
+        ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
+        });
+        continue;
+      }
 
-    const liveControl = resolveControl(snap, item.control);
-    if (liveControl === null) continue; // control vanished between snapshots — dropped
+      snap = await takeSnapshot();
+      const newFingerprint = stateFingerprint(snap);
+      const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
+      transitionsExercised += 1;
 
-    const result = await act(params.actor, {
-      op: item.op,
-      control: liveControl,
-      value: item.op === "click" ? null : "",
-    });
-    actions += 1;
-    if (!result.ok) continue;
+      // A hang: record it (reproduced from the path that led here), reset to a known state and keep
+      // exploring the rest of the frontier. The hung state is never expanded.
+      const hang = seenHang.last;
+      if (hang !== null) {
+        transcript.record({
+          op: item.op,
+          control: liveControl,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "coverage-frontier",
+          actOk: true,
+          reason: `hang (${hang.kind}): ${hang.detail}`,
+          snapshot: decidedOn,
+          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
+        });
+        await recordCoverageHang({
+          hang,
+          // The path starts at the seed (the frontier's reach navigates there first): prepend it.
+          recording: {
+            ...branch,
+            pages: [
+              { url: toPath(params.seedUrl), steps: [{ step: { kind: "navigate", url: toPath(params.seedUrl), expect: { kind: "urlIncludes", text: toPath(params.seedUrl) } } }] },
+              ...branch.pages.filter((p) => p.steps.length > 0),
+            ],
+          },
+          steps: transcript.entries(),
+          found: hangs,
+          ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
+          ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+          // Re-detected with the SAME perception bounds the mission used.
+          perceive: {
+            ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
+            ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
+          },
+        });
+        if (!(await sessions.reset(hang))) {
+          return {
+            outcome: "hang",
+            coverage: report(false),
+            recordings: [...statePaths.values()],
+            transcript: transcript.entries(),
+            timing: summarizeTimings(timings),
+            hangs: [...hangs.values()],
+          };
+        }
+        await monitorFor(sessions.page).instrument();
+        currentFingerprint = ""; // the next item is reached afresh from the seed
+        continue;
+      }
 
-    snap = await takeSnapshot();
-    const newFingerprint = stateFingerprint(snap);
-    const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
-    transitionsExercised += 1;
-
-    // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
-    // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
-    // guard (guardrail #5). The verdict NEVER gates termination or expansion.
-    const answers = await params.judgment.systemOne({
-      state: buildJudgmentState({
-        goal: "state coverage",
-        url: snap.url,
-        controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
-        history: [],
-      }),
-      questions: { isDefect: { kind: "noul" } },
-    });
-    if ((answers.isDefect as NoulAnswer).value) {
-      defects.push({
-        stateFingerprint: newFingerprint,
-        url: snap.url,
-        reason: "judgment flagged defect",
-        recording: branch,
+      // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
+      // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
+      // guard (guardrail #5). The verdict NEVER gates termination or expansion — so an
+      // unavailable judgment is a missing advisory, recorded, and the run goes on.
+      let isDefect: Answer | undefined;
+      let judgmentNote: string | undefined;
+      try {
+        const answers = await params.judgment.systemOne({
+          state: buildJudgmentState({
+            goal: "state coverage",
+            url: snap.url,
+            controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
+            history: [],
+          }),
+          questions: { isDefect: { kind: "noul" } },
+        });
+        isDefect = answers.isDefect;
+      } catch (e) {
+        judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
+      }
+      const flagged = isDefect?.kind === "noul" && isDefect.value;
+      transcript.record({
+        op: item.op,
+        control: liveControl,
+        confidence: null,
+        chosenBy: "strategy",
+        strategy: "coverage-frontier",
+        actOk: true,
+        snapshot: decidedOn,
+        ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
+        ...(judgmentNote === undefined ? {} : { reason: judgmentNote }),
+        ...(isDefect?.kind === "noul"
+          ? { judgments: { isDefect: { value: isDefect.value, probability: isDefect.probability } } }
+          : {}),
       });
+      if (flagged) {
+        defects.push({
+          stateFingerprint: newFingerprint,
+          url: snap.url,
+          reason: "judgment flagged defect",
+          recording: branch,
+        });
+        currentFingerprint = newFingerprint;
+        continue; // recorded, but a flagged state is never expanded
+      }
+
+      if (!visited.has(newFingerprint)) {
+        visited.add(newFingerprint);
+        statePaths.set(newFingerprint, branch);
+        enqueueFrom(frontier, newFingerprint, branch, snap.controls);
+      }
       currentFingerprint = newFingerprint;
-      continue; // recorded, but a flagged state is never expanded
     }
 
-    if (!visited.has(newFingerprint)) {
-      visited.add(newFingerprint);
-      statePaths.set(newFingerprint, branch);
-      enqueueFrom(frontier, newFingerprint, branch, snap.controls);
-    }
-    currentFingerprint = newFingerprint;
+    return {
+      outcome: "exhausted",
+      coverage: report(true),
+      recordings: [...statePaths.values()],
+      transcript: transcript.entries(),
+      timing: summarizeTimings(timings),
+      hangs: [...hangs.values()],
+    };
+  } catch (e) {
+    // Engine failure: a typed `crashed` result with every state path and transcript step so far.
+    return {
+      outcome: "crashed",
+      failure: describeFailure(e, crashWatch.signals()),
+      coverage: report(false),
+      recordings: [...statePaths.values()],
+      transcript: transcript.entries(),
+      timing: summarizeTimings(timings),
+      hangs: [...hangs.values()],
+    };
+  } finally {
+    await sessions.closeOwned();
   }
-
-  return { outcome: "exhausted", coverage: report(true), recordings: [...statePaths.values()] };
 }

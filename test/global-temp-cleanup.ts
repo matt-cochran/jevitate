@@ -1,41 +1,27 @@
-import { readdir, rm } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * Vitest global teardown: sweep throwaway temp dirs the suite leaks.
+ * Vitest global setup/teardown: give THIS run its own temp directory.
  *
- * Fixtures across this repo create disposable dirs via `mkdtemp(join(tmpdir(),
- * "<prefix>"))` — CLI homes, journey stores, profile dirs, and Playwright
- * user-data dirs — and not every test removes its own. A full run can leak
- * hundreds of MB into `os.tmpdir()`. This teardown removes ONLY our own
- * prefixes, and ONLY dirs that appeared DURING this run (snapshotted at setup),
- * so a concurrent run's dirs are never touched. It is a safety net; production
- * CLI sessions are pooled browser contexts with no on-disk profile at all.
+ * Fixtures across this repo create disposable dirs via `mkdtemp(join(tmpdir(), "<prefix>"))` —
+ * CLI homes, journey stores, profile dirs, Playwright user-data dirs — and not every test removes
+ * its own. The run's workers inherit `TMPDIR` pointing at a run-private directory, so:
+ *  - everything a test creates in `os.tmpdir()` lives under it and is removed in one sweep at the
+ *    end of the run;
+ *  - a CONCURRENT run (another checkout, another agent) can never delete this run's fixtures, and
+ *    this run can never delete theirs — the old shared-`/tmp` sweep removed any `jevitate-*` dir
+ *    that appeared during a run, including a concurrent run's live fixtures (a load-dependent
+ *    flake).
  */
-const PREFIXES = ["jevitate-"] as const;
-
-async function snapshotMatching(): Promise<Set<string>> {
-  const out = new Set<string>();
-  let entries: string[];
-  try {
-    entries = await readdir(tmpdir());
-  } catch {
-    return out;
-  }
-  for (const name of entries) {
-    if (PREFIXES.some((p) => name.startsWith(p))) out.add(name);
-  }
-  return out;
-}
-
 export default async function setup(): Promise<() => Promise<void>> {
-  const before = await snapshotMatching();
+  const base = process.env.TMPDIR ?? tmpdir();
+  const runDir = mkdtempSync(join(base, "jvt-run-"));
+  process.env.TMPDIR = runDir;
+  process.env.JEVITATE_TEST_RUN_TMPDIR = runDir;
   return async () => {
-    const after = await snapshotMatching();
-    for (const name of after) {
-      if (before.has(name)) continue; // pre-existing / another run — never touch
-      await rm(join(tmpdir(), name), { recursive: true, force: true }).catch(() => {});
-    }
+    await rm(runDir, { recursive: true, force: true }).catch(() => undefined);
   };
 }

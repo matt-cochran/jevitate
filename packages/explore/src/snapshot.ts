@@ -3,6 +3,7 @@ import { computeDescriptor, isSecretField } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
 import { contentHash } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
+import { occluderOf } from "./occlusion.js";
 
 /**
  * perceive: turn a live `Page` into an indexed table of interactive controls,
@@ -109,6 +110,8 @@ function readControlFacts(node: Node): ControlFacts {
 
   const style = window.getComputedStyle(el as HTMLElement);
   const rect = (el as HTMLElement).getBoundingClientRect();
+  // Rendered only; whether it is COVERED is decided separately by the shared `occluderOf`
+  // predicate (./occlusion.ts) — the same one the pre-click act() gate uses.
   const visible =
     style.visibility !== "hidden" &&
     style.display !== "none" &&
@@ -244,6 +247,10 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
       const raw = await handle.evaluate(readControlFacts);
       // Hidden file inputs are the sole exception (see the module doc).
       if (!raw.visible && raw.inputType !== "file") continue;
+      // Occlusion — the ONE shared predicate (./occlusion.ts), also used by act()'s gate: a control
+      // a user cannot click (covered by an overlay, or by an ancestor at its own centre) is not
+      // offered. Off-screen controls stay eligible (scroll ops reach them).
+      if (raw.inputType !== "file" && (await handle.evaluate(occluderOf)) !== null) continue;
       // The value leaves the page only for a control the shared predicate says
       // is NOT a secret (type=password, or a password/one-time-code
       // autocomplete — which catches a revealed "show password" field).

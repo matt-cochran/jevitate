@@ -8,7 +8,7 @@ function fakeLocator(overrides: Partial<Record<string, any>> = {}) {
     click: vi.fn(async () => {}),
     fill: vi.fn(async () => {}),
     isVisible: vi.fn(async () => false), // the postcondition that never holds — always fails
-    count: vi.fn(async () => 0),
+    count: vi.fn(async () => 1) /* the recorded target resolves uniquely */,
     innerText: vi.fn(async () => ""),
     waitFor: vi.fn(async () => {}),
     ...overrides,

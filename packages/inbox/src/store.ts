@@ -2,6 +2,7 @@ import { mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.js";
 import { withIdLock } from "./lock.js";
+import { flushIfDurable } from "./durability.js";
 import type { Action, InboxItem, InboxSummary, ThreadEntry } from "./types.js";
 import { InboxItemSchema, SAFE_INBOX_ID_RE, assertSafeInboxId, asSecret, resolveTransition, toSummary } from "./types.js";
 
@@ -121,7 +122,7 @@ export class FsInboxStore implements InboxStore {
       }
       try {
         await fh.writeFile(serialized);
-        await fh.sync();
+        await flushIfDurable(fh);
       } finally {
         await fh.close();
       }

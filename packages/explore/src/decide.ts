@@ -1,55 +1,27 @@
-import type {
-  JudgmentPort,
-  JudgmentState,
-  Question,
-  ChoiceQuestion,
-  ChoiceAnswer,
-} from "@jevitate/ai-core";
+import type { JudgmentPort, JudgmentState, Question, ChoiceQuestion } from "@jevitate/ai-core";
+import { assertNoSecretInPayload } from "@jevitate/ai-core";
 import type { Control, Snapshot } from "./snapshot.js";
-import { buildJudgmentState } from "./redact.js";
+import { buildJudgmentState, redactText } from "./redact.js";
+import { OPS_NEEDING_TARGET, TARGET_FREE_ACTIONS, targetCandidates, type Op, type TargetOp } from "./actions.js";
 
 /**
- * decide: one `JudgmentPort.systemOne` round-trip with TWO heads —
- *   op:     Choice<click|type|select|upload|scroll_up|scroll_down|wait|done|blocked>
- *   target: Choice over the snapshot's indexed control indices
- * — and the loop consumes ONLY the chosen op's target. Every prompt carries the
- * prompt-injection guard (guardrail #5) as the first line of the control list,
- * and the whole state is redacted first (guardrail #3, via `buildJudgmentState`).
+ * decide: one `JudgmentPort.systemOne` round-trip with ONE head — `action`, a
+ * Choice over the COMPLETE candidate actions the page affords (the
+ * candidate-action technique browser agents such as browser-use / Stagehand
+ * use): `<op>:<controlIndex>` for every control (its op derived by
+ * `affordedOp`, see ./actions.ts) plus the target-free ops. An op and a target
+ * can therefore never disagree. Every prompt carries the prompt-injection guard
+ * (guardrail #5) as the first line of the control list, and the whole state and
+ * every candidate description are redacted first (guardrail #3).
  *
- * `upload` is offered ONLY when the mission carries a fixture file
- * (`DecideInput.uploadAvailable`); it then attaches that fixture to the chosen
- * file-input control. The model picks the op and the target — never a path.
+ * Upload candidates are offered ONLY when the mission carries a fixture file
+ * (`DecideInput.uploadAvailable`); choosing one attaches that fixture to that
+ * file-input control. The model picks the action — never a path.
  *
  * Jev makes exactly ONE typed decision per step. `done`/`blocked` are advisory
  * signals to the loop, never the success verdict (that is the independent
  * oracle's job — guardrail #4).
  */
-
-export type Op =
-  | "click"
-  | "type"
-  | "select"
-  | "upload"
-  | "scroll_up"
-  | "scroll_down"
-  | "wait"
-  | "done"
-  | "blocked";
-
-export const OPS: readonly Op[] = [
-  "click",
-  "type",
-  "select",
-  "upload",
-  "scroll_up",
-  "scroll_down",
-  "wait",
-  "done",
-  "blocked",
-];
-
-/** The ops that require a chosen control; every other op ignores the target head. */
-export const OPS_NEEDING_TARGET: ReadonlySet<Op> = new Set<Op>(["click", "type", "select", "upload"]);
 
 /**
  * Model-facing description of the `upload` op, added to the prompt (right after
@@ -98,8 +70,14 @@ export interface DecideInput {
   readonly uploadAvailable?: boolean;
 }
 
+/**
+ * One judgment per step over the COMPLETE actions available on this page (the candidate-action
+ * technique browser agents such as browser-use / Stagehand use), instead of independent op and
+ * target heads that could disagree. Candidate ids are `<op>:<controlIndex>` or a bare target-free op.
+ */
 export async function decide(judge: JudgmentPort, input: DecideInput): Promise<Decision> {
   const { snapshot } = input;
+  const secrets = input.secrets ?? [];
   const controlLines = snapshot.controls.map((c) => `[${c.index}] ${c.summary}`);
   const uploadAvailable = input.uploadAvailable === true;
 
@@ -110,31 +88,52 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
       ? [PROMPT_INJECTION_GUARD, UPLOAD_OP_GUIDE, ...controlLines]
       : [PROMPT_INJECTION_GUARD, ...controlLines],
     history: input.history,
-    secrets: input.secrets,
+    secrets,
   });
 
-  const ops = uploadAvailable ? OPS : OPS.filter((o) => o !== "upload");
-  const opQuestion: ChoiceQuestion<Op> = { kind: "choice", options: ops };
-  const questions: Record<string, Question> = { op: opQuestion };
-
-  const targetOptions = snapshot.controls.map((c) => String(c.index));
-  if (targetOptions.length > 0) {
-    const targetQuestion: ChoiceQuestion<string> = { kind: "choice", options: targetOptions };
-    questions.target = targetQuestion;
+  const candidates = new Map<string, { op: Op; control: Control | null }>();
+  const descriptions: Record<string, string> = {};
+  // An upload that could only fail closed is never offered.
+  const ops: ReadonlySet<TargetOp> = new Set<TargetOp>(
+    uploadAvailable ? ["click", "type", "select", "upload"] : ["click", "type", "select"],
+  );
+  for (const c of targetCandidates(snapshot.controls, { ops })) {
+    candidates.set(c.id, { op: c.op, control: c.control });
+    // Page text is untrusted and may contain secrets: redacted like the state.
+    descriptions[c.id] = redactText(c.description, secrets);
+  }
+  for (const a of TARGET_FREE_ACTIONS) {
+    candidates.set(a.op, { op: a.op, control: null });
+    descriptions[a.op] = a.description;
   }
 
+  const actionQuestion: ChoiceQuestion<string> = {
+    kind: "choice",
+    options: [...candidates.keys()],
+    descriptions,
+    instructions:
+      "Which single action best advances the goal from the current page? Use the history: do not repeat an " +
+      "action that already succeeded, and when a dialog or form step is in progress, complete it.",
+  };
+  const questions: Record<string, Question> = { action: actionQuestion };
+
+  // The question carries page-derived text: prove no registered secret survived, exactly as
+  // buildJudgmentState does for the state (fail-closed choke point).
+  assertNoSecretInPayload(questions, secrets);
   const answers = await judge.systemOne({ state, questions });
-  const opAns = answers.op as ChoiceAnswer<Op>;
-  const op = opAns.value;
-
-  let control: Control | null = null;
-  let targetMissing = false;
-  if (OPS_NEEDING_TARGET.has(op)) {
-    const targetAns = answers.target as ChoiceAnswer<string> | undefined;
-    const idx = targetAns ? Number(targetAns.value) : NaN;
-    control = Number.isInteger(idx) ? snapshot.controls.find((c) => c.index === idx) ?? null : null;
-    targetMissing = control === null;
+  const answer = answers.action;
+  const chosen = answer?.kind === "choice" ? candidates.get(answer.value) : undefined;
+  if (answer?.kind !== "choice" || chosen === undefined) {
+    // The judgment port validates choices against the offered options; reaching here means an
+    // unusable answer (missing, wrong kind, or an id that was not offered) — fail closed as a
+    // target-requiring op with no target, never a guessed action.
+    return { op: "click", control: null, confidence: answer?.kind === "choice" ? answer.confidence : 0, targetMissing: true, state };
   }
-
-  return { op, control, confidence: opAns.confidence, targetMissing, state };
+  return {
+    op: chosen.op,
+    control: chosen.control,
+    confidence: answer.confidence,
+    targetMissing: OPS_NEEDING_TARGET.has(chosen.op) && chosen.control === null,
+    state,
+  };
 }

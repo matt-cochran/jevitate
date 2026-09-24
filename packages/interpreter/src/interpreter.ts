@@ -3,6 +3,7 @@ import { RecordingSchema } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import type { InterpretResult } from "./interpret-result.js";
 import { runStep } from "./run-step.js";
+import { ReplayTargetError, type ResolveTargetOptions } from "./resolve-target.js";
 import type { RecordingSink } from "./sink.js";
 
 /**
@@ -29,6 +30,16 @@ const SUPPORTED_FOREACH_CHILD_KINDS = new Set(["click", "extract"]);
  */
 export class RecordingInterpreter {
   /**
+   * `targetTimeoutMs`: how long a recorded target may take to appear before the step fails as
+   * `replay-target-not-found` / `ambiguous` (default 15s).
+   */
+  constructor(private readonly options: { readonly targetTimeoutMs?: number } = {}) {}
+
+  #targetOpts(): ResolveTargetOptions {
+    return this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs };
+  }
+
+  /**
    * Runs the entire recording from the start, stopping early at the first
    * `awaiting_human` (a `handback` step) or the first step that throws
    * (a `PostconditionFailed` or any other error).
@@ -54,7 +65,7 @@ export class RecordingInterpreter {
     validateRecording(rec);
     const flat = flatten(rec);
     const varsMap = new Map(Object.entries(vars ?? {}));
-    return runFlat(actor, flat, varsMap, flat.length - 1, sink);
+    return runFlat(actor, flat, varsMap, flat.length - 1, this.#targetOpts(), sink);
   }
 
   /**
@@ -83,7 +94,7 @@ export class RecordingInterpreter {
     const flat = flatten(rec);
     const varsMap = new Map<string, string>();
     const lastIndex = Math.min(stepIndex, flat.length - 1);
-    return runFlat(actor, flat, varsMap, lastIndex);
+    return runFlat(actor, flat, varsMap, lastIndex, this.#targetOpts());
   }
 
   /**
@@ -105,7 +116,7 @@ export class RecordingInterpreter {
   ): Promise<InterpretResult> {
     validateRecording(rec);
     const flat = flatten(rec);
-    return runFlat(actor, flat, new Map(Object.entries(vars)), flat.length - 1, sink, fromIndex);
+    return runFlat(actor, flat, new Map(Object.entries(vars)), flat.length - 1, this.#targetOpts(), sink, fromIndex);
   }
 }
 
@@ -201,6 +212,7 @@ async function runFlat(
   flat: RecordedStep[],
   vars: Map<string, string>,
   lastIndex: number,
+  targetOpts: ResolveTargetOptions,
   sink?: RecordingSink,
   startIndex = 0,
 ): Promise<InterpretResult> {
@@ -210,10 +222,12 @@ async function runFlat(
     let outcome;
     const stepStartedAt = performance.now();
     try {
-      outcome = await runStep(actor, flat[i], vars, i);
+      outcome = await runStep(actor, flat[i], vars, i, targetOpts);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { outcome: "failed", at: i, error: message };
+      return err instanceof ReplayTargetError
+        ? { outcome: "failed", at: i, error: message, reason: err.kind }
+        : { outcome: "failed", at: i, error: message };
     }
     const stepEndedAt = performance.now();
     if (outcome.kind === "awaiting_human") {

@@ -26,6 +26,19 @@ export interface TargetDescriptor {
    * itself carry `ordinal`/`container`.
    */
   container?: TargetDescriptor;
+  /**
+   * How many elements matched the rung when `ordinal` was recorded. At replay a different count
+   * means the page changed around the target: the step fails as `ambiguous` instead of clicking
+   * whichever element now sits at that index. Absent on older recordings (then `ordinal` alone).
+   */
+  candidates?: number;
+  /**
+   * A stable attribute anchor captured at record time (a document-unique, non-generated `id` or
+   * `name` attribute that resolved to the very element acted on). Replay prefers it; when it no
+   * longer resolves to exactly one element, replay falls back to the rung (exact name + nth).
+   * Identifiers only — never a field's value.
+   */
+  anchor?: { id?: string; name?: string };
 }
 
 export type RedactedValue =
@@ -60,10 +73,31 @@ export type Step =
   | { kind: "assert"; label?: string; check: Assertion }
   | { kind: "handback"; label?: string; prompt: string; resume: Assertion; timeoutMs?: number };
 
+/**
+ * How the page reached the state after a step — a MEASUREMENT recorded alongside the step (never a
+ * postcondition, never replayed): navigation timing for a new document, action-to-settled time for
+ * an in-place transition, and the page's network in that window (URLs redacted + normalized).
+ */
+export interface PageTimingRecord {
+  route: string;
+  kind: "navigation" | "transition" | "idle";
+  navigation?: { ttfbMs: number; domContentLoadedMs: number; loadMs: number | null };
+  settleMs?: number;
+  settled: boolean;
+  requests: {
+    count: number;
+    pending: number;
+    slowest: Array<{ endpoint: string; url: string; status: number | null; durationMs: number }>;
+  };
+  lcpMs?: number;
+}
+
 export interface StepTiming {
   atMs: number;
   durationMs: number;
   gapBeforeMs: number;
+  /** The page timing observed after this step (optional; measurement only). */
+  page?: PageTimingRecord;
 }
 
 export interface RecordedStep {
@@ -137,6 +171,8 @@ const TargetDescriptorSchema: z.ZodType<TargetDescriptor> = z
     css: z.string().optional(),
     frameUrl: z.string().optional(),
     ordinal: z.number().int().nonnegative().optional(),
+    candidates: z.number().int().positive().optional(),
+    anchor: z.object({ id: z.string().optional(), name: z.string().optional() }).strict().optional(),
     container: z.lazy(() => TargetDescriptorSchema).optional(),
   })
   .strict()
@@ -304,11 +340,37 @@ const StepSchema: z.ZodType<Step> = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+const PageTimingRecordSchema = z
+  .object({
+    route: z.string(),
+    kind: z.enum(["navigation", "transition", "idle"]),
+    navigation: z
+      .object({ ttfbMs: z.number(), domContentLoadedMs: z.number(), loadMs: z.number().nullable() })
+      .strict()
+      .optional(),
+    settleMs: z.number().optional(),
+    settled: z.boolean(),
+    requests: z
+      .object({
+        count: z.number(),
+        pending: z.number(),
+        slowest: z.array(
+          z
+            .object({ endpoint: z.string(), url: z.string(), status: z.number().nullable(), durationMs: z.number() })
+            .strict(),
+        ),
+      })
+      .strict(),
+    lcpMs: z.number().optional(),
+  })
+  .strict();
+
 const StepTimingSchema = z
   .object({
     atMs: z.number(),
     durationMs: z.number(),
     gapBeforeMs: z.number(),
+    page: PageTimingRecordSchema.optional(),
   })
   .strict();
 

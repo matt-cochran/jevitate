@@ -55,9 +55,21 @@ export class OpenRouterGenerationGateway implements GenerationPort {
   }
 }
 
-// Real seam (documented, wired in bin/host, NOT unit-tested): the production
-// OpenRouterCall lazily imports `ai` + `@openrouter/ai-sdk-provider` and calls
-// generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body),
-// headers: { Authorization: authHeader } }). Lazy import keeps the package
-// building/testing without the SDK installed. Pin both versions and confirm
-// the generateObject signature at wiring time.
+// Real seam (wired in bin/host): the production OpenRouterCall lazily imports
+// `ai` + `@openrouter/ai-sdk-provider`, builds the provider from
+// `openRouterProviderSettings(authHeader)` and calls generateObject({ model:
+// openrouter(model), schema, prompt: JSON.stringify(body) }). Lazy import keeps
+// the package building/testing without the SDK installed.
+
+/**
+ * `@openrouter/ai-sdk-provider` settings for a gateway `Bearer <key>` auth header. The provider
+ * reads the key ONLY from `apiKey` (or the OPENROUTER_API_KEY env var) and builds its own
+ * `Authorization` header from it — a key passed as a custom header is ignored and the call fails
+ * with "OpenRouter API key is missing". Fails closed on a malformed header.
+ */
+export function openRouterProviderSettings(authHeader: string): { apiKey: string } {
+  const match = /^Bearer\s+(\S+)\s*$/.exec(authHeader);
+  const key = match?.[1];
+  if (key === undefined) throw new Error("generation auth header is not a Bearer token");
+  return { apiKey: key };
+}

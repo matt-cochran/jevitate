@@ -70,14 +70,12 @@ class CapturingJudge implements JudgmentPort {
     this.payloads.push(JSON.stringify(args));
     this.states.push(args.state);
     this.#calls += 1;
-    if (this.#calls > 1) return { op: { kind: "choice", value: "done", confidence: 0.9 } };
+    if (this.#calls > 1) return { action: { kind: "choice", value: "done", confidence: 0.9 } };
     const line = args.state.controls.find((c) => /^\[\d+\] button/.test(c));
     if (line === undefined) throw new Error(`no button control in ${JSON.stringify(args.state.controls)}`);
-    const index = /^\[(\d+)\]/.exec(line)![1]!;
-    return {
-      op: { kind: "choice", value: "click", confidence: 0.9 },
-      target: { kind: "choice", value: index, confidence: 0.9 },
-    };
+    const index = /^\[(\d+)\]/.exec(line)?.[1];
+    if (index === undefined) throw new Error(`unindexed control line ${line}`);
+    return { action: { kind: "choice", value: `click:${index}`, confidence: 0.9 } };
   }
 }
 

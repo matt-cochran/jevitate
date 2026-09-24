@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
+import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { startServer } from "@jevitate/example-site";
-import { runGoalBasedMission, type Op } from "../index.js";
-import { withSession } from "../testkit.js";
+import { runGoalBasedMission } from "../index.js";
+import { ScriptedJudge, withSession } from "../testkit.js";
 
 let site: { url: string; close(): Promise<void> };
 beforeAll(async () => {
@@ -13,20 +13,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await site.close();
 });
-
-class ScriptedJudge implements JudgmentPort {
-  #i = 0;
-  constructor(private readonly seq: ReadonlyArray<{ op: Op; target?: string }>) {}
-  async systemOne(args: { questions: Record<string, unknown> }): Promise<Record<string, Answer>> {
-    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)]!;
-    this.#i += 1;
-    const out: Record<string, Answer> = { op: { kind: "choice", value: cur.op, confidence: 0.9 } };
-    if (args.questions.target && cur.target !== undefined) {
-      out.target = { kind: "choice", value: cur.target, confidence: 0.9 };
-    }
-    return out;
-  }
-}
 
 describe("goal-based mission — independent oracle adjudicates (Task 10, guardrail #4)", () => {
   it(

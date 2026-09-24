@@ -29,7 +29,11 @@ import {
   MissingCredentialError,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
+  RetryingGenerationPort,
+  RetryingJudgmentPort,
+  openRouterProviderSettings,
   JevJudgmentGateway,
+  realJevClientCall,
   type JudgmentPort,
   type GenerationPort,
   type Answer,
@@ -38,10 +42,8 @@ import {
   type CatalogModel,
   type ModelConstraints,
   type OpenRouterCall,
-  type JevClientCall,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { apiKeyFromAuthHeader, fromSdkAnswers, toSdkQuestions, type SdkQuestion } from "./jev-sdk-adapter.js";
 import { FixtureNotFoundError, UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
@@ -59,6 +61,11 @@ import {
   UnknownMissionTargetError,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
+import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
+import { GitHubIssueFiler } from "./github-issue-filer.js";
+import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
+import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { collectAllMissingKeys } from "./init-keys.js";
@@ -1291,9 +1298,43 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--out <dir>", "directory to write the emitted Recording")
+    .option(
+      "--file-issues",
+      "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
+    )
+    .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
+    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2)")
+    .option(
+      "--settle-ignore <pattern>",
+      "a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)")
+    .option(
+      "--api-prefix <path>",
+      "a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--ignore-no-progress <pattern>",
+      "a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option("--jevitate-repo <owner/name>", "where jevitate engine findings are filed (default matt-cochran/jevitate)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{
+        fileIssues?: boolean;
+        issueRepo?: string;
+        hangReplays?: string;
+        settleIgnore: string[];
+        apiPrefix: string[];
+        longPollMs?: string;
+        ignoreNoProgress: string[];
+        jevitateRepo?: string;
         url?: string;
         strategy?: string;
         goal?: string;
@@ -1315,6 +1356,50 @@ export function buildProgram(deps: CliDeps): Command {
 
       const strategy = o.strategy ?? "goal";
       const browser = browserLaunchFromFlags(o);
+      // Issue filing: drafts are always written; filing needs --file-issues (or config) AND a repo.
+      let filing: FilingConfig | undefined;
+      if (o.url !== undefined) {
+        try {
+          filing = resolveFilingConfig(
+            loadFilingFileConfig(deps.explore?.filingConfigPath),
+            {
+              ...(o.fileIssues === undefined ? {} : { fileIssues: o.fileIssues }),
+              ...(o.issueRepo === undefined ? {} : { issueRepo: o.issueRepo }),
+              ...(o.jevitateRepo === undefined ? {} : { jevitateRepo: o.jevitateRepo }),
+            },
+            new URL(o.url).origin,
+          );
+        } catch (err) {
+          if (err instanceof FilingConfigError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          if (!(err instanceof TypeError)) throw err;
+          // An unparseable --url is refused by the authorized-target guard below.
+        }
+      }
+      // Per-target settle/hang configuration: ~/.jevitate/targets.json by origin, plus flags.
+      let target: TargetConfig | undefined;
+      if (o.url !== undefined) {
+        try {
+          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(o.url).origin, {
+            settleIgnore: o.settleIgnore,
+            ignoreNoProgress: o.ignoreNoProgress,
+            apiPrefixes: o.apiPrefix,
+            ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
+          });
+        } catch (err) {
+          if (err instanceof TargetConfigError) {
+            emitJson(program, fail(err.code, err.message));
+            return;
+          }
+          if (!(err instanceof TypeError)) throw err;
+        }
+      }
+      const issueFiler =
+        deps.explore?.issueFiler ??
+        ((): IssueFilerPort =>
+          new GitHubIssueFiler({ store: envCredentialStore(process.env, loadLocalCredentials()) }));
       // `--fixture` feeds the upload op, which only the explore loop (goal and
       // usability strategies) can issue. Refuse it elsewhere rather than
       // silently ignoring a file the user expected to be uploaded.
@@ -1358,6 +1443,7 @@ export function buildProgram(deps: CliDeps): Command {
 
         try {
           const result = await runCoverageMission({
+            ...(target === undefined ? {} : { target }),
             url: o.url,
             allowlist: covAllowlist,
             judge: covJudge,
@@ -1374,7 +1460,8 @@ export function buildProgram(deps: CliDeps): Command {
           } else {
             program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
           }
-          if (result.coverage.defects.length > 0) process.exitCode = 1;
+          // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see mission-exit.ts).
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1410,26 +1497,39 @@ export function buildProgram(deps: CliDeps): Command {
           return;
         }
 
+        const advBounds: Record<string, number> = {};
+        if (o.maxActions !== undefined) advBounds.maxActions = Number(o.maxActions);
+        if (o.maxDecisions !== undefined) advBounds.maxDecisions = Number(o.maxDecisions);
         try {
           const result = await runAdversarialCliMission({
+            ...(target === undefined ? {} : { target }),
             seedUrl: o.url,
             allowlist: advAllowlist,
+            bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
+            secrets: o.secret.length > 0 ? o.secret : undefined,
+            ...(filing === undefined ? {} : { filing }),
+            issueFiler,
+            ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
             strategies: [
               "ordering-violation",
               "repeat-rapid",
               "boundary-input",
               "contradictory-actions",
               "nav-during-pending",
+              // Keep hunting on other routes after (and between) defects.
+              "visit-route",
             ],
             judgment: advJudge,
             generation: advGen,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            outDir: o.out,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
-          // A discovered defect gates CI, mirroring how a failing test would.
-          if (result.outcome === "defect") process.exitCode = 1;
+          // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
+          // itself broke (inconclusive/crashed) — see mission-exit.ts.
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1474,6 +1574,7 @@ export function buildProgram(deps: CliDeps): Command {
         }
         try {
           const result = await runUsabilityMission({
+            ...(target === undefined ? {} : { target }),
             url: o.url,
             job: o.goal,
             allowlist: uxAllowlist,
@@ -1489,13 +1590,13 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
+          // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
-          } else if (err instanceof UxAnalysisFailedError) {
-            emitJson(program, fail("E_UX_ANALYSIS", err.message));
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -1523,6 +1624,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           });
           emitJson(program, ok(result));
+          process.exitCode = result.exitCode;
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1564,6 +1666,7 @@ export function buildProgram(deps: CliDeps): Command {
 
       try {
         const result = await runExploration({
+            ...(target === undefined ? {} : { target }),
           url: o.url,
           goal: o.goal,
           successAssertion,
@@ -1577,15 +1680,18 @@ export function buildProgram(deps: CliDeps): Command {
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          ...(filing === undefined ? {} : { filing }),
+          issueFiler,
+          ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
         });
         const envelope = ok(result);
         if (o.json) {
           emitJson(program, envelope);
-          if (result.outcome !== "succeeded") process.exitCode = 1;
         } else {
           program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
-          process.exitCode = result.outcome === "succeeded" ? 0 : 1;
         }
+        // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
+        process.exitCode = result.exitCode;
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1594,6 +1700,42 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // `verify-fix`: replays a finding's reproduction in a FRESH browser and reports whether its
+  // fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive.
+  withBrowserLaunchFlags(
+    program
+      .command("verify-fix")
+      .description("replay a defect's repro from a mission result; passes only if the defect signal is absent"),
+  )
+    .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
+    .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
+    .option("--storage-state <file>", "override the storageState the mission ran with")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command) {
+      const o = this.opts<{ result: string; fingerprint: string; storageState?: string; json?: boolean } & BrowserLaunchFlags>();
+      try {
+        const report = await runVerifyFix({
+          targets: loadTargetsFile(deps.explore?.targetsConfigPath),
+          resultPath: o.result,
+          fingerprint: o.fingerprint,
+          ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+          browserPortFactory: deps.explore?.browserPortFactory,
+          browser: browserLaunchFromFlags(o),
+        });
+        emitJson(program, ok(report));
+        process.exitCode = report.exitCode;
+      } catch (err) {
+        if (err instanceof VerifyFixInputError || err instanceof TargetConfigError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnauthorizedExploreTargetError) {
+          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+        } else {
+          emitJson(program, fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
+        }
+        process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
       }
     });
 
@@ -1995,6 +2137,7 @@ export function buildProgram(deps: CliDeps): Command {
           journeysDir: resolveJourneysDir(deps, dir),
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
+          recordingsDir: resolveDataDir(["recordings"]),
           inboxDir: resolveInboxDir(deps),
           credentialStore: aiStore,
           generationGateway,
@@ -2136,7 +2279,9 @@ async function buildExploreGateways(
       call: await realOpenRouterCall(),
     });
     const judge = new JevJudgmentGateway(store, await realJevClientCall());
-    return { judge, gen };
+    // Transient model/network failures are retried with exponential backoff + jitter (≈16s), then
+    // fail typed; validation/auth errors fail at once (owner ruling 4).
+    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen) };
   }
   if (opts.fakeAi) {
     return { judge: fakeDoneJudge(), gen: new FakeGenerationGateway() };
@@ -2146,57 +2291,47 @@ async function buildExploreGateways(
   );
 }
 
-/** A judge that always proposes `done` — used only by `--fake-ai` (smoke). */
-function fakeDoneJudge(): JudgmentPort {
+/**
+ * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It answers EVERY
+ * question it is asked (whatever the mission names it): a choice picks `done` when offered (else
+ * fails closed), a noul answers "no", a score answers 0.
+ */
+export function fakeDoneJudge(): JudgmentPort {
   return {
-    async systemOne(_args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
-      return { op: { kind: "choice", value: "done", confidence: 1 } };
+    async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
+      const out: Record<string, Answer> = {};
+      for (const [name, q] of Object.entries(args.questions)) {
+        switch (q.kind) {
+          case "choice":
+            if (!q.options.includes("done")) throw new Error(`fake judge: question '${name}' does not offer 'done'`);
+            out[name] = { kind: "choice", value: "done", confidence: 1 };
+            break;
+          case "noul":
+            out[name] = { kind: "noul", value: false, probability: 0 };
+            break;
+          case "score":
+            out[name] = { kind: "score", value: 0 };
+            break;
+          default: {
+            const exhaustive: never = q;
+            throw new Error(`fake judge: unsupported question ${JSON.stringify(exhaustive)}`);
+          }
+        }
+      }
+      return out;
     },
   };
 }
 
-/** Real OpenRouter seam (lazy import; not unit-tested) — mirrors ai-cli.ts. */
+/** Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`. */
 async function realOpenRouterCall(): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
   return async ({ model, schema, body, authHeader }) => {
-    const openrouter = createOpenRouter({ headers: { Authorization: authHeader } });
+    const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
     const { object } = await generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body) });
     return { object, latencyMs: Date.now() - start };
-  };
-}
-
-/** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
-interface TypeSafeSdk {
-  TypeSafeClient: new (config: { apiKey: string }) => {
-    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown }>;
-  };
-}
-
-function isTypeSafeSdk(mod: unknown): mod is TypeSafeSdk {
-  return typeof mod === "object" && mod !== null && "TypeSafeClient" in mod && typeof mod.TypeSafeClient === "function";
-}
-
-/**
- * Real Jev seam (lazy). Uses a non-literal specifier so this package builds and
- * tests without `@typesafe-ai/sdk` installed. All translation between jevitate's
- * judgment questions/answers and the SDK's `systemOne` shapes lives in the pure,
- * unit-tested `jev-sdk-adapter.ts`; this only constructs the client and calls it.
- */
-async function realJevClientCall(): Promise<JevClientCall> {
-  const specifier = "@typesafe-ai/sdk";
-  const mod: unknown = await import(specifier).catch(() => {
-    throw new Error("live judgment requires @typesafe-ai/sdk — install it next to the jevitate CLI (npm i @typesafe-ai/sdk)");
-  });
-  if (!isTypeSafeSdk(mod)) {
-    throw new Error("@typesafe-ai/sdk does not export TypeSafeClient — unsupported SDK version (expected >= 0.6)");
-  }
-  const sdk = mod;
-  return async ({ state, questions, authHeader }) => {
-    const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader) });
-    const result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
-    return fromSdkAnswers(questions, result.answers);
   };
 }
 

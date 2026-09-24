@@ -6,10 +6,12 @@ import {
   type Recording,
   type Step,
   type StepTiming,
+  type PageTimingRecord,
   type TargetDescriptor,
   type ValueOrVar,
 } from "@jevitate/recording";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
+import type { PageTiming } from "./timing.js";
 
 /**
  * record: accumulate executed steps into a schema-valid, deterministically
@@ -72,6 +74,13 @@ function redactDescriptor(d: TargetDescriptor, secrets: readonly string[]): Targ
   if (d.css !== undefined) out.css = r(d.css);
   if (d.frameUrl !== undefined) out.frameUrl = r(redactUrl(d.frameUrl));
   if (d.ordinal !== undefined) out.ordinal = d.ordinal;
+  if (d.candidates !== undefined) out.candidates = d.candidates;
+  if (d.anchor !== undefined) {
+    out.anchor = {
+      ...(d.anchor.id === undefined ? {} : { id: r(d.anchor.id) }),
+      ...(d.anchor.name === undefined ? {} : { name: r(d.anchor.name) }),
+    };
+  }
   if (d.container !== undefined) out.container = redactDescriptor(d.container, secrets);
   return out;
 }
@@ -81,10 +90,14 @@ export class RunRecorder {
   #current: PageSegment | null = null;
   #pendingSegmentUrl: string | null = null;
   #lastStep: RecordedStep | null = null;
+  /** Whether `observed` already ran for the last step (only the FIRST observation after a step counts). */
+  #lastStepObserved = false;
   #t0: number | null = null;
   #prevTime: number | null = null;
 
   readonly #secrets: readonly string[];
+  readonly #listener: ((recording: Recording) => void) | undefined;
+  #steps = 0;
 
   /**
    * `secrets` are the run's registered secret values: every label/descriptor,
@@ -96,8 +109,21 @@ export class RunRecorder {
     readonly site: string,
     private readonly version = "1.0.0",
     secrets: readonly string[] = [],
+    /**
+     * Incremental-flush seam: receives the (validated, secret-free) Recording after every recorded
+     * step, so a run that dies mid-way still leaves its Recording up to the failure on disk. A
+     * snapshot that cannot be validated is simply not emitted (the final `finish` still fails
+     * closed).
+     */
+    listener?: (recording: Recording) => void,
   ) {
     this.#secrets = secrets;
+    this.#listener = listener;
+  }
+
+  /** Number of steps recorded so far — a step's flat replay index is its count minus one. */
+  get stepCount(): number {
+    return this.#steps;
   }
 
   #path(url: string): string {
@@ -106,6 +132,23 @@ export class RunRecorder {
 
   #target(d: TargetDescriptor): TargetDescriptor {
     return redactDescriptor(d, this.#secrets);
+  }
+
+  #pageTiming(t: PageTiming): PageTimingRecord {
+    const r = (v: string): string => redactText(v, this.#secrets);
+    return {
+      route: r(t.route),
+      kind: t.kind,
+      ...(t.navigation === undefined ? {} : { navigation: { ...t.navigation } }),
+      ...(t.settleMs === undefined ? {} : { settleMs: t.settleMs }),
+      settled: t.settled,
+      requests: {
+        count: t.requests.count,
+        pending: t.requests.pending,
+        slowest: t.requests.slowest.map((q) => ({ endpoint: r(q.endpoint), url: r(q.url), status: q.status, durationMs: q.durationMs })),
+      },
+      ...(t.lcpMs === undefined ? {} : { lcpMs: t.lcpMs }),
+    };
   }
 
   #timing(atMs: number, durationMs = 0): StepTiming {
@@ -135,8 +178,19 @@ export class RunRecorder {
 
   #append(step: Step, atMs: number, durationMs = 0): void {
     const recorded: RecordedStep = { step, timing: this.#timing(atMs, durationMs) };
-    this.#current!.steps.push(recorded);
+    const segment = this.#current;
+    if (segment === null) throw new Error("RunRecorder: no page segment is open");
+    segment.steps.push(recorded);
     this.#lastStep = recorded;
+    this.#lastStepObserved = false;
+    this.#steps += 1;
+    this.#emit();
+  }
+
+  #emit(): void {
+    if (this.#listener === undefined) return;
+    const partial = this.tryFinish();
+    if (partial.ok) this.#listener(partial.recording);
   }
 
   /** Record a navigation to `url`. Opens the segment for it. */
@@ -195,18 +249,51 @@ export class RunRecorder {
    * the last recorded step caused the navigation: rewrite its postcondition to
    * `urlIncludes` and queue the next segment (materialized on the next step).
    */
-  observed(url: string, _atMs: number): void {
+  observed(url: string, _atMs: number, timing?: PageTiming, opts?: { readonly lastTargetStillPresent?: boolean }): void {
+    // The first observation after a step carries how the page got there (a measurement, never a
+    // postcondition): it is attached to that step's timing, redacted like everything else.
+    if (timing !== undefined && this.#lastStep !== null && this.#lastStep.timing !== undefined && this.#lastStep.timing.page === undefined) {
+      this.#lastStep.timing.page = this.#pageTiming(timing);
+    }
     const path = this.#path(url);
     if (this.#current !== null && path !== this.#current.url && this.#lastStep !== null) {
       setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });
       this.#pendingSegmentUrl = path;
+      this.#emit();
+    } else if (
+      opts?.lastTargetStillPresent === false &&
+      this.#lastStep !== null &&
+      !this.#lastStepObserved &&
+      "expect" in this.#lastStep.step &&
+      this.#lastStep.step.expect.kind !== "urlIncludes"
+    ) {
+      // An in-place action whose target is gone afterwards (an SPA step that swaps the view): the
+      // provisional "target visible" postcondition did NOT hold in this run, so it must not be
+      // recorded — the page's URL is what held, and a replay checks that instead.
+      setExpect(this.#lastStep.step, { kind: "urlIncludes", text: path });
+      this.#emit();
     }
+    this.#lastStepObserved = true;
   }
 
   /**
    * Emit the schema-valid `Recording`. Throws if assembly produced anything
    * invalid, or if any registered secret survived into it (fail closed).
    */
+  /**
+   * `finish` as DATA: the Recording, or why it could not be produced (never throws). Used when a
+   * run is being wound down after a failure, where a second exception would lose the evidence.
+   */
+  tryFinish(
+    opts?: { intent?: string; retro?: string; startedAtIso?: string },
+  ): { ok: true; recording: Recording } | { ok: false; reason: string } {
+    try {
+      return { ok: true, recording: this.finish(opts) };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e) };
+    }
+  }
+
   finish(opts?: { intent?: string; retro?: string; startedAtIso?: string }): Recording {
     const recording: Recording = {
       version: this.version,
@@ -220,4 +307,31 @@ export class RunRecorder {
     assertNoSecretInPayload(parsed, this.#secrets);
     return parsed;
   }
+}
+
+/** A schema-valid, step-free Recording whose retro says why the real one is unavailable. */
+export function emptyRecording(site: string, reason: string): Recording {
+  return { version: "1.0.0", site, pages: [], retro: `recording unavailable: ${reason}` };
+}
+
+/**
+ * A copy of `recording` whose step at flat index `index` asserts nothing about its outcome (an
+ * always-true `urlIncludes ""`). Used when replaying a finding's repro to OBSERVE what the app does
+ * after that step — the check that follows (a defect signal, a hang) is the verdict, and a fixed
+ * app that now behaves differently after the step must not turn the replay into a failure.
+ * Every earlier step keeps its postcondition, so the replay still proves it reached the same place.
+ */
+export function observeAfterStep(recording: Recording, index: number): Recording {
+  const copy: Recording = structuredClone(recording);
+  let i = 0;
+  for (const page of copy.pages) {
+    for (const recorded of page.steps) {
+      if (i === index && "expect" in recorded.step) {
+        recorded.step.expect = { kind: "urlIncludes", text: "" };
+        return copy;
+      }
+      i += 1;
+    }
+  }
+  return copy;
 }

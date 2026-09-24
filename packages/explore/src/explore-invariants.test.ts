@@ -11,11 +11,10 @@ import {
   FillHelper,
   PROMPT_INJECTION_GUARD,
   runGoalBasedMission,
-  type Op,
   type Snapshot,
   type Control,
 } from "./index.js";
-import { withSession } from "./testkit.js";
+import { ScriptedJudge, withSession } from "./testkit.js";
 
 /**
  * @jevitate/explore — guardrail refusal contract (design §6, BINDING).
@@ -33,20 +32,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await site.close();
 });
-
-class ScriptedJudge implements JudgmentPort {
-  #i = 0;
-  constructor(private readonly seq: ReadonlyArray<{ op: Op; target?: string }>) {}
-  async systemOne(args: { questions: Record<string, unknown> }): Promise<Record<string, Answer>> {
-    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)]!;
-    this.#i += 1;
-    const out: Record<string, Answer> = { op: { kind: "choice", value: cur.op, confidence: 0.9 } };
-    if (args.questions.target && cur.target !== undefined) {
-      out.target = { kind: "choice", value: cur.target, confidence: 0.9 };
-    }
-    return out;
-  }
-}
 
 const fakeControl: Control = {
   index: 0,
@@ -114,7 +99,7 @@ describe("explore — guardrail refusal contract (design §6)", () => {
     const spyJudge: JudgmentPort = {
       async systemOne(args) {
         judgmentDump = JSON.stringify(args.state);
-        return { op: { kind: "choice", value: "done", confidence: 1 } };
+        return { action: { kind: "choice", value: "done", confidence: 1 } };
       },
     };
     await decide(spyJudge, {
@@ -173,7 +158,7 @@ describe("explore — guardrail refusal contract (design §6)", () => {
     const spyJudge: JudgmentPort = {
       async systemOne(args) {
         controls = args.state.controls;
-        return { op: { kind: "choice", value: "wait", confidence: 1 } };
+        return { action: { kind: "choice", value: "wait", confidence: 1 } };
       },
     };
     await decide(spyJudge, { goal: "x", snapshot: fakeSnapshot, history: [] });

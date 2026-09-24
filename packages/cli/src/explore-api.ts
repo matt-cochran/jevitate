@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import type { Assertion, TargetDescriptor } from "@jevitate/recording";
+import type { Assertion, Recording, TargetDescriptor } from "@jevitate/recording";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -22,9 +22,35 @@ import {
   type MisuseStrategy,
   type CapabilityScope,
   type FeatureRunResult,
+  type TranscriptEntry,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
+import {
+  combineOutcomes,
+  type FilingConfig,
+  type IssueDraft,
+  type IssueFilerPort,
+  type MissionFailure,
+  type MissionOutcome,
+} from "@jevitate/domain";
+import {
+  currentEnvironment,
+  draftForCrash,
+  draftForDefect,
+  draftForHang,
+  hangOutcome,
+  summarizeTimings,
+  type DraftContext,
+  type HangFinding,
+  type TimingSummary,
+  type VerifySession,
+} from "@jevitate/explore";
+import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
+import { readCliVersion } from "./version.js";
+import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
+import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
+import { goalExitCode, missionExitCode } from "./mission-exit.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -65,6 +91,61 @@ export interface RunExplorationOptions {
   readonly storageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
+  /** Issue filing for a crash (off unless enabled + a repo is configured). Default: drafts only. */
+  readonly filing?: FilingConfig;
+  /** Creates the filer — called only when filing is enabled. */
+  readonly issueFiler?: () => IssueFilerPort;
+  /** Fresh-context replays that confirm a hang (default 2). */
+  readonly hangReplays?: number;
+}
+
+/** Filing is off by default: drafts only, never a tracker call. */
+const DRAFTS_ONLY: FilingConfig = { enabled: false, jevitateRepo: "matt-cochran/jevitate" };
+const NO_FILER = (): IssueFilerPort => {
+  throw new Error("issue filing is enabled but no filer was configured");
+};
+
+function draftContext(
+  origin: string,
+  journal: MissionJournal,
+  secrets: readonly string[],
+  browserVersion: string | undefined,
+): DraftContext {
+  return {
+    environment: currentEnvironment(origin, {
+      jevitateVersion: readCliVersion(),
+      ...(browserVersion === undefined ? {} : { browser: browserVersion }),
+    }),
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    secrets,
+  };
+}
+
+/**
+ * Opens a FRESH browser session for replays (hang reproduction): a new context from the same port
+ * and options — same authenticated storageState, never the session the finding was made in.
+ */
+function freshSessionOpener(
+  portFactory: () => BrowserPort,
+  launch: Parameters<BrowserPort["open"]>[0],
+  allowlist: readonly string[],
+): () => Promise<VerifySession> {
+  return async () => {
+    const session = await portFactory().open(launch);
+    const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [...allowlist]));
+    return { page: session.page, actor, close: () => session.close() };
+  };
+}
+
+function browserVersionOf(page: { context(): { browser(): { version(): string } | null } }): string | undefined {
+  try {
+    return page.context().browser()?.version();
+  } catch {
+    return undefined;
+  }
 }
 
 export interface RunExplorationResult {
@@ -75,6 +156,29 @@ export interface RunExplorationResult {
   readonly decisions: number;
   readonly actions: number;
   readonly recordingPath: string;
+  /**
+   * The per-decision trail (op, target, confidence, whether the action succeeded and why
+   * not, URL, page signature) — so a stalled or failed run is explainable. Written next to
+   * the Recording as `<recording>.transcript.json`. Built from already-redacted state.
+   */
+  readonly transcriptPath: string;
+  readonly transcript: readonly TranscriptEntry[];
+  /** Process exit code for this outcome (see `goalExitCode`). */
+  readonly exitCode: number;
+  /** Why the run ended `crashed`/`inconclusive`. */
+  readonly failure?: MissionFailure;
+  /** Issue drafts (a crash) written next to the Recording, and what filing did with them. */
+  readonly issues: FindingsIssues;
+  /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
+  readonly timing: TimingSummary;
+  /** Hang findings (0 or 1: the loop stops at a hang), each with its fresh-context reproduction. */
+  readonly hangs: HangFinding[];
+  /** The run's Recording (also written to `recordingPath`). */
+  readonly recording: Recording;
+  /** Where the run happened — what `verify-fix` needs to replay a finding. */
+  readonly target: MissionTarget;
+  /** The persisted typed result (`<recording>.result.json`). */
+  readonly resultPath: string;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -85,17 +189,31 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
 
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  await mkdir(outDir, { recursive: true });
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  // Crash-safe: the transcript and partial Recording are flushed after every step.
+  const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
+      ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      // A hang is reproduced by replaying its steps in fresh contexts (same auth).
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
+      onTranscriptEntry: journal.onTranscriptEntry,
+      onRecording: journal.onRecording,
       actor,
       judge: opts.judge,
       gen: opts.gen,
@@ -109,23 +227,56 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       fixture,
     });
 
-    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-    await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const recordingPath = join(outDir, `explore-${iso.replace(/[:.]/g, "-")}.json`);
-    await writeFile(recordingPath, `${JSON.stringify(mission.recording, null, 2)}\n`, "utf8");
+    journal.writeRecording(mission.recording);
+    journal.writeTranscript(mission.transcript);
+    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const resultPath = resultPathFor(journal.recordingPath);
+    const drafts: IssueDraft[] = [];
+    if (mission.run.crash !== undefined) drafts.push(draftForCrash(mission.run.crash, mission.transcript, ctx));
+    if (mission.hang !== undefined) {
+      drafts.push(
+        draftForHang(mission.hang, {
+          ...ctx,
+          verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${mission.hang.fingerprint}`,
+        }),
+      );
+    }
+    const issues = await processIssueDrafts(
+      journal.recordingPath,
+      drafts,
+      opts.filing ?? DRAFTS_ONLY,
+      opts.issueFiler ?? NO_FILER,
+      iso,
+    );
 
-    return {
+    const result: RunExplorationResult = {
+      issues,
+      timing: mission.run.timing,
       outcome: mission.outcome,
       assertionPassed: mission.assertionPassed,
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
       actions: mission.run.actions,
-      recordingPath,
+      recordingPath: journal.recordingPath,
+      transcriptPath: journal.transcriptPath,
+      transcript: mission.transcript,
+      exitCode: goalExitCode(mission.outcome),
+      resultPath,
+      target: {
+        seedUrl: opts.url,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
+      recording: mission.recording,
+      hangs: mission.hang === undefined ? [] : [mission.hang],
+      ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
     };
+    // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
+    writeMissionResult(journal.recordingPath, mission.outcome, result.exitCode, result);
+    return result;
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
@@ -292,12 +443,30 @@ export interface RunCoverageMissionOptions {
    */
   readonly storageState?: string;
   readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
 }
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang";
+  /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
+  readonly hangs: HangFinding[];
+  /** A coverage run has no single Recording: each finding carries the path that reached it. */
+  readonly recording: null;
+  /** Where the run happened — what `verify-fix` needs to replay a finding. */
+  readonly target: MissionTarget;
+  /** The typed verdict: `crashed` for a broken run, else `defects-found` / `clean`. */
+  readonly missionOutcome: MissionOutcome;
+  readonly exitCode: number;
+  readonly failure?: MissionFailure;
+  /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
+  readonly timing: TimingSummary;
+  /** The persisted typed result (`coverage-<stamp>.result.json`). */
+  readonly resultPath: string;
   readonly recordingPaths: string[];
+  /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
+  readonly transcriptPath: string;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -306,17 +475,27 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
 
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  await mkdir(outDir, { recursive: true });
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const stamp = artifactStamp(iso);
+  const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
+      // A hang is reproduced in fresh contexts, and the frontier keeps being explored after it.
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       page: session.page,
       actor,
       judgment: opts.judge,
@@ -324,22 +503,42 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       seedUrl: opts.url,
       allowlist: opts.allowlist,
       bounds: opts.bounds,
+      onTranscriptEntry: journal.onTranscriptEntry,
     });
 
-    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
-    await mkdir(outDir, { recursive: true });
-    const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const stamp = iso.replace(/[:.]/g, "-");
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
       await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
+    journal.writeTranscript(result.transcript);
+    const missionOutcome: MissionOutcome = combineOutcomes([
+      result.outcome === "crashed" ? "crashed" : result.coverage.defects.length > 0 ? "defects-found" : "clean",
+      ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
+    ]);
 
-    return { coverage: result.coverage, outcome: result.outcome, recordingPaths };
+    const exitCode = missionExitCode(missionOutcome);
+    const typed = {
+      hangs: result.hangs,
+      recording: null,
+      target: {
+        seedUrl: opts.url,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
+      timing: result.timing,
+      coverage: result.coverage,
+      outcome: result.outcome,
+      missionOutcome,
+      exitCode,
+      ...(result.failure === undefined ? {} : { failure: result.failure }),
+      recordingPaths,
+      transcriptPath: journal.transcriptPath,
+    };
+    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
@@ -354,6 +553,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly strategies: readonly MisuseStrategy[];
   readonly judgment: JudgmentPort;
   readonly generation: GenerationPort;
+  /** Step/action budget (CLI `--max-decisions` / `--max-actions`). */
+  readonly bounds?: Partial<Bounds>;
   readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
@@ -365,7 +566,42 @@ export interface RunAdversarialCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
+  readonly secrets?: readonly string[];
+  /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
+  readonly filing?: FilingConfig;
+  /** Creates the filer — called only when filing is enabled. */
+  readonly issueFiler?: () => IssueFilerPort;
+  /** Fresh-context replays that confirm a hang (default 2). */
+  readonly hangReplays?: number;
+  /** Where the Recording and decision transcript are written. Default `~/.jevitate/recordings`. */
+  readonly outDir?: string;
+  /** ISO clock for the transcript filename. Default `Date.now()`. */
+  readonly nowIso?: () => string;
+  /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
+  readonly target?: TargetConfig;
 }
+
+/** The adversarial outcome plus where its Recording and decision transcript were written. */
+/** Where a mission ran — enough for `verify-fix` to replay one of its defects in a fresh session. */
+export interface MissionTarget {
+  readonly seedUrl: string;
+  readonly allowlist: string[];
+  /** Absolute path of the storageState file the run started from (never its contents). */
+  readonly storageStatePath?: string;
+}
+
+export type AdversarialCliMissionResult = AdversarialOutcome & {
+  readonly target: MissionTarget;
+  /** One ready-to-file draft per defect (and per crash), written next to the Recording. */
+  readonly issues: FindingsIssues;
+  readonly recordingPath: string;
+  /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
+  readonly resultPath: string;
+  readonly transcriptPath: string;
+  /** Process exit code for `outcome` (see `missionExitCode`). */
+  readonly exitCode: number;
+};
 
 /**
  * Runs `@jevitate/explore`'s adversarial "try to break it" mission behind the
@@ -375,21 +611,29 @@ export interface RunAdversarialCliMissionOptions {
  */
 export async function runAdversarialCliMission(
   opts: RunAdversarialCliMissionOptions,
-): Promise<AdversarialOutcome> {
+): Promise<AdversarialCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const session = await port.open({
+  const launch = {
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await port.open(launch);
+  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  // Crash-safe: the transcript and partial Recording are flushed after every step.
+  const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
-    return await runAdversarialMission({
+    const outcome = await runAdversarialMission({
+      ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
+      ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
+      ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
       page: session.page,
       actor,
       judgment: opts.judgment,
@@ -398,9 +642,50 @@ export async function runAdversarialCliMission(
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       site: origin,
+      ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
+      ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+      // A hang is reproduced by replaying its steps in fresh contexts (same auth).
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+      ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
+      onTranscriptEntry: journal.onTranscriptEntry,
+      onRecording: journal.onRecording,
     });
+    journal.writeRecording(outcome.recording);
+    journal.writeTranscript(outcome.transcript);
+    const exitCode = missionExitCode(outcome.outcome);
+    const resultPath = resultPathFor(journal.recordingPath);
+    const ctx = draftContext(origin, journal, opts.secrets ?? [], browserVersionOf(session.page));
+    const drafts: IssueDraft[] = outcome.defects.map((d) =>
+      draftForDefect(d, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${d.fingerprint}` }),
+    );
+    for (const h of outcome.hangs) {
+      drafts.push(draftForHang(h, { ...ctx, verifyCommand: `jevitate verify-fix --result ${resultPath} --fingerprint ${h.fingerprint}` }));
+    }
+    if (outcome.crash !== undefined) drafts.push(draftForCrash(outcome.crash, outcome.transcript, ctx));
+    const issues = await processIssueDrafts(
+      journal.recordingPath,
+      drafts,
+      opts.filing ?? DRAFTS_ONLY,
+      opts.issueFiler ?? NO_FILER,
+      iso,
+    );
+    const result = {
+      ...outcome,
+      recordingPath: journal.recordingPath,
+      transcriptPath: journal.transcriptPath,
+      exitCode,
+      issues,
+      // What `verify-fix` needs to replay a defect later: where, which origins, which session file
+      // (the storageState PATH only — its cookies never enter an artifact).
+      target: {
+        seedUrl: opts.seedUrl,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
+    };
+    return { ...result, resultPath: writeMissionResult(journal.recordingPath, outcome.outcome, exitCode, result) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
@@ -430,35 +715,54 @@ export interface RunFeatureCliMissionOptions {
   readonly storageState?: string;
 }
 
-export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureRunResult> {
+/** The feature mission's result plus its typed verdict and exit code. */
+export type FeatureCliMissionResult = FeatureRunResult & {
+  readonly missionOutcome: MissionOutcome;
+  readonly exitCode: number;
+};
+
+export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
-  const session = await portFactory().open({
+  const launch = {
     headless: opts.headless ?? true,
     allowedOrigins: [...opts.allowlist],
     baseUrl: origin,
     ...opts.browser,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
+  };
+  const session = await portFactory().open(launch);
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
-    return await runFeatureMission({
+    const result = await runFeatureMission({
+      openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       page: session.page,
       actor,
       seedUrl: opts.seedUrl,
       allowlist: opts.allowlist,
       scope,
     });
+    const missionOutcome: MissionOutcome = combineOutcomes([
+      result.outcome === "crashed" ? "crashed" : "clean",
+      ...result.hangs.map((h) => hangOutcome(h.reproduction.status)),
+    ]);
+    return { ...result, missionOutcome, exitCode: missionExitCode(missionOutcome) };
   } finally {
-    await session.close();
+    await closeQuietly(session);
   }
 }
 
 /** Injectable wiring for the `explore` CLI command (all optional). */
 export interface ExploreCliDeps {
+  /** Injected issue filer (tests use a fake — nothing real is ever filed from a test). */
+  issueFiler?: () => IssueFilerPort;
+  /** Injected filing config file path (tests). Default `~/.jevitate/filing.json`. */
+  filingConfigPath?: string;
+  /** Injected per-target config file path (tests). Default `~/.jevitate/targets.json`. */
+  targetsConfigPath?: string;
   /** Injected judgment gateway (tests). */
   judge?: JudgmentPort;
   /** Injected generation gateway (tests). */
