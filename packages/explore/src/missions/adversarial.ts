@@ -48,6 +48,13 @@ import {
 } from "../adversarial/run-coverage.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import { seedRedirectReason } from "../seed-redirect.js";
+import type { InvariantSpec } from "@jevitate/recording";
+import {
+  InvariantMonitor,
+  type InvariantAction,
+  type InvariantReport,
+  type InvariantViolation,
+} from "../declared-invariants.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -58,7 +65,8 @@ import { seedRedirectReason } from "../seed-redirect.js";
  * other routes) until its step, action or time budget runs out, and after EVERY
  * step asks a TRUSTED HARD-SIGNAL oracle (`PageSignalCollector`) whether the app
  * broke — a console error, an HTTP 5xx, a failed request, an unhandled page
- * exception — plus an optional user-declared invariant.
+ * exception — plus the user's invariants: an optional code-level `userInvariant` and the app-
+ * declared invariant spec (#86), both evaluated around every adjudicated step.
  *
  * A defect is the mission's SUCCESS case, so it is data: finding one does not
  * stop the run. Each defect is keyed by a stable fingerprint (signal kind +
@@ -114,6 +122,8 @@ export interface AdversarialDefect {
   readonly signals: DefectSignal[];
   /** The invariant's reason, for an `invariant` defect. */
   readonly invariantReason?: string;
+  /** For a DECLARED invariant (#86): its id, expression, before/after values, action and evidence. */
+  readonly invariant?: InvariantViolation;
   readonly firstSeenStep: number;
   readonly occurrences: number;
   readonly occurrenceSteps: number[];
@@ -156,6 +166,8 @@ export interface AdversarialOutcome {
   readonly scope: AdversarialScope;
   /** What the run exercised on its target, and whether that was enough for silence to mean clean. */
   readonly coverage: AdversarialCoverage;
+  /** Per declared invariant (#86): how often it applied, held, was violated, or could not be read. */
+  readonly invariants?: InvariantReport[];
 }
 
 export interface AdversarialMissionParams {
@@ -171,8 +183,14 @@ export interface AdversarialMissionParams {
   readonly bounds?: Partial<Bounds>;
   /** Wall-clock budget for the hunt (ms). Default 10 minutes. */
   readonly timeBudgetMs?: number;
-  /** An independent, user-declared invariant. `ok:false` is a HARD defect. */
+  /** An independent, user-declared (code-level) invariant. `ok:false` is a HARD defect. */
   readonly userInvariant?: (page: Page) => Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * App-declared invariants (#86): the closed, declarative spec, snapshotted before each action and
+   * evaluated after it (with every `never`). A violation is a HARD defect keyed by id + route —
+   * the same oracle path as `userInvariant`, generalised to before/after, network and probes.
+   */
+  readonly invariants?: InvariantSpec;
   /** Recording.site label. Defaults to the seed origin. */
   readonly site?: string;
   /** Bound (ms) on waiting for a rendered page before each strategy step. Default `RENDER_WAIT_MS`. */
@@ -252,6 +270,7 @@ interface StepFinding {
   readonly url: string;
   readonly signals: DefectSignal[];
   readonly invariantReason?: string;
+  readonly invariant?: InvariantViolation;
 }
 
 interface MutableDefect extends Omit<StepFinding, "related"> {
@@ -275,6 +294,7 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
     url: d.url,
     signals: d.signals,
     ...(d.invariantReason === undefined ? {} : { invariantReason: d.invariantReason }),
+    ...(d.invariant === undefined ? {} : { invariant: d.invariant }),
     firstSeenStep: d.firstSeenStep,
     occurrences: d.occurrenceSteps.length,
     occurrenceSteps: [...d.occurrenceSteps],
@@ -304,9 +324,23 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   // Attach the hard-signal listeners BEFORE navigating (on every page the run works in).
   let collector = new PageSignalCollector(params.page);
   let crashWatch = new CrashWatch(params.page);
+  // Declared invariants (#86): listening for `network` observables from before the first navigation.
+  const declared =
+    params.invariants === undefined
+      ? null
+      : new InvariantMonitor(params.invariants, {
+          allowlist: params.allowlist,
+          baseUrl: params.seedUrl,
+          ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
+        });
+  declared?.attach(params.page);
+  /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
+  let armed = false;
   sessions.onReset((page) => {
     collector = new PageSignalCollector(page);
     crashWatch = new CrashWatch(page);
+    declared?.attach(page);
+    armed = false;
   });
   const heap = new HeapLog();
   const probeHost = params.hostProbe ?? hostProbe();
@@ -366,6 +400,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       heap: heap.samples(),
       timing: summarizeTimings(timings),
       scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
+      ...(declared === null ? {} : { invariants: declared.report() }),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
             crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
@@ -488,11 +523,15 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     ]);
 
   /**
-   * The independent oracle for one step: drains the hard signals and checks the user invariant.
-   * Returns the transcript reason and the step's findings, or null when nothing broke.
+   * The independent oracle for one step: drains the hard signals and checks the user invariants —
+   * the code-level `userInvariant` and the declared spec (against the `before` snapshot armed for
+   * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
+   * findings, or null when nothing broke.
    */
-  const adjudicate = async (): Promise<{ reason: string; findings: StepFinding[] } | null> => {
+  const adjudicate = async (action: InvariantAction | null = null): Promise<{ reason: string; findings: StepFinding[] } | null> => {
     const invariantResult = params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
+    const declaredResult = declared === null ? null : await declared.after(sessions.actor, armed ? action : null);
+    armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
     const hardSignals = collector.drain();
@@ -526,8 +565,25 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         invariantReason: reason,
       });
     }
+    for (const v of declaredResult?.violations ?? []) {
+      findings.push({
+        fingerprint: v.fingerprint,
+        related: [v.fingerprint],
+        kind: "invariant",
+        title: `Invariant "${v.id}" violated on ${v.route}`,
+        route: v.route,
+        url: v.url,
+        signals: [],
+        invariantReason: v.reason,
+        invariant: v,
+      });
+    }
     if (findings.length === 0) return null;
-    const reasons = [...hardSignals.map((s) => s.detail), invariantResult.ok ? undefined : invariantResult.reason]
+    const reasons = [
+      ...hardSignals.map((s) => s.detail),
+      invariantResult.ok ? undefined : invariantResult.reason,
+      ...(declaredResult?.violations ?? []).map((v) => v.reason),
+    ]
       .filter((r): r is string => Boolean(r))
       .join("; ");
     return { reason: `defect: ${reasons}`, findings };
@@ -831,6 +887,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       if (strategy === undefined) throw new Error("adversarial: strategy index out of range");
       strategySteps += 1;
       const round = rounds.get(strategy) ?? 0;
+      // A snapshot armed by an episode that ended without an adjudication (budget, disabled target)
+      // is stale: the next action gets a fresh one, so no effect is attributed to the wrong action.
+      armed = false;
 
       // A perception's timing is reported once — on the first step decided on it.
       let stepSnap = snap;
@@ -899,6 +958,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           stepTiming = undefined;
           break;
         }
+        // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
+        const actedOn = sessions.page.url();
+        if (declared !== null && !armed) {
+          await declared.before(sessions.actor);
+          armed = true;
+        }
         const at = now();
         const { result, value } = await execute(s);
         actions += 1;
@@ -931,7 +996,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
           continue;
         }
-        const verdict = await adjudicate();
+        const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn });
         const soft = verdict === null ? await softJudgment(stepSnap) : {};
         const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
         transcript.record({
