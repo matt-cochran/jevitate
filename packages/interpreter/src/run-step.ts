@@ -14,7 +14,7 @@ async function strictTarget(actor: Actor, d: TargetDescriptor, opts: ResolveTarg
   const locator = await resolveTarget(page, d, opts);
   return Target.named(descriptorToTarget(d).description).locatedBy(() => locator);
 }
-import { checkAssertion, pollUntil, PostconditionFailed } from "./assertion.js";
+import { checkAssertion, pollUntil, textIncludesCI, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
 
@@ -321,7 +321,7 @@ async function evaluateAssertionInRowOnce(
     }
     case "textIncludes": {
       const text = await resolveInRoot(rowLocator, a.target).innerText();
-      return text.includes(a.text);
+      return textIncludesCI(text, a.text);
     }
     case "count": {
       const n = await resolveInRoot(rowLocator, a.target).count();

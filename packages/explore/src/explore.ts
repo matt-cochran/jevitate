@@ -36,10 +36,12 @@ import {
   secretFieldsToFill,
   secretPlaceholder,
 } from "./secret-fields.js";
-import { act } from "./act.js";
+import { act, parseInterceptor } from "./act.js";
 import { SideEffectGuard, SideEffectLog, awaitWrites, type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
+import { coveredByInterceptors } from "./occlusion.js";
+import { descriptorToLocator } from "@jevitate/recorder";
 import { ObservedPages, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
 import {
   REPLY_CEILING_MS,
@@ -398,6 +400,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let statusAfter: string | null = null;
   /** Consecutive `wait`s that changed nothing while nothing was pending. */
   let quietWaits = 0;
+  /**
+   * CSS selectors (parsed from a Playwright "intercepts pointer events" failure, #90) for elements
+   * proven to cover a real click. Every control they still cover is withheld from the model until the
+   * page state changes — a click failure otherwise burns the whole run re-choosing the same or a
+   * sibling target under the same backdrop.
+   */
+  let blockedInterceptors: readonly string[] = [];
+  /** The page signature blocked interceptors were recorded against — cleared once it changes. */
+  let blockedSinceSignature: string | null = null;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -650,6 +661,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       seen.add(snap.signature);
 
+      // #90 — an interceptor proven by a real click failure stays blocked only while the page it was
+      // proven on is still up; a re-render/navigation may have removed or moved it.
+      if (blockedSinceSignature !== null && snap.signature !== blockedSinceSignature) {
+        blockedInterceptors = [];
+        blockedSinceSignature = null;
+      }
+      let modelControls = snap.controls;
+      if (blockedInterceptors.length > 0) {
+        const covered = new Set<number>();
+        for (const c of snap.controls) {
+          const loc = descriptorToLocator(page, c.descriptor);
+          const hit = await loc.evaluate(coveredByInterceptors, blockedInterceptors).catch(() => false);
+          if (hit) covered.add(c.index);
+        }
+        if (covered.size > 0) modelControls = snap.controls.filter((c) => !covered.has(c.index));
+      }
+
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
       const path = safePath(snap.url);
@@ -674,7 +702,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       try {
         decision = await decide(cfg.judge, {
           goal: cfg.goal,
-          snapshot: snap,
+          snapshot: modelControls === snap.controls ? snap : { ...snap, controls: modelControls },
           history,
           missionContext,
           secrets,
@@ -957,10 +985,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           record(true, note);
         } else {
           quietWaits = 0;
-          const y0 = await page.evaluate(() => window.scrollY).catch(() => null);
+          // #109 — act() itself polls the scroll position (of the nearest scrollable container under
+          // the pointer, else the window) until it settles, so this never reads immediately after the
+          // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
-          const y1 = await page.evaluate(() => window.scrollY).catch(() => null);
-          changed = y0 !== null && y1 !== null && y0 !== y1;
+          changed = r.moved === true;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
           record(r.ok, r.ok ? note : r.reason);
         }
@@ -1424,6 +1453,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           cleared(control);
         } else {
           history.push(`click failed: ${failNote(r.reason, control)}`);
+          // #90 — a real "intercepts pointer events" failure proves what covers this control (and,
+          // in practice, its neighbours under the same backdrop): remember it so the model is not
+          // offered another target it covers until the page changes.
+          const interceptor = r.reason === undefined ? null : parseInterceptor(r.reason);
+          if (interceptor !== null && !blockedInterceptors.includes(interceptor)) {
+            blockedInterceptors = [...blockedInterceptors, interceptor];
+            blockedSinceSignature = snap.signature;
+          }
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control), {
           ...(message === undefined ? {} : { message }),

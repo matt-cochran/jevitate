@@ -244,7 +244,7 @@ decides it. `--success` can be repeated, and every check must hold:
 |---|---|
 | `urlIncludes:<text>` | the final URL contains the text |
 | `visible:<d>` | the element is visible |
-| `textIncludes:<d>\|<text>` | the element's text contains the text |
+| `textIncludes:<d>\|<text>` | the element's text contains the text (case-insensitive) |
 | `count:<d>\|min=<n>,max=<n>` | the number of matching elements is within the bounds |
 | `valueEquals:<d>\|<value>` | a form control's **value** (input, textarea, select) equals the value exactly |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |

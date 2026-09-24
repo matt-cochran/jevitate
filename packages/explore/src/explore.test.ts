@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type JudgmentPort } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
@@ -132,6 +134,79 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
       site.url,
     );
   });
+});
+
+describe("explore — an overlay opened by a click covers sr-only controls behind it (#90)", () => {
+  const SR_ONLY = "position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden";
+  let overlayServer: Server;
+  let overlayOrigin: string;
+
+  beforeAll(async () => {
+    overlayServer = createServer((req, res) => {
+      res
+        .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+        .end(
+          `<!doctype html><html><body>
+            <button type="button" id="open" onclick="document.getElementById('inspector').style.display='block'">Open inspector</button>
+            <div style="margin:40px">
+              <input type="radio" name="plan" id="a" style="${SR_ONLY}" />
+              <label for="a" style="display:inline-block;padding:12px 24px;background:#cde">Plan A</label>
+              <input type="radio" name="plan" id="b" style="${SR_ONLY}" />
+              <label for="b" style="display:inline-block;padding:12px 24px;background:#cde">Plan B</label>
+            </div>
+            <div id="inspector" data-testid="inspector"
+              style="display:none;position:fixed;top:0;left:0;bottom:0;width:100%;background:rgba(255,255,255,.95)">
+              <button type="button" aria-label="Close inspector"
+                onclick="document.getElementById('inspector').style.display='none'">Close inspector</button>
+            </div>
+          </body></html>`,
+        );
+    });
+    await new Promise<void>((resolve) => overlayServer.listen(0, "127.0.0.1", resolve));
+    overlayOrigin = `http://127.0.0.1:${(overlayServer.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    overlayServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => overlayServer.close((e) => (e ? reject(e) : resolve())));
+  });
+
+  it(
+    "the sr-only radios behind the opened inspector are not offered again, and no click ever times out",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-overlay-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [overlayOrigin]));
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "open the inspector",
+            allowlist: [overlayOrigin],
+            startUrl: overlayOrigin,
+            bounds: { maxDecisions: 5 },
+          });
+        },
+        overlayOrigin,
+      );
+
+      // The FIRST decision (before the inspector opens) sees both radios as candidates; the SECOND
+      // (right after the click that opened it) must not — the overlay now covers them.
+      expect(judge.states.length).toBeGreaterThanOrEqual(2);
+      const beforeOpen = judge.states[0]!.controls.join("\n");
+      expect(beforeOpen).toContain("Plan A");
+      const afterOpen = judge.states[1]!.controls.join("\n");
+      expect(afterOpen).not.toContain("Plan A");
+      expect(afterOpen).not.toContain("Plan B");
+
+      // Never attempted, never timed out: no transcript entry mentions a Playwright interception.
+      const timeouts = run.transcript.filter((t) => typeof t.reason === "string" && /intercepts pointer events/.test(t.reason));
+      expect(timeouts).toHaveLength(0);
+      expect(run.stop).toBe("done");
+    },
+    30_000,
+  );
 });
 
 describe("explore — typed stops instead of throws (owner ruling 1)", () => {
