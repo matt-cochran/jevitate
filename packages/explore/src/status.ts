@@ -136,3 +136,55 @@ export function describeStatus(s: PageStatus): string {
 export function isEmptyStatus(s: PageStatus): boolean {
   return s.alerts.length === 0 && s.notices.length === 0 && s.invalid.length === 0;
 }
+
+/**
+ * An IN-PROGRESS status the page shows (#92 reopened): a job the app runs in the background and
+ * reports by text, not by a request in flight — Preveti's "SIMULATING…" / "A simulation for this bet
+ * is already running (started …)", polled by the app, so the network is idle between polls. It
+ * counts as pending work: a `wait` on it is patience, never "nothing is pending".
+ *
+ * Signals, in order: a visible `aria-busy=true` region; a live region (`role=status`, `aria-live`,
+ * `role=progressbar`, `<output>`) whose text says work is under way; a short visible line that is a
+ * progress verb trailing off ("Simulating…", "Processing...") or says a job "is running" / "in
+ * progress". Returns what it saw (for the transcript), or null.
+ */
+export const IN_PROGRESS_WORDS =
+  "simulating|processing|running|generating|analy[sz]ing|computing|calculating|loading|preparing|working|thinking|uploading|importing|exporting|syncing|saving|submitting|creating|building|training|indexing|queued|in progress";
+
+/** BROWSER CODE — serialized by `page.evaluate`: no imports, no closure over module scope. */
+function inProgressInPage(words: string): string | null {
+  const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
+  const cut = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  const shown = (el: Element): boolean => {
+    const h = el as HTMLElement;
+    if (h.closest("[hidden],[aria-hidden=true]") !== null) return false;
+    const st = window.getComputedStyle(h);
+    const r = h.getBoundingClientRect();
+    return st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  };
+  const loose = new RegExp(`\\b(?:${words})\\b`, "i");
+  const trailing = new RegExp(`^\\W*(?:${words})\\b[^.!?]{0,60}(?:…|\\.\\.\\.)\\s*$`, "i");
+  const job =
+    /\b(?:is|are)\s+(?:still\s+|already\s+|currently\s+|now\s+)?(?:running|processing|in progress|being (?:processed|generated|simulated|prepared))\b|\bstill (?:running|working|processing)\b|^\W*in progress\W*$/i;
+  for (const el of Array.from(document.querySelectorAll('[aria-busy="true"]'))) {
+    if (shown(el)) return `aria-busy region${norm((el as HTMLElement).innerText) === "" ? "" : ` "${cut(norm((el as HTMLElement).innerText))}"`}`;
+  }
+  const live = document.querySelectorAll("[role=status],[aria-live=polite],[aria-live=assertive],[role=progressbar],output");
+  for (const el of Array.from(live)) {
+    if (!shown(el)) continue;
+    const text = norm((el as HTMLElement).innerText || el.getAttribute("aria-valuetext") || el.getAttribute("aria-label"));
+    if (text !== "" && loose.test(text)) return `status "${cut(text)}"`;
+  }
+  const body = document.body ? document.body.innerText : "";
+  for (const raw of body.split(/\n+/)) {
+    const line = norm(raw);
+    if (line === "" || line.length > 200) continue;
+    if (trailing.test(line) || job.test(line)) return `status text "${cut(line)}"`;
+  }
+  return null;
+}
+
+/** The in-progress status the page shows, or null (a page that cannot be read shows none). */
+export async function readInProgressStatus(page: Page): Promise<string | null> {
+  return page.evaluate(inProgressInPage, IN_PROGRESS_WORDS).catch(() => null);
+}

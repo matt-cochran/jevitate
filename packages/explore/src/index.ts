@@ -42,6 +42,8 @@ export * from "./crash-report.js";
 export * from "./issue-draft.js";
 export * from "./occlusion.js";
 export * from "./side-effects.js";
+export * from "./safety.js";
+export * from "./mission-safety.js";
 export * from "./timing.js";
 export * from "./hang.js";
 export * from "./hang-repro.js";

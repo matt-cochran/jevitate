@@ -31,6 +31,11 @@ function finding(id: string, severity: UxFinding["severity"], confidence: number
   );
 }
 
+/** #132: a finding grounded in observed friction (what the live/offline paths attach via groundFindings). */
+function grounded(f: UxFinding, impact: NonNullable<UxFinding["impact"]> = "slowed", steps: number[] = [2, 3]): UxFinding {
+  return { ...f, impact, journeyEvidence: { id: `retry@${steps[0]}-${steps[steps.length - 1]}`, kind: "retry", steps, detail: "repeated" } };
+}
+
 const fullCoverage: Coverage = { totalItems: 2, evaluated: 2, skipped: [], budgetTruncated: [] };
 const partialCoverage: Coverage = {
   totalItems: 4,
@@ -40,11 +45,36 @@ const partialCoverage: Coverage = {
 };
 
 describe("buildReport", () => {
-  it("ranks findings by severity × confidence (major before minor)", () => {
-    const outcome: AnalysisOutcome = { kind: "analyzed", findings: [finding("minor-1", "minor", 0.99), finding("major-1", "major", 0.5, true)], coverage: fullCoverage };
+  it("ranks findings by severity × confidence (major before minor) within one impact", () => {
+    const outcome: AnalysisOutcome = { kind: "analyzed", findings: [grounded(finding("minor-1", "minor", 0.99)), grounded(finding("major-1", "major", 0.5, true))], coverage: fullCoverage };
     const report = buildReport(outcome, { minConfidence: 0 });
     expect(report.findings[0].rubricItemId).toBe("major-1");
     expect(report.findings[1].rubricItemId).toBe("minor-1");
+  });
+
+  it("#132: ranks by observed impact on the job first — blocked > slowed > confused", () => {
+    const outcome: AnalysisOutcome = {
+      kind: "analyzed",
+      findings: [grounded(finding("major-1", "major", 0.99), "confused"), grounded(finding("minor-1", "minor", 0.4), "blocked")],
+      coverage: fullCoverage,
+    };
+    expect(buildReport(outcome, { minConfidence: 0 }).findings.map((f) => f.impact)).toEqual(["blocked", "confused"]);
+  });
+
+  it("#132: a rubric finding with no behavioral evidence is heuristic-only — capped at info, in the appendix, not the findings", () => {
+    const outcome: AnalysisOutcome = { kind: "analyzed", findings: [finding("major-1", "major", 0.9), grounded(finding("minor-1", "minor", 0.5))], coverage: fullCoverage };
+    const report = buildReport(outcome, { minConfidence: 0 });
+    expect(report.findings.map((f) => f.rubricItemId)).toEqual(["minor-1"]);
+    expect(report.findings[0]!.journeyEvidence?.steps).toEqual([2, 3]);
+    expect(report.heuristicAppendix).toHaveLength(1);
+    expect(report.heuristicAppendix[0]).toMatchObject({ rubricItemId: "major-1", severity: "info", heuristicOnly: true });
+    expect(report.headline).toMatch(/1 heuristic-only \(no observed friction, info\) in the appendix/);
+    // Nothing above minor without behavioral evidence, anywhere in the report.
+    for (const f of [...report.findings, ...report.heuristicAppendix]) {
+      if (f.severity === "major") expect(f.journeyEvidence ?? f.signal).toBeDefined();
+    }
+    // An appendix-only report is not clean.
+    expect(buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.9)], coverage: fullCoverage }, { minConfidence: 0 }).clean).toBe(false);
   });
 
   it("a report with less than full coverage is not complete and warns prominently", () => {
@@ -66,14 +96,17 @@ describe("buildReport", () => {
   });
 
   it("predicted-attention findings keep their provenance label", () => {
-    const report = buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.9, true)], coverage: fullCoverage });
+    const report = buildReport({ kind: "analyzed", findings: [grounded(finding("major-1", "major", 0.9, true))], coverage: fullCoverage });
     expect(report.findings[0].predictedAttention?.label).toBe("predicted-from-visual-hierarchy");
   });
 
   it("HONEST LABELING: the report never contains 'eye-tracking' or 'gaze' as a verdict field", () => {
-    const report = buildReport({ kind: "analyzed", findings: [finding("major-1", "major", 0.9, true)], coverage: fullCoverage });
+    const report = buildReport(
+      { kind: "analyzed", findings: [finding("major-1", "major", 0.9, true), grounded(finding("major-1", "major", 0.9, true))], coverage: fullCoverage },
+    );
     // predictedAttention.note is a provenance disclaimer, not a verdict; strip it before scanning verdicts.
-    const scrubbed = { ...report, findings: report.findings.map((f) => ({ ...f, predictedAttention: f.predictedAttention?.label })) };
+    const strip = (f: UxFinding) => ({ ...f, predictedAttention: f.predictedAttention?.label });
+    const scrubbed = { ...report, findings: report.findings.map(strip), heuristicAppendix: report.heuristicAppendix.map(strip) };
     const text = JSON.stringify(scrubbed).toLowerCase();
     expect(text).not.toContain("eye-tracking");
     expect(text).not.toContain("gaze");
@@ -82,7 +115,7 @@ describe("buildReport", () => {
   it("findings below minConfidence are suppressed, counted by reason/item/route, and summarized — never silently dropped", () => {
     const outcome: AnalysisOutcome = {
       kind: "analyzed",
-      findings: [finding("major-1", "major", 0.9), finding("minor-1", "minor", 0.4), finding("minor-1", "minor", 0.3)],
+      findings: [grounded(finding("major-1", "major", 0.9)), grounded(finding("minor-1", "minor", 0.4)), grounded(finding("minor-1", "minor", 0.3))],
       coverage: fullCoverage,
       suppressed: [{ rubricItemId: "major-1", route: "/x", screenId: "s9", reason: "rejected-evidence", detail: "cites control:9 absent" }],
       rawOccurrences: 12,
@@ -97,25 +130,43 @@ describe("buildReport", () => {
     expect(report.suppressed.byRubricItemRoute["minor-1 /route-minor-1"]).toBe(2);
     expect(report.suppressed.items.filter((i) => i.reason === "below-min-confidence").every((i) => i.confidence !== undefined)).toBe(true);
     expect(report.rawOccurrences).toBe(12);
-    expect(report.headline).toMatch(/^1 finding\(s\) graded actionable\/relevant-minor at finding-confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/);
+    expect(report.headline).toMatch(
+      /^1 finding\(s\) grounded in observed run behavior, shown with their quality grade \(not filtered by it\), at finding-confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/,
+    );
     expect(report.coverageSummary).toMatch(/3 suppressed/);
   });
 
-  it("the quality policy shows actionable + relevant-minor by default; generic/wrong are suppressed with counts", () => {
+  it("#133: by default the (uncalibrated) grader filters nothing — every finding is shown with its grade", () => {
     const graded = (id: string, label: "actionable" | "relevant-minor" | "generic" | "wrong") =>
-      ({ ...finding(id, "minor", 0.9), quality: { label, confidence: 0.8 } }) as UxFinding;
+      ({ ...grounded(finding(id, "minor", 0.9)), quality: { label, confidence: 0.8 } }) as UxFinding;
     const outcome: AnalysisOutcome = {
       kind: "analyzed",
       findings: [graded("major-1", "actionable"), graded("minor-1", "generic"), graded("minor-1", "wrong"), graded("major-1", "relevant-minor")],
       coverage: fullCoverage,
     };
     const report = buildReport(outcome, { minConfidence: 0 });
-    expect(report.findings.map((f) => f.quality?.label).sort()).toEqual(["actionable", "relevant-minor"]);
-    expect(report.suppressed.byReason["quality-policy"]).toBe(2);
-    expect(report.suppressed.items.map((i) => i.qualityLabel).sort()).toEqual(["generic", "wrong"]);
+    expect(report.findings.map((f) => f.quality?.label).sort()).toEqual(["actionable", "generic", "relevant-minor", "wrong"]);
+    expect(report.qualityFiltered).toBe(false);
+    expect(report.suppressed.byReason["quality-policy"]).toBe(0);
+    expect(report.headline).toMatch(/shown with their quality grade \(not filtered by it\)/);
     expect(report.qualityDistribution).toEqual({ actionable: 1, generic: 1, wrong: 1, "relevant-minor": 1 });
     expect(report.clean).toBe(false);
-    // A custom policy is honored.
+  });
+
+  it("the opt-in quality filter suppresses the other grades, counted", () => {
+    const graded = (id: string, label: "actionable" | "relevant-minor" | "generic" | "wrong") =>
+      ({ ...grounded(finding(id, "minor", 0.9)), quality: { label, confidence: 0.8 } }) as UxFinding;
+    const outcome: AnalysisOutcome = {
+      kind: "analyzed",
+      findings: [graded("major-1", "actionable"), graded("minor-1", "generic"), graded("minor-1", "wrong"), graded("major-1", "relevant-minor")],
+      coverage: fullCoverage,
+    };
+    const report = buildReport(outcome, { minConfidence: 0, quality: { show: ["actionable", "relevant-minor"] } });
+    expect(report.findings.map((f) => f.quality?.label).sort()).toEqual(["actionable", "relevant-minor"]);
+    expect(report.qualityFiltered).toBe(true);
+    expect(report.suppressed.byReason["quality-policy"]).toBe(2);
+    expect(report.suppressed.items.map((i) => i.qualityLabel).sort()).toEqual(["generic", "wrong"]);
+    expect(report.headline).toMatch(/graded actionable\/relevant-minor/);
     expect(buildReport(outcome, { minConfidence: 0, quality: { show: ["actionable"] } }).findings).toHaveLength(1);
   });
 

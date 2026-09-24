@@ -316,6 +316,12 @@ describe("FsInboxStore.health", () => {
     expect(health.oldestPendingAgeSec).toBeGreaterThanOrEqual(45);
     expect(health.version).toBe("test-version");
   });
+
+  it("reports the serving build's full identity when the host hands it in (#112)", async () => {
+    const build = { version: "0.1.0", commit: "147b50b", builtAt: "2026-09-24T15:17:04Z" };
+    const health = await new FsInboxStore(await tmpDir(), build).health();
+    expect(health).toMatchObject(build);
+  });
 });
 
 describe("FsInboxStore corrupt-file handling (S-G)", () => {

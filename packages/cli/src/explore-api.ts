@@ -4,7 +4,7 @@ import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCo
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { Assertion, InvariantSpec, Recording, TargetDescriptor } from "@jevitate/recording";
-import type { InvariantDefect, InvariantReport } from "@jevitate/explore";
+import type { InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -212,6 +212,9 @@ function browserVersionOf(page: { context(): { browser(): { version(): string } 
 
 export interface RunExplorationResult {
   readonly outcome: GoalBasedOutcome;
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /**
    * Did the loop complete its goal (`completed`, verified by the success assertion), or why not
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
@@ -292,13 +295,19 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
@@ -369,6 +378,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording: mission.recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      sideEffects: mission.run.sideEffects,
+      ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
       engine,
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(mission.reason === undefined ? {} : { reason: mission.reason }),
@@ -567,11 +578,18 @@ export interface RunCoverageMissionOptions {
   readonly routeGlobs?: readonly string[];
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /**
+   * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
+   * the last action revealed is tried first (#115).
+   */
+  readonly strategy?: "coverage" | "exploratory";
+  /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
+  readonly stallTimeoutMs?: number;
 }
 
 export interface RunCoverageMissionResult {
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable";
+  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
@@ -589,6 +607,9 @@ export interface RunCoverageMissionResult {
   readonly recordingPaths: string[];
   /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
+  /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects: SideEffect[];
+  readonly sideEffectsTruncated?: number;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
@@ -620,7 +641,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
   // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -638,6 +664,9 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.strategy === undefined ? {} : { strategy: opts.strategy }),
+      ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
     });
 
     const recordingPaths: string[] = [];
@@ -652,7 +681,13 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
     const found = result.coverage.defects.length + (result.invariantDefects?.length ?? 0);
-    const bare = result.outcome === "crashed" ? "crashed" : result.outcome === "scope-unreachable" ? "inconclusive" : null;
+    // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
+    const bare =
+      result.outcome === "crashed"
+        ? "crashed"
+        : result.outcome === "scope-unreachable" || result.outcome === "stalled"
+          ? "inconclusive"
+          : null;
     const thin = bare === null && found === 0 && !result.coverage.sufficiency.sufficient;
     const missionOutcome: MissionOutcome = combineOutcomes([
       bare ?? (thin ? "inconclusive" : found > 0 ? "defects-found" : "clean"),
@@ -680,6 +715,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(failure === undefined ? {} : { failure }),
       recordingPaths,
       transcriptPath: journal.transcriptPath,
+      sideEffects: result.sideEffects ?? [],
+      ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
@@ -691,6 +728,28 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     await closeQuietly(session);
   }
 }
+
+/**
+ * The misuse strategies `explore --strategy adversarial` runs, in order — shared with the queue drain
+ * (`jevitate mission run`, #117) so a queued adversarial mission hunts exactly like the CLI's.
+ */
+export const CLI_ADVERSARIAL_STRATEGIES: readonly MisuseStrategy[] = [
+  // Form-aware misuse around submitting (#64): most app pages are forms.
+  "double-submit",
+  "boundary-submit",
+  "edit-cancel-save",
+  "navigate-away-unsaved",
+  "act-while-pending",
+  // Coverage: act on every target control once.
+  "exercise-controls",
+  "ordering-violation",
+  "repeat-rapid",
+  "boundary-input",
+  "contradictory-actions",
+  "nav-during-pending",
+  // Keep hunting on other routes (within the target's scope) after and between defects.
+  "visit-route",
+];
 
 /**
  * Options for the additive adversarial CLI mission. Mirrors `runExploration`'s
@@ -799,13 +858,19 @@ export async function runAdversarialCliMission(
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+  });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
+      ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       page: session.page,
       actor,
       judgment: opts.judgment,
@@ -884,6 +949,8 @@ export interface RunFeatureCliMissionOptions {
   readonly capability: string;
   readonly routeGlobs: readonly string[];
   readonly headless?: boolean;
+  /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
+  readonly stallTimeoutMs?: number;
   /** Step/action budget (CLI `--max-actions` / `--max-decisions`). */
   readonly bounds?: Partial<Bounds>;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
@@ -909,6 +976,8 @@ export interface RunFeatureCliMissionOptions {
   readonly saveStorageState?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
   readonly invariants?: InvariantSpec;
+  /** The shared safety policy (#116: `--deny`, `--allow-destructive`, `--read-rpc`). */
+  readonly safety?: SafetyConfig;
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
@@ -958,7 +1027,11 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
-  const disarmKillSwitch = armMissionKillSwitch({ recordingPath: journal.recordingPath });
+  const disarmKillSwitch = armMissionKillSwitch({
+    recordingPath: journal.recordingPath,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+  });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -971,6 +1044,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       bounds: opts.bounds,
       onTranscriptEntry: journal.onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
+      ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
+      ...(opts.safety === undefined ? {} : { safety: opts.safety }),
     });
 
     const recordingPaths: string[] = [];
@@ -999,7 +1074,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const missionOutcome: MissionOutcome = combineOutcomes([
       result.outcome === "crashed"
         ? "crashed"
-        : result.outcome === "scope-unreachable"
+        : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
           : invariantDefects > 0
             ? "defects-found"
@@ -1067,7 +1142,9 @@ export interface ExploreCliDeps {
  * Compact assertion spec parser (a recording `Assertion`, checked on a page). Supported forms:
  *   urlIncludes:<text>
  *   visible:<descriptor>
- *   textIncludes:<descriptor>|<text>
+ *   textIncludes:<descriptor>|<text>  — case-insensitive (#113): matches regardless of case, or of a
+ *                                        CSS text-transform (a badge whose DOM text is "Approved" but
+ *                                        renders `uppercase` still matches `|Approved`)
  *   count:<descriptor>|min=<n>,max=<n>
  *   valueEquals:<descriptor>|<value>   — a form control's VALUE (input, textarea, select), exactly
  * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS

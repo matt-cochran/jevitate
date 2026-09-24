@@ -50,6 +50,9 @@ import {
 } from "../adversarial/run-coverage.js";
 import { descriptorToLocator } from "@jevitate/recorder";
 import { seedRedirectReason } from "../seed-redirect.js";
+import { MissionSafety } from "../mission-safety.js";
+import type { SafetyConfig } from "../safety.js";
+import type { SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantMonitor,
@@ -196,6 +199,9 @@ export interface AdversarialOutcome {
   readonly coverage: AdversarialCoverage;
   /** Per declared invariant (#86): how often it applied, held, was violated, or could not be read. */
   readonly invariants?: InvariantReport[];
+  /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
+  readonly sideEffects?: SideEffect[];
+  readonly sideEffectsTruncated?: number;
 }
 
 export interface AdversarialMissionParams {
@@ -250,6 +256,11 @@ export interface AdversarialMissionParams {
   readonly settle?: SettleConfig;
   /** The target's hang configuration (`ui-no-progress` ignores). */
   readonly hangs?: HangConfig;
+  /**
+   * The shared safety policy (#116). Misuse never targets a session-ending or destructive control
+   * (form-misuse's own rule, whatever this says); the policy adds paid and --deny'd controls.
+   */
+  readonly safety?: SafetyConfig;
   /**
    * Extra in-scope route globs (CLI `--route`, the feature mission's glob syntax). The scope is
    * always the start URL's route and everything under it; these add to it.
@@ -417,6 +428,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     armed = false;
   });
   const heap = new HeapLog();
+  /** The shared safety policy and the writes the run fires (#116). */
+  // Its clock is the page monitor's (wall time), never the `now` seam: writes are attributed by it.
+  const safety = new MissionSafety(params.safety);
   const probeHost = params.hostProbe ?? hostProbe();
   let crashHost: HostPressure | undefined;
   const secrets = params.secrets ?? [];
@@ -477,6 +491,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       timing: summarizeTimings(timings),
       scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
       ...(declared === null ? {} : { invariants: declared.report() }),
+      ...safety.result(),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
             crash: buildCrashReport(finalFailure, crashWatch.signals(), heap.samples(), {
@@ -567,6 +582,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }
   > => {
     await monitorFor(sessions.page).instrument();
+    safety.attach(monitorFor(sessions.page));
     recorder = new RunRecorder(site, undefined, secrets);
     segments.push(recorder);
     await Navigate.to(params.seedUrl).performAs(sessions.actor);
@@ -763,6 +779,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
     await monitorFor(sessions.page).instrument();
+    safety.attach(monitorFor(sessions.page));
     // #128: real network evidence for the FIRST navigation — a refused connection can still
     // surface as a bare navigation timeout.
     let firstNavNetError: string | null = null;
@@ -915,19 +932,29 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       }
     };
 
-    /** One planned step through the gated act(). A select with no chosen option takes another option. */
-    const execute = async (s: MisuseStep): Promise<{ result: ActResult; value?: string }> => {
+    /**
+     * One planned step through the gated act(). A select with no chosen option takes another
+     * option. `send` (a chat composer: #121) is given the CURRENT page's controls as its submit
+     * candidates, so it finds its own nearest Send button (or falls back to Enter) exactly as the
+     * goal loop's composer handling does — never a separate detected submit control to plan around.
+     */
+    const execute = async (s: MisuseStep, candidates: readonly Control[]): Promise<{ result: ActResult; value?: string }> => {
       if (s.op === "select" && s.control !== null && s.fillText === undefined) {
         const option = await otherOption(sessions.page, s.control);
         if (option === null) return { result: { ok: false, mutated: false, reason: "no other option to choose" } };
         return { result: await act(sessions.actor, { op: "select", control: s.control, value: option }), value: option };
       }
-      const result = await act(sessions.actor, { op: s.op, control: s.control, value: s.fillText ?? null });
+      const result = await act(sessions.actor, {
+        op: s.op,
+        control: s.control,
+        value: s.fillText ?? null,
+        ...(s.op === "send" ? { candidates } : {}),
+      });
       return s.fillText === undefined ? { result } : { result, value: s.fillText };
     };
 
     /** Appends an executed step to the Recording (the defect's repro path). */
-    const recordAction = (s: MisuseStep, value: string | undefined, at: number): void => {
+    const recordAction = (s: MisuseStep, value: string | undefined, at: number, submittedVia?: ActResult["submittedVia"]): void => {
       if (s.control === null) {
         if (s.op === "reload") {
           recorder.navigate(sessions.page.url(), at);
@@ -942,7 +969,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         const v = value ?? "";
         recorder.fill(s.control.descriptor, s.redacted === true ? { redacted: true, length: v.length } : v, at);
       } else if (s.op === "select") recorder.select(s.control.descriptor, value ?? "", at);
-      else return;
+      else if (s.op === "send") {
+        recorder.fill(s.control.descriptor, value ?? "", at);
+        if (submittedVia !== undefined && submittedVia.kind === "click") recorder.click(submittedVia.control.descriptor, at);
+        else recorder.press("Enter", s.control.descriptor, at);
+      } else return;
       lastRecordedTarget = JSON.stringify(s.control.descriptor);
     };
 
@@ -1096,6 +1127,24 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           stepTiming = undefined;
           break;
         }
+        // The shared safety policy (#116): a paid / session-ending / destructive / --deny'd control is
+        // never clicked — a no-op like a disabled target, counted against no budget.
+        const unsafe = safety.gate(s.op, s.control);
+        if (unsafe !== null) {
+          transcript.record({
+            op: null,
+            control: s.control,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy,
+            actOk: false,
+            reason: joinReasons([s.note, unsafe.reason]),
+            snapshot: stepSnap,
+            ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          });
+          stepTiming = undefined;
+          break;
+        }
         // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
         const actedOn = sessions.page.url();
         if (declared !== null && !armed) {
@@ -1103,9 +1152,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           armed = true;
         }
         const at = now();
-        const { result, value } = await execute(s);
+        safety.mark(transcript.nextStep, s.op, s.control);
+        const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
-        if (result.ok) recordAction(s, value, at);
+        if (result.ok) recordAction(s, value, at, result.submittedVia);
         if (result.ok) cov.acted(stepSnap.url, s.control, s.submitsForm);
         if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
         last = { op: s.op, control: s.control, ...(value === undefined ? {} : { fillText: value }) };

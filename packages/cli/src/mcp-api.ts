@@ -16,8 +16,10 @@ import {
   facadeCancelCommand,
   facadeGetSiteHealth,
   isMissionResultId,
+  isQueuedMissionId,
+  missionResultFileName,
   missionStatus,
-  parseMissionOutcome,
+  parseResultOutcome,
   type AiGenerateTextArgs,
   type AiGenerateTextResult,
 } from "@jevitate/mcp-facade";
@@ -36,10 +38,11 @@ import {
   type SetupRequiredResult,
 } from "@jevitate/ai-core";
 import { safeRunPolicy } from "@jevitate/domain";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { runVerifyFix, type VerifyFixReport } from "./verify-fix-api.js";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
 
 /**
  * The MCP stdio server behind `jevitate mcp`. It exposes ONLY the tools in
@@ -77,8 +80,11 @@ export interface McpApiDeps {
   /**
    * Test seam. Defaults to `runJourneyProgrammatically` with a fail-closed
    * `safeRunPolicy()` (invariant #5: PUBLISHED-id-only, never inline steps).
+   * `storageState` (#118) is a PATH to a Playwright storageState JSON file — the file is
+   * read only by the server's own browser launch; its contents never enter this handler,
+   * an MCP result, or a log.
    */
-  runJourney?: (id: string, params: Record<string, string>) => Promise<unknown>;
+  runJourney?: (id: string, params: Record<string, string>, storageState?: string) => Promise<unknown>;
   /**
    * Promoted mission-target store directory (`~/.jevitate/missions/targets` in
    * production — the SAME store `jevitate mission target` writes). Required for
@@ -131,10 +137,20 @@ export interface McpApiDeps {
    */
   recordingsDir?: string;
   /**
+   * Where usability reviews write their artifacts (`~/.jevitate/ux-reports` in production): a
+   * `usability-<stamp>` result is looked up here after `recordingsDir`.
+   */
+  uxReportsDir?: string;
+  /**
    * Test seam. Defaults to `runVerifyFix` over `<recordingsDir>/<id>.result.json`: replays the
    * finding's repro in a fresh browser (authorized against the mission's own allowlist).
    */
   verifyFix?: (args: { resultPath: string; fingerprint: string }) => Promise<VerifyFixReport>;
+  /**
+   * The serving build's identity (#112) — reported by `initialize` (`serverInfo.version`) and by
+   * `get_site_health`. Defaults to this build's `currentEngineInfo()`.
+   */
+  engine?: EngineInfo;
 }
 
 const ALLOWED = new Set<string>(ALLOWED_TOOLS);
@@ -193,8 +209,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
 
   const runJourney =
     deps.runJourney ??
-    ((id: string, params: Record<string, string>) =>
-      runJourneyProgrammatically({ dir: deps.journeysDir, id, params, policy: safeRunPolicy() }));
+    ((id: string, params: Record<string, string>, storageState?: string) =>
+      runJourneyProgrammatically({
+        dir: deps.journeysDir,
+        id,
+        params,
+        policy: safeRunPolicy(),
+        ...(storageState !== undefined ? { storageState } : {}),
+      }));
 
   // queue_exploration: enqueue over the SAME promoted fs store `jevitate
   // mission target` writes. The store is built lazily inside the closure so
@@ -233,7 +255,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     if (!deps.inboxDir) {
       throw new Error("inbox tools require inboxDir to be configured");
     }
-    return new FsInboxStore(deps.inboxDir);
+    return new FsInboxStore(deps.inboxDir, deps.engine ?? currentEngineInfo());
   };
 
   function inboxHandler(fn: (store: ReturnType<typeof inboxStore>, args: Record<string, unknown>) => Promise<unknown> | unknown): McpTool["handler"] {
@@ -279,39 +301,104 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   // get_mission_result: reads a persisted typed mission result by ID only (the artifact stem the
   // CLI wrote) — never a caller-supplied path. The status carries the CLI exit code, and a run that
   // itself broke (inconclusive/crashed) is an MCP error result, so it can never read as a pass.
+  //
+  // The id is either a result stem (`explore-<stamp>`, `usability-<stamp>.recording`, …) or a
+  // `queue_exploration` missionId (#117): the latter resolves through the mission's queue record —
+  // `queued`/`running` is reported as such (not an error, not a result), `failed` as an error, and
+  // `done` reads the result its drain wrote. Both shapes are closed regexes; nothing caller-shaped
+  // ever reaches a path.
+  const resolveResultId = async (
+    id: unknown,
+    tool: string,
+  ): Promise<{ resultId: string; missionId?: string } | { response: McpToolResult; pending?: Record<string, unknown> }> => {
+    if (isMissionResultId(id)) return { resultId: id };
+    if (!isQueuedMissionId(id)) {
+      return {
+        response: errorResult({
+          error: "invalid_args",
+          message: `${tool} requires a mission result 'id' (explore-|coverage-|adversarial-|feature-|usability-<stamp>) or a queue_exploration missionId`,
+        }),
+      };
+    }
+    if (!deps.missionQueueDir) {
+      return { response: errorResult({ error: "not_configured", message: `${tool} requires missionQueueDir to resolve a missionId` }) };
+    }
+    let mission;
+    try {
+      mission = await new FsMissionQueueStore(deps.missionQueueDir).get(id);
+    } catch {
+      return { response: errorResult({ error: "corrupt_mission", id }) };
+    }
+    if (mission === null) return { response: errorResult({ error: "not_found", id }) };
+    if (mission.status === "queued" || mission.status === "running") {
+      // Not finished: neither a pass nor a failure — the agent polls again later.
+      const pending = {
+        id,
+        missionId: id,
+        status: mission.status,
+        pending: true,
+        enqueuedAtIso: mission.enqueuedAtIso,
+        ...(mission.startedAtIso === undefined ? {} : { startedAtIso: mission.startedAtIso }),
+      };
+      return { response: jsonResult(pending), pending };
+    }
+    if (mission.status === "failed") {
+      return { response: errorResult({ id, missionId: id, status: "failed", isError: true, error: mission.error ?? "mission failed" }) };
+    }
+    if (!isMissionResultId(mission.resultId)) return { response: errorResult({ error: "corrupt_mission", id }) };
+    return { resultId: mission.resultId, missionId: id };
+  };
+
+  /** The dirs a result may live in: recordings, and (usability reviews) the UX reports dir. */
+  const resultPathsFor = (resultId: string): string[] => {
+    const file = missionResultFileName(resultId);
+    const dirs = [deps.recordingsDir, ...(resultId.startsWith("usability-") ? [deps.uxReportsDir] : [])];
+    return dirs.filter((d): d is string => d !== undefined).map((d) => join(d, file));
+  };
+
   const getMissionResult = async (args: Record<string, unknown>): Promise<McpToolResult> => {
     if (!deps.recordingsDir) {
       return errorResult({ error: "not_configured", message: "get_mission_result requires recordingsDir" });
     }
-    if (!isMissionResultId(args.id)) {
-      return errorResult({ error: "invalid_args", message: "get_mission_result requires a mission result 'id'" });
+    const ref = await resolveResultId(args.id, "get_mission_result");
+    if ("response" in ref) return ref.response;
+    const ids = { id: args.id, ...(ref.missionId === undefined ? {} : { missionId: ref.missionId, resultId: ref.resultId }) };
+    let raw: string | undefined;
+    for (const path of resultPathsFor(ref.resultId)) {
+      try {
+        raw = await readFile(path, "utf8");
+        break;
+      } catch {
+        // Try the next candidate dir.
+      }
     }
-    let raw: string;
-    try {
-      raw = await readFile(join(deps.recordingsDir, `${args.id}.result.json`), "utf8");
-    } catch {
-      return errorResult({ error: "not_found", id: args.id });
+    if (raw === undefined) {
+      return errorResult({ error: "not_found", ...ids });
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return errorResult({ error: "corrupt_result", id: args.id });
+      return errorResult({ error: "corrupt_result", ...ids });
     }
-    const outcome =
+    // A goal run's own outcome (succeeded/exhausted/blocked) folds onto the canonical one (#117).
+    const parsedOutcome =
       parsed !== null && typeof parsed === "object" && "missionOutcome" in parsed
-        ? parseMissionOutcome((parsed as { missionOutcome: unknown }).missionOutcome)
+        ? parseResultOutcome((parsed as { missionOutcome: unknown }).missionOutcome)
         : null;
-    if (outcome === null) {
-      return errorResult({ error: "corrupt_result", id: args.id });
+    if (parsedOutcome === null) {
+      return errorResult({ error: "corrupt_result", ...ids });
     }
-    const status = missionStatus(outcome);
+    const status = {
+      ...missionStatus(parsedOutcome.outcome),
+      ...(parsedOutcome.goalOutcome === undefined ? {} : { goalOutcome: parsedOutcome.goalOutcome }),
+    };
     const result = (parsed as { result?: unknown }).result ?? null;
     // An adversarial run's coverage is surfaced next to the status: an `inconclusive` run says what
     // it did and did not exercise, so an agent can tell "found nothing" from "tried nothing".
     const coverage =
       result !== null && typeof result === "object" && "coverage" in result ? (result as { coverage: unknown }).coverage : undefined;
-    const body = { id: args.id, ...status, ...(coverage === undefined ? {} : { coverage }), result };
+    const body = { ...ids, ...status, ...(coverage === undefined ? {} : { coverage }), result };
     return status.isError ? errorResult(body) : jsonResult(body);
   };
 
@@ -323,15 +410,38 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     if (!deps.recordingsDir) {
       return errorResult({ error: "not_configured", message: "verify_fix requires recordingsDir" });
     }
-    if (!isMissionResultId(args.id) || typeof args.fingerprint !== "string" || !/^[0-9a-f]{16}$/.test(args.fingerprint)) {
-      return errorResult({ error: "invalid_args", message: "verify_fix requires a mission result 'id' and a 16-hex 'fingerprint'" });
+    if (
+      !(isMissionResultId(args.id) || isQueuedMissionId(args.id)) ||
+      typeof args.fingerprint !== "string" ||
+      !/^[0-9a-f]{16}$/.test(args.fingerprint)
+    ) {
+      return errorResult({ error: "invalid_args", message: "verify_fix requires a mission result 'id' (or missionId) and a 16-hex 'fingerprint'" });
+    }
+    const ref = await resolveResultId(args.id, "verify_fix");
+    if ("response" in ref) {
+      // A mission still queued/running has nothing to verify yet: never a pass.
+      return ref.pending === undefined ? ref.response : errorResult({ error: "not_ready", ...ref.pending });
+    }
+    // The first candidate that exists (usability results may sit in the UX reports dir).
+    const candidates = resultPathsFor(ref.resultId);
+    let resultPath = candidates[0]!;
+    for (const path of candidates) {
+      try {
+        await access(path);
+        resultPath = path;
+        break;
+      } catch {
+        // Try the next candidate dir.
+      }
     }
     try {
-      const report = await verifyFixImpl({
-        resultPath: join(deps.recordingsDir, `${args.id}.result.json`),
-        fingerprint: args.fingerprint,
-      });
-      const body = { id: args.id, status: report.verdict, ...report };
+      const report = await verifyFixImpl({ resultPath, fingerprint: args.fingerprint });
+      const body = {
+        id: args.id,
+        ...(ref.missionId === undefined ? {} : { missionId: ref.missionId, resultId: ref.resultId }),
+        status: report.verdict,
+        ...report,
+      };
       // Neither is a pass: `inconclusive` proved nothing either way, `intermittent` (#74) means the
       // signal fired on SOME but not all fresh-context replays — never trustworthy as "fixed".
       return report.verdict === "inconclusive" || report.verdict === "intermittent" ? errorResult(body) : jsonResult(body);
@@ -343,7 +453,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   const wired: Record<string, Omit<McpTool, "name">> = {
     verify_fix: {
       description:
-        "Replay a finding's reproduction (by mission result id + fingerprint) N times in fresh browsers (default 3). status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass).",
+        "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3). status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass).",
       inputSchema: {
         type: "object",
         properties: { id: { type: "string" }, fingerprint: { type: "string" } },
@@ -353,7 +463,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     get_mission_result: {
       description:
-        "Read a finished mission's TYPED result by id (e.g. adversarial-2026-09-23T00-00-00-000Z): status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
+        "Read a mission's TYPED result by id: a result stem (explore-|coverage-|adversarial-|feature-|usability-<stamp>, e.g. adversarial-2026-09-23T00-00-00-000Z) or a queue_exploration missionId. A queued mission reports status queued | running (pending: true — poll again; `jevitate mission run` drains the queue) or failed (an error: it could not run). A finished one: status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: getMissionResult,
     },
@@ -364,12 +474,17 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     run_journey: {
       description:
-        "Run a PUBLISHED Journey by id with string params (fail-closed policy). Never accepts inline steps.",
+        "Run a PUBLISHED Journey by id with string params (fail-closed policy). Never accepts inline steps. " +
+        "Optional 'storageState': a PATH (on the machine running this MCP server) to a Playwright storageState " +
+        "JSON file, for a Journey authored behind a login (#118) — the file's contents are read only by the " +
+        "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
+        "with a clear error when no storageState is given.",
       inputSchema: {
         type: "object",
         properties: {
           id: { type: "string" },
           params: { type: "object", additionalProperties: { type: "string" } },
+          storageState: { type: "string" },
         },
         required: ["id"],
       },
@@ -377,18 +492,19 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         if (typeof args.id !== "string" || args.id.length === 0) {
           return errorResult({ error: "invalid_args", message: "run_journey requires a non-empty string 'id'" });
         }
-        // Invariant #5: only id + params are threaded through — any inline
+        // Invariant #5: only id + params (+ storageState PATH) are threaded through — any inline
         // `steps`/`recording` in the arguments is deliberately ignored.
         const params =
           args.params && typeof args.params === "object" && !Array.isArray(args.params)
             ? (args.params as Record<string, string>)
             : {};
-        return jsonResult(await runJourney(args.id, params));
+        const storageState = typeof args.storageState === "string" ? args.storageState : undefined;
+        return jsonResult(await runJourney(args.id, params, storageState));
       },
     },
     queue_exploration: {
       description:
-        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only).",
+        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues; `jevitate mission run` drains the queue, and get_mission_result {id: missionId} reports its status/result. strategy: goal-based (goal|feature|route + successAssertion) | coverage | adversarial (optional in-scope route glob) | feature (feature name, optional route glob). The target's authorized origin plus its declared apiOrigins are the only reachable origins. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only).",
       inputSchema: {
         type: "object",
         properties: {
@@ -566,8 +682,15 @@ export function createMcpServer(deps: McpApiDeps): Server {
   const tools = buildMcpTools(deps);
   const byName = new Map(tools.map((t) => [t.name, t]));
 
+  // The real build identity (#112), never a placeholder: `version` is the published semver, and the
+  // description names the commit/build time so an MCP client can tie a session to a build.
+  const engine = deps.engine ?? currentEngineInfo();
   const server = new Server(
-    { name: "jevitate", version: "0.0.0" },
+    {
+      name: "jevitate",
+      version: engine.version,
+      description: `jevitate ${engine.version} (commit ${engine.commit}, built ${engine.builtAt})`,
+    },
     { capabilities: { tools: {} } },
   );
 

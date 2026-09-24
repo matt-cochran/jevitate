@@ -162,6 +162,38 @@ test("journey run --self-heal hybrid wires a SelfHealer into the JourneyRunner (
   }
 });
 
+test("#124: journey promote <id> promotes an unpromoted journey (human-approval gate) and persists it", async () => {
+  const journeysDir = await seedJourneysDir([makeJourney({ id: "draft", promoted: false })]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "promote", "draft", "--dir", journeysDir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: true, data: { id: "draft", promoted: true } });
+
+  // Persisted: a second read via `journey list` shows it promoted.
+  const { program: program2, lines: lines2 } = newProgram();
+  await program2.parseAsync(["journey", "list", "--dir", journeysDir, "--json"], { from: "user" });
+  const listed = JSON.parse(lines2.join(""));
+  expect(listed.data).toContainEqual(expect.objectContaining({ id: "draft", promoted: true }));
+});
+
+test("journey promote with an unknown id fails fast with E_UNKNOWN_JOURNEY and a non-zero exit", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const journeysDir = await seedJourneysDir([]);
+    const { program, lines } = newProgram();
+
+    await program.parseAsync(["journey", "promote", "does-not-exist", "--dir", journeysDir, "--json"], { from: "user" });
+    const parsed = JSON.parse(lines.join(""));
+
+    expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
 test("journey run with no --self-heal is unchanged: default fail-closed, no AI setup demanded", async () => {
   // The additive flag must not change existing behavior. With no --self-heal,
   // an unknown journey still fails fast the same way (no AI-setup gate).

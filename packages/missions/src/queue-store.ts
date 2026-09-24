@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { QueuedMission } from "./schema.js";
 import { QueuedMissionSchema } from "./schema.js";
@@ -8,6 +9,22 @@ export interface MissionQueueStore {
   enqueue(m: QueuedMission): Promise<void>;
   get(id: string): Promise<QueuedMission | null>;
   list(): Promise<QueuedMission[]>;
+}
+
+/**
+ * What a queue drain (`jevitate mission run`) additionally needs (#117): an exclusive claim, so two
+ * drains never run the same mission, and status updates (running → done/failed).
+ */
+export interface DrainableMissionQueueStore extends MissionQueueStore {
+  /** Atomically claims `id` for one drain; false when another drain already holds it. */
+  claim(id: string): Promise<boolean>;
+  /** Rewrites an existing mission's record (re-validated; the id must already be queued). */
+  update(m: QueuedMission): Promise<void>;
+  /**
+   * `update`, synchronously — for a process about to exit on a kill signal, which cannot await
+   * (the killed mission's record must not be left `running` forever).
+   */
+  updateSync(m: QueuedMission): void;
 }
 
 /**
@@ -35,7 +52,7 @@ function isNodeError(err: unknown, code: string): boolean {
  * `FsJourneyStore` — validates fully-resolved records BEFORE any disk I/O
  * (fail-closed, no partial writes).
  */
-export class FsMissionQueueStore implements MissionQueueStore {
+export class FsMissionQueueStore implements DrainableMissionQueueStore {
   constructor(private readonly dir: string) {}
 
   private pathFor(id: string): string {
@@ -49,6 +66,41 @@ export class FsMissionQueueStore implements MissionQueueStore {
     const serialized = JSON.stringify(validated);
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     await writeFile(this.pathFor(validated.id), serialized, { mode: 0o600 });
+  }
+
+  /**
+   * `<id>.claim`, created exclusively (`wx`): the first drain to create it owns the mission. Never
+   * removed — a claimed mission is never run twice, even by a drain started after this one ends.
+   */
+  async claim(id: string): Promise<boolean> {
+    assertSafeId(id);
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    try {
+      const fh = await open(join(this.dir, `${id}.claim`), "wx", 0o600);
+      await fh.close();
+      return true;
+    } catch (err) {
+      if (isNodeError(err, "EEXIST")) return false;
+      throw err;
+    }
+  }
+
+  async update(m: QueuedMission): Promise<void> {
+    const validated = QueuedMissionSchema.parse(m);
+    assertSafeId(validated.id);
+    if ((await this.get(validated.id)) === null) {
+      throw new Error(`cannot update unknown mission '${validated.id}'`);
+    }
+    await writeFile(this.pathFor(validated.id), JSON.stringify(validated), { mode: 0o600 });
+  }
+
+  updateSync(m: QueuedMission): void {
+    const validated = QueuedMissionSchema.parse(m);
+    assertSafeId(validated.id);
+    if (!existsSync(this.pathFor(validated.id))) {
+      throw new Error(`cannot update unknown mission '${validated.id}'`);
+    }
+    writeFileSync(this.pathFor(validated.id), JSON.stringify(validated), { mode: 0o600 });
   }
 
   async get(id: string): Promise<QueuedMission | null> {

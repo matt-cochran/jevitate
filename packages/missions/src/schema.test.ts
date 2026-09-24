@@ -3,6 +3,7 @@ import {
   MissionTargetSchema,
   MissionRequestSchema,
   QueuedMissionSchema,
+  targetAllowlist,
 } from "./schema.js";
 
 const validTarget = {
@@ -28,6 +29,33 @@ describe("MissionTargetSchema", () => {
 
   it("rejects an unknown extra key", () => {
     expect(() => MissionTargetSchema.parse({ ...validTarget, bogus: 1 })).toThrow();
+  });
+
+  it("accepts declared API origins, and targetAllowlist is the app origin plus them (#117)", () => {
+    const t = MissionTargetSchema.parse({ ...validTarget, apiOrigins: ["https://api.example.com", "http://127.0.0.1:18582"] });
+    expect(targetAllowlist(t)).toEqual(["https://demo.example.com", "https://api.example.com", "http://127.0.0.1:18582"]);
+    expect(targetAllowlist(MissionTargetSchema.parse(validTarget))).toEqual(["https://demo.example.com"]);
+  });
+
+  it("validates every origin: a bare http(s) origin only — no path, credentials, wildcard or other scheme", () => {
+    for (const bad of [
+      "https://api.example.com/",
+      "https://api.example.com/v1",
+      "https://user:pw@api.example.com",
+      "https://*.example.com",
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "api.example.com",
+      "",
+    ]) {
+      expect(() => MissionTargetSchema.parse({ ...validTarget, apiOrigins: [bad] }), bad).toThrow();
+      expect(() => MissionTargetSchema.parse({ ...validTarget, authorizedOrigin: bad }), bad).toThrow();
+    }
+  });
+
+  it("refuses a baseUrl that is not on the target's authorized origin", () => {
+    expect(() => MissionTargetSchema.parse({ ...validTarget, baseUrl: "https://elsewhere.example.com/app" })).toThrow();
+    expect(() => MissionTargetSchema.parse({ ...validTarget, baseUrl: "https://demo.example.com/app/settings" })).not.toThrow();
   });
 });
 
@@ -71,10 +99,35 @@ describe("MissionRequestSchema", () => {
     expect(() => MissionRequestSchema.parse({ ...baseRequest, bogus: 1 })).toThrow();
   });
 
-  it("rejects an unsupported strategy value", () => {
+  it("rejects an unsupported strategy value (a usability review needs inputs the request cannot carry)", () => {
+    for (const strategy of ["usability", "induction", "exploratory"]) {
+      expect(() => MissionRequestSchema.parse({ ...baseRequest, strategy })).toThrow();
+    }
+  });
+
+  it("accepts coverage/adversarial with no goal and no success assertion, optionally scoped by a route glob (#117)", () => {
+    for (const strategy of ["coverage", "adversarial"]) {
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy })).not.toThrow();
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy, route: "/thread/**" })).not.toThrow();
+      // A goal or a success assertion has no meaning for these — refused, never silently dropped.
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy, goal: "g" })).toThrow();
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy, successAssertion: validAssertion })).toThrow();
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy, feature: "checkout" })).toThrow();
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy, route: "thread/**" })).toThrow();
+    }
+  });
+
+  it("strategy feature requires its feature name (#117)", () => {
+    expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy: "feature", feature: "checkout" })).not.toThrow();
     expect(() =>
-      MissionRequestSchema.parse({ ...baseRequest, strategy: "adversarial" }),
-    ).toThrow();
+      MissionRequestSchema.parse({ target: "demo-shop", strategy: "feature", feature: "checkout", route: "/checkout/**" }),
+    ).not.toThrow();
+    expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy: "feature" })).toThrow();
+  });
+
+  it("goal-based still requires its success assertion", () => {
+    const { successAssertion, ...rest } = baseRequest;
+    expect(() => MissionRequestSchema.parse(rest)).toThrow();
   });
 
   it("accepts an omitted budget", () => {
@@ -115,5 +168,15 @@ describe("QueuedMissionSchema", () => {
   it("rejects a missing status", () => {
     const { status, ...rest } = queued;
     expect(() => QueuedMissionSchema.parse(rest)).toThrow();
+  });
+
+  it("carries the drain lifecycle: running, done with a result id, failed with an error (#117)", () => {
+    expect(() => QueuedMissionSchema.parse({ ...queued, status: "running", startedAtIso: "2026-09-20T00:00:01Z" })).not.toThrow();
+    expect(() =>
+      QueuedMissionSchema.parse({ ...queued, status: "done", resultId: "explore-2026-09-20T00-00-02-000Z", missionOutcome: "succeeded", exitCode: 0 }),
+    ).not.toThrow();
+    expect(() => QueuedMissionSchema.parse({ ...queued, status: "failed", error: "unknown or unpromoted mission target" })).not.toThrow();
+    expect(() => QueuedMissionSchema.parse({ ...queued, status: "bogus" })).toThrow();
+    expect(() => QueuedMissionSchema.parse({ ...queued, status: "done", resultId: "../../etc/passwd" })).toThrow();
   });
 });

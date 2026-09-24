@@ -8,6 +8,25 @@ import { InboxItemSchema, SAFE_INBOX_ID_RE, assertSafeInboxId, asSecret, resolve
 
 export type Channel = "human" | "agent";
 
+/**
+ * The build serving this store (#112): handed in as data by the host (the CLI), never read here —
+ * this package does not know how it was built. `commit`/`builtAt` are reported when given.
+ */
+export interface BuildIdentity {
+  readonly version: string;
+  readonly commit: string;
+  readonly builtAt: string;
+}
+
+export interface InboxHealth {
+  ok: boolean;
+  pending: number;
+  oldestPendingAgeSec: number;
+  version: string;
+  commit?: string;
+  builtAt?: string;
+}
+
 export interface InboxStore {
   enqueue(item: InboxItem): Promise<void>;
   getSummaries(now?: number): Promise<InboxSummary[]>;
@@ -16,7 +35,7 @@ export interface InboxStore {
   resolve(id: string, req: { channel: Channel; action: Action; input?: string }): Promise<InboxItem>;
   appendThread(id: string, entry: ThreadEntry): Promise<InboxItem>;
   sweepExpired(now?: number): Promise<number>;
-  health(now?: number): Promise<{ ok: boolean; pending: number; oldestPendingAgeSec: number; version: string }>;
+  health(now?: number): Promise<InboxHealth>;
 }
 
 export class InboxItemNotFoundError extends Error {
@@ -66,10 +85,16 @@ const TERMINAL_STATUSES = new Set(["approved", "rejected", "resolved", "expired"
  * full invariant list (SM1/SM2/SM3, S-E, S-G, C-B).
  */
 export class FsInboxStore implements InboxStore {
+  private readonly identity: { version: string; commit?: string; builtAt?: string };
+
+  /** `build`: the serving build's identity (or just its version) — reported by `health()`. */
   constructor(
     private readonly dir: string,
-    private readonly version: string = "0.0.0",
-  ) {}
+    build: string | BuildIdentity = "0.0.0",
+  ) {
+    this.identity =
+      typeof build === "string" ? { version: build } : { version: build.version, commit: build.commit, builtAt: build.builtAt };
+  }
 
   private hotPath(id: string): string {
     return join(this.dir, `${id}.json`);
@@ -287,7 +312,7 @@ export class FsInboxStore implements InboxStore {
     return count;
   }
 
-  async health(now = Date.now()): Promise<{ ok: boolean; pending: number; oldestPendingAgeSec: number; version: string }> {
+  async health(now = Date.now()): Promise<InboxHealth> {
     let entries: string[];
     try {
       entries = await readdir(this.dir);
@@ -310,6 +335,6 @@ export class FsInboxStore implements InboxStore {
       }
     }
     const oldestPendingAgeSec = oldestMtimeMs === undefined ? 0 : Math.max(0, Math.floor((now - oldestMtimeMs) / 1000));
-    return { ok: true, pending, oldestPendingAgeSec, version: this.version };
+    return { ok: true, pending, oldestPendingAgeSec, ...this.identity };
   }
 }
