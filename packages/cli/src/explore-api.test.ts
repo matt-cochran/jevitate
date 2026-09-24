@@ -242,6 +242,19 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("between 0 and 1") } });
   });
 
+  it("refuses a --success-when other than held|final before any browser opens (#80)", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      [
+        "explore", "--url", "http://127.0.0.1:3000/login", "--goal", "g", "--success", "visible:testId=x",
+        "--success-when", "sometimes", "--fake-ai", "--json",
+      ],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("--success-when") } });
+  });
+
   it("fails on a malformed --success spec", async () => {
     const { program, lines } = newProgram();
     await program.parseAsync(

@@ -83,7 +83,7 @@ describe("explore — guardrail refusal contract (design §6)", () => {
           allowlist: [site.url],
           startUrl: `${site.url}/login`,
           successAssertion: { kind: "urlIncludes", text: "/inbox" },
-          bounds: { maxDecisions: 3 },
+          bounds: { maxDecisions: 2 }, // below MAX_QUIET_WAITS: the budget ends it first
           oracleTimeoutMs: 300,
         });
       },

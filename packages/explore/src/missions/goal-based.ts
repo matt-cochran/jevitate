@@ -27,6 +27,13 @@ import type { VerifySession } from "../verify-fix.js";
  * Jev's `done` is advisory only — it can propose the goal is met, but it never
  * certifies it (guardrail #4).
  *
+ * When the page checks are judged (`successWhen`, #80): `final` (the default) — on the final page
+ * only; `held` — on the final page OR together at any settled step of the run (a one-time secret, a
+ * toast, a "saved" banner the run then dismissed). Under `held` the page checks are evaluated after
+ * every settled step and the step they held at is reported. Network checks are capture-based over
+ * the whole run either way; `reloadThen` is always judged on the final page (a mid-run reload would
+ * throw away the state the run is building).
+ *
  * Outcome:
  *  - `succeeded`  — the success assertion holds against the live final page.
  *  - `exhausted`  — the assertion did not hold and the loop hit a budget cap.
@@ -60,7 +67,18 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly openFreshSession?: () => Promise<VerifySession>;
   /** How many fresh-context replays confirm a hang. Default 2. */
   readonly hangReplays?: number;
+  /**
+   * When the page checks must hold (#80): `final` (default) — on the final page; `held` — on the
+   * final page, or all together at some settled step of the run. `reloadThen` is final-only.
+   */
+  readonly successWhen?: SuccessWhen;
 }
+
+/** When the goal mission's page checks must hold. */
+export type SuccessWhen = "held" | "final";
+
+/** Bound (ms) on each per-step page-check evaluation under `successWhen: "held"` (a quick look). */
+const HELD_CHECK_TIMEOUT_MS = 250;
 
 export type GoalBasedOutcome = "succeeded" | "exhausted" | "blocked" | "hang" | "intermittent" | "inconclusive" | "crashed";
 
@@ -82,6 +100,20 @@ export interface GoalBasedResult {
    * which success check did not hold.
    */
   readonly reason?: string;
+}
+
+/** Does this result belong to a page check (the kind `held` can remember)? Matched by description. */
+function isPageCheck(r: SuccessCheckResult, pageChecks: readonly SuccessCheck[]): boolean {
+  return pageChecks.some((c) => describeCheck(c) === r.check);
+}
+
+/** A quick, bounded look: do ALL the page checks hold right now? */
+async function everyPageCheckHolds(actor: Actor, pageChecks: readonly SuccessCheck[]): Promise<boolean> {
+  for (const c of pageChecks) {
+    if (c.kind !== "page") continue;
+    if (!(await checkAssertion(actor, c.assertion, { timeoutMs: HELD_CHECK_TIMEOUT_MS }))) return false;
+  }
+  return true;
 }
 
 /** The one-line account of an unsuccessful run: how the loop ended, then the checks that failed. */
@@ -110,6 +142,9 @@ export async function runGoalBasedMission(
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   // Network checks look at every request the run makes, from before the first navigation.
   const needsNetwork = checks.some((c) => c.kind === "requestMade" || c.kind === "responseStatus");
+  if (cfg.successWhen !== undefined && cfg.successWhen !== "held" && cfg.successWhen !== "final") {
+    throw new Error(`runGoalBasedMission: successWhen must be "held" or "final", got ${JSON.stringify(cfg.successWhen)}`);
+  }
   const capture = needsNetwork ? monitorFor(page).startCapture() : null;
   try {
     return await adjudicated(cfg, checks, page, capture);
@@ -124,16 +159,31 @@ async function adjudicated(
   page: Page,
   capture: RequestCapture | null,
 ): Promise<GoalBasedResult> {
+  const pageChecks = checks.filter((c) => c.kind === "page");
+  /** Under `held`: the first settled step at which every page check held together (1-based), or null. */
+  let heldAtStep: number | null = null;
+  let settledSteps = 0;
+  const held = cfg.successWhen === "held" && pageChecks.length > 0;
   const run = await explore({
     ...cfg,
     missionContext:
       "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict",
+    // `held`: after every settled step, a quick look at the page checks — remembered once they all
+    // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
+    onSnapshot: async (snap) => {
+      await cfg.onSnapshot?.(snap);
+      settledSteps += 1;
+      if (!held || heldAtStep !== null) return;
+      const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
+      if (ok) heldAtStep = settledSteps;
+    },
     // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
     // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
     // final verdict — reloading mid-run would throw away the state the run is still building.
+    // Under `held`, a page check that already held (together, at a settled step) counts.
     successCheck: () =>
       evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
-        (rs) => rs.every((r) => r.passed),
+        (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
         () => false,
       ),
   });
@@ -212,6 +262,16 @@ async function adjudicated(
     };
   }
 
+  // `held`: a page check that failed on the final page passes when every page check held together
+  // at a settled step of the run — and says so. Never on a run that could not be evaluated (above).
+  if (heldAtStep !== null) {
+    const step = heldAtStep;
+    results = results.map((r) =>
+      !r.passed && isPageCheck(r, pageChecks)
+        ? { ...r, passed: true, detail: `held at settled step ${step} (--success-when held); ${r.detail}` }
+        : r,
+    );
+  }
   const assertionPassed = results.every((r) => r.passed);
   const outcome: GoalBasedOutcome = assertionPassed
     ? "succeeded"

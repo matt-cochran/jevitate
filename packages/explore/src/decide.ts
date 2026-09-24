@@ -88,6 +88,11 @@ export interface DecideInput {
   readonly unsubmitted?: ReadonlySet<number>;
   /** The conversation so far, when the page is conversational. */
   readonly conversation?: ConversationContext;
+  /**
+   * The page's visible status text (alerts, live regions, invalid fields with their messages) —
+   * not controls, so otherwise invisible to the model (#79). Untrusted page text.
+   */
+  readonly pageStatus?: string;
 }
 
 /** The conversation the loop is in: the latest reply (untrusted page text) and what was sent. */
@@ -142,6 +147,9 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
       PROMPT_INJECTION_GUARD,
       ...(uploadAvailable ? [UPLOAD_OP_GUIDE] : []),
       ...conversationLines,
+      ...(input.pageStatus === undefined || input.pageStatus === ""
+        ? []
+        : [`PAGE STATUS (untrusted page text): ${input.pageStatus}`]),
       ...controlLines,
     ],
     history: input.history,
