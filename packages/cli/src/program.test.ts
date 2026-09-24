@@ -788,3 +788,59 @@ test("init --dry-run --skip-keys --json plans MCP registration without writing a
   expect(parsed.data.mcp.every((r: { action: string }) => r.action === "create")).toBe(true);
   expect(existsSync(join(cwd, ".mcp.json"))).toBe(false);
 });
+
+// === viewport/device emulation (#149) — CLI validation refuses before any browser opens ===
+
+test("explore --device 'Nokia 9000' is refused before any browser opens, listing close matches", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --viewport 375x812 --device \"iPhone 13\" together is refused (mutually exclusive)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["explore", "--url", "http://127.0.0.1:1/", "--viewport", "375x812", "--device", "iPhone 13", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message.toLowerCase()).toContain("mutually exclusive");
+});
+
+test("verify-fix --device 'Nokia 9000' is refused before any replay", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["verify-fix", "--result", "/nonexistent.result.json", "--fingerprint", "deadbeef", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_VERIFY_FIX_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --help documents the default viewport and --viewport/--device (#149)", () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const explore = program.commands.find((c) => c.name() === "explore")!;
+  let help = "";
+  explore.configureOutput({ writeOut: (s) => (help += s) });
+  explore.outputHelp();
+  expect(help).toContain("--viewport");
+  expect(help).toContain("--device");
+  expect(help).toMatch(/default viewport|1280x720/i);
+});

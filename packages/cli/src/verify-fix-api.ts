@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
-import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording } from "@jevitate/recording";
+import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording, type RecordingEmulation } from "@jevitate/recording";
 import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { buildMissionFixtures, type FixtureFlags } from "./fixture-cli.js";
 import {
@@ -14,7 +14,7 @@ import {
   type FixtureSpec,
   type MissionFixtures,
 } from "./mission-fixtures.js";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
   assertAuthorizedExploreTarget,
@@ -73,6 +73,15 @@ export interface RunVerifyFixOptions {
   readonly fixtureFlags?: FixtureFlags;
   /** Values redacted from everything the fixture logs (CLI `--secret`). */
   readonly secrets?: readonly string[];
+  /**
+   * Explicit `--viewport` / `--device` override (#149). Defaults to the finding's OWN recorded
+   * emulation (`recording.emulation`) — a 375px defect replays at 375px, not the caller's desktop
+   * default. An override that DIFFERS from the recorded emulation is refused (fails closed) unless
+   * `allowEmulationOverride` is set: replaying at the wrong device could report a false "fixed".
+   */
+  readonly emulation?: EmulationSpec;
+  /** Replay at `emulation` even though it differs from the finding's recorded emulation. */
+  readonly allowEmulationOverride?: boolean;
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
@@ -221,6 +230,17 @@ export function findFinding(mission: PersistedMission, fingerprint: string): Per
   return mission.findings.find((f) => f.fingerprint === fingerprint || (f.related ?? []).includes(fingerprint));
 }
 
+/** Whether an explicit `--viewport`/`--device` matches a finding's recorded emulation (#149). */
+function emulationMatchesRecorded(explicit: EmulationSpec, recorded: RecordingEmulation): boolean {
+  if (explicit.device !== undefined || recorded.device !== undefined) return explicit.device === recorded.device;
+  if (explicit.viewport === undefined) return true;
+  return explicit.viewport.width === recorded.viewport.width && explicit.viewport.height === recorded.viewport.height;
+}
+
+function describeEmulation(e: RecordingEmulation): string {
+  return e.device !== undefined ? `--device "${e.device}"` : `--viewport ${e.viewport.width}x${e.viewport.height}`;
+}
+
 export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFixReport> {
   let raw: unknown;
   try {
@@ -249,6 +269,23 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   };
   const recording = finding.recording ?? mission.recording;
   if (recording === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  // #149: replay under the finding's OWN recorded emulation by default — a 375px defect reproduces
+  // at 375px, not the caller's desktop default. An explicit --viewport/--device that DIFFERS from
+  // it fails closed (never silently "verifies fixed" at the wrong device) unless overridden.
+  const recordedEmulation = recording.emulation;
+  let effectiveEmulation: EmulationSpec | undefined;
+  if (opts.emulation !== undefined) {
+    if (recordedEmulation !== undefined && !emulationMatchesRecorded(opts.emulation, recordedEmulation) && opts.allowEmulationOverride !== true) {
+      throw new VerifyFixInputError(
+        `--viewport/--device differs from the finding's recorded emulation (${describeEmulation(recordedEmulation)}); ` +
+          "pass allowEmulationOverride (CLI --allow-emulation-override) to replay at a different emulation anyway",
+      );
+    }
+    effectiveEmulation = opts.emulation;
+  } else if (recordedEmulation !== undefined) {
+    effectiveEmulation = recordedEmulation.device !== undefined ? { device: recordedEmulation.device } : { viewport: recordedEmulation.viewport };
+  }
+  resolveEmulation(effectiveEmulation); // refused BEFORE any browser opens (an unknown device, e.g.)
   // A declared-invariant defect (#86) is re-checked with the same spec (or `--invariants`), its probes
   // authorized against the MISSION's own origins before any browser opens.
   let invariantSpec: InvariantSpec | undefined;
@@ -285,6 +322,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
       allowedOrigins: [...mission.target.allowlist],
       baseUrl: origin,
       ...opts.browser,
+      ...effectiveEmulation,
       ...(storageState !== undefined ? { storageState } : {}),
     });
     const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
