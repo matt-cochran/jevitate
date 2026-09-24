@@ -131,6 +131,40 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
 
+### Authenticated missions
+
+`--secret <value>` **only redacts**: the value is kept out of every model call,
+transcript, Recording and issue draft, but it is never typed into a field.
+
+- **Start logged in (preferred).** Save a Playwright storageState once, for example
+  with `npx playwright codegen --save-storage=auth.json https://app.example.test/login`,
+  and pass `--storage-state auth.json`. The file holds live session cookies and
+  localStorage. It goes only to the browser, and artifacts record its path, never
+  its contents. `jevitate record` does not write a storageState.
+- **Rotating refresh tokens.** When the app rotates its refresh token on every use,
+  a saved state goes stale after the first run that refreshes it. Save a fresh state
+  before each mission (or each CI job), and do not share one file between parallel runs.
+- **Driving a login or signup form.** Bind a field to an environment variable, and
+  code types the value itself. The model only ever sees `«secret:VAR»`, and the
+  Recording records the fill as `{ redacted: true }`:
+
+  ```bash
+  APP_PASSWORD=… jevitate explore --url https://app.example.test/login \
+    --goal "log in as ada@example.com with the bound password" \
+    --secret-field 'label=Password=env:APP_PASSWORD' --success 'visible:testId=dashboard'
+  ```
+
+  A descriptor is `label=<text>`, `testId=<id>`, `type=<input type>` (for example
+  `type=password`), `id=<element id>` or `name=<name attribute>`.
+- **MFA (TOTP).** `--totp '<descriptor>=env:VAR'` takes a base32 TOTP seed (what
+  the app shows at enrolment). The 6-digit code is computed locally (RFC 6238,
+  SHA-1, 30 s) when the field is typed. The seed never reaches a model or disk.
+  For an app that forces enrolment on signup, a storageState saved after
+  enrolment avoids the flow entirely.
+
+The bound value and the seed are registered as run secrets, so the existing
+redaction seams scrub them everywhere.
+
 ### Adversarial scope, form misuse and coverage
 
 An adversarial run is **scoped to its target**: the start URL's route and everything
