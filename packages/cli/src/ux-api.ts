@@ -34,6 +34,8 @@ import {
   type SideEffect,
   type TranscriptEntry,
   secretFieldSecrets,
+  detectOverflow,
+  shouldCheckOverflow,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
@@ -51,6 +53,7 @@ import {
   resolveMinConfidence,
   resolveQualityPolicy,
   withSignalFindings,
+  makeSignalFinding,
   type AppContext,
   type JourneyOutcome,
   type RunSignalCapture,
@@ -59,6 +62,7 @@ import {
   type Control as UxControl,
   type ScreenRef,
   type UxEvidence,
+  type UxFinding,
   type UxReport,
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
@@ -594,6 +598,18 @@ export interface RunUsabilityMissionOptions {
    * result but — like every UX finding — never gates `missionOutcome`/`exitCode` (advisory-only).
    */
   readonly serverLog?: ServerLogOptions;
+  /**
+   * Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`): checked
+   * on every observed screen and, when it fires, reported as a `tier: "signal"` UxFinding — pure
+   * DOM geometry (`detectOverflow`), never a model judgment. Runs by default only when the emulated
+   * viewport is narrower than 1024px, or always when `checkOverflow` is set.
+   */
+  readonly overflow?: {
+    readonly checkOverflow?: boolean;
+    readonly toleranceCss?: number;
+    /** `--ignore-overflow <selector>` (repeatable): intentional overflow, never a finding. */
+    readonly ignoreSelectors?: readonly string[];
+  };
 }
 
 export interface RunUsabilityMissionResult {
@@ -698,6 +714,10 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const session = await port.open(launch);
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
+  // #149: one signal finding per distinct fingerprint (route + element) — a wide table seen across
+  // many observed screens is still ONE finding, never a finding per occurrence.
+  const overflowFindings: UxFinding[] = [];
+  const seenOverflow = new Set<string>();
   const extract =
     opts.extractText ??
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
@@ -780,6 +800,44 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         history.push({ screenId: ev.screenId, url: ev.url });
         // #98 the step's (secret-masked) screenshot; #96 the screen's facts for the signal oracles.
         await capture.observe(snap, visibleText);
+        // #149: horizontal-overflow hard signal — pure DOM geometry, never a model judgment.
+        // Best-effort like visibleText extraction above: a detection failure never fails the mission.
+        try {
+          const vp = session.page.viewportSize();
+          if (shouldCheckOverflow(vp?.width, opts.overflow?.checkOverflow ?? false)) {
+            const overflow = await detectOverflow(session.page, {
+              viewport: vp ?? { width: 1280, height: 720 },
+              ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+              ...(opts.overflow?.toleranceCss === undefined ? {} : { toleranceCss: opts.overflow.toleranceCss }),
+              ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+              secrets,
+            });
+            if (overflow !== null && !seenOverflow.has(overflow.fingerprint)) {
+              seenOverflow.add(overflow.fingerprint);
+              overflowFindings.push(
+                makeSignalFinding({
+                  kind: "horizontal-overflow",
+                  confidence: 0.9,
+                  url: ev.url,
+                  screenId: ev.screenId,
+                  observation: `${overflow.element.descriptor} overflows the ${overflow.viewport.width}px viewport by ${overflow.overflowPx}px on ${overflow.route}.`,
+                  userImpact:
+                    "Content extends past the visible viewport; a user on this device must discover and use horizontal scrolling to see it, and may miss it entirely.",
+                  recommendation: `Constrain ${overflow.element.descriptor} to the viewport width (e.g. a responsive layout, or an explicit scroll container) at ${overflow.viewport.width}px.`,
+                  controls: [overflow.element.descriptor],
+                  evidence: {
+                    kind: "horizontal-overflow",
+                    steps: [history.length],
+                    requests: [],
+                    detail: `scrollWidth exceeds innerWidth by ${overflow.overflowPx}px at a ${overflow.viewport.width}x${overflow.viewport.height} viewport`,
+                  },
+                }),
+              );
+            }
+          }
+        } catch {
+          // Best-effort: the run's own explore loop is never held up or failed by this check.
+        }
       },
     });
     // Never blocks the mission itself: the drain wait happens AFTER `explore()` returned.
@@ -797,10 +855,11 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const signalCapture = await capture.signalCapture(run.transcript, typedValues);
     // A gRPC-web/Connect read is never a duplicate write (#110); `--read-rpc` marks more reads.
     const readRequests = opts.target?.safety?.readRequests;
-    const signalFindings = detectSignals(
-      signalCapture,
-      readRequests === undefined ? opts.signals : { ...opts.signals, readRequests },
-    );
+    const signalFindings = [
+      ...detectSignals(signalCapture, readRequests === undefined ? opts.signals : { ...opts.signals, readRequests }),
+      // #149: horizontal-overflow, computed live during the run (never from the captured timeline).
+      ...overflowFindings,
+    ];
     // #132: the friction the run walked into — what grounds (or not) each rubric finding.
     const friction = detectFriction(signalCapture, run.outcome);
     // #134: the evidence sidecar, written through the redaction door BEFORE analysis (so it exists

@@ -1771,7 +1771,8 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--personas <file>", "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\"}]}")
     .option(
       "--check-overflow",
-      "check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory. " +
+      "check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
+        "(a defect), adversarial (a defect) or usability (a signal finding). " +
         "On by default whenever --viewport/--device emulates a viewport narrower than 1024px",
     )
     .option(
@@ -2305,6 +2306,7 @@ export function buildProgram(deps: CliDeps): Command {
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
             ...(emulation === undefined ? {} : { emulation }),
+            overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...withServerLog,
           });
