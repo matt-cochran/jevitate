@@ -2,13 +2,24 @@ import type { Question } from "./core.js";
 import { BrowseTheWebToken } from "./browse-the-web.js";
 import type { Target } from "./target.js";
 
+/**
+ * The rendered text of an element. `null` when the target does not resolve to exactly one element
+ * (absent, or ambiguous) or its text cannot be read within a short bound — never Playwright's 30s
+ * default wait: text that is not there is an answer ("no"), not an engine failure.
+ */
 export const TextOf = {
-  target(target: Target): Question<string> {
+  target(target: Target): Question<string | null> {
     return {
       description: `text of ${target.description}`,
       async answeredBy(actor) {
         const page = actor.ability(BrowseTheWebToken).session.page;
-        return target.resolve(page).innerText();
+        const locator = target.resolve(page);
+        if ((await locator.count()) !== 1) return null;
+        try {
+          return await locator.innerText({ timeout: 1_000 });
+        } catch {
+          return null;
+        }
       },
     };
   },

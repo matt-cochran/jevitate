@@ -71,6 +71,7 @@ test("checkAssertion: a textIncludes assertion that becomes true after a delay p
   const start = Date.now();
   const locator = fakeLocator({
     innerText: vi.fn(async () => (Date.now() - start >= 60 ? "Ready: done" : "Loading...")),
+    count: vi.fn(async () => 1),
   });
   const actor = actorWithPage(fakePage(locator));
   const a: Assertion = { kind: "textIncludes", target: { testId: "status" }, text: "done" };
@@ -167,4 +168,16 @@ test("checkAssertion(valueEquals): a missing, ambiguous or value-less target fai
     ),
   );
   await expect(checkAssertion(notAControl, a, { timeoutMs: 30, pollMs: 10 })).resolves.toBe(false);
+});
+
+test("checkAssertion: a textIncludes target that is not on the page is `false` within the bound — never a 30s throw", async () => {
+  const locator = fakeLocator({
+    innerText: vi.fn(async () => {
+      throw new Error("locator.innerText: Timeout 30000ms exceeded");
+    }),
+  });
+  const actor = actorWithPage(fakePage(locator));
+  const a: Assertion = { kind: "textIncludes", target: { testId: "status" }, text: "done" };
+  await expect(checkAssertion(actor as any, a, { timeoutMs: 200, pollMs: 20 })).resolves.toBe(false);
+  expect(locator.innerText).not.toHaveBeenCalled();
 });
