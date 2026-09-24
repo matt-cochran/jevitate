@@ -5,7 +5,7 @@ import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import type { SafetyConfig } from "../safety.js";
-import { goalAsksForChange } from "../read-only.js";
+import { DEFAULT_ALLOWED_WRITES, goalAsksForChange, pathGlob } from "../read-only.js";
 import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
 
 /**
@@ -32,18 +32,63 @@ const BILLING_HTML = `<!doctype html><html><body>
 </script>
 </body></html>`;
 
+/**
+ * An authenticated page with a ROTATING refresh token: a timer POSTs /auth/refresh with the current
+ * token; the server accepts only the latest one. A refresh that fails signs the page out (to /login).
+ * A heartbeat timer POSTs /api/heartbeat. "Show usage" is a read-looking control that POSTs /api/track.
+ */
+const SESSION_HTML = `<!doctype html><html><body>
+<h1>Usage</h1>
+<p>Seats used: 12 of 250.</p>
+<p id="who">Signed in</p>
+<button id="usage">Show usage</button>
+<script>
+  let token = "t0";
+  // One refresh at a time (the next is scheduled once the last rotated the token).
+  const refresh = () =>
+    fetch("/auth/refresh", { method: "POST", body: token })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error("refresh rejected"))))
+      .then((t) => { token = t; setTimeout(refresh, 150); }, () => { location.href = "/login"; });
+  setTimeout(refresh, 150);
+  setInterval(() => { fetch("/api/heartbeat", { method: "POST" }).catch(() => {}); }, 150);
+  document.getElementById("usage").addEventListener("click", () => { fetch("/api/track", { method: "POST" }).catch(() => {}); });
+</script>
+</body></html>`;
+
 let server: Server;
+/** The refresh token the server accepts next (rotating). */
+let current = "t0";
+let refreshes = 0;
+let staleRefreshes = 0;
 let origin: string;
 let writes: string[] = [];
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/auth/refresh") {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString()));
+      req.on("end", () => {
+        refreshes += 1;
+        if (body !== current) {
+          staleRefreshes += 1;
+          res.writeHead(401).end();
+          return;
+        }
+        current = `t${refreshes}`;
+        res.writeHead(200, { "content-type": "text/plain" }).end(current);
+      });
+      return;
+    }
     if (req.method === "POST") {
       writes.push(req.url ?? "");
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
       return;
     }
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(BILLING_HTML);
+    const url = req.url ?? "";
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(
+      url.startsWith("/usage") ? SESSION_HTML : url.startsWith("/login") ? "<!doctype html><h1>Sign in</h1>" : BILLING_HTML,
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -53,6 +98,9 @@ afterAll(async () => {
 });
 beforeEach(() => {
   writes = [];
+  current = "t0";
+  refreshes = 0;
+  staleRefreshes = 0;
 });
 
 const GOAL = "Find out: what does the Design Partner plan cost, and for how long? What happens after that period? Report the answer.";
@@ -67,7 +115,11 @@ const ANSWER = {
   },
 };
 
-async function run(steps: ScriptedStep[], safety?: SafetyConfig): Promise<{ result: GoalBasedResult; judge: ScriptedJudge }> {
+async function run(
+  steps: ScriptedStep[],
+  safety?: SafetyConfig,
+  opts: { readonly path?: string; readonly goal?: string; readonly gen?: FakeGenerationGateway; readonly waitOpMs?: number } = {},
+): Promise<{ result: GoalBasedResult; judge: ScriptedJudge }> {
   const judge = new ScriptedJudge(steps);
   const result = await withSession(
     "findout-readonly-",
@@ -76,11 +128,13 @@ async function run(steps: ScriptedStep[], safety?: SafetyConfig): Promise<{ resu
       return runGoalBasedMission({
         actor,
         judge,
-        gen: new FakeGenerationGateway(ANSWER),
-        goal: GOAL,
+        gen: opts.gen ?? new FakeGenerationGateway(ANSWER),
+        goal: opts.goal ?? GOAL,
         allowlist: [origin],
-        startUrl: `${origin}/settings/billing`,
-        waitOpMs: 300,
+        startUrl: `${origin}${opts.path ?? "/settings/billing"}`,
+        waitOpMs: opts.waitOpMs ?? 300,
+        // The app's timers (a refresh, a heartbeat) are background work for the settle rule.
+        settle: { ignoreRequests: ["/auth/refresh", "/api/heartbeat"] },
         bounds: { maxDecisions: 10 },
         ...(safety === undefined ? {} : { safety }),
       });
@@ -137,6 +191,50 @@ describe("a find-out goal is read-only by default (#158) and answers with 2FA/v2
     },
     60_000,
   );
+});
+
+describe("read-only blocks only what an action fires — the app's own writes pass (#158)", () => {
+  it(
+    "a timer-driven rotating token refresh and a heartbeat go through (session stays valid); a click-triggered POST is aborted",
+    async () => {
+      const gen = new FakeGenerationGateway({
+        "goal.answer": { answer: "12 of 250 seats are used.", claims: [{ claim: "12 of 250 seats are used", quote: "Seats used: 12 of 250" }] },
+      });
+      // Controls: [0] Show usage. Wait (background only), click (its POST is blocked), wait, report.
+      const { result } = await run(
+        [{ op: "wait" }, { op: "click", target: "0" }, { op: "wait" }, { op: "report" }],
+        undefined,
+        { path: "/usage", goal: "Find out how many seats are used.", gen, waitOpMs: 800 },
+      );
+
+      // The click's write never reached the server; it is recorded as blocked.
+      expect(writes).not.toContain("/api/track");
+      expect(result.transcript.some((e) => e.strategy === "read-only" && /POST \/api\/track/.test(e.reason ?? ""))).toBe(true);
+      // The refresh was never blocked (not even inside the click's window): the session stayed valid.
+      expect(refreshes).toBeGreaterThan(0);
+      expect(staleRefreshes).toBe(0);
+      expect(new URL(result.run.finalUrl).pathname).toBe("/usage");
+      expect(result.transcript.some((e) => /\/auth\/refresh/.test(e.reason ?? ""))).toBe(false);
+      // The heartbeat outside the action window passed, listed as a background side effect.
+      expect(writes).toContain("/api/heartbeat");
+      const bg = result.run.sideEffects.filter((e) => e.background === true);
+      expect(bg.some((e) => e.request.endpoint === "/api/heartbeat")).toBe(true);
+      expect(result.outcome).toBe("succeeded");
+    },
+    60_000,
+  );
+
+  it("built-in auth-refresh globs and --allow-write globs match paths", () => {
+    const g = (glob: string, path: string): boolean => pathGlob(glob).test(path);
+    expect(g("**/refresh*", "/auth/refresh")).toBe(true);
+    expect(g("**/refresh*", "/api/v1/session/refresh-token")).toBe(true);
+    expect(g("**/token*", "/oauth/token")).toBe(true);
+    expect(g("**/oauth/**", "/oauth/authorize/callback")).toBe(true);
+    expect(g("**/auth/**/refresh*", "/api/auth/session/refresh")).toBe(true);
+    expect(g("/api/track", "/api/track")).toBe(true);
+    expect(g("/api/*", "/api/a/b")).toBe(false);
+    expect(DEFAULT_ALLOWED_WRITES.some((d) => g(d, "/api/checkout"))).toBe(false);
+  });
 });
 
 describe("goalAsksForChange", () => {

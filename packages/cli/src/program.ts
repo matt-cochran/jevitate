@@ -1713,7 +1713,14 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--allow-writes",
       "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
-        "(checkout, upgrade, create, save, submit…) are refused and write requests are blocked, unless the goal itself asks for a change",
+        "(checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change",
+    )
+    .option(
+      "--allow-write <glob>",
+      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments), beyond the built-in auth-refresh ones " +
+        "(**/refresh*, **/token*, **/oauth/**, **/auth/**/refresh*). The app's background writes outside an action always pass",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
     )
     .option(
       "--read-rpc <glob>",
@@ -1886,6 +1893,7 @@ export function buildProgram(deps: CliDeps): Command {
         deny: string[];
         allowDestructive?: boolean;
         allowWrites?: boolean;
+        allowWrite: string[];
         readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
@@ -1985,6 +1993,7 @@ export function buildProgram(deps: CliDeps): Command {
             readRpc: o.readRpc,
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
             ...(o.allowWrites === true ? { allowWrites: true } : {}),
+            allowWrite: o.allowWrite,
             ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
           });
         } catch (err) {

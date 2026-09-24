@@ -49,6 +49,11 @@ export interface SafetyConfig {
    * default such a goal is read-only unless its text asks for a change (see `read-only.ts`).
    */
   readonly allowWrites?: boolean;
+  /**
+   * Write-request path globs a read-only run never blocks, beyond the built-in auth-refresh ones
+   * (`--allow-write`, repeatable; `safety.allowWrites: [globs]` in targets.json). `**` spans segments.
+   */
+  readonly allowWriteRequests?: readonly string[];
 }
 
 /** The built-in category a control's name falls into, with the words that matched, or null. */

@@ -16,8 +16,12 @@ import type { Control } from "./snapshot.js";
  *    manage subscription…) or that submits a form is refused; so are `send` (a message is a write)
  *    and `upload`. Reading ops — navigate by link, open a tab/disclosure, scroll, type into a search
  *    field, select a filter — stay allowed.
- *  - at the network: once the run has loaded its seed page, every request the shared write
- *    classifier (#110) calls a write is ABORTED before it leaves the browser, and reported.
+ *  - at the network: a write request (the shared #110 classifier) that STARTS inside a model-chosen
+ *    action's window — from the act until the page settled after it — is ABORTED before it leaves the
+ *    browser, and reported. The app's own background writes outside that window (token refresh,
+ *    heartbeat, telemetry) pass through and are listed as `background` side effects: blocking a
+ *    rotating refresh token would sign the run out mid-mission. Common auth-refresh endpoints
+ *    (`DEFAULT_ALLOWED_WRITES`) and operator globs (`--allow-write`) pass even inside a window.
  * `--allow-writes` (or a goal that asks for a change — "create…", "update…") lifts the guard; the
  * #116 safety policy still applies then.
  */
@@ -50,6 +54,25 @@ const FLOW =
 /** A form submit that only reads (a search/filter form). */
 const READ_SUBMIT = /\b(?:search|find|filter|go|look ?up|show|view|apply filters?)\b/i;
 
+/** Auth-refresh endpoints a read-only run never blocks (a blocked rotating refresh signs the run out). */
+export const DEFAULT_ALLOWED_WRITES: readonly string[] = ["**/refresh*", "**/token*", "**/oauth/**", "**/auth/**/refresh*"];
+
+/** A path glob: `**` spans segments, `*` stays within one; case-insensitive. */
+export function pathGlob(glob: string): RegExp {
+  let src = "";
+  const g = glob.trim();
+  for (let i = 0; i < g.length; i++) {
+    const ch = g[i]!;
+    if (ch === "*") {
+      if (g[i + 1] === "*") {
+        src += ".*";
+        i++;
+      } else src += "[^/]*";
+    } else src += ch.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${src}$`, "i");
+}
+
 export const READ_ONLY_NOTE =
   "this is a find-out goal and it is READ-ONLY: find the answer on the pages without changing anything — " +
   "never buy, upgrade, subscribe, create, save, submit, send or delete (such actions are refused and their write requests blocked); " +
@@ -64,12 +87,28 @@ export interface BlockedWrite {
 export class ReadOnlyGuard {
   readonly #isWrite: WriteClassifier;
   readonly #blocked: BlockedWrite[] = [];
+  readonly #allowed: readonly RegExp[];
   #page: Page | null = null;
   #armed = false;
+  /** A model-chosen action's window is open (from its act until the page settled after it). */
+  #inAction = false;
   readonly #handler = (route: Route, request: Request): Promise<void> => this.#route(route, request);
 
-  constructor(isWrite: WriteClassifier) {
+  constructor(isWrite: WriteClassifier, opts: { readonly allowWrites?: readonly string[] } = {}) {
     this.#isWrite = isWrite;
+    this.#allowed = [...DEFAULT_ALLOWED_WRITES, ...(opts.allowWrites ?? [])].filter((g) => g.trim() !== "").map(pathGlob);
+  }
+
+  /** A model-chosen action is about to be dispatched: its writes are blocked until `settled()`. */
+  beginAction(): void {
+    this.#inAction = true;
+  }
+
+  /** The page settled after the action: the window closes. True when one was open. */
+  settled(): boolean {
+    const was = this.#inAction;
+    this.#inAction = false;
+    return was;
   }
 
   /** Why an op on a control may not run on a read-only goal, or null when it may. */
@@ -91,7 +130,7 @@ export class ReadOnlyGuard {
     return `refused: this find-out goal is read-only — "${name}" ${why}; find the answer on the page instead (pass --allow-writes to permit it)`;
   }
 
-  /** From now on, every write request the page sends is aborted before it leaves the browser. */
+  /** From now on, a write request that starts inside an action window is aborted before it leaves the browser. */
   async arm(page: Page): Promise<void> {
     if (this.#armed) return;
     this.#armed = true;
@@ -107,7 +146,7 @@ export class ReadOnlyGuard {
       /* keep "/" */
     }
     const write = this.#isWrite({ method: request.method(), path, contentType: request.headers()["content-type"] ?? null });
-    if (!write) {
+    if (!write || !this.#inAction || this.#allowed.some((g) => g.test(path))) {
       await route.fallback().catch(() => undefined);
       return;
     }

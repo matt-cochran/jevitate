@@ -110,13 +110,14 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     if (f.allowDestructive !== undefined && typeof f.allowDestructive !== "boolean") {
       throw new TargetConfigError(`${where}.safety.allowDestructive must be a boolean`);
     }
-    if (f.allowWrites !== undefined && typeof f.allowWrites !== "boolean") {
-      throw new TargetConfigError(`${where}.safety.allowWrites must be a boolean`);
+    if (f.allowWrites !== undefined && typeof f.allowWrites !== "boolean" && !Array.isArray(f.allowWrites)) {
+      throw new TargetConfigError(`${where}.safety.allowWrites must be a boolean or an array of path globs`);
     }
     out.safety = {
       ...(f.deny === undefined ? {} : { deny: strings(f.deny, `${where}.safety.deny`) }),
       ...(f.allowDestructive === undefined ? {} : { allowDestructive: f.allowDestructive as boolean }),
-      ...(f.allowWrites === undefined ? {} : { allowWrites: f.allowWrites as boolean }),
+      ...(typeof f.allowWrites === "boolean" ? { allowWrites: f.allowWrites } : {}),
+      ...(Array.isArray(f.allowWrites) ? { allowWriteRequests: strings(f.allowWrites, `${where}.safety.allowWrites`) } : {}),
       ...(f.readRequests === undefined ? {} : { readRequests: strings(f.readRequests, `${where}.safety.readRequests`) }),
     };
   }
@@ -157,6 +158,8 @@ export interface TargetFlags {
   readonly allowDestructive?: boolean;
   /** `--allow-writes` (true wins over the file, #158). */
   readonly allowWrites?: boolean;
+  /** `--allow-write` path globs (added to the file's `safety.allowWrites` globs, #158). */
+  readonly allowWrite?: readonly string[];
   /** `--read-rpc` patterns (added to the file's `safety.readRequests`). */
   readonly readRpc?: readonly string[];
 }
@@ -176,11 +179,13 @@ export function resolveTargetConfig(
   const readRequests = [...(base.safety?.readRequests ?? []), ...(flags.readRpc ?? [])];
   const allowDestructive = flags.allowDestructive === true || base.safety?.allowDestructive === true;
   const allowWrites = flags.allowWrites === true || base.safety?.allowWrites === true;
+  const allowWriteRequests = [...(base.safety?.allowWriteRequests ?? []), ...(flags.allowWrite ?? [])];
   const safety: SafetyConfig = {
     ...(deny.length === 0 ? {} : { deny }),
     ...(readRequests.length === 0 ? {} : { readRequests }),
     ...(allowDestructive ? { allowDestructive } : {}),
     ...(allowWrites ? { allowWrites } : {}),
+    ...(allowWriteRequests.length === 0 ? {} : { allowWriteRequests }),
   };
   return {
     ...(Object.keys(safety).length === 0 ? {} : { safety }),

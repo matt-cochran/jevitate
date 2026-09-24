@@ -213,8 +213,9 @@ export interface ExploreConfig {
   readonly safety?: SafetyConfig;
   /**
    * A READ-ONLY run (#158: a find-out goal that does not ask for a change): code refuses clicks on
-   * controls that start a write flow / submit a form, `send` and `upload`, and aborts every write
-   * request (#110's classifier) once the seed page loaded. Every refusal is recorded (origin
+   * controls that start a write flow / submit a form, `send` and `upload`, and aborts the write
+   * requests (#110's classifier) a model-chosen action fires (act → settle); the app's own background
+   * writes (token refresh, heartbeat) pass and are listed `background`. Every refusal is recorded (origin
    * `engine`) and told to the model. Set by the goal mission; never a model decision.
    */
   readonly readOnly?: boolean;
@@ -527,7 +528,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** The writes the run's actions fire (#116: the result's `sideEffects`). */
   const effectLog = new SideEffectLog({ isWrite, now });
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
-  const readOnly = cfg.readOnly === true ? new ReadOnlyGuard(isWrite) : null;
+  const readOnly =
+    cfg.readOnly === true
+      ? new ReadOnlyGuard(isWrite, cfg.safety?.allowWriteRequests === undefined ? {} : { allowWrites: cfg.safety.allowWriteRequests })
+      : null;
   const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   let jobWaitedMs = 0;
@@ -580,6 +584,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // #158 — from here on, a read-only run's write requests never leave the browser.
     if (readOnly !== null) {
       await readOnly.arm(page);
+      effectLog.markBackground();
       history.push(READ_ONLY_NOTE);
     }
 
@@ -595,6 +600,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
       sideEffects.settle();
+      // #158 — the action's window closes once the page settled: later writes are the app's own.
+      if (readOnly?.settled() === true) effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
       const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
       {
@@ -1171,6 +1178,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         const at = now();
         effectLog.mark(transcript.nextStep, "reload");
+        readOnly?.beginAction();
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
           recorder.navigate(page.url(), at);
@@ -1222,6 +1230,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const at = now();
       const risk = safety.riskOf(control);
       effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
+      readOnly?.beginAction();
 
       // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
       // would cross what remains of the budget is refused BEFORE it fires — code decides, never the
