@@ -49,6 +49,7 @@ import {
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
   type CoverageThresholds,
+  type SuccessCheck,
 } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
@@ -96,6 +97,7 @@ import {
   runAdversarialCliMission,
   runFeatureCliMission,
   parseAssertionSpec,
+  parseSuccessSpec,
   resolveExploreAllowlist,
   type ExploreCliDeps,
 } from "./explore-api.js";
@@ -1280,7 +1282,19 @@ export function buildProgram(deps: CliDeps): Command {
       "--min-confidence <n>",
       "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
-    .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/inbox")
+    .option(
+      "--success <spec>",
+      [
+        "independent success check (repeatable; every one must hold). Kinds:",
+        "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> | count:<d>|min=<n>,max=<n>",
+        "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
+        "| requestMade:<METHOD> <path-glob> | responseStatus:<METHOD> <path-glob>=<2xx|4xx|code>.",
+        "<d> is testId=..;role=..;name=..;label=..;text=..;css=.. or a CSS selector such as [data-testid=x].",
+        "e.g. --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'",
+      ].join(" "),
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
@@ -1374,7 +1388,7 @@ export function buildProgram(deps: CliDeps): Command {
         appClass?: string;
         minConfidence?: string;
         show?: string;
-        success?: string;
+        success: string[];
         feature?: string;
         route: string[];
         allow: string[];
@@ -1709,13 +1723,13 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
 
-      if (!o.url || !o.goal || !o.success) {
+      if (!o.url || !o.goal || o.success.length === 0) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--url, --goal and --success are all required"));
         return;
       }
-      let successAssertion;
+      let successChecks: SuccessCheck[];
       try {
-        successAssertion = parseAssertionSpec(o.success);
+        successChecks = o.success.map(parseSuccessSpec);
       } catch (err) {
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
@@ -1743,7 +1757,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(target === undefined ? {} : { target }),
           url: o.url,
           goal: o.goal,
-          successAssertion,
+          successChecks,
           allowlist,
           judge,
           gen,

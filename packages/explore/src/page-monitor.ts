@@ -1,3 +1,4 @@
+import { redactUrl } from "@jevitate/ai-core";
 import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
@@ -118,6 +119,58 @@ const INSTRUMENT = `(() => {
 
 type Wake = () => void;
 
+/** One finished request, as a run-long capture keeps it (for network assertions). */
+export interface CapturedRequest {
+  readonly method: string;
+  /** The redacted URL (sensitive query values masked). */
+  readonly url: string;
+  /** The URL's path (no query, no hash). */
+  readonly path: string;
+  /** The response status; null when the request failed without a response. */
+  readonly status: number | null;
+  readonly failed: boolean;
+}
+
+/** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
+const MAX_CAPTURED = 20_000;
+
+/**
+ * Every request that finishes on a page from `startCapture()` on — unlike the timing window, which
+ * forgets requests once a perception has read them. Network assertions (`requestMade`,
+ * `responseStatus`) are evaluated over it.
+ */
+export class RequestCapture {
+  readonly #requests: CapturedRequest[] = [];
+  #truncated = false;
+
+  /** @internal — fed by the page's monitor. */
+  add(r: CapturedRequest): void {
+    this.#requests.push(r);
+    if (this.#requests.length > MAX_CAPTURED) {
+      this.#requests.shift();
+      this.#truncated = true;
+    }
+  }
+
+  /** The requests captured so far, in the order they finished. */
+  requests(): CapturedRequest[] {
+    return [...this.#requests];
+  }
+
+  /** True when more requests finished than the capture keeps (the oldest were dropped). */
+  get truncated(): boolean {
+    return this.#truncated;
+  }
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split(/[?#]/)[0] ?? url;
+  }
+}
+
 export class PageMonitor {
   readonly #page: Page;
   readonly #inflight = new Map<Request, InflightRequest>();
@@ -133,6 +186,7 @@ export class PageMonitor {
   #longPollMs = DEFAULT_LONG_POLL_MS;
   #documentNavStartedAt: number | null = null;
   #instrumented: Promise<void> | undefined;
+  readonly #captures = new Set<RequestCapture>();
 
   constructor(page: Page, now: () => number = Date.now) {
     this.#page = page;
@@ -169,6 +223,9 @@ export class PageMonitor {
         const endedAt = this.#now();
         const contentType = this.#contentTypes.get(r) ?? null;
         this.#completed.push({ ...started, status, contentType, failed, endedAt, durationMs: Math.max(0, endedAt - started.startedAt) });
+        for (const c of this.#captures) {
+          c.add({ method: started.method.toUpperCase(), url: redactUrl(started.url), path: pathOf(started.url), status, failed });
+        }
       }
       if (!ignored) this.#touch();
     };
@@ -203,6 +260,18 @@ export class PageMonitor {
       await this.#page.evaluate(INSTRUMENT).catch(() => undefined);
     })();
     return this.#instrumented;
+  }
+
+  /** Starts keeping every request that finishes from now on (until `stopCapture`). */
+  startCapture(): RequestCapture {
+    const c = new RequestCapture();
+    this.#captures.add(c);
+    return c;
+  }
+
+  /** Stops feeding `capture` (what it holds is kept). */
+  stopCapture(capture: RequestCapture): void {
+    this.#captures.delete(capture);
   }
 
   /** Applies the target's settle configuration (idempotent; the latest call wins). */

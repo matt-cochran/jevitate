@@ -25,6 +25,9 @@ import {
   type TranscriptEntry,
   type RunOutcome,
   type CoverageThresholds,
+  type StatusSpec,
+  type SuccessCheck,
+  type SuccessCheckResult,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -69,7 +72,10 @@ import { goalExitCode, missionExitCode } from "./mission-exit.js";
 export interface RunExplorationOptions {
   readonly url: string;
   readonly goal: string;
-  readonly successAssertion: Assertion;
+  /** A success assertion on the final page. With `successChecks`, every one must hold. */
+  readonly successAssertion?: Assertion;
+  /** More independent checks (`--success`, repeatable): page, reloadThen, requestMade, responseStatus. */
+  readonly successChecks?: readonly SuccessCheck[];
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
@@ -161,6 +167,8 @@ export interface RunExplorationResult {
    */
   readonly runOutcome: RunOutcome;
   readonly assertionPassed: boolean;
+  /** Each success check's verdict and what the oracle saw. */
+  readonly checks: SuccessCheckResult[];
   readonly stop: StopReason;
   readonly finalUrl: string;
   readonly decisions: number;
@@ -230,7 +238,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       goal: opts.goal,
       allowlist: opts.allowlist,
       startUrl: opts.url,
-      successAssertion: opts.successAssertion,
+      ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
+      ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,
@@ -266,6 +275,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       outcome: mission.outcome,
       runOutcome: mission.run.outcome,
       assertionPassed: mission.assertionPassed,
+      checks: mission.checks,
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
@@ -791,13 +801,15 @@ export interface ExploreCliDeps {
 }
 
 /**
- * Compact `--success` assertion spec parser. Supported forms:
+ * Compact assertion spec parser (a recording `Assertion`, checked on a page). Supported forms:
  *   urlIncludes:<text>
  *   visible:<descriptor>
  *   textIncludes:<descriptor>|<text>
  *   count:<descriptor>|min=<n>,max=<n>
- * where <descriptor> is `k=v` pairs joined by `;` over
- * testId/role/name/label/text/css.
+ *   valueEquals:<descriptor>|<value>   — a form control's VALUE (input, textarea, select), exactly
+ * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS
+ * selector starting with `[`, `#` or `.` (`[data-testid=x]` is read as `testId=x`). In
+ * `textIncludes` / `valueEquals` the LAST `|` separates the descriptor from the text.
  */
 export function parseAssertionSpec(spec: string): Assertion {
   const ci = spec.indexOf(":");
@@ -817,6 +829,11 @@ export function parseAssertionSpec(spec: string): Assertion {
       if (bar === -1) throw new Error('textIncludes requires "<descriptor>|<text>"');
       return { kind: "textIncludes", target: parseDescriptorSpec(rest.slice(0, bar)), text: rest.slice(bar + 1) };
     }
+    case "valueEquals": {
+      const bar = rest.lastIndexOf("|");
+      if (bar === -1) throw new Error('valueEquals requires "<descriptor>|<value>"');
+      return { kind: "valueEquals", target: parseDescriptorSpec(rest.slice(0, bar)), value: rest.slice(bar + 1) };
+    }
     case "count": {
       const bar = rest.indexOf("|");
       const descPart = bar === -1 ? rest : rest.slice(0, bar);
@@ -835,7 +852,64 @@ export function parseAssertionSpec(spec: string): Assertion {
   }
 }
 
+const HTTP_METHOD = /^(?:[A-Za-z]+|\*)$/;
+
+/** `<METHOD> <path-glob>` — the request half of a network check. */
+function parseRequestSpec(kind: string, text: string): { method: string; pathGlob: string } {
+  const sp = text.indexOf(" ");
+  const method = sp === -1 ? "" : text.slice(0, sp);
+  const pathGlob = sp === -1 ? "" : text.slice(sp + 1).trim();
+  if (!HTTP_METHOD.test(method) || !pathGlob.startsWith("/")) {
+    throw new Error(`${kind} requires "<METHOD> <path-glob>", e.g. ${kind}:PUT /api/profile/*`);
+  }
+  return { method: method.toUpperCase(), pathGlob };
+}
+
+function parseStatusSpec(text: string): StatusSpec {
+  if (/^[1-5]xx$/i.test(text)) return { class: Number(text[0]) as 1 | 2 | 3 | 4 | 5 };
+  if (/^[1-5]\d\d$/.test(text)) return { code: Number(text) };
+  throw new Error(`responseStatus expects 2xx, 4xx … or a status code, got ${JSON.stringify(text)}`);
+}
+
+/**
+ * The goal mission's `--success` spec parser (repeatable: every check must hold). Besides every
+ * page assertion `parseAssertionSpec` reads:
+ *   reloadThen:<assertion>                     — reload the page, then check (persistence)
+ *   requestMade:<METHOD> <path-glob>           — the run issued this request
+ *   responseStatus:<METHOD> <path-glob>=<2xx|4xx|code> — and it got this status
+ * `<path-glob>` uses the route-glob syntax (`*` within a segment, `**` across segments) against
+ * the request's path; `*` as METHOD matches any method.
+ */
+export function parseSuccessSpec(spec: string): SuccessCheck {
+  const ci = spec.indexOf(":");
+  const kind = ci === -1 ? spec : spec.slice(0, ci);
+  const rest = ci === -1 ? "" : spec.slice(ci + 1);
+  switch (kind) {
+    case "reloadThen":
+      if (rest.startsWith("reloadThen:")) throw new Error("reloadThen cannot be nested");
+      return { kind: "reloadThen", assertion: parseAssertionSpec(rest) };
+    case "requestMade":
+      return { kind: "requestMade", ...parseRequestSpec(kind, rest) };
+    case "responseStatus": {
+      const eq = rest.lastIndexOf("=");
+      if (eq === -1) throw new Error('responseStatus requires "<METHOD> <path-glob>=<2xx|4xx|code>"');
+      return { kind: "responseStatus", ...parseRequestSpec(kind, rest.slice(0, eq)), status: parseStatusSpec(rest.slice(eq + 1)) };
+    }
+    default:
+      return { kind: "page", assertion: parseAssertionSpec(spec) };
+  }
+}
+
 function parseDescriptorSpec(s: string): TargetDescriptor {
+  const raw = s.trim();
+  if (/^[[#.]/.test(raw)) {
+    // A CSS selector. The common test-id attribute form becomes a test-id descriptor (the most
+    // stable rung); anything else is used as CSS verbatim.
+    const testId = /^\[data-testid=(?:"([^"]*)"|'([^']*)'|([^\]"']*))\]$/.exec(raw);
+    const id = testId === null ? undefined : (testId[1] ?? testId[2] ?? testId[3]);
+    if (id !== undefined && id !== "") return { testId: id };
+    return { css: raw };
+  }
   const d: TargetDescriptor = {};
   const keys = ["testId", "role", "name", "label", "text", "css"] as const;
   for (const pair of s.split(";")) {

@@ -9,6 +9,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
 import {
   parseAssertionSpec,
+  parseSuccessSpec,
   resolveExploreAllowlist,
   runExploration,
   runAuthorJourney,
@@ -40,6 +41,74 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     expect(() => parseAssertionSpec("nope")).toThrow();
     expect(() => parseAssertionSpec("urlIncludes:")).toThrow();
     expect(() => parseAssertionSpec("visible:foo=bar")).toThrow(/no usable selector/);
+  });
+
+  it("parses valueEquals (a form control's value) with key=value or CSS-selector descriptors", () => {
+    expect(parseAssertionSpec("valueEquals:label=Last name|Litmus")).toEqual({
+      kind: "valueEquals",
+      target: { label: "Last name" },
+      value: "Litmus",
+    });
+    // The issue's own example: a [data-testid=…] selector is read as the test id.
+    expect(parseAssertionSpec("valueEquals:[data-testid=profile-general-lastName]|Litmus")).toEqual({
+      kind: "valueEquals",
+      target: { testId: "profile-general-lastName" },
+      value: "Litmus",
+    });
+    expect(parseAssertionSpec('valueEquals:[data-testid="last"]|')).toEqual({
+      kind: "valueEquals",
+      target: { testId: "last" },
+      value: "",
+    });
+    expect(parseAssertionSpec("valueEquals:#profile input[name=last]|x")).toEqual({
+      kind: "valueEquals",
+      target: { css: "#profile input[name=last]" },
+      value: "x",
+    });
+    expect(() => parseAssertionSpec("valueEquals:testId=last")).toThrow(/<descriptor>\|<value>/);
+  });
+
+  it("parses every --success check kind: page, reloadThen, requestMade, responseStatus", () => {
+    expect(parseSuccessSpec("urlIncludes:/done")).toEqual({ kind: "page", assertion: { kind: "urlIncludes", text: "/done" } });
+    expect(parseSuccessSpec("reloadThen:valueEquals:[data-testid=last]|Litmus")).toEqual({
+      kind: "reloadThen",
+      assertion: { kind: "valueEquals", target: { testId: "last" }, value: "Litmus" },
+    });
+    expect(parseSuccessSpec("requestMade:put /api/profile/*")).toEqual({
+      kind: "requestMade",
+      method: "PUT",
+      pathGlob: "/api/profile/*",
+    });
+    expect(parseSuccessSpec("requestMade:* /api/**")).toEqual({ kind: "requestMade", method: "*", pathGlob: "/api/**" });
+    expect(parseSuccessSpec("responseStatus:PUT /api/profile=2xx")).toEqual({
+      kind: "responseStatus",
+      method: "PUT",
+      pathGlob: "/api/profile",
+      status: { class: 2 },
+    });
+    expect(parseSuccessSpec("responseStatus:POST /api/items=201")).toMatchObject({ status: { code: 201 } });
+    expect(parseSuccessSpec("responseStatus:DELETE /api/items/*=4XX")).toMatchObject({ status: { class: 4 } });
+  });
+
+  it("rejects malformed --success checks", () => {
+    expect(() => parseSuccessSpec("requestMade:/api/profile")).toThrow(/<METHOD> <path-glob>/);
+    expect(() => parseSuccessSpec("requestMade:PUT api/profile")).toThrow(/<METHOD> <path-glob>/);
+    expect(() => parseSuccessSpec("responseStatus:PUT /api/profile")).toThrow(/=<2xx\|4xx\|code>/);
+    expect(() => parseSuccessSpec("responseStatus:PUT /api/profile=ok")).toThrow(/2xx, 4xx/);
+    expect(() => parseSuccessSpec("responseStatus:PUT /api/profile=600")).toThrow(/2xx, 4xx/);
+    expect(() => parseSuccessSpec("reloadThen:reloadThen:urlIncludes:/x")).toThrow(/cannot be nested/);
+    expect(() => parseSuccessSpec("reloadThen:nope")).toThrow();
+    expect(() => parseSuccessSpec("nope")).toThrow();
+  });
+
+  it("documents every --success kind in the explore help, and --success is repeatable", () => {
+    const program = buildProgram({ profiles: new ProfileManager("/unused") });
+    const explore = program.commands.find((c) => c.name() === "explore");
+    const success = explore?.options.find((o) => o.long === "--success");
+    for (const kind of ["urlIncludes:", "visible:", "textIncludes:", "count:", "valueEquals:", "reloadThen:", "requestMade:", "responseStatus:"]) {
+      expect(success?.description).toContain(kind);
+    }
+    expect(success?.description).toContain("repeatable");
   });
 
   it("defaults the allowlist to the URL's own origin, honoring explicit --allow", () => {

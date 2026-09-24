@@ -95,6 +95,42 @@ jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.j
 
 The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same.
 
+### Success checks (goal mission)
+
+A goal run succeeds only if its independent checks hold. The model's "done" never
+decides it. `--success` can be repeated, and every check must hold:
+
+| Check | Holds when |
+|---|---|
+| `urlIncludes:<text>` | the final URL contains the text |
+| `visible:<d>` | the element is visible |
+| `textIncludes:<d>\|<text>` | the element's text contains the text |
+| `count:<d>\|min=<n>,max=<n>` | the number of matching elements is within the bounds |
+| `valueEquals:<d>\|<value>` | a form control's **value** (input, textarea, select) equals the value exactly |
+| `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
+| `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing) |
+| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status |
+
+In these specs:
+
+- `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…`, or a CSS selector
+  (`[data-testid=x]` is read as the test id).
+- The last `|` separates the descriptor from the text or value.
+- Path globs match the request path: `*` within one segment, `**` across segments.
+  A method of `*` matches any method.
+- Network checks look only at the requests the run itself made. The reload that
+  `reloadThen` performs is not counted.
+- The goal loop can also choose a `reload` step itself.
+
+The result lists each check with what the oracle saw, so a failing run names the
+check that caught it:
+
+```bash
+jevitate explore --url https://app.example.test/profile --goal "set the last name to Litmus and save" \
+  --success 'requestMade:PUT /api/profile' --success 'responseStatus:PUT /api/profile=2xx' \
+  --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
+```
+
 ### Adversarial scope, form misuse and coverage
 
 An adversarial run is **scoped to its target**: the start URL's route and everything
