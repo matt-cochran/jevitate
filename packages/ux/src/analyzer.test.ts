@@ -60,14 +60,17 @@ function scriptedGen(make: (rubricItemId: string) => Omit<UxSpecificsItem, "rubr
 }
 
 /** Jev: primary-action flagged (P(clear)=pClear) and applicability P(applies)=pApplies. */
-function flaggingJudge(pClear: number, pApplies: number): JudgmentPort {
+function flaggingJudge(pClear: number, pApplies: number, grade = "actionable"): JudgmentPort {
   return {
     systemOne: async (args) => {
       const out: Record<string, Answer> = {};
-      for (const k of Object.keys(args.questions)) {
-        out[k] = k.endsWith(`::${APPLIES_QUESTION_ID}`)
-          ? { kind: "noul", value: pApplies >= 0.5, probability: pApplies }
-          : { kind: "noul", value: pClear >= 0.5, probability: pClear };
+      for (const [k, q] of Object.entries(args.questions)) {
+        out[k] =
+          q.kind === "choice"
+            ? { kind: "choice", value: grade, confidence: 0.8 } // the independent quality grader
+            : k.endsWith(`::${APPLIES_QUESTION_ID}`)
+              ? { kind: "noul", value: pApplies >= 0.5, probability: pApplies }
+              : { kind: "noul", value: pClear >= 0.5, probability: pClear };
       }
       return out;
     },
@@ -264,9 +267,14 @@ describe("UxAnalyzer", () => {
     let call = 0;
     const judge: JudgmentPort = {
       systemOne: async (args) => {
-        call++;
         const out: Record<string, Answer> = {};
-        for (const k of Object.keys(args.questions)) {
+        const isGrader = Object.values(args.questions).some((q) => q.kind === "choice");
+        if (!isGrader) call++;
+        for (const [k, q] of Object.entries(args.questions)) {
+          if (q.kind === "choice") {
+            out[k] = { kind: "choice", value: "relevant-minor", confidence: 0.7 };
+            continue;
+          }
           out[k] = k.endsWith(`::${APPLIES_QUESTION_ID}`)
             ? { kind: "noul", value: true, probability: 1 }
             : // 3 of the 4 states on /checkout flag it (P(clear)=0), the 4th passes.
@@ -286,6 +294,25 @@ describe("UxAnalyzer", () => {
     expect(f.screenIds).toEqual(["s1", "s2", "s3"]);
     expect(f.confidenceBasis?.agreement).toBe(0.75);
     expect(f.confidence).toBe(0.75);
+    expect(f.quality).toEqual({ label: "relevant-minor", confidence: 0.7 });
+  });
+
+  it("the quality grade is a SEPARATE Jev request (own question/criteria), recorded on the finding", async () => {
+    const requests: string[][] = [];
+    const base = flaggingJudge(0.1, 0.9, "generic");
+    const judge: JudgmentPort = {
+      systemOne: async (args) => {
+        requests.push(Object.keys(args.questions));
+        return base.systemOne(args);
+      },
+    };
+    const analyzer = new UxAnalyzer({ judge, gen: scriptedGen(() => grounded()) });
+    const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([primaryAction]), appContext, judgmentBudget: 10 });
+    if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(["grade::0"]);
+    expect(requests[0]).not.toContain("grade::0");
+    expect(outcome.findings[0]?.quality?.label).toBe("generic");
   });
 
   it("a specifics-generation error becomes `failed`, never a silent empty result", async () => {

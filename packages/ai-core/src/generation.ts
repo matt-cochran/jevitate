@@ -81,8 +81,14 @@ export const GEN_TASKS = {
   "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "1" },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
-  "ux.specifics": { input: UxSpecificsInput, output: UxSpecificsOutput, promptVersion: "1" },
+  "ux.specifics": { input: UxSpecificsInput, output: UxSpecificsOutput, promptVersion: "1", temperature: 0 },
 } as const;
+
+/** A task's sampling temperature when it pins one (run-to-run consistency); else the provider default. */
+export function taskTemperature(kind: GenTaskKind): number | undefined {
+  const task = GEN_TASKS[kind];
+  return "temperature" in task ? task.temperature : undefined;
+}
 export type GenTaskKind = keyof typeof GEN_TASKS;
 export type GenInput<K extends GenTaskKind> = z.input<(typeof GEN_TASKS)[K]["input"]>;
 export type GenOutput<K extends GenTaskKind> = z.output<(typeof GEN_TASKS)[K]["output"]>;

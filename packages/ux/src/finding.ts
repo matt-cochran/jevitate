@@ -44,6 +44,7 @@ export interface MakeFindingInput {
   /** Every screen-state observed (default: just the analyzed evidence's screen). */
   readonly screenIds?: readonly string[];
   readonly confidenceBasis?: ConfidenceBasis;
+  readonly quality?: UxFinding["quality"];
   readonly predictedAttention?: PredictedAttention;
 }
 
@@ -108,6 +109,7 @@ export function makeFinding(
     occurrences,
     screenIds: [...(input.screenIds ?? [evidence.screenId])],
     ...(input.confidenceBasis ? { confidenceBasis: { ...input.confidenceBasis } } : {}),
+    ...(input.quality ? { quality: { ...input.quality } } : {}),
     ...(input.predictedAttention ? { predictedAttention: input.predictedAttention } : {}),
   };
   return Object.freeze(finding);

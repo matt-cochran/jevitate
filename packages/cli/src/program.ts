@@ -96,7 +96,7 @@ import {
 } from "./explore-api.js";
 import { runUsabilityMission, runUxReview, UxAnalysisFailedError } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
-import { MinConfidenceError } from "@jevitate/ux";
+import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import {
   runRecording,
@@ -1268,6 +1268,10 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--goal <text>", "natural-language goal / job (required for --strategy goal and usability)")
     .option("--app-class <class>", "app class for UX calibration (required for --strategy usability), e.g. consumer|admin|internal")
     .option(
+      "--show <labels>",
+      "quality grades to show (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then actionable,relevant-minor",
+    )
+    .option(
       "--min-confidence <n>",
       "(--strategy usability) UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.75",
     )
@@ -1346,6 +1350,7 @@ export function buildProgram(deps: CliDeps): Command {
         goal?: string;
         appClass?: string;
         minConfidence?: string;
+        show?: string;
         success?: string;
         feature?: string;
         route: string[];
@@ -1589,6 +1594,7 @@ export function buildProgram(deps: CliDeps): Command {
             judge: uxJudge,
             gen: uxGen,
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
+            ...(o.show !== undefined ? { show: o.show } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
             fixture: o.fixture,
@@ -1605,7 +1611,7 @@ export function buildProgram(deps: CliDeps): Command {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
-          } else if (err instanceof MinConfidenceError || err instanceof UxConfigError) {
+          } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
             emitJson(program, fail("E_UX_ARGS", err.message));
           } else {
             emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
@@ -2193,6 +2199,10 @@ export function buildProgram(deps: CliDeps): Command {
     .description("offline UX review of a saved Recording — ranked, cited usability findings")
     .option("--app-class <class>", "app class for calibration (required), e.g. consumer|admin|internal")
     .option(
+      "--show <labels>",
+      "quality grades to show (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then actionable,relevant-minor",
+    )
+    .option(
       "--min-confidence <n>",
       "UX findings below this confidence (0..1) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.75",
     )
@@ -2206,6 +2216,7 @@ export function buildProgram(deps: CliDeps): Command {
       const o = this.opts<{
         appClass?: string;
         minConfidence?: string;
+        show?: string;
         persona?: string;
         job?: string;
         out?: string;
@@ -2247,13 +2258,14 @@ export function buildProgram(deps: CliDeps): Command {
           judge: uxJudge,
           gen: uxGen,
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
+          ...(o.show !== undefined ? { show: o.show } : {}),
           outDir: o.out,
         });
         emitJson(program, ok(result));
       } catch (err) {
         if (err instanceof UxAnalysisFailedError) {
           emitJson(program, fail("E_UX_ANALYSIS", err.message));
-        } else if (err instanceof MinConfidenceError || err instanceof UxConfigError) {
+        } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
           emitJson(program, fail("E_UX_ARGS", err.message));
         } else {
           emitJson(program, fail("E_UX_RUN", String(err instanceof Error ? err.message : err)));
@@ -2347,10 +2359,15 @@ export function fakeDoneJudge(): JudgmentPort {
 async function realOpenRouterCall(): Promise<OpenRouterCall> {
   const { generateObject } = await import("ai");
   const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
-  return async ({ model, schema, body, authHeader }) => {
+  return async ({ model, schema, body, authHeader, temperature }) => {
     const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
     const start = Date.now();
-    const { object } = await generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body) });
+    const { object } = await generateObject({
+      model: openrouter(model),
+      schema,
+      prompt: JSON.stringify(body),
+      ...(temperature === undefined ? {} : { temperature }),
+    });
     return { object, latencyMs: Date.now() - start };
   };
 }

@@ -1,0 +1,170 @@
+{
+  "version": "ux-prompts@5",
+  "notes": "App-agnostic prompt + rubric-description assets for @jevitate/ux. Never name a specific product, route or domain term here (enforced by prompts.test.ts). Bump `version` on any change and re-measure (scripts/ux-quality).",
+  "applicability": "Setting aside whether it is satisfied: can the principle \"{principle}\" sensibly be at issue on THIS screen, given what the screen is for (its type and purpose), the job, and the app class? Answer no when the principle cannot meaningfully apply here — e.g. choice overload on a screen with two buttons, error recovery on a screen showing no error and no input, progress/status on a static confirmation.",
+  "specifics": [
+    "You are reviewing ONE screen of a web app for usability problems. An automated judge flagged each listed rubric item on this screen; most such flags are false alarms, so confirm each one against the screen before reporting it.",
+    "For EACH item return:",
+    "- violated: true ONLY if specific controls or on-screen text visibly break the principle for this job. Otherwise false.",
+    "- implicatedControls: the `index` of ONLY the controls that show the problem. Never list site-wide navigation, header or footer links unless the problem is in them.",
+    "- quotes: short verbatim excerpts copied exactly from visibleText or a control label that show the problem.",
+    "- observation: one or two sentences naming the control/label/text and the concrete conflict with the job (e.g. two labels that mean the same thing, a term the user cannot know, a required step that is hidden, an error with no way forward).",
+    "- userImpact: what this concretely costs the user pursuing the job.",
+    "- recommendation: a specific change to that control/text. Never restate the heuristic's name.",
+    "Set violated=false (and leave implicatedControls and quotes empty) when the only evidence is: speculation about what happens after a click (feedback, confirmation, progress) that a static screen cannot show; a missing cancel/back/undo on ordinary links or navigation; missing help on a simple page; 'many options may overwhelm users' without a concrete conflict between named controls; a label that is already clear to someone doing this job; or a content item (a message, a record, an article link) being mistaken for an action."
+  ],
+  "grader": {
+    "instructions": "You are a senior UX reviewer triaging an automated usability finding about ONE screen. The screen's controls and visible text are in the state; the user's job is the goal. Check the finding against what is actually shown. Findings that name a concrete conflict between specific labels or controls (duplicated or near-identical labels, unexplained jargon, a visible error or empty state, a required step that is hidden) are usually real. Findings that only speculate about what happens after a click, ask for cancel/back on an ordinary link, ask for help on a simple page, or say options 'may overwhelm' users without a concrete conflict are usually generic. If no observation is given, decide whether the principle is concretely violated on this screen. Finding: {finding}",
+    "labels": {
+      "actionable": "A real, specific problem on THIS screen, shown by the cited controls or text, that blocks, misleads or clearly slows the job; the fix is concrete and worth doing.",
+      "relevant-minor": "A real problem visible in the cited controls or text (e.g. duplicated or confusing labels, jargon, a real missing state), but low impact on the job.",
+      "generic": "Boilerplate or speculation: the problem is not visible on this screen, or the principle does not meaningfully apply to this screen or job; the fix would fit almost any screen.",
+      "wrong": "The screen as shown already satisfies the principle, or the finding misreads the cited controls or text (e.g. treats a link or content item as an action, or calls missing something that is present)."
+    }
+  },
+  "rubric": {
+    "nielsen-1": {
+      "principle": "Visibility of system status",
+      "questions": {
+        "status-visible": {
+          "instruction": "For a {persona} pursuing the job, does this {appClass} screen keep the user informed of current system state where they would need it — e.g. a visible loading/saving indicator, selection state, or 'step X of Y' progress?",
+          "criteria": "A timely, on-screen indicator communicates the state relevant to the next action. Judge only state visible on THIS screen (current selection, step, saved/loaded/error state). Absent when the user must act blind. Do NOT flag because a click's future feedback is not visible on a static screen."
+        }
+      }
+    },
+    "nielsen-2": {
+      "principle": "Match between system and the real world",
+      "questions": {
+        "real-world-language": {
+          "instruction": "Does the visible language use words, phrases, and concepts a {persona} already knows for this job, rather than internal jargon, system codes, or developer terminology?",
+          "criteria": "Labels and copy map to the user's domain vocabulary and natural reading order. Failing when jargon/system terms (ids, enum names, internal states) appear in user-facing copy."
+        }
+      }
+    },
+    "nielsen-3": {
+      "principle": "User control and freedom",
+      "questions": {
+        "escape-hatch": {
+          "instruction": "Does the screen give the user a clearly marked way out of the current action — undo, cancel, back, or clear — without forcing them to commit or complete an unwanted path?",
+          "criteria": "A visible control lets the user reverse or exit. Applies to commit/destructive steps, multi-step flows and modal states. Failing when the only visible controls advance/commit and there is no cancel/back/undo affordance. Ordinary navigation links and read-only pages are not failures (the browser back and site navigation are the exit)."
+        }
+      }
+    },
+    "nielsen-4": {
+      "principle": "Consistency and standards",
+      "questions": {
+        "consistent-conventions": {
+          "instruction": "Do the controls and terminology follow established platform/web conventions and stay internally consistent — the same word for the same thing, standard control patterns for standard tasks?",
+          "criteria": "Conventional affordances (a real submit button for submit, links that look like links) and one term per concept. Failing on nonstandard patterns or the same concept named two ways."
+        }
+      }
+    },
+    "nielsen-5": {
+      "principle": "Error prevention",
+      "questions": {
+        "prevents-errors": {
+          "instruction": "Does the screen actively prevent the errors most likely for this job — sensible defaults, input constraints/formats surfaced up front, and a confirmation step before a destructive or irreversible action?",
+          "criteria": "Constraints, defaults, and guards reduce the chance of a slip or mistake. Failing when a destructive/irreversible action has no confirmation, or a constrained input gives no up-front format guidance. Only inputs, destructive or irreversible actions can fail this; ordinary navigation links cannot."
+        }
+      }
+    },
+    "nielsen-6": {
+      "principle": "Recognition rather than recall",
+      "questions": {
+        "recognition-over-recall": {
+          "instruction": "Can the user proceed toward the job using only what is visible/recognizable on this screen, without having to remember specific details (values, codes, choices) from an earlier screen?",
+          "criteria": "Needed options and previously-entered context are shown or retrievable in place. Failing when the user must recall a value/choice from a prior step that is not surfaced here."
+        }
+      }
+    },
+    "nielsen-7": {
+      "principle": "Flexibility and efficiency of use",
+      "questions": {
+        "efficiency-accelerators": {
+          "instruction": "Does the screen offer an efficient path for a returning or expert user — shortcuts, sensible prefilled defaults, or bulk/batch actions — without making the first-time path harder?",
+          "criteria": "Accelerators exist for the frequent case and do not clutter the novice path. Failing when every user, expert or not, is forced through the same slow, step-by-step interaction."
+        }
+      }
+    },
+    "nielsen-8": {
+      "principle": "Aesthetic and minimalist design",
+      "questions": {
+        "signal-over-noise": {
+          "instruction": "Is the screen free of extraneous content and controls that compete with the information the user needs for this job right now?",
+          "criteria": "Every prominent element earns its place for the current job. Failing when secondary content, promos, or rarely-needed controls dilute the primary information and dominate attention."
+        }
+      }
+    },
+    "nielsen-9": {
+      "principle": "Help users recognize, diagnose, and recover from errors",
+      "questions": {
+        "error-recovery": {
+          "instruction": "Where an error state is present or likely on this screen, is it expressed in plain language that names the problem precisely and states the concrete recovery action — not a code or a generic 'something went wrong'?",
+          "criteria": "Error messaging identifies the cause and the fix in the user's terms. Failing on raw codes, generic failures, or an error with no stated path to recover."
+        }
+      }
+    },
+    "nielsen-10": {
+      "principle": "Help and documentation",
+      "questions": {
+        "contextual-help": {
+          "instruction": "Where the task on this screen is non-obvious, is contextual help or guidance available in place (tooltip, inline hint, help link) so the user can complete the job without leaving the flow?",
+          "criteria": "Help is discoverable at the point of need and scoped to the task. Failing when a genuinely non-obvious step has no in-context guidance at all. A simple page whose controls are self-explanatory for this job does not need help and passes."
+        }
+      }
+    },
+    "scent": {
+      "principle": "Information scent — labels predict their destination relative to the job",
+      "questions": {
+        "scent-strength": {
+          "instruction": "Rate how well the actionable controls' labels and affordances let the user predict, before clicking, which one advances the job — i.e. the strength of the information scent toward the goal. 1.0 = each next step's label unambiguously signals its destination; 0.0 = the user must guess or click to find out.",
+          "criteria": "Judge the whole screen's set of actionable controls against the job. Weak scent = vague/generic labels ('Continue', 'More', 'Options'), competing look-alike actions, or the job-advancing control indistinguishable from the rest."
+        }
+      }
+    },
+    "progressive-disclosure": {
+      "principle": "Progressive disclosure — essential actions prominent, advanced options deferred",
+      "questions": {
+        "disclosure-quality": {
+          "instruction": "Rate how well this screen practices progressive disclosure for a {persona} doing the job. 1.0 = only the controls essential to the job right now are prominent, and secondary/advanced/rarely-used options are tucked into a deeper level; 0.0 = advanced or rarely-needed options are exposed at the same prominence as the essential path.",
+          "criteria": "Classify each control as essential-now / secondary / advanced for the job, then judge the exposure. Low score = advanced options compete for attention with the primary path, inflating perceived complexity."
+        }
+      }
+    },
+    "cognitive-load": {
+      "principle": "Cognitive load / choice overload — decision burden vs the job (Hick's Law, CLT)",
+      "questions": {
+        "decision-burden": {
+          "instruction": "Rate the decision burden this screen imposes relative to the job. 1.0 = a focused, minimal set of choices leads cleanly to the goal; 0.0 = so many simultaneous options/inputs compete that the primary action is diluted and choosing is costly (Hick's Law), or extraneous load is high (Cognitive Load Theory).",
+          "criteria": "Weigh the count and simultaneity of choices/inputs against what the job actually requires here. Low score = choice overload or high extraneous load, not merely a rich screen that the job needs."
+        }
+      }
+    },
+    "primary-action": {
+      "principle": "Primary-action clarity — the single next step toward the job is unambiguous",
+      "questions": {
+        "primary-action-unambiguous": {
+          "instruction": "Is the single next step toward the job unambiguous from what is on screen — one clearly primary action that is visually dominant and unmistakable, not competing on equal footing with other buttons?",
+          "criteria": "There is exactly one visually dominant, correctly-labelled primary action for the job. Failing when two or more actions compete for 'primary', or the true next step is visually recessive. Ignore site-wide navigation, header and footer links; judge the actions in the page's main content."
+        }
+      }
+    },
+    "dark-patterns": {
+      "principle": "Deceptive patterns — confirmshaming, misdirection, forced continuity",
+      "questions": {
+        "confirmshaming": {
+          "instruction": "Does any decline / opt-out / dismiss option use guilt, shame, or loaded wording to pressure the user away from the choice they might reasonably want (confirmshaming)?",
+          "criteria": "Look at the wording of negative/decline options. Present when the opt-out is phrased to make the user feel bad ('No thanks, I don't want to save money'). Neutral decline wording is NOT a finding."
+        },
+        "misdirection": {
+          "instruction": "Does the visual hierarchy or wording deliberately steer the user toward a choice that benefits the business over the user's stated job (misdirection) — e.g. a bright 'upgrade' button dwarfing the plain path the user actually wants?",
+          "criteria": "Compare emphasis given to the business-preferred option vs the user's job path. Present when attention is engineered toward the business's interest against the user's. Legitimate emphasis on the user's own goal is NOT a finding."
+        },
+        "forced-continuity": {
+          "instruction": "Does the screen set up an automatic charge, renewal, or ongoing commitment without clear, prominent disclosure of the terms and an easy way to decline or exit (forced continuity)?",
+          "criteria": "Present when a recurring charge / auto-renewal / trial-to-paid is implied or set without conspicuous terms and an easy opt-out. Fully-disclosed, easily-cancellable subscriptions are NOT a finding."
+        }
+      }
+    }
+  }
+}

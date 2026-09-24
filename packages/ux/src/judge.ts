@@ -6,6 +6,7 @@
 // reach the model here: the signature enforces it at compile time.
 import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
 import type { JevQuestionSpec, RubricEntry } from "./types.js";
+import { UX_PROMPTS } from "./prompts.js";
 import type { RedactedEvidence } from "./redact.js";
 
 /** Namespaced key so questions from different rubric entries never collide. */
@@ -57,11 +58,7 @@ function toQuestion(spec: JevQuestionSpec, evidence: RedactedEvidence): Question
 function appliesQuestion(entry: RubricEntry): Question {
   return {
     kind: "noul",
-    instructions:
-      `Setting aside whether it is satisfied: can the principle "${entry.principle}" sensibly be at issue on THIS screen, ` +
-      "given what the screen is for (its type and purpose), the job, and the app class? Answer no when the principle " +
-      "cannot meaningfully apply here — e.g. choice overload on a screen with two buttons, error recovery on a screen " +
-      "showing no error and no input, progress/status on a static confirmation.",
+    instructions: UX_PROMPTS.applicability.replace("{principle}", entry.principle),
   };
 }
 

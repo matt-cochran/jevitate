@@ -21,6 +21,8 @@ import { generateSpecifics, type UxSpecificsItem } from "./specifics.js";
 import { adjudicate, controlKey, normalizeText } from "./adjudicate.js";
 import { clamp01, combineConfidence } from "./confidence.js";
 import { routeOf } from "./route.js";
+import { gradeCandidates, type QualityGrade } from "./grade.js";
+import type { MakeFindingInput } from "./finding.js";
 import type {
   AnalysisOutcome,
   AppContext,
@@ -173,6 +175,8 @@ export class UxAnalyzer {
     const a11yEntries = entries.filter((e) => e.tier === "objective-a11y");
 
     const occurrences: Occurrence[] = [];
+    /** Redacted evidence per screen-state (the grader re-reads a finding's representative screen). */
+    const redactedById = new Map<string, RedactedEvidence>();
     const a11yFindings: { finding: UxFinding; refs: ReadonlySet<string> }[] = [];
     const suppressed: SuppressedItem[] = [];
     const skipped: SkippedItem[] = [];
@@ -202,6 +206,7 @@ export class UxAnalyzer {
         return { kind: "failed", reason: `redaction failed: ${message(cause)}`, screenId: screen.screenId };
       }
       const route = routeOf(redacted.url);
+      redactedById.set(screen.screenId, redacted);
 
       // Partition Jev entries into applicable vs Skipped(reason) vs notApplicable(reason).
       const applicable: RubricEntry[] = [];
@@ -325,8 +330,42 @@ export class UxAnalyzer {
       }
     }
 
+    // Dedupe, then the independent quality pass: one grader request per representative screen.
+    const drafts = dedupeSemantic(occurrences, judgedOnRoute);
+    const byScreen = new Map<string, Draft[]>();
+    for (const d of drafts) {
+      const list = byScreen.get(d.screenId) ?? [];
+      list.push(d);
+      byScreen.set(d.screenId, list);
+    }
+    const grades = new Map<string, QualityGrade>();
+    for (const [screenId, list] of [...byScreen.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const evidence = redactedById.get(screenId);
+      if (!evidence) continue;
+      try {
+        const g = await gradeCandidates(
+          this.deps.judge,
+          evidence,
+          list.map((d) => ({
+            key: d.key,
+            principle: d.principle,
+            observation: d.input.observation,
+            userImpact: d.input.userImpact,
+            recommendation: d.input.recommendation,
+            controls: d.input.controls ?? [],
+            quotes: d.input.quotes ?? [],
+          })),
+        );
+        for (const [k, v] of g) grades.set(k, v);
+      } catch (cause) {
+        return { kind: "failed", reason: `quality grading failed: ${message(cause)}`, screenId, rubricItemId: list[0]?.input.rubricItemId };
+      }
+    }
     const findings = [
-      ...dedupeSemantic(occurrences, judgedOnRoute, request.rubric),
+      ...drafts.map((d) => {
+        const quality = grades.get(d.key);
+        return makeFinding({ ...d.input, ...(quality ? { quality } : {}) }, request.rubric, { screenId: d.screenId, refs: d.refs });
+      }),
       ...dedupeObjective(a11yFindings, request.rubric),
     ];
     const coverage: Coverage = { totalItems, evaluated, skipped, budgetTruncated, notApplicable };
@@ -359,20 +398,25 @@ function flagEntry(entry: RubricEntry, answers: Record<string, Answer>): Flagged
   return { entry, severity, violation, applicability };
 }
 
-/** Same item × route × implicated controls/text → ONE finding with an occurrence count. */
-function dedupeSemantic(
-  occurrences: readonly Occurrence[],
-  judgedOnRoute: ReadonlyMap<string, readonly JudgedScreen[]>,
-  rubric: ReadonlyMap<string, RubricEntry>,
-): UxFinding[] {
+/** A deduplicated semantic finding before grading + construction. */
+interface Draft {
+  readonly key: string;
+  readonly principle: string;
+  readonly screenId: string;
+  readonly refs: ReadonlySet<string>;
+  readonly input: MakeFindingInput;
+}
+
+/** Same item × route × implicated controls/text → ONE draft with an occurrence count (deterministic order). */
+function dedupeSemantic(occurrences: readonly Occurrence[], judgedOnRoute: ReadonlyMap<string, readonly JudgedScreen[]>): Draft[] {
   const groups = new Map<string, Occurrence[]>();
   for (const o of occurrences) {
     const g = groups.get(o.dedupeKey);
     if (g) g.push(o);
     else groups.set(o.dedupeKey, [o]);
   }
-  const out: UxFinding[] = [];
-  for (const group of groups.values()) {
+  const out: Draft[] = [];
+  for (const [key, group] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const first = group[0];
     if (!first) continue;
     // Agreement denominator: judged screen-states on this route where the SAME evidence was
@@ -384,32 +428,32 @@ function dedupeSemantic(
         : first.quotes.every((q) => j.text.includes(normalizeText(q))),
     ).length;
     const { confidence, basis } = combineConfidence(group, judged);
-    // Representative = the best-grounded, most-confident occurrence.
+    // Representative = the best-grounded, most-confident occurrence (ties: first observed).
     const rep = [...group].sort((a, b) => b.grounding * b.violation - a.grounding * a.violation)[0] ?? first;
     const severity = group.reduce<UxFinding["severity"]>((s, o) => (SEVERITY_RANK[o.severity] > SEVERITY_RANK[s] ? o.severity : s), "info");
-    out.push(
-      makeFinding(
-        {
-          rubricItemId: rep.entry.id,
-          evidenceRefs: rep.evidenceRefs,
-          severity,
-          confidence,
-          observation: rep.observation,
-          userImpact: rep.userImpact,
-          recommendation: rep.recommendation,
-          tier: rep.entry.tier,
-          route: rep.route,
-          controls: rep.controls,
-          quotes: rep.quotes,
-          occurrences: group.length,
-          screenIds: [...new Set(group.map((o) => o.screenId))],
-          confidenceBasis: basis,
-          ...(rep.entry.attentionProvenance ? { predictedAttention: { label: rep.entry.attentionProvenance, note: ATTENTION_NOTE } } : {}),
-        },
-        rubric,
-        { screenId: rep.screenId, refs: rep.refs },
-      ),
-    );
+    out.push({
+      key,
+      principle: rep.entry.principle,
+      screenId: rep.screenId,
+      refs: rep.refs,
+      input: {
+        rubricItemId: rep.entry.id,
+        evidenceRefs: rep.evidenceRefs,
+        severity,
+        confidence,
+        observation: rep.observation,
+        userImpact: rep.userImpact,
+        recommendation: rep.recommendation,
+        tier: rep.entry.tier,
+        route: rep.route,
+        controls: rep.controls,
+        quotes: rep.quotes,
+        occurrences: group.length,
+        screenIds: [...new Set(group.map((o) => o.screenId))],
+        confidenceBasis: basis,
+        ...(rep.entry.attentionProvenance ? { predictedAttention: { label: rep.entry.attentionProvenance, note: ATTENTION_NOTE } } : {}),
+      },
+    });
   }
   return out;
 }

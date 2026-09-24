@@ -23,7 +23,7 @@ export type Adjudication =
       readonly userImpact: string;
       readonly recommendation: string;
     }
-  | { readonly kind: "suppressed"; readonly reason: Exclude<SuppressionReason, "below-min-confidence">; readonly detail: string };
+  | { readonly kind: "suppressed"; readonly reason: Exclude<SuppressionReason, "below-min-confidence" | "quality-policy">; readonly detail: string };
 
 /** Case- and whitespace-insensitive normal form for text matching. */
 export function normalizeText(s: string): string {

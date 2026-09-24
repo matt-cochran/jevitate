@@ -97,8 +97,26 @@ describe("buildReport", () => {
     expect(report.suppressed.byRubricItemRoute["minor-1 /route-minor-1"]).toBe(2);
     expect(report.suppressed.items.filter((i) => i.reason === "below-min-confidence").every((i) => i.confidence !== undefined)).toBe(true);
     expect(report.rawOccurrences).toBe(12);
-    expect(report.headline).toMatch(/^1 finding\(s\) at confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/);
+    expect(report.headline).toMatch(/^1 finding\(s\) graded actionable\/relevant-minor at confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/);
     expect(report.coverageSummary).toMatch(/3 suppressed/);
+  });
+
+  it("the quality policy shows actionable + relevant-minor by default; generic/wrong are suppressed with counts", () => {
+    const graded = (id: string, label: "actionable" | "relevant-minor" | "generic" | "wrong") =>
+      ({ ...finding(id, "minor", 0.9), quality: { label, confidence: 0.8 } }) as UxFinding;
+    const outcome: AnalysisOutcome = {
+      kind: "analyzed",
+      findings: [graded("major-1", "actionable"), graded("minor-1", "generic"), graded("minor-1", "wrong"), graded("major-1", "relevant-minor")],
+      coverage: fullCoverage,
+    };
+    const report = buildReport(outcome, { minConfidence: 0 });
+    expect(report.findings.map((f) => f.quality?.label).sort()).toEqual(["actionable", "relevant-minor"]);
+    expect(report.suppressed.byReason["quality-policy"]).toBe(2);
+    expect(report.suppressed.items.map((i) => i.qualityLabel).sort()).toEqual(["generic", "wrong"]);
+    expect(report.qualityDistribution).toEqual({ actionable: 1, generic: 1, wrong: 1, "relevant-minor": 1 });
+    expect(report.clean).toBe(false);
+    // A custom policy is honored.
+    expect(buildReport(outcome, { minConfidence: 0, quality: { show: ["actionable"] } }).findings).toHaveLength(1);
   });
 
   it("defaults the cutoff to DEFAULT_MIN_CONFIDENCE", () => {

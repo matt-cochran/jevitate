@@ -1,8 +1,8 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { Answer, JudgmentPort } from "@jevitate/ai-core";
+import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import type { Recording } from "@jevitate/recording";
 import {
@@ -84,7 +84,7 @@ describe("snapshotToEvidence", () => {
 describe("runUxReview (offline)", () => {
   it("writes a report with first-class coverage", async () => {
     const outDir = await mkdtemp(join(tmpdir(), "ux-report-"));
-    const { report, reportPath } = await runUxReview({ recording: recording(), appContext: APP, judge: benignJudge, outDir, nowIso: () => "2026-09-21T00:00:00Z" });
+    const { report, reportPath } = await runUxReview({ recording: recording(), appContext: APP, judge: benignJudge, gen: new FakeGenerationGateway(), outDir, env: {}, configPath: join(outDir, "no-config.json"), nowIso: () => "2026-09-21T00:00:00Z" });
     expect(report.coverage).toBeDefined();
     expect(report.coverage.totalItems).toBeGreaterThan(0);
     const written = JSON.parse(await readFile(reportPath, "utf8"));
@@ -94,8 +94,31 @@ describe("runUxReview (offline)", () => {
   it("FAILS FAST: an analysis failure throws UxAnalysisFailedError — never a fabricated clean report", async () => {
     const throwingJudge: JudgmentPort = { async systemOne() { throw new Error("gateway down"); } };
     await expect(
-      runUxReview({ recording: recording(), appContext: APP, judge: throwingJudge, outDir: "/unused" }),
+      runUxReview({ recording: recording(), appContext: APP, judge: throwingJudge, gen: new FakeGenerationGateway(), outDir: "/unused", env: {}, configPath: "/nonexistent/config.json" }),
     ).rejects.toBeInstanceOf(UxAnalysisFailedError);
+  });
+});
+
+describe("runUxReview — min-confidence + quality policy resolution", () => {
+  it("flag > env > config > default; the report records the cutoff and policy applied", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "ux-cutoff-"));
+    const configPath = join(outDir, "config.json");
+    await writeFile(configPath, JSON.stringify({ ux: { minConfidence: 0.3, show: ["actionable"] } }));
+    const base = { recording: recording(), appContext: APP, judge: benignJudge, gen: new FakeGenerationGateway(), outDir, configPath, nowIso: () => "2026-09-21T00:00:00Z" };
+    expect((await runUxReview({ ...base, env: {} })).report).toMatchObject({ minConfidence: 0.3, qualityShown: ["actionable"] });
+    expect((await runUxReview({ ...base, env: { JEVITATE_UX_MIN_CONFIDENCE: "0.6", JEVITATE_UX_SHOW: "generic" } })).report).toMatchObject({ minConfidence: 0.6, qualityShown: ["generic"] });
+    expect((await runUxReview({ ...base, env: { JEVITATE_UX_MIN_CONFIDENCE: "0.6" }, minConfidence: "0.9", show: "wrong" })).report).toMatchObject({ minConfidence: 0.9, qualityShown: ["wrong"] });
+    expect((await runUxReview({ ...base, configPath: join(outDir, "absent.json"), env: {} })).report.minConfidence).toBe(0.75);
+  });
+
+  it("an invalid cutoff or policy fails closed (never silently defaulted)", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "ux-cutoff-bad-"));
+    const base = { recording: recording(), appContext: APP, judge: benignJudge, gen: new FakeGenerationGateway(), outDir, configPath: join(outDir, "absent.json") };
+    await expect(runUxReview({ ...base, env: {}, minConfidence: "1.5" })).rejects.toThrow(/min-confidence/);
+    await expect(runUxReview({ ...base, env: { JEVITATE_UX_SHOW: "great" } })).rejects.toThrow(/unknown quality label/);
+    const bad = join(outDir, "bad.json");
+    await writeFile(bad, JSON.stringify({ ux: { minConfidence: "high" } }));
+    await expect(runUxReview({ ...base, env: {}, configPath: bad })).rejects.toThrow(/ux.minConfidence/);
   });
 });
 

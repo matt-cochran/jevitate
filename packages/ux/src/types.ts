@@ -202,6 +202,11 @@ export interface UxFinding {
   /** Every screen-state id the issue was observed on. */
   readonly screenIds: readonly string[];
   readonly confidenceBasis?: ConfidenceBasis;
+  /**
+   * The independent quality grade (grade.ts) — advisory; the report's quality policy decides
+   * whether the finding is shown. Absent for objective (computed) findings.
+   */
+  readonly quality?: { readonly label: "actionable" | "relevant-minor" | "generic" | "wrong"; readonly confidence: number };
   readonly predictedAttention?: PredictedAttention;
 }
 
@@ -243,7 +248,9 @@ export type SuppressionReason =
   /** The specifics step, looking for concrete evidence, found the principle not violated. */
   | "not-confirmed"
   /** Grounded, but confidence fell below the report's `minConfidence` cutoff. */
-  | "below-min-confidence";
+  | "below-min-confidence"
+  /** The quality grade (e.g. generic / wrong) is not in the report's quality policy. */
+  | "quality-policy";
 
 /** A suppressed candidate — counted and summarized in the report, never silently dropped. */
 export interface SuppressedItem {
@@ -254,6 +261,7 @@ export interface SuppressedItem {
   readonly detail: string;
   readonly confidence?: number;
   readonly occurrences?: number;
+  readonly qualityLabel?: string;
 }
 
 export type AnalysisOutcome =
