@@ -295,9 +295,13 @@ ${prose}
 <script>
 const broken = ${JSON.stringify(broken)};
 const ids = ${JSON.stringify(ids)};
+// Every keystroke saves; a sequence number lets the server drop a save that arrives after a newer
+// one (concurrent PUTs can land out of order on a loaded host).
+let seq = 0;
 for (const p of document.querySelectorAll(".block")) {
   p.addEventListener("input", () => {
-    fetch("/editor-fixture/blocks/" + p.id, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ html: p.innerHTML }), keepalive: true });
+    seq += 1;
+    fetch("/editor-fixture/blocks/" + p.id, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ html: p.innerHTML, seq }), keepalive: true });
   });
 }
 for (const cell of document.querySelectorAll("rect[data-cell]")) {
@@ -313,12 +317,18 @@ for (const cell of document.querySelectorAll("rect[data-cell]")) {
 }
 </script></body></html>`);
   });
-  app.put<{ Params: { id: string }; Body: { html?: string } }>("/editor-fixture/blocks/:id", async (req, reply) => {
+  const lastSeq = new Map<string, number>();
+  app.put<{ Params: { id: string }; Body: { html?: string; seq?: number } }>("/editor-fixture/blocks/:id", async (req, reply) => {
     if (!blocks.has(req.params.id) || typeof req.body?.html !== "string") {
       reply.code(400).send({ ok: false });
       return;
     }
-    blocks.set(req.params.id, req.body.html);
+    const seq = typeof req.body.seq === "number" ? req.body.seq : Number.POSITIVE_INFINITY;
+    // Last WRITTEN wins, not last ARRIVED: a stale save that lands late never overwrites a newer one.
+    if (seq >= (lastSeq.get(req.params.id) ?? 0)) {
+      lastSeq.set(req.params.id, seq);
+      blocks.set(req.params.id, req.body.html);
+    }
     reply.send({ ok: true });
   });
 
