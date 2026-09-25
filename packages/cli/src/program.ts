@@ -98,6 +98,8 @@ import {
   buildMissionFixtures,
   checkSetupRefs,
   checkUrlRefOrigin,
+  invariantSetupTexts,
+  substituteSpecSetupRefs,
   fixtureSetupFailedResult,
   regressionFixtures,
   withFixtureFlags,
@@ -2493,7 +2495,7 @@ export function buildProgram(deps: CliDeps): Command {
           secrets: o.secret,
           ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
         });
-        checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success }, fx);
+        checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success, ...invariantSetupTexts(invariants) }, fx);
       } catch (err) {
         if (!(err instanceof FixtureSpecError || err instanceof UnboundSetupRefError)) throw err;
         emitJson(program, fail(err.code, err.message));
@@ -2519,6 +2521,7 @@ export function buildProgram(deps: CliDeps): Command {
 
       let url = o.url;
       let goal = o.goal;
+      let runInvariants = withInvariants;
       if (fx !== undefined) {
         // Never run the mission on unknown state: a failed setup ends the run inconclusive (a
         // configuration error), after restoring whatever the partial setup created.
@@ -2528,6 +2531,8 @@ export function buildProgram(deps: CliDeps): Command {
           url = substituteSetupRefs(o.url, b, { where: "--url" });
           goal = substituteSetupRefs(o.goal, b, { where: "--goal" });
           successChecks = o.success.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
+          // #187: ${setup.x} in the invariants (probe paths, deniedAs.open, capture routes), origin-fixed.
+          if (invariants !== undefined) runInvariants = { ...withInvariants, invariants: substituteSpecSetupRefs(invariants, b, url) };
         } catch (err) {
           if (!(err instanceof FixtureSetupError || err instanceof UnboundSetupRefError)) {
             await fx.restore();
@@ -2565,7 +2570,7 @@ export function buildProgram(deps: CliDeps): Command {
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
-          ...withInvariants,
+          ...runInvariants,
           ...withServerLog,
           ...(fx === undefined ? {} : { fixtures: fx }),
         });
@@ -3029,7 +3034,7 @@ export function buildProgram(deps: CliDeps): Command {
             return actor;
           },
         });
-        const envelope = ok(report);
+        const envelope = ok(withEngine(report));
         if (json) {
           emitJson(program, envelope);
         } else {

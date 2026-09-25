@@ -1465,6 +1465,19 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   readonly serverLogs?: ServerLogsSummary;
   /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
   readonly serverLogDefects?: ServerLogDefect[];
+  /** Always zero (#188): a feature mission makes no model call — stated, never absent ("not tracked"). */
+  readonly usage: UsageCounts;
+};
+
+/** A model-free mission's usage (#188): nothing called, nothing to price — a known $0. */
+export const NO_MODEL_USAGE: UsageCounts = {
+  judgments: 0,
+  generations: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  totalUsd: 0,
+  priced: "full",
+  priceSource: ["no model call"],
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
@@ -1593,6 +1606,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       },
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...serverLogResult(serverLogRun),
+      usage: NO_MODEL_USAGE,
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
