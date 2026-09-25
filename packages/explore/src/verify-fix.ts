@@ -5,7 +5,7 @@ import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interp
 import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
 import type { HangSignal } from "./hang.js";
-import { replayAndDetectHang } from "./hang-repro.js";
+import { replayAndDetectHang, type HangRule } from "./hang-repro.js";
 import type { SafetyConfig } from "./safety.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
@@ -134,7 +134,7 @@ export interface VerifyFixResult {
         readonly reason?: ReplayTargetFailure;
       };
   readonly reason: string;
-  /** Every fresh-context attempt for a non-hang defect signal (#74): absent for `hang`/`invariant`. */
+  /** Every fresh-context attempt (#74; a hang's single replay too, #164): absent for `invariant`. */
   readonly attempts?: ReplayAttemptEvidence[];
 }
 
@@ -143,6 +143,10 @@ export interface ReplayAttemptEvidence {
   readonly ran: boolean;
   readonly fired: boolean;
   readonly detail: string;
+  /** A hang replay: which rule decided (#164). */
+  readonly rule?: HangRule;
+  /** A busy-indicator hang replay: busy indicators visible on the replayed page (#164). */
+  readonly busyIndicators?: number;
 }
 
 /**
@@ -188,8 +192,18 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     });
     const replay: VerifyFixResult["replay"] =
       attempt.replay === "failed" ? { outcome: "failed", at: -1, error: attempt.detail } : { outcome: "completed" };
+    // #164: the hang's one replay is recorded as evidence too — which rule decided, and what it saw.
+    const attempts: ReplayAttemptEvidence[] = [
+      {
+        ran: attempt.ran,
+        fired: attempt.reproduced,
+        detail: attempt.detail,
+        ...(attempt.rule === undefined ? {} : { rule: attempt.rule }),
+        ...(attempt.busyIndicators === undefined ? {} : { busyIndicators: attempt.busyIndicators }),
+      },
+    ];
     if (attempt.reproduced) {
-      return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}` };
+      return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}`, attempts };
     }
     if (attempt.withheld !== undefined) {
       // #153: not replayed — the path re-sends a paid/destructive write. Never "fixed".
@@ -197,9 +211,9 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     }
     if (!attempt.ran) {
       // The attempt never ran (no session, or the replay failed before the step): no evidence.
-      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay, reason: `${attempt.detail}; absence of the hang proves nothing` };
+      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay, reason: `${attempt.detail}; absence of the hang proves nothing`, attempts };
     }
-    return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})` };
+    return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})`, attempts };
   }
   const declared = params.defectKind === "invariant" ? params.invariant : undefined;
   if (params.defectKind === "invariant" && (declared === undefined || !declared.spec.invariants.some((i) => i.id === declared.id))) {

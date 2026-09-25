@@ -4,9 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
-import { replayAndDetectHang, type ReproduceHangParams } from "./hang-repro.js";
+import { busyIndicatorOf, replayAndDetectHang, type ReproduceHangParams } from "./hang-repro.js";
 import type { HangSignal } from "./hang.js";
-import type { VerifySession } from "./verify-fix.js";
+import { perceive } from "./perceive.js";
+import { verifyFix, type VerifySession } from "./verify-fix.js";
 
 /**
  * #108 — a busy-indicator `ui-no-progress` hang: the original evidence was a specific spinner/
@@ -111,5 +112,74 @@ describe("#108 — replayAndDetectHang re-checks the SAME busy indicator, not th
     const differentElementHang: HangSignal = { ...busyIndicatorHang, element: "[data-testid=some-other-spinner]" };
     const attempt = await replayAndDetectHang({ ...params(), hang: differentElementHang });
     expect(attempt.reproduced).toBe(false);
+  }, 30_000);
+});
+
+describe("#164 — a busy-indicator hang persisted WITHOUT `element` (pre-#87 engine) is still judged by its indicator", () => {
+  // The round-3 evidence: the signal carries no `element`, and its indicator is named only in the
+  // detail, in the old `<selector> <tag>` form. Its lastState signature is the page's REAL one — a
+  // fixed page that settles on that same state must never read as "the same stalled state".
+  const legacy = (signature: string): HangSignal => ({
+    kind: "ui-no-progress",
+    detail: 'a busy indicator ([role="progressbar"]:not([aria-valuenow]) <div>) never went away within 15000ms',
+    route: "/busy-page",
+    url: `${origin}/busy-page`,
+    pending: [],
+    lastState: { signature, controls: [] },
+  });
+  async function realSignature(): Promise<string> {
+    const s = await freshSession();
+    try {
+      await s.page.goto(`${origin}/busy-page`);
+      return (await perceive(s.page, { renderWaitMs: 1_500, hangProbeMs: 500 })).snapshot.signature;
+    } finally {
+      await s.close();
+    }
+  }
+  const noSleep = { stallMs: 1, sleep: async (): Promise<void> => undefined };
+
+  it("busyIndicatorOf recovers the indicator from the detail; a no-indicator stall stays a stalled-state hang", () => {
+    expect(busyIndicatorOf(legacy("s"))).toBe('[role="progressbar"]:not([aria-valuenow]) <div>');
+    expect(busyIndicatorOf({ kind: "ui-no-progress", detail: "the UI made no progress" })).toBeNull();
+    expect(busyIndicatorOf({ kind: "ui-no-progress", detail: "x", element: "[data-testid=a]" })).toBe("[data-testid=a]");
+    expect(busyIndicatorOf({ kind: "never-settled", detail: "a busy indicator (x) never went away within 1ms" })).toBeNull();
+  });
+
+  it("the indicator is gone (app fixed) on the same settled state: FIXED by the busy-indicator rule, never 'still reproduces'", async () => {
+    broken = false;
+    const hang = legacy(await realSignature());
+    const attempt = await replayAndDetectHang({ ...params(), hang, ...noSleep });
+    expect(attempt.ran).toBe(true);
+    expect(attempt.reproduced).toBe(false);
+    expect(attempt.rule).toBe("busy-indicator");
+    expect(attempt.busyIndicators).toBe(0);
+    expect(attempt.detail).not.toMatch(/stalled-state/);
+  }, 30_000);
+
+  it("the same (legacy-described) indicator is still stuck: still reproduces", async () => {
+    broken = true;
+    const hang = legacy(await realSignature());
+    const attempt = await replayAndDetectHang({ ...params(), hang, ...noSleep });
+    expect(attempt.reproduced).toBe(true);
+    expect(attempt.rule).toBe("busy-indicator");
+    expect(attempt.busyIndicators).toBe(1);
+  }, 30_000);
+
+  it("verifyFix reads FIXED and records the attempt (rule + indicator count)", async () => {
+    broken = false;
+    const hang = legacy(await realSignature());
+    const r = await verifyFix({
+      defectKind: "hang",
+      fingerprint: "f",
+      recording,
+      recordingStepIndex: 0,
+      hang,
+      openSession: freshSession,
+      perceive: { renderWaitMs: 1_500, hangProbeMs: 500 },
+      stallMs: 1,
+    });
+    expect(r.verdict).toBe("fixed");
+    expect(r.attempts).toHaveLength(1);
+    expect(r.attempts?.[0]).toMatchObject({ ran: true, fired: false, rule: "busy-indicator", busyIndicators: 0 });
   }, 30_000);
 });
