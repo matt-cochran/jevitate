@@ -152,6 +152,14 @@ export interface InvariantReport {
 export interface ObserverSessions {
   /** The observer's page; throws when its session cannot be opened. */
   page(actor: string): Promise<Page>;
+  /**
+   * #173 — an observer's storageState `localStorage[key]` for `origin`, read straight from its
+   * storageState FILE: no navigation, no live page needed (cheaper, and the token is never logged).
+   * Preferred over the observer's live page for `authFrom.localStorage`, whose page a probe-only
+   * observer never opens (it is opened lazily and a bare probe never navigates it). Optional: when
+   * absent, the live page is read instead (works only once that page has loaded the origin).
+   */
+  localStorage?(actor: string, key: string, origin: string): Promise<string | null>;
   close(): Promise<void>;
 }
 
@@ -668,7 +676,8 @@ export class InvariantMonitor {
       const o = this.#spec.observe?.[name];
       if (o === undefined) continue; // a capture
       const onObserver = "probe" in o && o.probe.as !== undefined;
-      const read = await this.#read(onObserver ? observerPage : primary, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+      const observerName = onObserver && "probe" in o ? (o.probe.as ?? null) : null;
+      const read = await this.#read(onObserver ? observerPage : primary, name, o, observerName).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
       values.set(name, read.value);
       if (read.evidence !== undefined) evidence.set(name, onObserver ? `${read.evidence} (as ${c.observer ?? ""})` : read.evidence);
       if (onObserver && observerUrl === null && "probe" in o) {
@@ -930,15 +939,26 @@ export class InvariantMonitor {
 
   /**
    * Resolves a probe's `authFrom` (#135) into an `Authorization` header, reading the token from the
-   * run's own live session — never from a new credential path. `localStorage` is read via
-   * `page.evaluate` (in the page's own JS context); `cookie` from the browser context's cookie jar;
-   * `secret` from the CLI-resolved `authTokens` map (an `env:VAR` ref this module never resolves
-   * itself). The token is pushed into the redaction set the instant it is read — before it is ever
-   * used in a request — so it can never appear in evidence, an error, or the value the probe returns.
+   * run's own live session — never from a new credential path. `cookie` reads the browser context's
+   * cookie jar; `secret` reads the CLI-resolved `authTokens` map (an `env:VAR` ref this module never
+   * resolves itself).
+   *
+   * `localStorage` (#173): for an OBSERVER (`observer !== null`), it is read straight from that
+   * observer's storageState FILE via `ObserverSessions.localStorage` — cheaper, and it never needs
+   * the observer's page to have navigated (a probe-only observer, the common "the member CAN read
+   * it" cross-actor check, never opens one). Falls back to the live page's own `page.evaluate` when
+   * no such reader is wired (the primary actor's own page, always already loaded) or an
+   * `ObserverSessions` implementation doesn't offer it — in which case an unread observer token is
+   * explained as the page never having loaded that origin, not a bare "unavailable".
+   *
+   * The token is pushed into the redaction set the instant it is read — before it is ever used in a
+   * request — so it can never appear in evidence, an error, or the value the probe returns.
    */
   async #authHeaders(
     page: Page,
     authFrom: ProbeAuthFrom | undefined,
+    observer: string | null,
+    origin: string,
   ): Promise<{ headers?: Record<string, string>; note: string } | { error: string }> {
     if (authFrom === undefined) return { note: "" };
     const scheme = authFrom.scheme ?? "Bearer";
@@ -948,7 +968,13 @@ export class InvariantMonitor {
     if (authFrom.localStorage !== undefined) {
       const key = authFrom.localStorage;
       source = `localStorage:${key}`;
-      token = await page.evaluate((k) => window.localStorage.getItem(k), key).catch(() => null);
+      const fromStorageState = observer === null ? undefined : this.#opts.observers?.localStorage;
+      if (fromStorageState !== undefined) {
+        token = await fromStorageState(observer as string, key, origin).catch(() => null);
+      } else {
+        token = await page.evaluate((k) => window.localStorage.getItem(k), key).catch(() => null);
+        if (token === null && observer !== null) source = `${source}: observer never loaded ${origin}`;
+      }
     } else if (authFrom.cookie !== undefined) {
       const name = authFrom.cookie;
       source = `cookie:${name}`;
@@ -999,7 +1025,7 @@ export class InvariantMonitor {
     return { value, evidence: `${channel}(${read.style}) ${reduce} over ${values.length} element(s) = ${value}` };
   }
 
-  async #read(page: Page, name: string, o: ObservableSpec): Promise<{ value: EvalValue; evidence?: string }> {
+  async #read(page: Page, name: string, o: ObservableSpec, observer: string | null = null): Promise<{ value: EvalValue; evidence?: string }> {
     if ("dom" in o) {
       const d = o.dom;
       const missing: EvalValue = d.optional === true ? null : UNKNOWN;
@@ -1043,7 +1069,7 @@ export class InvariantMonitor {
     // #135: authenticate from the run's own session — never a new credential path. A declared
     // `authFrom` whose token cannot be read (a missing localStorage key/cookie/env var) fails closed:
     // the probe is refused rather than silently sent unauthenticated (which would misreport state).
-    const auth = await this.#authHeaders(page, probe.authFrom);
+    const auth = await this.#authHeaders(page, probe.authFrom, observer, url.origin);
     if ("error" in auth) return { value: UNKNOWN, evidence: `probe refused: ${auth.error}` };
     const method = probe.head !== undefined ? "HEAD" : "GET";
     const res = await page.context().request.fetch(url.href, {

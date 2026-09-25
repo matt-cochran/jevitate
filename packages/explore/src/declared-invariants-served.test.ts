@@ -407,6 +407,93 @@ describe("declared invariants around an action (#86)", () => {
   );
 });
 
+describe("#173: a cross-actor probe's authFrom.localStorage reads the observer's storageState, no navigation needed", () => {
+  it(
+    "a probe-only observer (its page never navigates) still authenticates — from ObserverSessions.localStorage, not page.evaluate",
+    async () => {
+      const s = await openSession();
+      const observerSession = await port.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+      try {
+        await s.page.goto(`${origin}/app`);
+        // The observer's page is opened (lazily, as a real ObserverSessions would) but NEVER navigated —
+        // exactly the #173 repro: an observer used only for `probe`s never opens a page of its own.
+        const startUrl = observerSession.page.url();
+        const spec = validateInvariantSpec(
+          {
+            capture: { seed: { dom: { selector: "[data-testid=token]" } } },
+            observe: { secure: { probe: { as: "b", get: "/api/secure", json: "$.secure", authFrom: { localStorage: "tok" } } } },
+            invariants: [{ id: "secure-ok", when: { after: "capture.seed" }, require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app`, observers: ["b"] },
+        );
+        const monitor = new InvariantMonitor(spec, {
+          allowlist: [origin],
+          baseUrl: `${origin}/app`,
+          primaryActor: "a",
+          observers: {
+            page: async () => observerSession.page,
+            localStorage: async (actor, key, probeOrigin) => (actor === "b" && key === "tok" && probeOrigin === origin ? "SECRET-LS-TOKEN-abc" : null),
+            close: async () => undefined,
+          },
+        });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r.held).toEqual(["secure-ok"]);
+        expect(r.violations).toEqual([]);
+
+        // Never navigated: the fix reads the token from the storageState reader, not the live page.
+        expect(observerSession.page.url()).toBe(startUrl);
+
+        const probes = requests.filter((q) => q.path === "/api/secure");
+        expect(probes.length).toBeGreaterThan(0);
+        for (const p of probes) expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+        // secret-canary: the token never shows up in the result.
+        expect(JSON.stringify(r)).not.toContain("SECRET-LS-TOKEN-abc");
+      } finally {
+        await observerSession.close();
+        await s.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "without a storageState reader, the un-navigated observer's page.evaluate fallback fails closed, explained as never having loaded the origin",
+    async () => {
+      const s = await openSession();
+      const observerSession = await port.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+      try {
+        await s.page.goto(`${origin}/app`);
+        const spec = validateInvariantSpec(
+          {
+            capture: { seed: { dom: { selector: "[data-testid=token]" } } },
+            observe: { secure: { probe: { as: "b", get: "/api/secure", json: "$.secure", authFrom: { localStorage: "tok" } } } },
+            invariants: [{ id: "secure-ok", when: { after: "capture.seed" }, require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app`, observers: ["b"] },
+        );
+        // No `localStorage` reader on this ObserverSessions — the old (page.evaluate) path.
+        const monitor = new InvariantMonitor(spec, {
+          allowlist: [origin],
+          baseUrl: `${origin}/app`,
+          primaryActor: "a",
+          observers: { page: async () => observerSession.page, close: async () => undefined },
+        });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r.violations).toEqual([]);
+        expect(r.unknown).toEqual(["secure-ok"]);
+        const probes = requests.filter((q) => q.path === "/api/secure");
+        expect(probes).toEqual([]);
+      } finally {
+        await observerSession.close();
+        await s.close();
+      }
+    },
+    120_000,
+  );
+});
+
 describe("declared invariants in missions (#86)", () => {
   it(
     "goal: the goal is reached but the invariant broke on the way — defects-found, with the repro step",

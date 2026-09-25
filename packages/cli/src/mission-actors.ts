@@ -3,6 +3,7 @@ import type { BrowserPort } from "@jevitate/playwright";
 import type { ObserverSessions } from "@jevitate/explore";
 import { invariantActors, type InvariantSpec } from "@jevitate/recording";
 import { MultiRunArgsError, parseActorSpec, type Persona } from "./multi-run.js";
+import { localStorageValue } from "./fixture-auth.js";
 
 /**
  * Multi-actor missions (#147). `--actor <name>=<storageState>` (repeatable): the FIRST actor is the
@@ -71,6 +72,13 @@ export function observerSessions(
         open.set(name, session);
       }
       return (await session).page;
+    },
+    // #173: read straight from the observer's OWN storageState file — no browser context, no
+    // navigation, so a probe-only observer (never opened a page) still authenticates.
+    localStorage: async (name, key, origin) => {
+      const actor = observers.find((o) => o.name === name);
+      if (actor === undefined) throw new Error(`no observer actor named ${name}`);
+      return localStorageValue(actor.storageState, origin, key);
     },
     close: async () => {
       const sessions = [...open.values()];
