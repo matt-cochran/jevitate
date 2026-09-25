@@ -12,7 +12,6 @@ import {
   scopeGlobs,
   secretFieldSecrets,
   SecretFieldSpecError,
-  type MisuseStrategy,
   type SecretField,
   type SuccessCheck,
 } from "@jevitate/explore";
@@ -32,6 +31,7 @@ import {
   type RunRecord,
 } from "@jevitate/findings";
 import {
+  CLI_ADVERSARIAL_STRATEGIES,
   parseSuccessSpec,
   resolveExploreAllowlist,
   runAdversarialCliMission,
@@ -114,22 +114,6 @@ const REAL_RUNNERS: CheckRunners = {
   usability: runUsabilityMission,
   verifyFix: runVerifyFix,
 };
-
-/** The adversarial strategies `explore --strategy adversarial` runs, in the same order. */
-const ADVERSARIAL_STRATEGIES: readonly MisuseStrategy[] = [
-  "double-submit",
-  "boundary-submit",
-  "edit-cancel-save",
-  "navigate-away-unsaved",
-  "act-while-pending",
-  "exercise-controls",
-  "ordering-violation",
-  "repeat-rapid",
-  "boundary-input",
-  "contradictory-actions",
-  "nav-during-pending",
-  "visit-route",
-];
 
 export interface RunCheckOptions {
   readonly suite: CheckSuite;
@@ -802,7 +786,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...withServerLog,
         seedUrl: url,
         allowlist: item.t.allowlist,
-        strategies: ADVERSARIAL_STRATEGIES,
+        strategies: CLI_ADVERSARIAL_STRATEGIES,
         judgment: judge,
         generation: gen,
         usage,

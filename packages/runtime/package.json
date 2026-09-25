@@ -16,8 +16,7 @@
     "@jevitate/playwright": "workspace:*",
     "@jevitate/recording": "workspace:*",
     "@jevitate/screenplay": "workspace:*",
-    "@jevitate/secrets": "workspace:*",
-    "@jevitate/site-sdk": "workspace:*"
+    "@jevitate/secrets": "workspace:*"
   },
   "devDependencies": {
     "@jevitate/example-site": "workspace:*",

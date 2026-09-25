@@ -7,6 +7,7 @@ import {
   AssertionSchema,
   STYLE_CHANNELS,
   STYLE_PROPERTIES,
+  COMPARE_OPS,
   type Assertion,
   type CompareOp,
   type InvariantSpec,
@@ -1751,6 +1752,11 @@ function splitDescriptor(kind: string, spec: string, shape: string, optional = f
  * recording `AssertionSchema` (the allowlisted properties, a closed set of ops/channels), so a typo
  * fails here, before any browser work.
  */
+/** `<prop><op><value>` / `<channel>(<prop>)<op><value>` — ops from the shared `COMPARE_OPS` (longest first). */
+const STYLE_CHECK_RE = new RegExp(
+  String.raw`^\s*(?:([a-z]+)\(\s*([a-z-]+)\s*\)|([a-z-]+))\s*(${COMPARE_OPS.join("|")})\s*(.*)$`,
+);
+
 function parseVisualSpec(kind: string, rest: string): Assertion {
   let out: Assertion;
   switch (kind) {
@@ -1760,7 +1766,7 @@ function parseVisualSpec(kind: string, rest: string): Assertion {
       const bar = rest.lastIndexOf("|");
       if (bar === -1) throw new Error(`${kind} requires "<descriptor>|<prop><op><value>", e.g. ${kind}:[data-heat]|alpha(background-color)>0`);
       const target = parseDescriptorSpec(rest.slice(0, bar));
-      const m = /^\s*(?:([a-z]+)\(\s*([a-z-]+)\s*\)|([a-z-]+))\s*(>=|<=|!=|=|>|<)\s*(.*)$/.exec(rest.slice(bar + 1));
+      const m = STYLE_CHECK_RE.exec(rest.slice(bar + 1));
       if (m === null) throw new Error(`${kind}: expected <prop><op><value> (op = != > >= < <=), got ${JSON.stringify(rest.slice(bar + 1))}`);
       const channel = m[1];
       const property = m[2] ?? m[3] ?? "";
