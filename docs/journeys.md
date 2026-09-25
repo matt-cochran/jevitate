@@ -55,7 +55,13 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
   `--storage-state`, before any browser opens.
 - `load run` replays a promoted Journey with a seeded pool of actors, human-paced when the site has
   a [site policy](#site-policies) with pacing, and refuses to start without `--authorized-origin`.
-- Distributed sources share Journeys through git: `jevitate source add <name> <gitUrl>`,
+- Shared Journeys live in a git repository mounted under the app repo's `.jevitate/journeys/`,
+  usually as a submodule: `git submodule add <gitUrl> .jevitate/journeys/commerce`. Its Journeys
+  appear as `commerce/<id>` everywhere a local one does (`journey list`, `find`, `run`, `check`,
+  MCP `find_capabilities` and `run_journey`), and are promoted the same way. The submodule pin is
+  reviewed like any other code change, and each file keeps its own plain id, so the same Journeys
+  work in every repo that mounts them.
+- Distributed sources share Journeys from third parties through git: `jevitate source add <name> <gitUrl>`,
   `source trust <name> <journeyId>` (bound to the Journey's content hash), `source run`, and
   `jevitate journey publish <id> --to <source>`.
 

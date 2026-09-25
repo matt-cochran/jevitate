@@ -16,7 +16,6 @@
     "@jevitate/journey": "workspace:*",
     "@jevitate/missions": "workspace:*",
     "@jevitate/runtime": "workspace:*",
-    "@jevitate/sources": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "scripts": {
