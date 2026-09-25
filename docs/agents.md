@@ -81,7 +81,16 @@ http(s) origin — the queued-mission form of a second `explore --allow`); the t
 cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven missions stay queued
 (reported as `skipped`) and only feature missions run. The exit code is 1 only when a mission could
 not run at all; each mission's own outcome is in its result. A drain killed mid-mission records
-that mission `done` with its partial `inconclusive` result, never leaves it `running`.
+that mission `done` with its partial `inconclusive` result, never leaves it `running`. A drain that
+dies without that chance (SIGKILL, out of memory, a reboot) is caught by the next drain: a mission
+whose drain process is gone (on the same host), or that has run for more than 12 hours (claimed on
+another host), is recorded `failed` with the reason. It is never re-run automatically, since it may
+already have sent writes: enqueue it again to retry.
+
+Queued missions and Journey runs follow the operator's `~/.jevitate/targets.json` (safety, settle,
+hang settings) and site policies ([journeys.md](./journeys.md#site-policies)) exactly as CLI runs
+do; a queued request can never override them. A queued mission's declared invariants may not use
+`authFrom.secret`: a request never chooses which of the operator's environment variables is sent.
 
 **Authenticated queued missions.** An MCP request can never carry a session or a secret. The
 operator declares them per origin in `~/.jevitate/targets.json`, next to `fixtures` and

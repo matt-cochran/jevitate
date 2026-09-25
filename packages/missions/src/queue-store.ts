@@ -15,9 +15,18 @@ export interface MissionQueueStore {
  * What a queue drain (`jevitate mission run`) additionally needs (#117): an exclusive claim, so two
  * drains never run the same mission, and status updates (running → done/failed).
  */
+/** Which drain claimed a mission: its process and host, and when. */
+export interface ClaimOwner {
+  readonly pid: number;
+  readonly host: string;
+  readonly claimedAtIso: string;
+}
+
 export interface DrainableMissionQueueStore extends MissionQueueStore {
   /** Atomically claims `id` for one drain; false when another drain already holds it. */
-  claim(id: string): Promise<boolean>;
+  claim(id: string, owner: ClaimOwner): Promise<boolean>;
+  /** Who claimed `id`, or null (never claimed, or claimed before owners were recorded). */
+  claimOwner(id: string): Promise<ClaimOwner | null>;
   /** Rewrites an existing mission's record (re-validated; the id must already be queued). */
   update(m: QueuedMission): Promise<void>;
   /**
@@ -70,18 +79,42 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
 
   /**
    * `<id>.claim`, created exclusively (`wx`): the first drain to create it owns the mission. Never
-   * removed — a claimed mission is never run twice, even by a drain started after this one ends.
+   * removed — a claimed mission is never run twice, even by a drain started after this one ends. It
+   * records its owner, so a later drain can tell a mission whose drain died from one still running.
    */
-  async claim(id: string): Promise<boolean> {
+  async claim(id: string, owner: ClaimOwner): Promise<boolean> {
     assertSafeId(id);
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     try {
       const fh = await open(join(this.dir, `${id}.claim`), "wx", 0o600);
-      await fh.close();
+      try {
+        await fh.writeFile(JSON.stringify(owner));
+      } finally {
+        await fh.close();
+      }
       return true;
     } catch (err) {
       if (isNodeError(err, "EEXIST")) return false;
       throw err;
+    }
+  }
+
+  async claimOwner(id: string): Promise<ClaimOwner | null> {
+    assertSafeId(id);
+    let raw: string;
+    try {
+      raw = await readFile(join(this.dir, `${id}.claim`), "utf8");
+    } catch (err) {
+      if (isNodeError(err, "ENOENT")) return null;
+      throw err;
+    }
+    try {
+      const o = JSON.parse(raw) as Partial<ClaimOwner>;
+      return typeof o.pid === "number" && typeof o.host === "string" && typeof o.claimedAtIso === "string"
+        ? { pid: o.pid, host: o.host, claimedAtIso: o.claimedAtIso }
+        : null;
+    } catch {
+      return null; // an empty claim from before owners were recorded
     }
   }
 
