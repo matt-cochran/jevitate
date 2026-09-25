@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { allResultDirs, projectDataDir } from "./project-dir.js";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -36,11 +37,11 @@ export class ReportInputError extends Error {
 
 /** Where results live by default: mission results next to their Recordings, and UX reports. */
 export function defaultResultDirs(): string[] {
-  return [resolveDataDir(["recordings"]), resolveDataDir(["ux-reports"])];
+  return allResultDirs();
 }
 
 export function defaultBaselinesDir(): string {
-  return resolveDataDir(["baselines"]);
+  return projectDataDir(["baselines"]);
 }
 
 function readJson(path: string): unknown {

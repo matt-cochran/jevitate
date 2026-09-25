@@ -19,6 +19,8 @@ export interface CheckCliDeps {
   /** Builds the explore gateways for `--real` / `--fake-ai` (program.ts's `buildExploreGateways`). */
   readonly buildGateways: (sel: { real: boolean; fakeAi: boolean }) => Promise<CheckGateways>;
   readonly journeysDir: string;
+  /** The site-policy database (`jevitate site policy set`) Journey items are gated by. */
+  readonly sitePolicyDbPath?: string;
   readonly targetsConfigPath?: string;
   readonly browserPortFactory?: () => BrowserPort;
   /** Maps the command's browser launch flags to launch options (program.ts's `browserLaunchFromFlags`). */
@@ -80,6 +82,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           suiteUri: o.suite,
           outDir: o.out,
           journeysDir: deps.journeysDir,
+          ...(deps.sitePolicyDbPath === undefined ? {} : { sitePolicyDbPath: deps.sitePolicyDbPath }),
           targetsConfig: loadTargetsFile(deps.targetsConfigPath),
           ...(o.targetBuild === undefined ? {} : { targetBuild: o.targetBuild }),
           ...(o.baseline === undefined ? {} : { baseline: o.baseline }),

@@ -1,4 +1,6 @@
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
+import type { SiteGateDeps } from "@jevitate/runtime";
+import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -17,12 +19,9 @@ export interface RunJourneyLoadTestOptions {
   concurrency: number;
   iterationsPerActor: number;
   /**
-   * Governs deterministic actor fan-out/scheduling only (see
-   * `@jevitate/load`'s `RunLoadTestConfig.seed` doc comment) — the real
-   * `JourneyRunner` this function drives per pool member has no pacing
-   * hook, so this `seed` does NOT (yet) produce human-speed pacing of the
-   * real run the way `modeledCapacityReport`'s `seed` drives
-   * `simulateTiming()`. Known gap, deferred to a future slice.
+   * Governs deterministic actor fan-out/scheduling, and seeds each actor's human-like pacing when a
+   * site policy declares one (`jevitate site policy set <origin>`): actor N's pacing is reproducible
+   * from `seed` and N.
    */
   seed: number;
   authorizedOrigins: readonly string[];
@@ -46,6 +45,8 @@ export interface RunJourneyLoadTestOptions {
   browser?: BrowserLaunchOptions;
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`) — applied to EVERY pool member's session. */
   emulation?: EmulationSpec;
+  /** The site-policy gate (`jevitate site policy set`): only its pacing applies to a load run. */
+  siteGate?: SiteGateDeps;
 }
 
 /**
@@ -58,10 +59,10 @@ export interface RunJourneyLoadTestOptions {
  *
  * NOTE on "seeded ⇒ reproducible / human-paced" (corrected post-review):
  * `opts.seed` makes the ACTOR POOL's composition reproducible (via
- * `deriveActorSeeds` inside `runLoadTest`) — it does not yet make the real
- * run human-paced, because `JourneyRunner` (constructed below) has no
- * pacing hook to seed. Only the offline `modeledCapacityReport` path is
- * genuinely human-paced today, via `@jevitate/domain`'s `simulateTiming()`.
+ * `deriveActorSeeds` inside `runLoadTest`), and — with a site policy that declares pacing — each
+ * actor's clicks and keystrokes are human-paced, seeded from `seed` and the actor's index. A load
+ * run is the operator's deliberate burst: the policy's throttles, budgets and quiet hours do not
+ * refuse it; only its pacing applies.
  */
 export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promise<CapacityReport> {
   const store = new FsJourneyStore(opts.dir);
@@ -101,8 +102,10 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
         ...opts.emulation,
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       });
+      const gate = await gateJourney(opts.siteGate, journey.recording, { enforceLimits: false, runId: `load-${opts.seed}-${actorIndex}` });
       const actor = CastActor.named(`load-actor-${actorIndex}`).whoCan(
         new BrowseTheWeb(session, [journey.recording.site]),
+        ...gate.abilities,
       );
       const runner = new JourneyRunner(actor, new RecordingInterpreter());
 

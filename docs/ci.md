@@ -51,6 +51,7 @@ relative paths resolve against the suite file):
       "url": "https://staging.shop.example/",
       "allow": ["https://staging.shop.example"],
       "storageState": "auth.json",
+      "viewport": "1280x800",
       "invariants": ["invariants/credits.json"],
       "journeysDir": "journeys",
       "journeys": ["login", { "id": "checkout", "params": { "sku": "A1" }, "routes": ["/cart/**"] }],
@@ -61,6 +62,7 @@ relative paths resolve against the suite file):
         { "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60 },
         { "strategy": "feature", "feature": "import", "routes": ["/imports/**"] },
         { "strategy": "coverage", "routes": ["/**"] },
+        { "strategy": "exploratory", "device": "iPhone 13" },
         { "strategy": "usability", "goal": "invite a teammate", "appClass": "admin" }
       ],
       "verifyFix": [{ "result": "baseline/adversarial-2026-09-20T10-00-00-000Z.result.json", "fingerprint": "3fa2c1d09b7e4a55" }]
@@ -76,7 +78,8 @@ relative paths resolve against the suite file):
   (`usage.priced` is `partial` or `none`), the spend cannot be measured, so the check fails.
   Fake gateways cost nothing. The check result's `usage` sums every item that ran, and the human
   summary prints it on a `COST` line.
-- `ai`: the gateway for goals and model-driven missions (`coverage`, `adversarial`, `usability`).
+- `ai`: the gateway for goals and model-driven missions (`coverage`, `exploratory`, `adversarial`,
+  `usability`).
   `--real` or `--fake-ai` override it. If a suite needs a model and none is selected, it is refused
   before anything runs. Journeys, `feature` missions and verify-fix are model-free.
 - `storageState`, `secretFields`, `fixtures`: the target's auth and known state. Journeys run from
@@ -84,7 +87,12 @@ relative paths resolve against the suite file):
   `secretFields` (env-sourced `--secret-field` specs, resolved before anything runs) and the
   fixtures, and usability missions get the secret fields. Without `fixtures`, the target's entry
   in `~/.jevitate/targets.json` applies.
+- `viewport` (`"375x812"`) or `device` (a Playwright device name, e.g. `"iPhone 13"`): set on a
+  target, it is the default for every item; set on a Journey (object form), goal or mission, it
+  overrides that default for the item. An unknown device, or both on one entry, is refused before
+  anything runs.
 - `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
+  Journeys follow the site policy for their origin ([site policies](./journeys.md#site-policies)).
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
   frontier from `url`.
@@ -147,7 +155,8 @@ jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baselin
 
 `--target` takes an origin (or any URL on it), a suite target name, or a registered mission
 target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
-(default `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
+(default: every dated `.jevitate/logs/<date>/` dir, in the project and in `~/.jevitate`, then
+the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
 subdirectories. Each defect lists:
 
 - every mode and run that observed it, with occurrence counts;
@@ -187,5 +196,5 @@ mission settings (goal, route globs or seed route, feature, Journey, verify-fix 
 run that observed it, and that reached the finding's route. A goal run's silence is not evidence
 that an adversarial-only defect is gone. New and resolved are decided before flaky, and resolved
 needs enough comparable reruns to rule out the baseline's own hit rate. `last` means the previous run on the same
-target, per mode. A tag is a snapshot stored under `~/.jevitate/baselines/<name>.json`, so it
-survives pruned result files.
+target, per mode. A tag is a snapshot stored under `.jevitate/baselines/<name>.json` (commit it
+with the repo), so it survives pruned result files.

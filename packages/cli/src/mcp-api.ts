@@ -1,4 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SiteGateRefusedError } from "@jevitate/runtime";
+import { withSiteGate } from "./site-gate-cli.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -74,6 +76,11 @@ export interface McpApiDeps {
   /** Journeys store directory (`~/.jevitate/journeys` in production). */
   journeysDir: string;
   /**
+   * The site-policy database (`jevitate site policy set`): `run_journey` is paced, throttled,
+   * budgeted and kept out of quiet hours per the Journey's origin. Absent file = no policy.
+   */
+  sitePolicyDbPath?: string;
+  /**
    * Test seam. Defaults to the real promoted-only projection over the
    * journeys store (`@jevitate/mcp-facade`'s `findCapabilities`).
    */
@@ -133,15 +140,21 @@ export interface McpApiDeps {
    */
   aiGenerateText?: (args: AiGenerateTextArgs) => Promise<AiGenerateTextResult | SetupRequiredResult>;
   /**
-   * Directory holding mission artifacts (`~/.jevitate/recordings` in production): the typed
+   * Directory holding mission artifacts (the logs root in production): the typed
    * `<id>.result.json` files `get_mission_result` reads. A missing dir is a config refusal.
    */
   recordingsDir?: string;
   /**
-   * Where usability reviews write their artifacts (`~/.jevitate/ux-reports` in production): a
+   * Where usability reviews write their artifacts (0.1.0: `~/.jevitate/ux-reports`): a
    * `usability-<stamp>` result is looked up here after `recordingsDir`.
    */
   uxReportsDir?: string;
+  /**
+   * The directories a result id's files may be in, most likely first (production: its dated
+   * `.jevitate/logs/<date>` dir in the project, then `~/.jevitate`, then the 0.1.0 locations).
+   * Replaces `recordingsDir`/`uxReportsDir` for the lookup when given.
+   */
+  resultDirsFor?: (resultId: string) => string[];
   /**
    * Test seam. Defaults to `runVerifyFix` over `<recordingsDir>/<id>.result.json`: replays the
    * finding's repro in a fresh browser (authorized against the mission's own allowlist).
@@ -211,13 +224,16 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string) =>
-      runJourneyProgrammatically({
-        dir: deps.journeysDir,
-        id,
-        params,
-        policy: safeRunPolicy(),
-        ...(storageState !== undefined ? { storageState } : {}),
-      }));
+      withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
+        runJourneyProgrammatically({
+          dir: deps.journeysDir,
+          id,
+          params,
+          policy: safeRunPolicy(),
+          ...(storageState !== undefined ? { storageState } : {}),
+          ...(siteGate === undefined ? {} : { siteGate }),
+        }),
+      ));
 
   // queue_exploration: enqueue over the SAME promoted fs store `jevitate
   // mission target` writes. The store is built lazily inside the closure so
@@ -353,7 +369,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   /** The dirs a result may live in: recordings, and (usability reviews) the UX reports dir. */
   const resultPathsFor = (resultId: string): string[] => {
     const file = missionResultFileName(resultId);
-    const dirs = [deps.recordingsDir, ...(resultId.startsWith("usability-") ? [deps.uxReportsDir] : [])];
+    const dirs = deps.resultDirsFor?.(resultId) ?? [deps.recordingsDir, ...(resultId.startsWith("usability-") ? [deps.uxReportsDir] : [])];
     return dirs.filter((d): d is string => d !== undefined).map((d) => join(d, file));
   };
 
@@ -503,7 +519,15 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
             ? (args.params as Record<string, string>)
             : {};
         const storageState = typeof args.storageState === "string" ? args.storageState : undefined;
-        return jsonResult(await runJourney(args.id, params, storageState));
+        try {
+          return jsonResult(await runJourney(args.id, params, storageState));
+        } catch (err) {
+          // A site-policy refusal (throttle, budget, quiet hours) is an answer the agent acts on — when to retry.
+          if (err instanceof SiteGateRefusedError) {
+            return errorResult({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
+          }
+          throw err;
+        }
       },
     },
     queue_exploration: {

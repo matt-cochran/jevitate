@@ -1,6 +1,8 @@
 import { deriveParamSchema, validateParams } from "@jevitate/journey";
+import type { SiteGateDeps } from "@jevitate/runtime";
+import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
@@ -38,6 +40,10 @@ export type RunResolvedJourney = (
   storageState?: string,
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   emulation?: EmulationSpec,
+  /** Chromium launch options (CLI `--browser-executable` / `--browser-channel` / `--browser-arg`). */
+  browser?: BrowserLaunchOptions,
+  /** The site-policy gate (`jevitate site policy set`): pacing, throttles, budgets, quiet hours. */
+  siteGate?: SiteGateDeps,
 ) => Promise<JourneyRunResult>;
 
 /**
@@ -52,7 +58,7 @@ export type RunResolvedJourney = (
  * A `SharedJourneyFile` IS a `Journey` (+ `declaredOrigins`), so it runs
  * through the standard `JourneyRunner` unchanged.
  */
-export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState, emulation) => {
+export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState, emulation, browser, siteGate) => {
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
   if (file.metadata.requiresAuth === true && storageState === undefined) {
@@ -67,8 +73,11 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   // site plus every gate-approved declared origin.
   const allowedOrigins = [...new Set([file.recording.site, ...file.declaredOrigins])];
 
+  // The site policy for the Journey's origin, decided before the browser opens.
+  const gate = await gateJourney(siteGate, file.recording, { enforceLimits: true });
   const port = new PlaywrightBrowserPort();
   const session = await port.open({
+    ...browser,
     headless: true,
     allowedOrigins,
     baseUrl: file.recording.site,
@@ -76,9 +85,13 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     ...(storageState !== undefined ? { storageState } : {}),
   });
   try {
-    const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins));
+    const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
     const runner = new JourneyRunner(actor, new RecordingInterpreter());
-    return await runner.run({ journey: file, params, policy });
+    try {
+      return await runner.run({ journey: file, params, policy });
+    } finally {
+      await gate.done();
+    }
   } finally {
     await session.close();
   }
@@ -110,6 +123,10 @@ export interface RunSourceJourneyRequest {
   storageState?: string;
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   emulation?: EmulationSpec;
+  /** Chromium launch options (CLI `--browser-*`). */
+  browser?: BrowserLaunchOptions;
+  /** The site-policy gate (`jevitate site policy set`); absent = no site policy. */
+  siteGate?: SiteGateDeps;
 }
 
 /** Resolves a registered source's recorded pin, or throws `UnknownSourceError`
@@ -164,5 +181,5 @@ export async function runSourceJourney(
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
-  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation);
+  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate);
 }

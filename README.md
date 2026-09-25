@@ -53,7 +53,7 @@ It double-submits, feeds empty, boundary, long, unicode and invalid values, canc
 mid-edit, and acts while a save is still pending. It then prints a JSON result: `outcome`
 (`clean`, `defects-found`, `inconclusive`, …), each defect with its evidence and fingerprint, and
 the paths of its Recording, transcript and ready-to-file issue drafts (under
-`~/.jevitate/recordings`). The exit code is the outcome ([table below](#mission-outcomes-and-exit-codes)).
+`.jevitate/logs/<date>/`, see [where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things)). The exit code is the outcome ([table below](#mission-outcomes-and-exit-codes)).
 
 - Jevitate only visits the `--url`'s origin. Add `--allow <origin>` for each origin the app needs
   (include the app's own origin too, since `--allow` replaces the default).

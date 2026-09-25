@@ -1,4 +1,5 @@
 import { chmod, writeFile } from "node:fs/promises";
+import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
@@ -7,6 +8,7 @@ import {
   AssertionSchema,
   STYLE_CHANNELS,
   STYLE_PROPERTIES,
+  COMPARE_OPS,
   type Assertion,
   type CompareOp,
   type InvariantSpec,
@@ -45,6 +47,7 @@ import {
   type SuccessWhen,
   type SecretField,
   type BudgetTrajectory,
+  type CrashReport,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
@@ -122,7 +125,7 @@ export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; def
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
  * `Page` + gateways to `@jevitate/explore`'s goal-based mission, then persists
- * the emitted `Recording` under `~/.jevitate/recordings`.
+ * the emitted `Recording` under `.jevitate/logs/<date>`.
  *
  * The authorized-target guard runs FIRST (fail-closed), BEFORE any browser is
  * opened — an unauthorized origin never launches Chromium. Gateways are
@@ -163,7 +166,7 @@ export interface RunExplorationOptions {
    * browser opens: a missing file throws `FixtureNotFoundError`.
    */
   readonly fixture?: string;
-  /** Where the Recording is written. Default `~/.jevitate/recordings`. */
+  /** Where the Recording is written. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
@@ -397,6 +400,10 @@ export interface RunExplorationResult {
   readonly timing: TimingSummary;
   /** Hang findings (0 or 1: the loop stops at a hang), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
+  /** #126: seed-load hangs that did not reproduce (the goal was retried) — evidence, whatever the outcome. */
+  readonly intermittentHangs?: HangFinding[];
+  /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
   /** Declared mission spend budgets (#150/#180): the observed trajectory, whatever the outcome. */
   readonly budget?: BudgetTrajectory[];
   /** The run's Recording (also written to `recordingPath`). */
@@ -534,7 +541,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ? undefined
       : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
 
-  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
   // itself creates `outDir` synchronously (mkdirSync) — no `await` here, so there is no gap between
@@ -672,6 +679,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      ...(mission.intermittentHangs === undefined ? {} : { intermittentHangs: mission.intermittentHangs }),
+      ...(mission.run.crash === undefined ? {} : { crash: mission.run.crash }),
       // #180: the declared budgets' observed trajectory, whatever the outcome (a hang included).
       ...(mission.budget === undefined ? {} : { budget: mission.budget }),
       sideEffects: mission.run.sideEffects,
@@ -860,7 +869,7 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
  * The programmatic surface behind `jevitate explore --strategy coverage`
  * (additive, alongside `runExploration`). Wires a real Playwright `Page` +
  * gateways to `@jevitate/explore`'s proof-by-induction (state-coverage) mission
- * and persists each emitted repro `Recording` under `~/.jevitate/recordings`.
+ * and persists each emitted repro `Recording` under `.jevitate/logs/<date>`.
  *
  * Same fail-closed discipline as `runExploration`: the authorized-target guard
  * runs FIRST, before any browser is opened.
@@ -873,7 +882,7 @@ export interface RunCoverageMissionOptions {
   /** Usage accounting (#100): see `RunExplorationOptions.usage`. */
   readonly usage?: UsageTracker;
   readonly bounds?: Partial<Bounds>;
-  /** Where the repro Recordings are written. Default `~/.jevitate/recordings`. */
+  /** Where the repro Recordings are written. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
@@ -978,7 +987,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   };
   const session = await port.open(launch);
 
-  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
@@ -1183,7 +1192,7 @@ export interface RunAdversarialCliMissionOptions {
   readonly issueFiler?: () => IssueFilerPort;
   /** Fresh-context replays that confirm a hang (default 2). */
   readonly hangReplays?: number;
-  /** Where the Recording and decision transcript are written. Default `~/.jevitate/recordings`. */
+  /** Where the Recording and decision transcript are written. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   /** ISO clock for the transcript filename. Default `Date.now()`. */
   readonly nowIso?: () => string;
@@ -1262,7 +1271,7 @@ export async function runAdversarialCliMission(
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
   const session = await port.open(launch);
-  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
@@ -1412,7 +1421,7 @@ export interface RunFeatureCliMissionOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
-  /** Where the recordings, transcript and typed result are written. Default `~/.jevitate/recordings`. */
+  /** Where the recordings, transcript and typed result are written. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   /** ISO clock for output filenames. Default `Date.now()`. */
   readonly nowIso?: () => string;
@@ -1500,7 +1509,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
 
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
-  const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+  const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
@@ -1744,6 +1753,11 @@ function splitDescriptor(kind: string, spec: string, shape: string, optional = f
  * recording `AssertionSchema` (the allowlisted properties, a closed set of ops/channels), so a typo
  * fails here, before any browser work.
  */
+/** `<prop><op><value>` / `<channel>(<prop>)<op><value>` — ops from the shared `COMPARE_OPS` (longest first). */
+const STYLE_CHECK_RE = new RegExp(
+  String.raw`^\s*(?:([a-z]+)\(\s*([a-z-]+)\s*\)|([a-z-]+))\s*(${COMPARE_OPS.join("|")})\s*(.*)$`,
+);
+
 function parseVisualSpec(kind: string, rest: string): Assertion {
   let out: Assertion;
   switch (kind) {
@@ -1753,7 +1767,7 @@ function parseVisualSpec(kind: string, rest: string): Assertion {
       const bar = rest.lastIndexOf("|");
       if (bar === -1) throw new Error(`${kind} requires "<descriptor>|<prop><op><value>", e.g. ${kind}:[data-heat]|alpha(background-color)>0`);
       const target = parseDescriptorSpec(rest.slice(0, bar));
-      const m = /^\s*(?:([a-z]+)\(\s*([a-z-]+)\s*\)|([a-z-]+))\s*(>=|<=|!=|=|>|<)\s*(.*)$/.exec(rest.slice(bar + 1));
+      const m = STYLE_CHECK_RE.exec(rest.slice(bar + 1));
       if (m === null) throw new Error(`${kind}: expected <prop><op><value> (op = != > >= < <=), got ${JSON.stringify(rest.slice(bar + 1))}`);
       const channel = m[1];
       const property = m[2] ?? m[3] ?? "";

@@ -107,6 +107,7 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - `diff` and `report --baseline` compare a finding only across runs that could have observed it (same mode, target and mission settings, and the finding's route reached), so realistic run sets no longer come out mostly flaky; `report --dir` also reads subdirectories ([#171](https://github.com/matt-cochran/jevitate/issues/171)).
 - `jevitate report --target <t> [--since <run>]` produces one consolidated, deduped defect list (markdown and JSON) across every mode (goal, adversarial, usability, invariants, verify-fix) for a target and build, each with occurrence counts, evidence references and its verify-fix reproduction command ([#139](https://github.com/matt-cochran/jevitate/issues/139)).
 - `regression run` envelopes carry `engine`, and route templating folds dotted hex ids (`ws.1697a048…`) into `:id` ([#188](https://github.com/matt-cochran/jevitate/issues/188)).
+- `check` suites accept `viewport`/`device` (per target, overridable per item) and the `exploratory` mission strategy.
 
 ### Multi-run, personas and actors
 
@@ -136,6 +137,14 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - The goal and coverage `--json` envelopes and `result.json` carry the `budget` trajectory, a hang included ([#180](https://github.com/matt-cochran/jevitate/issues/180)).
 - `--paid <pattern>` (and `safety.paid` in targets.json) declares an app's own paid controls: the budget guard sees them, hang replays never repeat them, and a goal that asks for one may still click it. A hang replay is also withheld when the run's own `sideEffects` show the step sending a write ([#181](https://github.com/matt-cochran/jevitate/issues/181)).
 - `${setup.x}` binds into `--invariants` (probe paths, capture routes, `deniedAs.open`), origin-fixed; the `--url` origin refusal names the fix ([#187](https://github.com/matt-cochran/jevitate/issues/187)).
+- A repo's own `.jevitate/` (created by `jevitate init` at the git root) holds Journeys, regressions, baselines and dated `logs/`; `~/.jevitate` keeps secrets and machine state. Its `.gitignore` keeps logs and any secret or machine-local file out of git, and `init` only ever adds missing lines.
+- Run output is pruned: runs older than 14 days are deleted, but the newest 50 are always kept (`config.json` `logs.ttlDays`/`logs.keepLatest`; `jevitate logs prune`).
+- Queued missions and `check` items now follow the operator's `targets.json` (safety, settle, hangs, log sources) exactly as CLI runs do; a queued invariants spec may not use `authFrom.secret`.
+- A mission left `running` by a drain that died hard is recorded `failed` by the next drain, never re-run.
+- The `--browser-*` launch flags are on every browser-opening command (`journey run`, `source run`, `load run`, `regression capture`/`run` added) and documented.
+- Goal and usability results carry the crash report and intermittent-hang evidence, and a CI guard (`surface-wiring.test.ts`) fails when a surface drops a mission option or a result field without a stated reason.
+- Site policies (`jevitate site policy set <origin>`) now govern Journey runs: human-like pacing, throttles, hourly/daily run budgets and quiet hours for `journey run`, `source run`, `check` and MCP `run_journey` (a refusal says when to retry); `load run` applies the pacing.
+- Shared Journeys from a git submodule under `.jevitate/journeys/<shared>/` appear as `<shared>/<id>` on every Journey surface, including MCP.
 
 ### Documentation and examples
 
@@ -171,7 +180,8 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 
 ### Upgrade notes
 
-- No config file migration is required beyond the items below — a 0.1.0 `~/.jevitate` directory (recordings, journeys, regressions) works unchanged.
+- No config file migration is required beyond the items below. Credentials, config, `targets.json` and the rest of `~/.jevitate` work unchanged.
+- Run output now goes to `.jevitate/logs/<date>/` (in the repo, else `~/.jevitate/logs/`), and Journeys, regressions and baselines default to the repo's `.jevitate/` once `jevitate init` has created it (outside a repo they stay in `~/.jevitate`). Results under the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports` are still found by `get_mission_result`, `verify_fix` and `report`. To use existing Journeys or regressions inside a repo, move them from `~/.jevitate/journeys` and `~/.jevitate/regressions` into its `.jevitate/`, or pass `--dir`.
 - If a script parses `usage.usd` as a single number, switch it to `usage.totalUsd` (checking `usage.priced` before treating it as complete); `usage.usd` still exists as a deprecated alias but only when at least one component was priced.
 - If CI treats any non-zero `verify-fix` exit code as "still reproduces", add explicit handling for exit code 4 (`intermittent`) — a flaky defect is neither `fixed` nor a confirmed `still-reproduces`.
 - If a suite relies on a coverage or exploratory mission wandering the whole app, add `--scope app` (or `--route <glob>`) — the new default scopes to the start URL's route.

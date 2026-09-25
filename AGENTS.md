@@ -1,6 +1,6 @@
 # Project Context & Archetype
 
-- pnpm@9 monorepo, Node>=20, TS/ESM. Workspaces: `packages/*`, `apps/*`, `site-integrations/*`. vitest, esbuild, changesets.
+- pnpm@9 monorepo, Node>=20, TS/ESM. Workspaces: `packages/*`, `apps/*`. vitest, esbuild, changesets.
 - Only `@jevitate/cli` (+ bare `jevitate` alias) is published; every other `packages/*` is private and bundled INTO the cli by esbuild — native deps (playwright, better-sqlite3) stay external. Product noun = "Journey" (intentional, never "fix").
 - Build: `pnpm -r build`. Lint: `pnpm lint`. Bundle: `pnpm --filter @jevitate/cli run bundle`. Safety gate: `pnpm check:no-fallback`.
 - TEST (WSL-critical): `pnpm exec vitest run packages/<pkg>/src/<file>.test.ts` from repo root. NEVER bare `pnpm exec vitest run` (hangs) and NEVER `pnpm --filter <pkg> exec vitest ...` (breaks root include globs).
