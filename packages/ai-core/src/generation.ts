@@ -8,15 +8,15 @@ import { FAKE_CALL_USAGE, type UsageSink } from "./usage.js";
  */
 export const FORM_VALUE_INSTRUCTIONS =
   "Return in `text` ONLY the literal characters to type into the single field named `fieldLabel` " +
-  "(HTML input type `fieldType`) — no explanation, no steps, no JSON, no other field's value, no " +
-  "`Label:` prefix, and NEVER the goal or a sentence copied from it: the goal says what the user " +
-  "wants done, not what this field holds. When `goal` states this field's value, copy just that " +
-  "value. Otherwise invent a short, plausible value of the field's kind (`fieldKind`): a name → a " +
-  "plausible name (e.g. Dana Ruiz); a search → a 1-3 word search term; a title → a short title; a " +
-  "rationale/notes/description → one sentence of reasoning in the user's words; email/url → an " +
-  "email address / absolute URL. `alreadyUsed` lists values already submitted into this field: " +
-  "when the goal names several items, use the next item not yet used, never one of them again. " +
-  "Return null only when no value can be invented safely.";
+  "(HTML input type `fieldType`) — no explanation, no JSON, no other field's value, no `Label:` " +
+  "prefix, NEVER the goal or a sentence copied from it, and NEVER the field's own label or " +
+  "placeholder (e.g. \"Edit block text\"). When `goal` states this field's value (quoted, or after " +
+  "`exactly:`), copy just that value verbatim. Otherwise invent a short, plausible value of the " +
+  "field's kind (`fieldKind`): a name → a plausible name (e.g. Dana Ruiz); a search → a 1-3 word " +
+  "term; a title → a short title; a rationale/notes/description → one sentence of reasoning in the " +
+  "user's words; email/url → an email address / absolute URL. `alreadyUsed` lists values already " +
+  "submitted into this field: when the goal names several items, use the next item not yet used, " +
+  "never one of them again. Return null only when no value can be invented safely.";
 
 /** Text-only generation tasks (form values / triage). Closed set. */
 export const FormValueInput = z.object({
