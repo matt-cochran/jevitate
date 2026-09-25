@@ -24,9 +24,10 @@ import { SafetyPolicy, controlRisk, type SafetyConfig } from "./safety.js";
  *
  * Every attempt's evidence is kept; the finding is never dropped and never reported clean.
  *
- * `ui-no-progress` has two sub-kinds, told apart by `HangSignal.element` (#108):
+ * `ui-no-progress` has two sub-kinds, told apart by `busyIndicatorOf` — `HangSignal.element`, or
+ * for a signal persisted before `element` existed, the indicator its detail names (#108/#164):
  *
- *  - a BUSY-INDICATOR hang (`element` set — a spinner/progressbar that never cleared): "the same
+ *  - a BUSY-INDICATOR hang (an indicator is named — a spinner/progressbar that never cleared): "the same
  *    hang" means THAT indicator (by its normalized identity) is visible again after the replay. A
  *    settled page with a stable signature is not evidence either way — it is what a genuinely
  *    fixed page looks like, so it can never alone read as reproduced;
@@ -102,6 +103,68 @@ export interface HangAttempt {
   readonly detail: string;
   /** Set when the attempt was not run: its replay would repeat a paid/destructive write (#153). */
   readonly withheld?: WithheldWrite;
+  /** Which rule decided an attempt that ran (#164). */
+  readonly rule?: HangRule;
+  /** Busy-indicator rule only: how many busy indicators were visible on the replayed page (#164). */
+  readonly busyIndicators?: number;
+}
+
+export type HangRule = "busy-indicator" | "stalled-state" | "same-kind";
+
+/**
+ * The busy indicator a `ui-no-progress` hang was attributed to, or null for a stalled-state hang
+ * (#164): `HangSignal.element`, else — for a hang persisted before `element` existed — the
+ * indicator named in its detail ("a busy indicator (X) never went away …"). Pure.
+ */
+export function busyIndicatorOf(hang: Pick<HangSignal, "kind" | "detail" | "element">): string | null {
+  if (hang.kind !== "ui-no-progress") return null;
+  if (hang.element !== undefined && hang.element !== "") return hang.element;
+  const m = /^a busy indicator \((.+)\) never went away within \d+ms$/.exec(hang.detail.trim());
+  return m?.[1] ?? null;
+}
+
+/** The pre-#87 description form `<css selector> <tag>` (e.g. `[role="progressbar"]:not([aria-valuenow]) <div>`). */
+function legacySelectorForm(indicator: string): { selector: string; tag: string } | null {
+  const m = /^(\[.+\]\S*) <([a-z][a-z0-9-]*)>$/.exec(indicator);
+  return m === null || m[1] === undefined || m[2] === undefined ? null : { selector: m[1], tag: m[2] };
+}
+
+/** Visible elements matching a recorded (legacy) indicator selector and tag; -1 when it cannot be evaluated. */
+async function countVisible(page: VerifySession["page"], selector: string, tag: string): Promise<number> {
+  return page
+    .evaluate(
+      ([sel, t]) => {
+        try {
+          return Array.from(document.querySelectorAll(sel)).filter((el) => {
+            if (el.tagName.toLowerCase() !== t) return false;
+            const r = (el as HTMLElement).getBoundingClientRect();
+            const s = window.getComputedStyle(el as HTMLElement);
+            return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+          }).length;
+        } catch {
+          return -1;
+        }
+      },
+      [selector, tag] as const,
+    )
+    .catch(() => -1);
+}
+
+/** How many busy indicators (the `visibleBusyIndicator` selectors) are visible now; -1 when unreadable. */
+async function countVisibleBusy(page: VerifySession["page"]): Promise<number> {
+  return page
+    .evaluate(() => {
+      const seen = new Set<Element>();
+      for (const sel of ['[aria-busy="true"]', '[role="progressbar"]:not([aria-valuenow])', '[class*="spinner" i]', '[class*="animate-spin" i]']) {
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const s = window.getComputedStyle(el as HTMLElement);
+          if (r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0") seen.add(el);
+        }
+      }
+      return seen.size;
+    })
+    .catch(() => -1);
 }
 
 export type ReproductionStatus = "reproduced" | "intermittent" | "inconclusive";
@@ -205,21 +268,30 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
 
     const seen = await perceive(session.page, p.perceive ?? {});
     const kind = seen.hang?.kind ?? null;
-    if (p.hang.kind === "ui-no-progress" && p.hang.element !== undefined) {
-      // A busy-indicator hang (#108): reproduction requires THAT indicator to be visible again.
-      // A stable, settled page signature alone proves nothing — it is exactly what a fixed page
-      // looks like, so the same-signature rule below must never decide this sub-kind.
-      const wantElement = messageClass(p.hang.element);
-      const backAgain = kind === "ui-no-progress" && seen.hang?.element !== undefined && messageClass(seen.hang.element) === wantElement;
+    const indicator = busyIndicatorOf(p.hang);
+    if (indicator !== null) {
+      // A busy-indicator hang (#108/#164): reproduction requires THAT indicator to be visible and
+      // stuck again. A stable, settled page signature alone proves nothing — it is exactly what a
+      // fixed page looks like, so the stalled-state rule below must never decide this sub-kind
+      // (including a hang recorded before `element` existed, identified from its detail).
+      const legacy = legacySelectorForm(indicator);
+      const matching = legacy === null ? null : await countVisible(session.page, legacy.selector, legacy.tag);
+      const backAgain =
+        kind === "ui-no-progress" &&
+        seen.hang?.element !== undefined &&
+        (messageClass(seen.hang.element) === messageClass(indicator) || (matching !== null && matching > 0));
+      const busyIndicators = await countVisibleBusy(session.page);
       return {
         reproduced: backAgain,
         kind: backAgain ? "ui-no-progress" : kind,
         replay,
         ran: true,
+        rule: "busy-indicator",
+        busyIndicators,
         detail: backAgain
-          ? `busy-indicator rule: the indicator (${seen.hang?.element ?? p.hang.element}) is back — ${seen.hang?.detail ?? p.hang.detail}`
+          ? `busy-indicator rule: the indicator (${seen.hang?.element ?? indicator}) is back — ${seen.hang?.detail ?? p.hang.detail}`
           : kind === null
-            ? `busy-indicator rule: the indicator (${p.hang.element}) is gone and the page settled — fixed`
+            ? `busy-indicator rule: the indicator (${indicator}) is gone and the page settled (${busyIndicators} busy indicator(s) visible) — fixed`
             : kind === "ui-no-progress"
               ? `busy-indicator rule: a different busy indicator (${seen.hang?.element ?? "unknown"}), not the one that hung`
               : `busy-indicator rule: no busy indicator, a different hang (${kind}) instead`,
@@ -230,7 +302,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       // stay there.
       const stalled = p.hang.lastState.signature;
       if (seen.snapshot.signature !== stalled) {
-        return { reproduced: false, kind, replay, ran: true, detail: "stalled-state rule: replay reached a different page state (progress was made)" };
+        return { reproduced: false, kind, replay, ran: true, rule: "stalled-state", detail: "stalled-state rule: replay reached a different page state (progress was made)" };
       }
       await (p.sleep ?? realSleep)(p.stallMs ?? DEFAULT_STALL_MS);
       const again = await perceive(session.page, p.perceive ?? {});
@@ -240,6 +312,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
         kind: stuck ? "ui-no-progress" : null,
         replay,
         ran: true,
+        rule: "stalled-state",
         detail: stuck
           ? "stalled-state rule: the replay landed on the same stalled state and stayed there"
           : "stalled-state rule: the page moved on after the stall window",
@@ -251,6 +324,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       kind,
       replay,
       ran: true,
+      rule: "same-kind",
       detail: reproduced ? (seen.hang?.detail ?? p.hang.detail) : kind === null ? "same-kind rule: the page settled — no hang" : `same-kind rule: a different hang (${kind})`,
     };
   } catch (e) {
