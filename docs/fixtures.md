@@ -29,6 +29,12 @@ jevitate explore --strategy adversarial --url http://localhost:3000/projects/new
   which you can use in `--url`, `--goal`, `--success`, a Journey's `--param`s and later steps,
   but never in the URL's origin.
   `secretOutputs` are redacted everywhere and never reach text a model sees.
+- `${secretField.<VAR>}` puts a `--secret-field` value (read from `env:<VAR>`) into a step's
+  `json`, `body` or `headers`, for example to log in to an app that keeps its token in memory.
+  It is refused in a URL, never written to the step log, result or Recording, and redacted from
+  every error. An unknown reference is refused before any browser or request. A credential
+  header may hold only references, and a `${setup.x}` it uses must be a secret output.
+  `verify-fix` re-binds the referenced variables.
 - A setup that fails, times out or leaves a `${setup.x}` unresolved ends the run `inconclusive`
   as a configuration error. A mission never runs on unknown state.
 - A target can declare its fixtures in `~/.jevitate/targets.json` instead of passing `--fixtures`.

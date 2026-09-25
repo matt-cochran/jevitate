@@ -13,8 +13,12 @@ transcript, Recording and issue draft, but it is never typed into a field.
   localStorage. It goes only to the browser, and artifacts record its path, never
   its contents. `jevitate record` does not write a storageState.
 - **Rotating refresh tokens.** When the app rotates its refresh token on every use,
-  a saved state goes stale after the first run that refreshes it. Save a fresh state
-  before each mission (or each CI job), and do not share one file between parallel runs.
+  a saved state goes stale after the first run that refreshes it. Pass
+  `--save-storage-state <file>` (it may be the `--storage-state` file itself) to write the
+  rotated session back when the mission ends. The write survives a crash or a
+  SIGTERM/SIGINT: it falls back to the last state captured while the session still looked
+  logged in, never overwrites a good file with a logged-out one, and uses mode 0600. Do not
+  share one file between parallel runs.
 - **Driving a login or signup form.** Bind a field to an environment variable, and
   code types the value itself. The model only ever sees `«secret:VAR»`, and the
   Recording records the fill as `{ redacted: true }`:

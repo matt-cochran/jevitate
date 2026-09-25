@@ -43,4 +43,6 @@ declared in the [invariants file](./invariants.md): a `capture` binds something 
 created (an id or URL), and a check gated on `when.after: "capture.<name>"` then verifies from the
 observer's own session, with a read-only `probe` (`as: "<actor>"`) or a `deniedAs` open, that it
 cannot see or open it. A violation is a defect, like any other invariant. Session contents are
-never copied between actors, and storageState files are never read or logged, only their paths.
+never copied between actors, and storageState files are never logged, only their paths. A probe's
+`authFrom.localStorage` token for an observer is read straight from that observer's storageState
+file, so an observer used only for probes never has to open a page; the token is never logged.
