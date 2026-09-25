@@ -116,6 +116,60 @@ describe("Frontier", () => {
   });
 });
 
+describe("Frontier — toggle round trips are exercised once in each direction, then dropped (#160)", () => {
+  const button = (name: string): Control => ({ ...c, name, descriptor: { role: "button", name } });
+
+  test("Collapse/Expand (name-paired, different identities): both directions blacklisted and purged after the 2nd", () => {
+    const f = new Frontier();
+    const collapse = button("Collapse signal minimap");
+    const expand = button("Expand signal minimap");
+    f.push(item({ key: "collapse-1", fromFingerprint: "s0", control: collapse }));
+    // s0 --Collapse--> s1
+    f.noteTransition("s0", collapse, "s1");
+    // s1 re-offers Expand — several times, from several near-identical states, exactly as the bug
+    // report describes ("each toggle produces a 'new' state signature").
+    f.push(item({ key: "expand-1", fromFingerprint: "s1", control: expand }));
+    f.push(item({ key: "expand-2", fromFingerprint: "s1b", control: expand }));
+    f.push(item({ key: "collapse-2", fromFingerprint: "s2", control: collapse }));
+    // s1 --Expand--> s2 (the reverse of s0->s1): the toggle has now gone both ways.
+    f.noteTransition("s1", expand, "s2");
+    expect(f.size).toBe(0); // every queued Collapse/Expand item was purged
+    // A LATER state re-offering either direction is refused too (never enqueued again).
+    f.push(item({ key: "expand-3", fromFingerprint: "s3", control: expand }));
+    f.push(item({ key: "collapse-3", fromFingerprint: "s4", control: collapse }));
+    expect(f.size).toBe(0);
+  });
+
+  test("a same-name disclosure (A→B→A via the SAME control): dropped after its round trip", () => {
+    const f = new Frontier();
+    const toggle = button("Supporting Details");
+    f.push(item({ key: "open", fromFingerprint: "a", control: toggle }));
+    f.noteTransition("a", toggle, "b"); // opens: a -> b
+    f.push(item({ key: "close-1", fromFingerprint: "b", control: toggle }));
+    f.push(item({ key: "close-2", fromFingerprint: "b2", control: toggle })); // a near-duplicate state
+    f.noteTransition("b", toggle, "a"); // closes: b -> a, the exact reverse
+    expect(f.size).toBe(0);
+    f.push(item({ key: "again", fromFingerprint: "c", control: toggle }));
+    expect(f.size).toBe(0);
+  });
+
+  test("a no-op action (before === after) records nothing — never mistaken for a toggle", () => {
+    const f = new Frontier();
+    const btn = button("Refresh");
+    f.noteTransition("a", btn, "a");
+    f.push(item({ key: "still-queued", fromFingerprint: "a", control: btn }));
+    expect(f.size).toBe(1);
+  });
+
+  test("an ordinary (non-toggle, non-round-trip) control is never affected", () => {
+    const f = new Frontier();
+    const btn = button("Export");
+    f.noteTransition("a", btn, "b");
+    f.push(item({ key: "still-queued", fromFingerprint: "b", control: btn }));
+    expect(f.size).toBe(1);
+  });
+});
+
 describe("Frontier — chrome last (#115)", () => {
   const sidebar = (n: number): Control => ({ ...nav(`Section ${n}`), href: `https://x.test/other${n}`, landmark: "navigation" });
   const button = (name: string): Control => ({ ...c, name, descriptor: { role: "button", name } });
