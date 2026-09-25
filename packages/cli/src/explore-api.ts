@@ -45,6 +45,7 @@ import {
   type SuccessWhen,
   type SecretField,
   type BudgetTrajectory,
+  type CrashReport,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
@@ -397,6 +398,10 @@ export interface RunExplorationResult {
   readonly timing: TimingSummary;
   /** Hang findings (0 or 1: the loop stops at a hang), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
+  /** #126: seed-load hangs that did not reproduce (the goal was retried) — evidence, whatever the outcome. */
+  readonly intermittentHangs?: HangFinding[];
+  /** For a `crashed` run: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
   /** Declared mission spend budgets (#150/#180): the observed trajectory, whatever the outcome. */
   readonly budget?: BudgetTrajectory[];
   /** The run's Recording (also written to `recordingPath`). */
@@ -672,6 +677,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      ...(mission.intermittentHangs === undefined ? {} : { intermittentHangs: mission.intermittentHangs }),
+      ...(mission.run.crash === undefined ? {} : { crash: mission.run.crash }),
       // #180: the declared budgets' observed trajectory, whatever the outcome (a hang included).
       ...(mission.budget === undefined ? {} : { budget: mission.budget }),
       sideEffects: mission.run.sideEffects,

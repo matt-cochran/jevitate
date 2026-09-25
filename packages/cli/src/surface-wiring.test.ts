@@ -201,17 +201,63 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 };
 
+/**
+ * Engine result → the envelope the user reads (`--json`, `<stem>.result.json`, MCP get_mission_result).
+ * A result field the envelope drops must say where it went instead (#180: `budget` was computed and
+ * never shown). Envelopes that spread the whole mission result (feature, adversarial) drop nothing.
+ */
+const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "GoalBasedResult → RunExplorationResult": {
+    run: "flattened: runOutcome, stop, decisions, actions, timing, sideEffects, answer",
+    hang: "→ hangs[]",
+    warnings: "→ checkWarnings",
+    invariantDefects: "→ defects (declaredResult)",
+  },
+  "ExploreRun → RunExplorationResult": {
+    hang: "→ hangs[]",
+    heap: "per-step samples; a crash carries them in crash.heap",
+    blockingCause: "folded into the run's reason (withCause)",
+  },
+  "InductionRunResult → RunCoverageMissionResult": {
+    recordings: "written to disk → recordingPaths",
+    transcript: "written to disk → transcriptPath",
+    invariantDefects: "→ defects (declaredResult)",
+  },
+  "ExploreRun → RunUsabilityMissionResult": {
+    recording: "written to disk → recordingPath",
+    transcript: "written to disk → transcriptPath",
+    heap: "per-step samples; a crash carries them in crash.heap",
+    blockingCause: "folded into the run's reason (withCause)",
+  },
+};
+
 interface Site {
   readonly key: string;
   readonly missing: readonly string[];
 }
 
-/** Every call from a non-test CLI source to a mission API, with the options its argument never sets. */
-function wiringSites(): Site[] {
+function cliProgram(): ts.Program {
   const configPath = join(CLI_ROOT, "tsconfig.json");
   const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined });
   if (parsed === undefined) throw new Error(`cannot read ${configPath}`);
-  const program = ts.createProgram(parsed.fileNames, parsed.options);
+  return ts.createProgram(parsed.fileNames, parsed.options);
+}
+
+/** The property names of a named interface / type alias anywhere in the program (the CLI's or a dependency's). */
+function propsOf(program: ts.Program, name: string): Set<string> {
+  const checker = program.getTypeChecker();
+  for (const sf of program.getSourceFiles()) {
+    for (const st of sf.statements) {
+      if ((ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st)) && st.name.text === name) {
+        return new Set(checker.getTypeAtLocation(st.name).getProperties().map((p) => p.name));
+      }
+    }
+  }
+  throw new Error(`type ${name} not found`);
+}
+
+/** Every call from a non-test CLI source to a mission API, with the options its argument never sets. */
+function wiringSites(program: ts.Program): Site[] {
   const checker = program.getTypeChecker();
   const byKey = new Map<string, Set<string>>();
   for (const sf of program.getSourceFiles()) {
@@ -241,8 +287,10 @@ function wiringSites(): Site[] {
   return [...byKey].map(([key, missing]) => ({ key, missing: [...missing].sort() }));
 }
 
+const PROGRAM = cliProgram();
+
 describe("surface wiring — every mission option is passed by every surface, or its omission is explained", () => {
-  const sites = wiringSites();
+  const sites = wiringSites(PROGRAM);
 
   it("finds the surfaces (the analysis itself is not vacuous)", () => {
     const keys = sites.map((s) => s.key);
@@ -264,3 +312,22 @@ describe("surface wiring — every mission option is passed by every surface, or
     expect(stale, "these are wired now (or the call moved): remove them from OMISSIONS").toEqual([]);
   }, 120_000);
 });
+
+describe("result exposure — every engine result field reaches the user's envelope, or says where it went", () => {
+  const dropped = Object.keys(ENVELOPES).map((pair) => {
+    const [from, to] = pair.split(" → ") as [string, string];
+    const have = propsOf(PROGRAM, to);
+    return { pair, dropped: [...propsOf(PROGRAM, from)].filter((p) => !have.has(p)).sort() };
+  });
+
+  it("no envelope drops an engine result field without a stated destination", () => {
+    const unexplained = dropped.flatMap((d) => d.dropped.filter((p) => ENVELOPES[d.pair]?.[p] === undefined).map((p) => `${d.pair}: ${p}`));
+    expect(unexplained, "the user never sees these: add them to the envelope, or to ENVELOPES with where they went").toEqual([]);
+  });
+
+  it("every listed drop is still a drop (the list never goes stale)", () => {
+    const stale = dropped.flatMap((d) => Object.keys(ENVELOPES[d.pair] ?? {}).filter((p) => !d.dropped.includes(p)).map((p) => `${d.pair}: ${p}`));
+    expect(stale).toEqual([]);
+  });
+});
+

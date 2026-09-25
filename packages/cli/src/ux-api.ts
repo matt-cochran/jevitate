@@ -40,6 +40,7 @@ import {
   secretFieldSecrets,
   detectOverflow,
   shouldCheckOverflow,
+  type CrashReport,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
@@ -683,6 +684,12 @@ export interface RunUsabilityMissionResult {
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
   readonly failure?: MissionFailure;
+  /** For a `crashed` review: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
+  /** Where the review ended (redacted), and how many decisions/actions it spent — as a goal run reports them. */
+  readonly finalUrl: string;
+  readonly decisions: number;
+  readonly actions: number;
   /** Why the analysis could not be produced (the run's evidence is still kept). */
   readonly analysisUnavailable?: string;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
@@ -1019,6 +1026,10 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
+      ...(run.crash === undefined ? {} : { crash: run.crash }),
+      finalUrl: run.finalUrl,
+      decisions: run.decisions,
+      actions: run.actions,
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
