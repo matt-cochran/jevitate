@@ -931,6 +931,8 @@ export interface RunCoverageMissionOptions {
 }
 
 export interface RunCoverageMissionResult {
+  /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix is `coverage-` for both. */
+  readonly strategy: "coverage" | "exploratory";
   readonly coverage: CoverageReport;
   readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
@@ -1103,6 +1105,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       timing: result.timing,
+      strategy: opts.strategy ?? "coverage",
       coverage: stampedCoverage,
       outcome: result.outcome,
       missionOutcome,
