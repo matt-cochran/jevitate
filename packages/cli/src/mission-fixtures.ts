@@ -17,7 +17,9 @@ import { authHeaders, type AuthSources, type RequestAuth } from "./fixture-auth.
  *  - HTTP steps, from a fixtures JSON file (`--fixtures`, or `fixtures` in `~/.jevitate/targets.json`).
  *    Only to an `--allow`-listed http(s) origin; authenticated like the page is (`fixture-auth.ts`:
  *    a storageState localStorage bearer, its cookies, or a `--secret-field` binding). A file can
- *    never declare a command.
+ *    never declare a command. A step's json/body/headers may use `${secretField.<VAR>}` (#166) —
+ *    the run's `--secret-field` value bound to env `<VAR>`, so a login step can authenticate; it
+ *    is put on the wire only (never in a URL, the step log, the result or the Recording).
  *  - Shell hooks, from the operator's own CLI flags only (`--before <cmd>` / `--after <cmd>`, and
  *    only with `--allow-shell-hooks`). Never model-chosen, never read from a file a run wrote. Exit
  *    codes are recorded; stdout is never persisted (it may carry `{vars, secret}`), stderr only
@@ -30,6 +32,14 @@ import { authHeaders, type AuthSources, type RequestAuth } from "./fixture-auth.
  */
 
 export const SETUP_REF = /\$\{setup\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/**
+ * `${secretField.<VAR>}` (#166): a run's `--secret-field` value (bound to env `<VAR>`), allowed only
+ * in a step's `json`/`body`/`headers` — so a login step can authenticate. Substituted into the
+ * outgoing request only: never into a URL, the step log, the result or the Recording.
+ */
+export const SECRET_FIELD_REF = /\$\{secretField\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/** Either reference, matched in ONE pass (a substituted value is never re-expanded). */
+const STEP_REF = /\$\{(setup|secretField)\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const OUTPUT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 /** Keys that would make a fixtures file run a command: refused anywhere in a step. */
@@ -103,6 +113,27 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /** Every `${setup.x}` name referenced in `text`. */
 export function referencedNames(text: string): string[] {
   return [...text.matchAll(SETUP_REF)].map((m) => m[1] as string);
+}
+
+/**
+ * Every `--secret-field` env variable a spec needs (#166): the `auth: {from: "secretField"}` names
+ * and every `${secretField.<VAR>}` in a step's json/body/headers.
+ */
+export function secretFieldNames(spec: FixtureSpec | undefined): string[] {
+  const names = new Set<string>();
+  for (const s of [...(spec?.setup ?? []), ...(spec?.restore ?? [])]) {
+    if (s.auth?.from === "secretField") names.add(s.auth.name);
+    for (const text of stringsIn([s.headers ?? {}, s.json ?? null, s.body ?? ""])) {
+      for (const m of text.matchAll(SECRET_FIELD_REF)) names.add(m[1] as string);
+    }
+  }
+  return [...names];
+}
+
+/** A header value that is only references (and at most a scheme word) holds no literal credential. */
+function onlyReferences(value: string): boolean {
+  if (value.search(STEP_REF) === -1) return false;
+  return /^([A-Za-z-]+)?$/.test(value.replace(STEP_REF, "").trim());
 }
 
 function stringsIn(v: unknown, out: string[] = []): string[] {
@@ -194,6 +225,10 @@ function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: Set<
   const method = typeof v.method === "string" ? v.method.toUpperCase() : "";
   if (!METHODS.has(method)) throw new FixtureSpecError(`${where}.method must be one of ${[...METHODS].join(", ")}`);
   if (typeof v.url !== "string" || v.url === "") throw new FixtureSpecError(`${where}.url is required`);
+  // A URL is logged and persisted: a secret never goes there (#166).
+  if (v.url.search(SECRET_FIELD_REF) !== -1) {
+    throw new FixtureSpecError(`${where}.url: \${secretField.*} is allowed only in json, body or headers (a URL is logged)`);
+  }
   // A reference may fill a path or query value, never choose the origin: check it with placeholders.
   assertStepUrl(v.url.replace(SETUP_REF, "0"), bounds, where);
   const u = resolveStepUrl(v.url.replace(SETUP_REF, "0"), bounds.baseUrl);
@@ -205,8 +240,11 @@ function parseStep(v: unknown, where: string, bounds: FixtureBounds, known: Set<
     headers = {};
     for (const [k, x] of Object.entries(v.headers)) {
       if (typeof x !== "string") throw new FixtureSpecError(`${where}.headers.${k} must be a string`);
-      if (CREDENTIAL_HEADERS.has(k.toLowerCase())) {
-        throw new FixtureSpecError(`${where}.headers.${k}: no literal credentials in a fixtures file — use "auth" (storage state or --secret-field)`);
+      // A credential header may only be references (`Bearer ${setup.token}`, `${secretField.API_KEY}`, #166).
+      if (CREDENTIAL_HEADERS.has(k.toLowerCase()) && !onlyReferences(x)) {
+        throw new FixtureSpecError(
+          `${where}.headers.${k}: no literal credentials in a fixtures file — use "auth" (storage state or --secret-field), \${secretField.<VAR>} or a secret \${setup.<name>}`,
+        );
       }
       headers[k] = x;
     }
@@ -304,6 +342,21 @@ export function parseFixtureSpec(raw: unknown, bounds: FixtureBounds, opts: { op
   const restoreKey = raw.teardown !== undefined ? "teardown" : "restore";
   const restore = list(raw[restoreKey], `fixtures.${restoreKey}`).map((s, i) => parseStep(s, `fixtures.${restoreKey}[${i}]`, bounds, known, "restore"));
   if (setup.length === 0 && restore.length === 0) throw new FixtureSpecError("a fixtures spec needs at least one setup or restore step");
+  // A credential header built from a setup output needs that output to be SECRET: a public output
+  // is persisted with the result, and a credential never is.
+  if (known !== null) {
+    const secret = new Set(setup.flatMap((s) => s.secretOutputs ?? []));
+    for (const [phase, steps] of [["setup", setup], [restoreKey, restore]] as const) {
+      for (const [i, s] of steps.entries()) {
+        for (const [k, x] of Object.entries(s.headers ?? {})) {
+          if (!CREDENTIAL_HEADERS.has(k.toLowerCase())) continue;
+          for (const name of referencedNames(x)) {
+            if (!secret.has(name)) throw new FixtureSpecError(`fixtures.${phase}[${i}].headers.${k}: \${setup.${name}} carries a credential — list it in secretOutputs`);
+          }
+        }
+      }
+    }
+  }
   return { ...(typeof raw.name === "string" ? { name: raw.name } : {}), setup, restore };
 }
 
@@ -377,10 +430,27 @@ export function substituteSetupRefs(text: string, b: FixtureBindings, opts: { al
   });
 }
 
-function substituteDeep(v: unknown, b: FixtureBindings): unknown {
-  if (typeof v === "string") return substituteSetupRefs(v, b, { allowSecret: true, where: "a fixture step" });
-  if (Array.isArray(v)) return v.map((x) => substituteDeep(x, b));
-  if (isRecord(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, substituteDeep(x, b)]));
+/**
+ * A step's `json`/`body`/`headers` text with every `${setup.x}` and `${secretField.VAR}` filled in,
+ * in one pass (#166). The result goes on the wire ONLY — never into a log line or an artifact.
+ */
+function substituteStepText(text: string, b: FixtureBindings, secretFields: Readonly<Record<string, string>>, where: string): string {
+  return text.replace(STEP_REF, (_whole, kind: string, name: string) => {
+    if (kind === "setup") {
+      const v = b.values[name];
+      if (v === undefined) throw new UnboundSetupRefError(`${where} references \${setup.${name}}, which the fixture setup did not output`);
+      return v;
+    }
+    const v = secretFields[name];
+    if (v === undefined || v === "") throw new UnboundSetupRefError(`${where} references \${secretField.${name}}, but the run has no --secret-field bound to env:${name}`);
+    return v;
+  });
+}
+
+function substituteDeep(v: unknown, sub: (text: string) => string): unknown {
+  if (typeof v === "string") return sub(v);
+  if (Array.isArray(v)) return v.map((x) => substituteDeep(x, sub));
+  if (isRecord(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, substituteDeep(x, sub)]));
   return v;
 }
 
@@ -525,8 +595,23 @@ export class MissionFixtures {
     if (opts.hooks !== undefined && (opts.hooks.before !== undefined || opts.hooks.after !== undefined) && opts.allowShellHooks !== true) {
       throw new FixtureSpecError("--before/--after run operator shell commands: pass --allow-shell-hooks to opt in");
     }
+    // #166: every `${secretField.VAR}` must name a binding this run has — refused here, before any
+    // browser or request, like an unknown `${setup.x}`.
+    const bound = opts.auth.secretFields ?? {};
+    for (const [phase, steps] of [["setup", opts.spec?.setup ?? []], ["restore", opts.spec?.restore ?? []]] as const) {
+      for (const [i, s] of steps.entries()) {
+        for (const text of stringsIn([s.headers ?? {}, s.json ?? null, s.body ?? ""])) {
+          for (const m of text.matchAll(SECRET_FIELD_REF)) {
+            const v = bound[m[1] as string];
+            if (v === undefined || v === "") {
+              throw new FixtureSpecError(`fixtures.${phase}[${i}] references \${secretField.${m[1]}}, but the run has no --secret-field bound to env:${m[1]}`);
+            }
+          }
+        }
+      }
+    }
     this.#opts = opts;
-    this.#specHash = sha256(canonical({ spec: opts.spec ?? null, hooks: this.hookHashes() ?? null })).slice(0, 16);
+    this.#specHash =sha256(canonical({ spec: opts.spec ?? null, hooks: this.hookHashes() ?? null })).slice(0, 16);
   }
 
   hookHashes(): PersistedFixtures["hooks"] | undefined {
@@ -565,7 +650,8 @@ export class MissionFixtures {
   }
 
   #redact(text: string): string {
-    return redactUrl(redactText(text, [...(this.#opts.secrets ?? []), ...this.secrets()]));
+    const bound = Object.values(this.#opts.auth.secretFields ?? {}).filter((v) => v !== "");
+    return redactUrl(redactText(text, [...(this.#opts.secrets ?? []), ...bound, ...this.secrets()]));
   }
 
   identity(): string {
@@ -695,12 +781,18 @@ export class MissionFixtures {
       url = new URL(substituteSetupRefs(step.url, b, { allowSecret: true, where: name }), this.#opts.baseUrl).href;
       // Re-check the substituted URL: a bound value never widens the allowlist.
       assertStepUrl(url, this.#opts, name);
-      headers = { ...(substituteDeep(step.headers ?? {}, b) as Record<string, string>) };
+      const sub = (text: string): string => substituteStepText(text, b, this.#opts.auth.secretFields ?? {}, name);
+      for (const [k, x] of Object.entries(step.headers ?? {})) {
+        // A `--before` hook may bind names at run time: a credential header still takes secret outputs only.
+        const pub = CREDENTIAL_HEADERS.has(k.toLowerCase()) ? referencedNames(x).find((n) => !b.secretNames.has(n)) : undefined;
+        if (pub !== undefined) throw new UnboundSetupRefError(`${name}: headers.${k} uses \${setup.${pub}}, which is not a secret output`);
+      }
+      headers = { ...(substituteDeep(step.headers ?? {}, sub) as Record<string, string>) };
       if (step.json !== undefined) {
-        body = JSON.stringify(substituteDeep(step.json, b));
+        body = JSON.stringify(substituteDeep(step.json, sub));
         headers["content-type"] ??= "application/json";
       } else if (step.body !== undefined) {
-        body = substituteSetupRefs(step.body, b, { allowSecret: true, where: name });
+        body = sub(step.body);
       }
       if (step.auth !== undefined) Object.assign(headers, authHeaders(step.auth, url, this.#opts.auth));
     } catch (e) {

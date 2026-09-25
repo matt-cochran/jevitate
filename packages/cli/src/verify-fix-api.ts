@@ -11,6 +11,7 @@ import {
   hookHash,
   loadFixtureFile,
   parseFixtureSpec,
+  secretFieldNames,
   type FixtureRecord,
   type FixtureSpec,
   type MissionFixtures,
@@ -483,7 +484,7 @@ function missionFixtures(
           ? parseFixtureSpec(saved.spec, bounds, openRefs)
           : undefined;
     // `--secret-field` bindings a spec authenticates with come from the same environment variables.
-    const names = [...(spec?.setup ?? []), ...(spec?.restore ?? [])].flatMap((s) => (s.auth?.from === "secretField" ? [s.auth.name] : []));
+    const names = secretFieldNames(spec); // `auth: {from: "secretField"}` and `${secretField.VAR}` (#166)
     const secretFields = names.flatMap((name) => {
       const secret = process.env[name];
       return secret === undefined ? [] : [{ descriptor: name, matcher: { key: "name" as const, value: name }, name, kind: "value" as const, secret }];
