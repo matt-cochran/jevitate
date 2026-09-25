@@ -43,7 +43,7 @@ export class MissionSafety {
   }
 
   /** An action is about to be dispatched (its writes are attributed to `step`). */
-  mark(step: number, op: string, control: Pick<Control, "name" | "summary"> | null): void {
+  mark(step: number, op: string, control: Pick<Control, "name" | "summary" | "role"> | null): void {
     const label = control === null ? op : control.name || control.summary;
     this.#log.mark(step, label, control === null ? null : this.policy.riskOf(control));
   }

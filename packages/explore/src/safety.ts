@@ -20,6 +20,14 @@ import type { Control } from "./snapshot.js";
  * contains the control's risky verb ("delete the draft" allows "Delete"; "simulate how customers
  * respond" allows "Run the simulation"); a feature mission's named capability counts as its goal
  * ("buy a pack" allows "Buy pack 1"). A false positive only costs coverage of that control.
+ *
+ * #168 (Preveti round 3 dogfood): on a chat/question-card UI the controls ARE the assistant's
+ * questions and answer options — a long question button ("How many qualified PM teams sign up but
+ * never start a trial today…") or a radio answer ("No — every user must pay today, so there is no
+ * free cohort") merely CONTAINS a risky word; it is not a verb-led action label. The categories below
+ * apply only to a short, button/link-shaped label — capped at `MAX_LABEL_LEN` — and skip choice
+ * controls (`radio`/`checkbox`/`option`, an answer, never an action) unless the label itself
+ * explicitly names a charge (a price, or "(paid)").
  */
 
 /** Ending the session would end the run's authentication. */
@@ -30,6 +38,16 @@ export const DESTRUCTIVE =
 /** Actions that cost money (a paid job, a purchase) or send something to real people. */
 export const PAID =
   /\b(?:buy|purchase|pay(?: now)?|checkout|check out|place (?:the |my |your |an? )?order|upgrade|subscribe|start (?:a |my |your |the )?(?:subscription|trial|plan)|simulat\w*|generate|send (?:an? |the )?(?:invites?|invitations?|interviews?|emails?|sms|texts?|campaigns?|newsletters?|reminders?))\b/i;
+
+/**
+ * A verb-led action label ("Pay now", "Upgrade to Pro") stays short; a chat question or answer runs
+ * much longer (#168's repros are 58-96 chars). Longer than this, a name is not a button verb.
+ */
+const MAX_LABEL_LEN = 40;
+/** Roles that are an ANSWER, never an action — a radio/checkbox/option is chosen, not clicked-to-run. */
+const CHOICE_ROLES = new Set(["radio", "checkbox", "option"]);
+/** A choice control that explicitly names a charge (a price, or an explicit "(paid)" marker). */
+const EXPLICIT_CHARGE = /\$\s?\d|\b\d+(?:\.\d+)?\s?(?:usd|dollars?|eur|gbp)\b|\(paid\)/i;
 
 export type ControlRisk = "session-end" | "destructive" | "paid" | "denied";
 
@@ -61,14 +79,25 @@ export interface SafetyConfig {
   readonly hangReplayWrites?: boolean;
 }
 
-/** The built-in category a control's name falls into, with the words that matched, or null. */
-export function controlRisk(name: string): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
+/**
+ * The built-in category a control's NAME falls into, with the words that matched, or null (#168).
+ * `role` (when known) lets the check skip choice controls (radio/checkbox/option — an answer, never
+ * an action) and is honored only when the label doesn't itself explicitly name a charge. A name
+ * longer than `MAX_LABEL_LEN` is a question/description, not a button verb, and never matches.
+ */
+export function controlRisk(
+  name: string,
+  role?: string,
+): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
+  const trimmed = name.replace(/\s+/g, " ").trim();
+  if (trimmed === "" || trimmed.length > MAX_LABEL_LEN) return null;
+  if (role !== undefined && CHOICE_ROLES.has(role.toLowerCase()) && !EXPLICIT_CHARGE.test(trimmed)) return null;
   for (const [risk, re] of [
     ["session-end", SESSION_END],
     ["destructive", DESTRUCTIVE],
     ["paid", PAID],
   ] as const) {
-    const m = re.exec(name);
+    const m = re.exec(trimmed);
     if (m !== null) return { risk, matched: m[0] };
   }
   return null;
@@ -169,8 +198,8 @@ export class SafetyPolicy {
   }
 
   /** The risk category of a control's name (for marking the side effects a click fired). */
-  riskOf(c: Pick<Control, "name">): Exclude<ControlRisk, "denied"> | null {
-    return controlRisk(c.name)?.risk ?? null;
+  riskOf(c: Pick<Control, "name" | "role">): Exclude<ControlRisk, "denied"> | null {
+    return controlRisk(c.name, c.role)?.risk ?? null;
   }
 
   /** Why this control may not be clicked, or null when it may. */
@@ -180,7 +209,7 @@ export class SafetyPolicy {
       if (d.match(c)) return { risk: "denied", reason: `refused by the safety policy: "${name}" matches --deny ${JSON.stringify(d.pattern)}` };
     }
     if (this.#allowDestructive) return null;
-    const r = controlRisk(name);
+    const r = controlRisk(name, c.role);
     if (r === null) return null;
     if (this.#goal !== null && goalAsksFor(this.#goal, r.matched)) return null;
     const what = r.risk === "session-end" ? "ends the session" : r.risk === "destructive" ? "is destructive" : "may cost money or contact real people";

@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { authHeaders } from "./fixture-auth.js";
+import { authHeaders, localStorageValue } from "./fixture-auth.js";
 import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, regressionFixtures } from "./fixture-cli.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 import {
@@ -346,6 +346,29 @@ describe("authHeaders", () => {
       expect(authHeaders({ from: "cookies" }, `${ORIGIN}/a`, { storageStatePath: state })).toEqual({ cookie: "sid=c1" });
       expect(authHeaders({ from: "secretField", name: "API_KEY", scheme: "" }, `${ORIGIN}/a`, { secretFields: { API_KEY: "k1" } })).toEqual({ authorization: "k1" });
       expect(() => authHeaders({ from: "localStorage", key: "missing" }, `${ORIGIN}/a`, { storageStatePath: state })).toThrow(/no localStorage "missing"/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("localStorageValue (#173)", () => {
+  it("reads a storageState file's localStorage[key] for an origin, straight from the file — no browser needed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-auth-ls-"));
+    try {
+      const state = join(dir, "b.json");
+      await writeFile(
+        state,
+        JSON.stringify({
+          cookies: [],
+          origins: [{ origin: ORIGIN, localStorage: [{ name: "simuli_token", value: "SECRET-MEMBER-JWT" }] }],
+        }),
+      );
+      expect(localStorageValue(state, ORIGIN, "simuli_token")).toBe("SECRET-MEMBER-JWT");
+      // No entry for that key, that origin, or an unreadable file: null, never a throw (the caller
+      // fails the probe closed the same way an unavailable token from any other source does).
+      expect(localStorageValue(state, ORIGIN, "missing-key")).toBeNull();
+      expect(localStorageValue(state, "http://elsewhere.test", "simuli_token")).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
