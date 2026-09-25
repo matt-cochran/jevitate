@@ -72,7 +72,11 @@ import {
   listMissionTargets,
   promoteMissionTarget,
   missionTargetContext,
+  missionTargetAuth,
+  updateMissionTargetAuth,
+  withMissionTargetAuthFlags,
   UnknownMissionTargetError,
+  type MissionTargetAuthFlags,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
 import { FsMissionQueueStore } from "@jevitate/missions";
@@ -3026,7 +3030,7 @@ export function buildProgram(deps: CliDeps): Command {
   const mission = program.command("mission");
   const missionTarget = mission.command("target");
 
-  missionTarget
+  const missionTargetAdd = missionTarget
     .command("add <id>")
     .description("register an exploration mission target (UNPROMOTED — not usable by queue_exploration until promoted)")
     .option("--name <name>", "human-readable target name")
@@ -3038,19 +3042,22 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--base-url <url>", "the base URL a mission starts navigation from")
-    .option("--description <text>", "optional human-readable description")
+    .option("--description <text>", "optional human-readable description");
+  withMissionTargetAuthFlags(missionTargetAdd)
     .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { name, authorizedOrigin, apiOrigin, baseUrl, description, dir, json } = this.opts<{
-        name?: string;
-        authorizedOrigin?: string;
-        apiOrigin: string[];
-        baseUrl?: string;
-        description?: string;
-        dir?: string;
-        json?: boolean;
-      }>();
+      const { name, authorizedOrigin, apiOrigin, baseUrl, description, dir, json, ...authFlags } = this.opts<
+        {
+          name?: string;
+          authorizedOrigin?: string;
+          apiOrigin: string[];
+          baseUrl?: string;
+          description?: string;
+          dir?: string;
+          json?: boolean;
+        } & MissionTargetAuthFlags
+      >();
       // Validate in-action + fail envelope (not commander's hard-exiting
       // `.requiredOption`), matching this CLI's convention.
       if (!name || !authorizedOrigin || !baseUrl) {
@@ -3059,7 +3066,16 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
-        const target = await addMissionTarget(ctx, { id, name, authorizedOrigin, apiOrigins: apiOrigin, baseUrl, description });
+        const auth = missionTargetAuth(authFlags);
+        const target = await addMissionTarget(ctx, {
+          id,
+          name,
+          authorizedOrigin,
+          apiOrigins: apiOrigin,
+          baseUrl,
+          ...(description === undefined ? {} : { description }),
+          ...(auth === undefined ? {} : { auth }),
+        });
         const envelope = ok(target);
         if (json) {
           emitJson(program, envelope);
@@ -3071,6 +3087,39 @@ export function buildProgram(deps: CliDeps): Command {
         }
       } catch (err) {
         emitJson(program, fail("E_MISSION_TARGET_ADD", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  withMissionTargetAuthFlags(
+    missionTarget
+      .command("update <id>")
+      .description("set a registered target's operator-declared auth for queued missions (#175); keeps its promotion state")
+      .option("--clear-auth", "drop the target's storage state, save-back and secret fields first"),
+  )
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json, clearAuth, ...authFlags } = this.opts<{ dir?: string; json?: boolean; clearAuth?: boolean } & MissionTargetAuthFlags>();
+      const auth = missionTargetAuth(authFlags);
+      if (auth === undefined && clearAuth !== true) {
+        emitJson(program, fail("E_MISSION_TARGET_ARGS", "nothing to update: pass --storage-state, --save-storage-state, --secret-field or --clear-auth"));
+        return;
+      }
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const target = await updateMissionTargetAuth(ctx, id, { ...(auth ?? {}), ...(clearAuth === true ? { clear: true } : {}) });
+        if (json) {
+          emitJson(program, ok(target));
+        } else {
+          program.configureOutput().writeOut?.(`updated mission target '${target.id}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownMissionTargetError) {
+          emitJson(program, fail("E_UNKNOWN_MISSION_TARGET", err.message));
+          return;
+        }
+        emitJson(program, fail("E_MISSION_TARGET_UPDATE", String(err instanceof Error ? err.message : err)));
       }
     });
 

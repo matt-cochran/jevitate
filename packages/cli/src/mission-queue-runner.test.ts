@@ -7,6 +7,7 @@ import { InvariantSpecError } from "@jevitate/recording";
 import { loadTargetsFile } from "./target-config.js";
 import {
   MissionRequestSchema,
+  MissionTargetSchema,
   FsMissionQueueStore,
   FsMissionTargetStore,
   MissionTargetRegistry,
@@ -228,7 +229,7 @@ describe("mission queue runner (#117)", () => {
         expect(opened[0]?.storageState).toBe(state);
       }
       const missing = capturing({ "https://app.example.com": { storageState: join(dir, "gone.json") } });
-      await expect(missing.execute({ mission: mission({ goal: "g" }), target, allowlist })).rejects.toThrow(/storageState for https:\/\/app\.example\.com not found/);
+      await expect(missing.execute({ mission: mission({ goal: "g" }), target, allowlist })).rejects.toThrow(/targets\.json entry for https:\/\/app\.example\.com: storageState not found/);
       expect(missing.opened).toEqual([]);
     });
 
@@ -270,6 +271,17 @@ describe("mission queue runner (#117)", () => {
       writeFileSync(file, JSON.stringify({ "https://app.example.com": { secretFields: ["label=Password=hunter2"] } }));
       expect(() => loadTargetsFile(file)).toThrow(/secretFields\[0\] must be/);
       expect(() => loadTargetsFile(file)).not.toThrow(/hunter2/);
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { storageState: "state.json", saveStorageState: true } }));
+      expect(loadTargetsFile(file)["https://app.example.com"]).toMatchObject({ saveStorageState: true });
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { saveStorageState: "rotated.json" } }));
+      expect(loadTargetsFile(file)["https://app.example.com"]).toMatchObject({ saveStorageState: join(dir, "rotated.json") });
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { saveStorageState: true } }));
+      expect(() => loadTargetsFile(file)).toThrow(/which is not set/);
+      // The record schema: operator-only, absolute paths, same save-back rule.
+      const record = { ...target, storageState: state };
+      expect(MissionTargetSchema.safeParse({ ...record, saveStorageState: true }).success).toBe(true);
+      expect(MissionTargetSchema.safeParse({ ...target, saveStorageState: true }).success).toBe(false);
+      expect(MissionTargetSchema.safeParse({ ...target, storageState: "relative.json" }).success).toBe(false);
     });
   });
 });
