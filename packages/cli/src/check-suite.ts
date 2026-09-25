@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
 
 /**
  * The `jevitate check --suite <file.json>` schema (#137). Validated in full BEFORE anything runs:
@@ -24,15 +25,19 @@ import { dirname, isAbsolute, resolve } from "node:path";
  *     "invariants": ["invariants/credits.json"],
  *     "journeys": ["login", { "id": "checkout", "params": { "sku": "A1" }, "routes": ["/cart/**"] }],
  *     "goals": [{ "name": "export", "goal": "export the report as CSV", "success": ["requestMade:GET /api/export"], "routes": ["/reports/**"] }],
- *     "missions": [{ "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60 }],
+ *     "viewport": "1280x800",
+ *     "missions": [
+ *       { "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60 },
+ *       { "strategy": "exploratory", "device": "iPhone 13" }
+ *     ],
  *     "verifyFix": [{ "result": "baseline/adversarial-….result.json", "fingerprint": "3fa2…" }]
  *   }]
  * }
  * ```
  */
 
-export type MissionStrategy = "coverage" | "adversarial" | "feature" | "usability";
-const STRATEGIES: readonly MissionStrategy[] = ["coverage", "adversarial", "feature", "usability"];
+export type MissionStrategy = "coverage" | "exploratory" | "adversarial" | "feature" | "usability";
+const STRATEGIES: readonly MissionStrategy[] = ["coverage", "exploratory", "adversarial", "feature", "usability"];
 
 export interface SuiteBudget {
   /** Total executed browser actions across every item. */
@@ -45,6 +50,8 @@ export interface SuiteBudget {
 
 export interface SuiteJourney {
   readonly id: string;
+  /** `viewport` ("375x812") or `device` ("iPhone 13"); default: the target's. */
+  readonly emulation?: EmulationSpec;
   readonly params: Readonly<Record<string, string>>;
   /** Route globs this Journey covers (for `--changed-routes`); default: its Recording's page routes. */
   readonly routes?: readonly string[];
@@ -52,6 +59,8 @@ export interface SuiteJourney {
 
 export interface SuiteGoal {
   readonly name: string;
+  /** `viewport` or `device`; default: the target's. */
+  readonly emulation?: EmulationSpec;
   readonly goal: string;
   readonly success: readonly string[];
   readonly url?: string;
@@ -63,6 +72,8 @@ export interface SuiteGoal {
 
 export interface SuiteMission {
   readonly name: string;
+  /** `viewport` or `device`; default: the target's. */
+  readonly emulation?: EmulationSpec;
   readonly strategy: MissionStrategy;
   readonly url?: string;
   readonly routes?: readonly string[];
@@ -85,6 +96,8 @@ export interface SuiteVerifyFix {
 export interface SuiteTarget {
   readonly name: string;
   readonly url: string;
+  /** The default `viewport` ("1280x800") or `device` ("iPhone 13") for every item of the target. */
+  readonly emulation?: EmulationSpec;
   readonly allow: readonly string[];
   /** Applied to every item of the target — Journeys, goals, missions, verify-fix (#170). */
   readonly storageState?: string;
@@ -176,6 +189,21 @@ class Reader {
     return v;
   }
 
+  /** `viewport: "WxH"` or `device: "<Playwright device>"` (never both), validated now. */
+  emulation(obj: Json, path: string): EmulationSpec | undefined {
+    const viewport = this.string(obj, "viewport", path, true);
+    const device = this.string(obj, "device", path, true);
+    if (viewport === undefined && device === undefined) return undefined;
+    let spec: EmulationSpec;
+    try {
+      spec = { ...(viewport === undefined ? {} : { viewport: parseViewport(viewport) }), ...(device === undefined ? {} : { device }) };
+      resolveEmulation(spec);
+    } catch (e) {
+      return this.fail(path, e instanceof Error ? e.message : String(e));
+    }
+    return spec;
+  }
+
   resolvePath(p: string): string {
     return isAbsolute(p) ? p : resolve(this.baseDir, p);
   }
@@ -192,19 +220,27 @@ class Reader {
   }
 }
 
+const emulationOf = (e: EmulationSpec | undefined): { emulation?: EmulationSpec } => (e === undefined ? {} : { emulation: e });
+
 function journeyOf(r: Reader, v: unknown, path: string): SuiteJourney {
   if (typeof v === "string" && v.trim() !== "") return { id: v, params: {} };
   if (!isRecord(v)) return r.fail(path, "must be a Journey id or { id, params?, routes? }");
-  r.keys(v, path, ["id", "params", "routes"]);
+  r.keys(v, path, ["id", "params", "routes", "viewport", "device"]);
   const params = v.params ?? {};
   if (!isRecord(params) || !Object.values(params).every((p) => typeof p === "string")) r.fail(`${path}.params`, "must be an object of string values");
   const routes = r.strings(v, "routes", path);
-  return { id: r.string(v, "id", path), params: params as Record<string, string>, ...(routes.length === 0 ? {} : { routes }) };
+  const emulation = r.emulation(v, path);
+  return {
+    id: r.string(v, "id", path),
+    params: params as Record<string, string>,
+    ...(routes.length === 0 ? {} : { routes }),
+    ...(emulation === undefined ? {} : { emulation }),
+  };
 }
 
 function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions"]);
+  r.keys(v, path, ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device"]);
   const success = r.strings(v, "success", path);
   if (success.length === 0) r.fail(`${path}.success`, "at least one success check is required (a goal without one proves nothing)");
   const successWhen = v.successWhen;
@@ -216,6 +252,7 @@ function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
   return {
     name: r.string(v, "name", path, true) ?? `goal-${i + 1}`,
     goal: r.string(v, "goal", path),
+    ...emulationOf(r.emulation(v, path)),
     success,
     ...(url === undefined ? {} : { url }),
     ...(successWhen === undefined ? {} : { successWhen }),
@@ -227,7 +264,7 @@ function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
 
 function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "maxActions", "maxDecisions"]);
+  r.keys(v, path, ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "maxActions", "maxDecisions", "viewport", "device"]);
   const strategy = r.string(v, "strategy", path);
   if (!STRATEGIES.includes(strategy as MissionStrategy)) r.fail(`${path}.strategy`, `must be one of ${STRATEGIES.join(" | ")}`);
   const s = strategy as MissionStrategy;
@@ -243,6 +280,7 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   return {
     name: r.string(v, "name", path, true) ?? (feature === undefined ? s : `${s}-${feature}`),
     strategy: s,
+    ...emulationOf(r.emulation(v, path)),
     ...(url === undefined ? {} : { url }),
     ...(routes.length === 0 ? {} : { routes }),
     ...(feature === undefined ? {} : { feature }),
@@ -270,7 +308,7 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix"]);
+  r.keys(v, path, ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"]);
   const name = r.string(v, "name", path);
   if (!NAME.test(name)) r.fail(`${path}.name`, "must match [A-Za-z0-9][A-Za-z0-9._-]*");
   const url = r.url(v, "url", path) ?? r.fail(`${path}.url`, "is required");
@@ -282,6 +320,7 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
   return {
     name,
     url,
+    ...emulationOf(r.emulation(v, path)),
     allow: r.strings(v, "allow", path),
     ...(storageState === undefined ? {} : { storageState: r.resolvePath(storageState) }),
     ...(secretFields.length === 0 ? {} : { secretFields }),

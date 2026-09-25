@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -659,6 +660,11 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     ...(item.t.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: item.t.invariantAuthTokens }),
   };
   const withServerLog = item.t.serverLog === undefined ? {} : { serverLog: item.t.serverLog };
+  // An item's own viewport/device, else its target's.
+  const emulationFor = (own: EmulationSpec | undefined): { emulation?: EmulationSpec } => {
+    const e = own ?? t.emulation;
+    return e === undefined ? {} : { emulation: e };
+  };
   const targetConfig = item.t.config === undefined ? {} : { target: item.t.config };
   // A feature mission takes the target's safety directly (it has no settle/hang config to apply).
   const targetSafety = item.t.config?.safety === undefined ? {} : { safety: item.t.config.safety };
@@ -673,6 +679,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       dir: t.journeysDir ?? opts.journeysDir,
       id: sj.id,
       params: { ...sj.params },
+      ...emulationFor(sj.emulation),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
       // #170: the target's session, exactly as `journey run --storage-state` (#118) and its fixtures.
@@ -723,6 +730,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       }
       const r = await runners.goal({
         ...common,
+        ...emulationFor(g.emulation),
         ...targetConfig,
         ...invariants,
         ...withServerLog,
@@ -753,6 +761,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     if (m.strategy === "feature") {
       const r = await runners.feature({
         ...common,
+        ...emulationFor(m.emulation),
         ...targetSafety,
         ...invariants,
         ...withServerLog,
@@ -766,9 +775,11 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
     }
     const { judge, gen, usage } = await ctx.gateways();
-    if (m.strategy === "coverage") {
+    if (m.strategy === "coverage" || m.strategy === "exploratory") {
       const r = await runners.coverage({
         ...common,
+        ...emulationFor(m.emulation),
+        ...(m.strategy === "exploratory" ? { strategy: "exploratory" as const } : {}),
         ...targetConfig,
         ...invariants,
         ...withServerLog,
@@ -786,6 +797,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     if (m.strategy === "adversarial") {
       const r = await runners.adversarial({
         ...common,
+        ...emulationFor(m.emulation),
         ...targetConfig,
         ...invariants,
         ...withServerLog,
@@ -804,6 +816,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     // usability: UX findings are advisory; the report file is the result the report reads.
     const r = await runners.usability({
       ...common,
+      ...emulationFor(m.emulation),
       ...targetConfig,
       ...withServerLog,
       url,

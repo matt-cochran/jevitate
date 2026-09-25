@@ -113,7 +113,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "check-api.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
-    emulation: "a suite item has no viewport/device field",
     policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
     selfHealer: "check never self-heals: a broken step fails the gate",
   },
@@ -168,15 +167,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     issueFiler: "check reports findings itself (JUnit/SARIF)",
     hangReplays: "fixed default replays in CI",
     conversation: "fixed default conversation settings",
-    emulation: "a suite item has no viewport/device field",
     actors: "a suite item has no actors field",
   },
   "check-api.ts runCoverageMission": {
     saveStorageState: "a suite never rewrites the operator's session file",
     nowIso: SEAM,
-    strategy: "a suite has no exploratory strategy",
     stallTimeoutMs: "fixed default in CI",
-    emulation: "a suite item has no viewport/device field",
     overflow: "fixed default in CI",
   },
   "check-api.ts runAdversarialCliMission": {
@@ -188,7 +184,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     hangReplays: "fixed default replays in CI",
     nowIso: SEAM,
     coverageThresholds: "fixed default thresholds in CI",
-    emulation: "a suite item has no viewport/device field",
     overflow: "fixed default in CI",
   },
   "check-api.ts runFeatureCliMission": {
@@ -196,7 +191,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stallTimeoutMs: "fixed default in CI",
     nowIso: SEAM,
     saveStorageState: "a suite never rewrites the operator's session file",
-    emulation: "a suite item has no viewport/device field",
   },
   "check-api.ts runUsabilityMission": {
     minConfidence: "fixed default in CI",
@@ -208,7 +202,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixture: "a suite item has no upload fixture field",
     judgmentBudget: "fixed default budget",
     conversation: "fixed default conversation settings",
-    emulation: "a suite item has no viewport/device field",
     saveStorageState: "a suite never rewrites the operator's session file",
     nowIso: SEAM,
     extractText: SEAM,
