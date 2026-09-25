@@ -23,7 +23,7 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
 import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
-import { decide, judgeGoalMet } from "./decide.js";
+import { decide, judgeGoalMet, type Decision } from "./decide.js";
 import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
 import {
   type SecretField,
@@ -87,6 +87,11 @@ import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
+
+/** The judgment API's refusal of an over-long option list (#192). */
+const TOO_MANY_CHOICES = /too many choices/i;
+/** The option budget a refused decision is retried with when the refusal names no limit (#192). */
+const TOO_MANY_CHOICES_RETRY = 120;
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
 
@@ -545,8 +550,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
   } = { lastMutation: null, lastRecordedTarget: null };
+  // #192: an option the goal names (a country, a currency) is perceived even deep in a long list.
+  const goalText = cfg.goal.toLowerCase();
   const perceiveOpts = {
     maxCandidates: bounds.maxCandidates,
+    mentioned: (name: string) => name.trim().length >= 2 && goalText.includes(name.trim().toLowerCase()),
     ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
     ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
     ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
@@ -956,21 +964,34 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       let decision: Awaited<ReturnType<typeof decide>>;
       try {
-        decision = await decide(cfg.judge, {
-          goal: cfg.goal,
-          snapshot: modelControls === snap.controls ? snap : { ...snap, controls: modelControls },
-          history,
-          missionContext,
-          secrets,
-          // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
-          // model had kept re-choosing it after a successful attach instead of proceeding).
-          uploadAvailable: fixture !== null && !fixtureAttached,
-          offered,
-          unsubmitted,
-          ...(conversation.latestReply === null && conversation.sent.length === 0
-            ? {}
-            : { conversation: { latestReply: conversation.latestReply, sentMessages: conversation.sent } }),
-          ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
+        // #192: the choice cap is bounded in decide(); should the API still refuse the count (a
+        // lower limit than documented), retry with a tighter budget instead of ending the run.
+        const decideWith = (maxChoices?: number): Promise<Decision> =>
+          decide(cfg.judge, {
+            goal: cfg.goal,
+            snapshot: modelControls === snap.controls ? snap : { ...snap, controls: modelControls },
+            history,
+            missionContext,
+            secrets,
+            // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
+            // model had kept re-choosing it after a successful attach instead of proceeding).
+            uploadAvailable: fixture !== null && !fixtureAttached,
+            offered,
+            unsubmitted,
+            ...(conversation.latestReply === null && conversation.sent.length === 0
+              ? {}
+              : { conversation: { latestReply: conversation.latestReply, sentMessages: conversation.sent } }),
+            ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
+            ...(maxChoices === undefined ? {} : { maxChoices }),
+          });
+        decision = await decideWith().catch(async (e: unknown) => {
+          const refusal = firstLine(e);
+          if (!TOO_MANY_CHOICES.test(refusal)) throw e;
+          // The refusal names the limit it enforces ("at most N choices"): retry within it.
+          const stated = Number(/at most (\d+)/i.exec(refusal)?.[1]);
+          const budget = Number.isInteger(stated) && stated > 0 ? stated : TOO_MANY_CHOICES_RETRY;
+          history.push(`the decision had too many choices for the model: retried with the ${budget} most relevant`);
+          return decideWith(budget);
         });
       } catch (e) {
         // The decision IS the goal loop's engine: without it the run can prove nothing more, so it

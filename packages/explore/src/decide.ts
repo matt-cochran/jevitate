@@ -1,5 +1,6 @@
 import type { JudgmentPort, JudgmentState, Question, ChoiceQuestion } from "@jevitate/ai-core";
-import { assertNoSecretInPayload } from "@jevitate/ai-core";
+import { MAX_CHOICE_OPTIONS, assertNoSecretInPayload } from "@jevitate/ai-core";
+import { boundCandidates } from "./candidate-budget.js";
 import type { Control, Snapshot } from "./snapshot.js";
 import { buildJudgmentState, redactText } from "./redact.js";
 import {
@@ -102,6 +103,11 @@ export interface DecideInput {
    * not controls, so otherwise invisible to the model (#79). Untrusted page text.
    */
   readonly pageStatus?: string;
+  /**
+   * The most options the action question may carry (default `MAX_CHOICE_OPTIONS`, the judgment
+   * API's cap, #192) — lowered on a retry when the API still refuses the count.
+   */
+  readonly maxChoices?: number;
 }
 
 /** The conversation the loop is in: the latest reply (untrusted page text) and what was sent. */
@@ -176,10 +182,18 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
   const sends = new Map(sendCandidates(snapshot.controls).map((c) => [c.control.index, c]));
   // Each rich-text control's `edit_text` (#148) sits right after its own action.
   const edits = new Map(editCandidates(snapshot.controls).map((c) => [c.control.index, c]));
-  const offeredActions = targetCandidates(snapshot.controls, { ops }).flatMap((c) => {
+  const allActions = targetCandidates(snapshot.controls, { ops }).flatMap((c) => {
     const send = c.op === "type" ? sends.get(c.control.index) : undefined;
     const edit = edits.get(c.control.index);
     return [c, ...(send === undefined ? [] : [send]), ...(edit === undefined ? [] : [edit])];
+  });
+  // #192: the judgment API takes at most MAX_CHOICE_OPTIONS options per question. A page with a long
+  // picker open would overflow it and end the run; code keeps the most useful actions instead.
+  const { kept: offeredActions, omitted } = boundCandidates(allActions, {
+    limit: (input.maxChoices ?? MAX_CHOICE_OPTIONS) - TARGET_FREE_ACTIONS.length,
+    goal: input.goal,
+    history: input.history,
+    offered,
   });
   for (const c of offeredActions) {
     candidates.set(c.id, { op: c.op, control: c.control });
@@ -204,7 +218,11 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
     instructions:
       "Which single action best advances the goal from the current page? Use the history: do not repeat an " +
       "action that already succeeded, and when a dialog or form step is in progress, complete it. " +
-      CONVERSATION_GUIDE,
+      CONVERSATION_GUIDE +
+      (omitted === 0
+        ? ""
+        : ` ${omitted} more controls on this page are not listed as actions (a long list, e.g. a picker's options): ` +
+          "if the one you need is not listed, type its name into the list's search/filter field, or scroll to it."),
   };
   const questions: Record<string, Question> = {
     action: actionQuestion,
