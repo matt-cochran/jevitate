@@ -96,3 +96,23 @@ describe("MissionRequest.invariants (#86)", () => {
     await expect(enqueueMission(targets, queue, { ...baseRequest, target: "spa", invariants: offOrigin })).rejects.toBeInstanceOf(InvariantSpecError);
   });
 });
+
+describe("a queued spec never picks the operator's environment variables (surface-wiring audit)", () => {
+  it("refuses authFrom.secret before the queue is written; authFrom.localStorage is accepted", async () => {
+    const { targets, queue } = await buildDeps();
+    const withSecret = {
+      ...invariants,
+      observe: { ...invariants.observe, imports: { probe: { get: "/v1/imports", json: "$.total", authFrom: { secret: "env:OPENROUTER_API_KEY" } } } },
+    };
+    await expect(enqueueMission(targets, queue, { ...baseRequest, invariants: withSecret })).rejects.toThrow(
+      /authFrom\.secret \(env:OPENROUTER_API_KEY\) is not accepted in a queued mission/,
+    );
+    expect(await queue.list()).toEqual([]);
+    const withSession = {
+      ...invariants,
+      observe: { ...invariants.observe, imports: { probe: { get: "/v1/imports", json: "$.total", authFrom: { localStorage: "access_token" } } } },
+    };
+    await expect(enqueueMission(targets, queue, { ...baseRequest, invariants: withSession })).resolves.toMatchObject({ status: "queued" });
+  });
+});
+

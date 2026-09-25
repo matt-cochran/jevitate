@@ -14,7 +14,7 @@ import { join, relative, sep } from "node:path";
  */
 const REAL_BROWSER = /withSession\(|new PlaywrightBrowserPort\((?!\{[^}]*\blaunch)|chromium\.launch(?:PersistentContext)?\(/;
 
-const ROOTS = ["packages", "site-integrations", "apps"];
+const ROOTS = ["packages", "apps"];
 
 function walk(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir)) {

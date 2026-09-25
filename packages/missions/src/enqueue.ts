@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { validateInvariantSpec } from "@jevitate/recording";
+import { InvariantSpecError, invariantAuthSecretRefs, validateInvariantSpec } from "@jevitate/recording";
 import { MissionRequestSchema, targetAllowlist, type MissionRequest, type QueuedMission } from "./schema.js";
 import { MISSION_BOUNDS_CEILING, type Budget } from "./bounds.js";
 import { BudgetExceedsCeilingError } from "./errors.js";
@@ -61,6 +61,15 @@ export async function enqueueMission(
   // (throws `InvariantSpecError`).
   if (request.invariants !== undefined) {
     validateInvariantSpec(request.invariants, { allowlist: targetAllowlist(target), baseUrl: target.baseUrl });
+    // An `authFrom.secret` (`env:VAR`) would let the caller choose which of the operator's
+    // environment variables is sent to the target — never from a queued request. Refused here,
+    // rather than run with probes that silently never authenticate.
+    const refs = invariantAuthSecretRefs(request.invariants);
+    if (refs.length > 0) {
+      throw new InvariantSpecError([
+        `authFrom.secret (${refs.join(", ")}) is not accepted in a queued mission: a request never chooses which environment variable is sent; use authFrom.localStorage or authFrom.cookie (the target's own session)`,
+      ]);
+    }
   }
 
   const mission: QueuedMission = {

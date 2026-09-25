@@ -47,9 +47,13 @@ describe("FsMissionQueueStore", () => {
     const dir = mkdtempSync(join(tmpdir(), "mqs-"));
     const store = new FsMissionQueueStore(dir);
     await store.enqueue(mkMission("m-1"));
-    const claims = await Promise.all([store.claim("m-1"), store.claim("m-1"), new FsMissionQueueStore(dir).claim("m-1")]);
+    const o = { pid: 1, host: "h", claimedAtIso: "2026-09-25T00:00:00Z" };
+    const claims = await Promise.all([store.claim("m-1", o), store.claim("m-1", o), new FsMissionQueueStore(dir).claim("m-1", o)]);
     expect(claims.filter(Boolean)).toHaveLength(1);
-    await expect(store.claim("../escape")).rejects.toThrow();
+    await expect(store.claim("../escape", o)).rejects.toThrow();
+    // The claim records its owner (so a later drain can tell a dead drain's mission from a live one).
+    expect(await store.claimOwner("m-1")).toEqual(o);
+    expect(await store.claimOwner("m-2")).toBeNull();
     // A claim file is not a mission: list() still returns exactly the queued records.
     expect((await store.list()).map((m) => m.id)).toEqual(["m-1"]);
   });

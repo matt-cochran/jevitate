@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { logsDirFor } from "./project-dir.js";
 import { join } from "node:path";
 import { assertAuthorizedExploreTarget, normalizeAllowlist } from "@jevitate/explore";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
@@ -10,7 +11,7 @@ import { resolveDataDir } from "./data-dir.js";
  * The programmatic surface behind `jevitate record` — opens a real browser on
  * an authorized origin, lets the user demonstrate a flow, and captures it into
  * a schema-valid `Recording` (record-by-demonstration via `@jevitate/recorder`)
- * which is then persisted under `~/.jevitate/recordings`.
+ * which is then persisted under `.jevitate/logs/<date>`.
  *
  * The authorized-target guard runs FIRST (fail-closed), BEFORE any browser is
  * opened — an unauthorized origin never launches Chromium. Both the browser
@@ -39,7 +40,7 @@ export interface RunRecordingOptions {
   readonly intent?: string;
   /** Optional retrospective note carried to `Recording.retro`. */
   readonly retro?: string;
-  /** Where the Recording is written. Default `~/.jevitate/recordings`. */
+  /** Where the Recording is written. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
@@ -95,7 +96,7 @@ export async function runRecording(opts: RunRecordingOptions): Promise<RunRecord
     const recording = await recorder.stop(opts.retro);
     const finalUrl = session.page.url();
 
-    const outDir = opts.outDir ?? resolveDataDir(["recordings"]);
+    const outDir = opts.outDir ?? logsDirFor();
     await mkdir(outDir, { recursive: true });
     const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
     const recordingPath = join(outDir, `record-${iso.replace(/[:.]/g, "-")}.json`);

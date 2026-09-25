@@ -9,20 +9,6 @@ import type { Control } from "../index.js";
 
 export type InputStrategy = "empty" | "boundary" | "long" | "unicode" | "invalid" | "normal";
 
-const ORDER: readonly InputStrategy[] = ["empty", "boundary", "long", "unicode", "invalid", "normal"];
-
-/**
- * Bounded: returns the next untried strategy in a FIXED order, and `null` once
- * every strategy in `ORDER` has been tried for this control — so a misuse loop
- * can never cycle forever on one field (guardrail #2: bounded + fail-closed).
- */
-export function chooseInputStrategy(
-  _control: Control,
-  tried: readonly InputStrategy[],
-): InputStrategy | null {
-  return ORDER.find((s) => !tried.includes(s)) ?? null;
-}
-
 function isEmailLike(control: Control): boolean {
   return control.inputType === "email" || /e-?mail/i.test(control.name ?? "");
 }

@@ -354,7 +354,7 @@ describe("suite validation", () => {
       throw new Error("accepted");
     };
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, jouneys: [] }] })).toBe(
-      "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix)",
+      "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix, viewport, device)",
     );
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, goals: [{ goal: "g" }] }] })).toMatch(/goals\[0\]\.success: at least one success check/);
     expect(refuse({ version: 2, targets: [] })).toBe("s.json: $.version: must be 1");
@@ -362,5 +362,54 @@ describe("suite validation", () => {
     mkdirSync(join(dir, "inv"));
     const ok = parseSuite({ version: 1, targets: [{ name: "a", url: URL0, invariants: ["inv/x.json"] }] }, join(dir, "s.json"));
     expect(ok.targets[0]?.invariants).toEqual([join(dir, "inv/x.json")]);
+  });
+});
+
+describe("check suites: viewport/device and the exploratory strategy (surface-wiring audit)", () => {
+  it("parses a target default and item overrides; refuses an unknown device or viewport+device, naming the path", () => {
+    const s = suite(0, {}, {
+      viewport: "1280x800",
+      missions: [
+        { name: "home", strategy: "feature", feature: "home" },
+        { name: "mobile", strategy: "exploratory", device: "iPhone 13" },
+      ],
+    });
+    const t = s.targets[0]!;
+    expect(t.emulation).toEqual({ viewport: { width: 1280, height: 800 } });
+    expect(t.missions.map((m) => [m.strategy, m.emulation])).toEqual([
+      ["feature", undefined],
+      ["exploratory", { device: "iPhone 13" }],
+    ]);
+    expect(() => suite(0, {}, { device: "Nokia 3310" })).toThrow(/\$\.targets\[0\]: .*Nokia 3310/);
+    expect(() => suite(0, {}, { missions: [{ strategy: "coverage", viewport: "375x812", device: "iPhone 13" }] })).toThrow(SuiteError);
+  });
+
+  it("each item runs under its own emulation, else the target's; exploratory runs the coverage runner as exploratory", async () => {
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const f = featureRunner([{ spend: 1 }]);
+    const featureSeen: unknown[] = [];
+    const feature = (async (o: { emulation?: unknown }) => {
+      featureSeen.push(o.emulation);
+      return f.runner(o as never);
+    }) as unknown as CheckRunners["feature"];
+    const coverageSeen: Array<{ strategy?: string; emulation?: unknown }> = [];
+    const coverage = (async (o: { strategy?: string; emulation?: unknown; outDir?: string }) => {
+      coverageSeen.push({ ...(o.strategy === undefined ? {} : { strategy: o.strategy }), emulation: o.emulation });
+      const resultPath = join(o.outDir ?? dir, "coverage-2026-09-24T10-00-00-000Z.result.json");
+      const result = { target: { seedUrl: URL0, allowlist: ["https://shop.example"] }, transcript: [], defects: [], hangs: [] };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result }));
+      return { ...result, resultPath, missionOutcome: "clean", exitCode: 0 };
+    }) as unknown as CheckRunners["coverage"];
+    const s = suite(0, {}, {
+      viewport: "1280x800",
+      missions: [
+        { name: "home", strategy: "feature", feature: "home" },
+        { name: "mobile", strategy: "exploratory", device: "iPhone 13" },
+      ],
+    });
+    await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { feature, coverage }, gateways: async () => gw, aiMode: "fake" });
+    expect(featureSeen).toEqual([{ viewport: { width: 1280, height: 800 } }]);
+    expect(coverageSeen).toEqual([{ strategy: "exploratory", emulation: { device: "iPhone 13" } }]);
   });
 });

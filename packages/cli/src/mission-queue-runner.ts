@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import { basename } from "node:path";
 import type { GenerationPort, JudgmentPort, UsageTracker } from "@jevitate/ai-core";
 import { validateInvariantSpec } from "@jevitate/recording";
@@ -65,6 +66,11 @@ export interface DrainedMission {
   readonly error?: string;
 }
 
+export interface RecoveredMission {
+  readonly missionId: string;
+  readonly error: string;
+}
+
 export interface SkippedMission {
   readonly missionId: string;
   readonly reason: string;
@@ -72,6 +78,11 @@ export interface SkippedMission {
 
 export interface DrainReport {
   readonly ran: DrainedMission[];
+  /**
+   * Missions a previous drain left `running` when it died (SIGKILL, OOM, reboot), now recorded
+   * `failed` — never re-run, since they may already have sent writes.
+   */
+  readonly recovered: RecoveredMission[];
   /** Left `queued` for a later drain (e.g. a model-driven mission when no gateway was selected). */
   readonly skipped: SkippedMission[];
 }
@@ -85,6 +96,12 @@ export interface DrainMissionQueueOptions {
   readonly nowIso?: () => string;
   /** Called once per mission as it finishes (a `--watch` drain streams these). */
   readonly onMission?: (m: DrainedMission) => void;
+  /** This drain's identity, recorded on each claim (default: this process and host). */
+  readonly owner?: { readonly pid: number; readonly host: string };
+  /** Is a process on this host alive? (default: `process.kill(pid, 0)`) */
+  readonly isAlive?: (pid: number) => boolean;
+  /** A `running` mission whose drain cannot be checked (another host, an old claim) is abandoned after this long (default 12h). */
+  readonly orphanAfterMs?: number;
 }
 
 /** `<dir>/<stem>.result.json` → `<stem>`: the id `get_mission_result` takes. */
@@ -105,6 +122,8 @@ export function needsModel(mission: QueuedMission): boolean {
  */
 export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise<DrainReport> {
   const now = opts.nowIso ?? (() => new Date().toISOString());
+  const self = opts.owner ?? { pid: process.pid, host: hostname() };
+  const recovered = await recoverOrphans(opts, self, now);
   const queued = (await opts.queue.list())
     .filter((m) => m.status === "queued")
     .sort((a, b) => a.enqueuedAtIso.localeCompare(b.enqueuedAtIso));
@@ -116,7 +135,7 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
       skipped.push({ missionId: candidate.id, reason: accepted });
       continue;
     }
-    if (!(await opts.queue.claim(candidate.id))) continue; // another drain owns it
+    if (!(await opts.queue.claim(candidate.id, { ...self, claimedAtIso: now() }))) continue; // another drain owns it
     const mission = await opts.queue.get(candidate.id);
     if (mission === null || mission.status !== "queued") continue;
     const running: QueuedMission = { ...mission, status: "running", startedAtIso: now() };
@@ -167,7 +186,54 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
     ran.push(drained);
     opts.onMission?.(drained);
   }
-  return { ran, skipped };
+  return { ran, recovered, skipped };
+}
+
+/** Default: 12h — well past any bounded mission (stall timeouts, action caps), short of a lost week. */
+const ORPHAN_AFTER_MS = 12 * 60 * 60 * 1000;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: it exists, owned by another user. Only ESRCH means it is gone.
+    return !(typeof err === "object" && err !== null && "code" in err && err.code === "ESRCH");
+  }
+}
+
+/**
+ * A drain that dies hard (SIGKILL, OOM, reboot) leaves its mission `running` forever, and
+ * `get_mission_result` would tell an agent to poll again indefinitely. Before claiming new work,
+ * a drain records such missions `failed`: when the claiming process on this host is gone, or —
+ * when that cannot be checked (another host, a claim from before owners were recorded) — once the
+ * mission has been running longer than `orphanAfterMs`. Never re-run: it may already have sent
+ * writes; the error says to enqueue it again.
+ */
+async function recoverOrphans(
+  opts: DrainMissionQueueOptions,
+  self: { readonly pid: number; readonly host: string },
+  now: () => string,
+): Promise<RecoveredMission[]> {
+  const isAlive = opts.isAlive ?? processAlive;
+  const orphanAfterMs = opts.orphanAfterMs ?? ORPHAN_AFTER_MS;
+  const out: RecoveredMission[] = [];
+  for (const m of await opts.queue.list()) {
+    if (m.status !== "running") continue;
+    const owner = await opts.queue.claimOwner(m.id);
+    if (owner !== null && owner.host === self.host && owner.pid === self.pid) continue; // this drain's own
+    const checkable = owner !== null && owner.host === self.host;
+    const startedMs = Date.parse(m.startedAtIso ?? owner?.claimedAtIso ?? m.enqueuedAtIso);
+    const dead = checkable ? !isAlive(owner.pid) : Date.parse(now()) - startedMs > orphanAfterMs;
+    if (!dead) continue;
+    const who = owner === null ? "its drain" : `its drain (pid ${owner.pid} on ${owner.host})`;
+    const error = checkable
+      ? `${who} stopped without finishing it; it was not re-run, since it may already have sent writes — enqueue it again to retry`
+      : `${who} has not finished it after ${Math.round(orphanAfterMs / 3_600_000)}h; recorded failed, not re-run, since it may already have sent writes — enqueue it again to retry`;
+    await opts.queue.update({ ...m, status: "failed", finishedAtIso: now(), error });
+    out.push({ missionId: m.id, error });
+  }
+  return out;
 }
 
 export interface RealExecutorOptions {
@@ -237,10 +303,20 @@ function queuedAuth(
   };
 }
 
+/** The operator's targets.json config for `baseUrl`'s origin, or undefined when there is no targets file. */
+function targetConfigFor(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): TargetConfig | undefined {
+  if (targets === undefined) return undefined;
+  try {
+    return resolveTargetConfig(targets, new URL(baseUrl).origin);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The operator-declared `--log-source`/`--log-defect` for one origin, already parsed (#142 follow-up).
  *  Throws (via `parseLogSourceSpecs`/`parseLogDefectSpecs`) on a malformed targets.json entry — the
  *  caller's existing per-mission try/catch turns that into a `failed` queue record, never a crash. */
-function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): ServerLogOptions | undefined {
+export function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): ServerLogOptions | undefined {
   if (targets === undefined) return undefined;
   let origin: string;
   try {
@@ -281,6 +357,12 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     const routeGlobs = mission.route === undefined ? [] : [mission.route];
     const serverLog = serverLogFromTargetConfig(opts.targets, target.baseUrl);
     const withServerLog = serverLog === undefined ? {} : { serverLog };
+    // The operator's targets.json entry for this origin — safety (deny/paid/allowDestructive/
+    // readRequests/hangReplayWrites), settle, hangs, timing — applies to a queued mission exactly as
+    // to `explore` on the CLI. Never from the request.
+    const config = targetConfigFor(opts.targets, target.baseUrl);
+    const withTarget = config === undefined ? {} : { target: config };
+    const withSafety = config?.safety === undefined ? {} : { safety: config.safety };
     // #175: the operator's session for this target (never the request's): every strategy starts
     // from its storage state; a goal mission also types its secret fields and runs its fixtures.
     const auth = queuedAuth(target, opts.targets, opts.env ?? process.env);
@@ -310,6 +392,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         routeGlobs,
         bounds,
         ...invariants,
+        ...withSafety,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
@@ -331,6 +414,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
+        ...withTarget,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
@@ -349,6 +433,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
+        ...withTarget,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
@@ -388,6 +473,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         usage,
         bounds,
         ...invariants,
+        ...withTarget,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,

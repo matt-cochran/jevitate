@@ -64,8 +64,12 @@ import { CastActor, BrowseTheWeb, BrowseTheWebToken, type Actor } from "@jevitat
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
+import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
+import { LogsConfigError, loadLogsRetention, pruneLogs } from "./logs-retention.js";
+import { initProjectDir, logsDirFor, logsRoot, projectDataDir, resultDirsFor, type ProjectInitReport } from "./project-dir.js";
+import { sitePolicyKey, withSiteGate } from "./site-gate-cli.js";
 import { runRegressionCapture, runRegressionRun, RegressionNotFoundError } from "./regression-api.js";
 import {
   addMissionTarget,
@@ -221,6 +225,12 @@ export interface RecordCliDeps {
 export interface CliDeps {
   profiles: ProfileManager;
   dbPath?: string;
+  /**
+   * Prune `.jevitate/logs` by the retention policy before each command that writes run output (the
+   * real binary sets it; left unset, e.g. in tests, nothing is pruned implicitly). `logsRoot`
+   * overrides where (default: the project's logs, else `~/.jevitate/logs`).
+   */
+  logs?: { readonly autoPrune: boolean; readonly logsRoot?: string; readonly configPath?: string };
   journeysDir?: string;
   /** Optional, additive: overrides the mission-targets store directory
    *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
@@ -278,8 +288,7 @@ export interface CliDeps {
 // `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
 // See data-dir.ts.
 const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
-const DEFAULT_JOURNEYS_DIR = resolveDataDir(["journeys"]);
-const DEFAULT_REGRESSIONS_DIR = resolveDataDir(["regressions"]);
+
 const DEFAULT_MISSION_TARGETS_DIR = resolveDataDir(["missions", "targets"]);
 const DEFAULT_INBOX_DIR = resolveDataDir(["inbox"]);
 
@@ -293,13 +302,13 @@ function resolveDbPath(deps: CliDeps, flag?: string): string {
  * the host, then `~/.jevitate/journeys`.
  */
 function resolveJourneysDir(deps: CliDeps, flag?: string): string {
-  return flag ?? deps.journeysDir ?? DEFAULT_JOURNEYS_DIR;
+  return flag ?? deps.journeysDir ?? projectDataDir(["journeys"]);
 }
 
 /** Same flag > home-dir-default convention as `resolveJourneysDir`, for the
  *  committed-regressions directory `regression capture` writes into. */
 function resolveRegressionsDir(flag?: string): string {
-  return flag ?? DEFAULT_REGRESSIONS_DIR;
+  return flag ?? projectDataDir(["regressions"]);
 }
 
 /** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
@@ -358,9 +367,12 @@ async function makeRealBrowserActor(
   site: string,
   storageState?: string,
   emulation?: EmulationSpec,
+  browser?: BrowserLaunchOptions,
+  portFactory: () => BrowserPort = () => new PlaywrightBrowserPort(),
 ): Promise<{ actor: Actor; close: () => Promise<void> }> {
-  const port = new PlaywrightBrowserPort();
+  const port = portFactory();
   const session = await port.open({
+    ...browser,
     headless: true,
     allowedOrigins: [site],
     baseUrl: site,
@@ -406,6 +418,12 @@ function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOptions | u
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
   };
   return Object.keys(launch).length > 0 ? launch : undefined;
+}
+
+/** `{ browser }` for the parsed `--browser-*` flags, or `{}` when none were given — spread into a runner's options. */
+function browserOption(o: BrowserLaunchFlags): { browser?: BrowserLaunchOptions } {
+  const launch = browserLaunchFromFlags(o);
+  return launch === undefined ? {} : { browser: launch };
 }
 
 /** Raw commander values of the shared `--viewport`/`--device` emulation flags (#149). */
@@ -593,8 +611,10 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--targets <ids>", "comma-separated runtime ids to force-install to, overriding detection")
     .option("--force", "overwrite a user-modified installed skill file/block or MCP config entry")
     .option("--dry-run", "report planned skill-install/mcp-register actions without writing")
+    .option("--skip-project", "skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)")
     .action(async function (this: Command) {
-      const { json, skipKeys, skipSkills, skipMcp, targets, force, dryRun } = this.opts<{
+      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun } = this.opts<{
+        skipProject?: boolean;
         json?: boolean;
         skipKeys?: boolean;
         skipSkills?: boolean;
@@ -605,6 +625,9 @@ export function buildProgram(deps: CliDeps): Command {
       }>();
       try {
         const data: Record<string, unknown> = { initialized: true };
+        // The repo's own .jevitate/ (0.2.0 layout): Journeys, regressions and baselines live with the
+        // app's code; logs stay local. Secrets and machine state stay in ~/.jevitate.
+        if (!skipProject) data.project = initProjectDir(deps.init?.detection?.cwd?.() ?? process.cwd(), { ...(dryRun === true ? { dryRun: true } : {}) });
         if (!skipKeys) {
           // SECURITY: reuses the existing, already-guardrailed credential
           // collection. The report holds only key NAMES (required/collected),
@@ -646,6 +669,8 @@ export function buildProgram(deps: CliDeps): Command {
           if (data.keys) out?.(`keys: ${JSON.stringify(data.keys)}\n`);
           if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
           if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) processed\n`);
+          const project = data.project as ProjectInitReport | undefined;
+          if (project !== undefined) out?.(project.dir === null ? `project: ${project.reason ?? "none"}\n` : `project: ${project.dir} (${project.created.length} created)\n`);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -695,11 +720,16 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  const site = program.command("site");
-  const sitePolicy = site.command("policy");
+  const site = program
+    .command("site")
+    .description("per-site policies for Journey runs: human-like pacing, throttles, run budgets and quiet hours");
+  const sitePolicy = site
+    .command("policy")
+    .description("read or set a site's policy (the site is the Journey's origin, e.g. https://app.example.com)");
 
   sitePolicy
     .command("get <site>")
+    .description("print the policy for a site (an origin) and account")
     .option("--account <account>", "account id", "primary")
     .option("--db <path>", "sqlite db path")
     .option("--json", "emit a JSON envelope")
@@ -707,7 +737,7 @@ export function buildProgram(deps: CliDeps): Command {
       const { account, db, json } = this.opts<{ account: string; db?: string; json?: boolean }>();
       try {
         const dbPath = resolveDbPath(deps, db);
-        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(siteId, account));
+        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(sitePolicyKey(siteId), account));
         const envelope = ok(policy);
         if (json) {
           emitJson(program, envelope);
@@ -730,6 +760,10 @@ export function buildProgram(deps: CliDeps): Command {
 
   sitePolicy
     .command("set <site>")
+    .description(
+      "set the policy for a site (an origin): Journey runs there are paced, throttled, budgeted and kept out of quiet hours " +
+        "(journey run, source run, check, MCP run_journey); load run applies the pacing only",
+    )
     .requiredOption("--file <path>", "path to a policy JSON file")
     .option("--account <account>", "account id", "primary")
     .option("--db <path>", "sqlite db path")
@@ -751,7 +785,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const dbPath = resolveDbPath(deps, db);
-        await withSitePolicyRepository(dbPath, (repository) => repository.set(siteId, account, policy));
+        await withSitePolicyRepository(dbPath, (repository) => repository.set(sitePolicyKey(siteId), account, policy));
         const envelope = ok({ site: siteId, account, version: policy.version });
         if (json) {
           emitJson(program, envelope);
@@ -768,6 +802,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   site
     .command("simulate <site>")
+    .description("estimate, offline, how long a planned step script takes under a site's pacing policy")
     .requiredOption("--script <path>", "path to a planned-step script JSON file")
     .option("--seed <n>", "deterministic RNG seed", "0")
     .option("--account <account>", "account id", "primary")
@@ -796,7 +831,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const dbPath = resolveDbPath(deps, db);
-        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(siteId, account));
+        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(sitePolicyKey(siteId), account));
         const interaction = policy?.interaction ?? {};
         const profile = simulateTiming(interaction, seedNum, plannedScript);
         const envelope = ok(profile);
@@ -1028,7 +1063,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  withEmulationFlags(withFixtureFlags(journey.command("run <id>")))
+  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>"))))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1079,7 +1114,7 @@ export function buildProgram(deps: CliDeps): Command {
       // owns `deps` + the credential preflight); a missing/unselected gateway
       // fails CLOSED before any browser launch, rather than silently running
       // with no healer. fail-closed needs no gateway (identical to today).
-      let selfHealer;
+      let selfHealer: SelfHealer | undefined;
       let policy = safeRunPolicy();
       // #163: a self-healing run makes model calls — their usage (and full cost) lands on its result.
       let healUsage: UsageTracker | undefined;
@@ -1105,13 +1140,15 @@ export function buildProgram(deps: CliDeps): Command {
         // browser launch). The default policy stays `safeRunPolicy()`
         // (fail-closed secret mode) — only `selfHeal.mode` is threaded from
         // the flag; a `--secret-mode` override is a later slice's concern.
-        const result = await runJourneyProgrammatically({
+        const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+          ...(siteGate === undefined ? {} : { siteGate }),
           dir: resolveJourneysDir(deps, dir),
           id,
           params: param,
           policy,
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
@@ -1124,7 +1161,7 @@ export function buildProgram(deps: CliDeps): Command {
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
-        }).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1136,7 +1173,9 @@ export function buildProgram(deps: CliDeps): Command {
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
-        if (err instanceof UnknownJourneyError) {
+        if (err instanceof SiteGateRefusedError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
@@ -1418,7 +1457,7 @@ export function buildProgram(deps: CliDeps): Command {
   // run` stays the LOCAL FsJourneyStore path; keeping remote runs here keeps the
   // two trust boundaries visibly separate. The run NEVER bypasses a gate: every
   // refusal below is a typed error thrown by `resolveForRun` BEFORE any browser.
-  withEmulationFlags(source.command("run <name> <journeyId>"))
+  withBrowserLaunchFlags(withEmulationFlags(source.command("run <name> <journeyId>")))
     .description("run a Journey from a trusted remote source through the run-gate")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1448,13 +1487,15 @@ export function buildProgram(deps: CliDeps): Command {
           ...resolveSourceApiDeps(deps),
           runJourney: deps.sources?.runJourney ?? realResolvedJourneyRunner,
         };
-        const result = withEngine(await runSourceJourney(apiDeps, {
+        const result = withEngine(await withSiteGate(resolveDbPath(deps), (siteGate) => runSourceJourney(apiDeps, {
+          ...(siteGate === undefined ? {} : { siteGate }),
           sourceName: name,
           journeyId,
           params: param,
           ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
-        }));
+          ...browserOption(this.opts<BrowserLaunchFlags>()),
+        })));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1466,7 +1507,9 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a
         // caller can tell WHY the run was refused without string-matching.
-        if (err instanceof UnknownSourceError) {
+        if (err instanceof SiteGateRefusedError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownSourceError) {
           emitJson(program, fail("E_SOURCE_RUN_UNKNOWN", err.message));
         } else if (err instanceof HashMismatchError) {
           emitJson(program, fail("E_SOURCE_RUN_HASH_MISMATCH", err.message));
@@ -1492,7 +1535,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   const load = program.command("load");
 
-  withEmulationFlags(load.command("run <journeyId>"))
+  withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>")))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
@@ -1543,7 +1586,8 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
       try {
-        const report = await runJourneyLoadTest({
+        const report = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyLoadTest({
+          ...(siteGate === undefined ? {} : { siteGate }),
           dir: resolveJourneysDir(deps, dir),
           id: journeyId,
           params: param,
@@ -1552,9 +1596,10 @@ export function buildProgram(deps: CliDeps): Command {
           seed: Number(seed),
           authorizedOrigins: authorizedOrigin,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
-        }).then((r) => withEngine(r));
+        })).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
           emitJson(program, envelope);
@@ -2829,7 +2874,7 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--headless", "run headless (default: headed — a record session is a live demonstration)", false)
-    .option("--out <dir>", "directory to write the emitted Recording (default: ~/.jevitate/recordings)")
+    .option("--out <dir>", "directory to write the emitted Recording (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const o = this.opts<{
@@ -2888,7 +2933,7 @@ export function buildProgram(deps: CliDeps): Command {
   // `runRegressionCapture`.
   const regression = program.command("regression");
 
-  withEmulationFlags(withFixtureFlags(regression.command("capture")))
+  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture"))))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
@@ -2963,7 +3008,7 @@ export function buildProgram(deps: CliDeps): Command {
           fingerprint,
           makeActor: async () => {
             await replayFixture?.reset();
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
             opened.push(close);
             if (replayFixture !== undefined) {
               rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
@@ -2991,7 +3036,7 @@ export function buildProgram(deps: CliDeps): Command {
   // `regression capture` wrote — a step-oracle, network-check, or declared-invariant one) and
   // reports "reproduces" or "fixed". The one CLI/MCP surface `loadRegressions`/`replayRegression`
   // (`@jevitate/regression`) previously had none of.
-  withEmulationFlags(regression.command("run"))
+  withBrowserLaunchFlags(withEmulationFlags(regression.command("run")))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)")
@@ -3029,7 +3074,7 @@ export function buildProgram(deps: CliDeps): Command {
           regressionsDir,
           ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
           makeActor: async () => {
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
             opened.push(close);
             return actor;
           },
@@ -3222,7 +3267,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--interval <ms>", "--watch poll interval in ms (default 5000)", "5000")
     .option("--dir <path>", "mission queue directory (default: ~/.jevitate/missions/queue)")
     .option("--targets-dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
-    .option("--out <dir>", "where results are written (default: ~/.jevitate/recordings — where `jevitate mcp` reads them)")
+    .option("--out <dir>", "where results are written (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date> — where `jevitate mcp` reads them)")
     .option("--real", "use live Jev + OpenRouter gateways for model-driven missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
@@ -3267,7 +3312,7 @@ export function buildProgram(deps: CliDeps): Command {
       const execute =
         deps.missions?.execute ??
         realQueuedMissionExecutor({
-          outDir: o.out ?? resolveDataDir(["recordings"]),
+          outDir: o.out ?? logsDirFor(),
           gateways: () => buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }),
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
@@ -3360,10 +3405,11 @@ export function buildProgram(deps: CliDeps): Command {
           });
         await startMcpServer({
           journeysDir: resolveJourneysDir(deps, dir),
+          sitePolicyDbPath: resolveDbPath(deps),
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
-          recordingsDir: resolveDataDir(["recordings"]),
-          uxReportsDir: resolveDataDir(["ux-reports"]),
+          recordingsDir: logsRoot(),
+          resultDirsFor: (resultId: string) => resultDirsFor(resultId),
           inboxDir: resolveInboxDir(deps),
           credentialStore: aiStore,
           generationGateway,
@@ -3514,6 +3560,7 @@ export function buildProgram(deps: CliDeps): Command {
     {
       buildGateways: (sel) => buildExploreGateways(deps, sel),
       journeysDir: resolveJourneysDir(deps),
+      sitePolicyDbPath: resolveDbPath(deps),
       ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
       ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
       browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
@@ -3521,8 +3568,49 @@ export function buildProgram(deps: CliDeps): Command {
     withBrowserLaunchFlags,
   );
   registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
+  registerLogsCommands(program, deps);
 
   return program;
+}
+
+/** The commands that write run output under `.jevitate/logs` — pruned before, when auto-prune is on. */
+const LOG_WRITING_COMMANDS = new Set(["explore", "explore-author-journey", "record", "ux", "check", "run", "verify-fix", "capture"]);
+
+function registerLogsCommands(program: Command, deps: CliDeps): void {
+  const configPath = deps.logs?.configPath ?? resolveDataDir(["config.json"]);
+  if (deps.logs?.autoPrune === true) {
+    program.hook("preAction", (_root, action) => {
+      if (!LOG_WRITING_COMMANDS.has(action.name())) return;
+      // A malformed retention config fails closed (the command is refused); a file that cannot be
+      // deleted is housekeeping, not the run's business: it is reported and the command goes on.
+      const retention = loadLogsRetention(configPath);
+      try {
+        pruneLogs(deps.logs?.logsRoot ?? logsRoot(), retention);
+      } catch (e) {
+        process.stderr.write(`warning: log pruning skipped: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+    });
+  }
+  const logs = program.command("logs").description("run output under .jevitate/logs (dated; pruned by retention)");
+  logs
+    .command("prune")
+    .description("delete runs older than the retention TTL, always keeping the newest runs (config.json logs.ttlDays / logs.keepLatest; defaults 14 and 50)")
+    .option("--dir <dir>", "logs root to prune (default: the project's .jevitate/logs, else ~/.jevitate/logs)")
+    .option("--dry-run", "list what would be deleted, deleting nothing")
+    .option("--json", "emit a JSON envelope")
+    .action(function (this: Command) {
+      const o = this.opts<{ dir?: string; dryRun?: boolean; json?: boolean }>();
+      try {
+        const retention = loadLogsRetention(configPath);
+        const report = pruneLogs(o.dir ?? deps.logs?.logsRoot ?? logsRoot(), retention, { ...(o.dryRun === true ? { dryRun: true } : {}) });
+        const data = { ...report, retention, dryRun: o.dryRun === true };
+        if (o.json === true) emitJson(program, ok(data));
+        else program.configureOutput().writeOut?.(`${o.dryRun === true ? "would remove" : "removed"} ${report.removed.length} run(s); kept ${report.keptRuns} (ttl ${retention.ttlDays}d, keep latest ${retention.keepLatest})\n`);
+      } catch (err) {
+        if (err instanceof LogsConfigError) emitJson(program, fail(err.code, err.message));
+        else emitJson(program, fail("E_LOGS_PRUNE", err instanceof Error ? err.message : String(err)));
+      }
+    });
 }
 
 /** Distinct from MissingCredentialError: "no --real/--fake-ai selected" vs "keys missing." */

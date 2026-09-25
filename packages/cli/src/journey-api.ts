@@ -3,7 +3,8 @@ import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
-import { JourneyRunner, type JourneyRunResult, type SelfHealer } from "@jevitate/runtime";
+import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
+import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
 
 /**
@@ -56,6 +57,13 @@ export interface RunJourneyProgrammaticallyOptions {
   browser?: BrowserLaunchOptions;
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   emulation?: EmulationSpec;
+  /**
+   * The site-policy gate's repositories (`jevitate site policy set`): pacing, throttles, budgets and
+   * quiet hours for the Journey's origin. Absent (no policy database) means no site policy applies.
+   */
+  siteGate?: SiteGateDeps;
+  /** The site-policy account (default `primary`, as `jevitate site policy` uses). */
+  account?: string;
 }
 
 /**
@@ -113,6 +121,10 @@ export async function runJourneyProgrammatically(
 
   const policy = opts.policy ?? safeRunPolicy();
 
+  // The site policy (`jevitate site policy set <origin>`): pacing, throttles, budgets, quiet hours —
+  // decided before any fixture or browser; a refusal says why and when to retry.
+  const gate = await gateJourney(opts.siteGate, journey.recording, { ...(opts.account === undefined ? {} : { account: opts.account }), enforceLimits: true });
+
   const fx = opts.fixtures?.(journey.recording.site);
   let params = opts.params;
   try {
@@ -134,9 +146,15 @@ export async function runJourneyProgrammatically(
     try {
       const actor = CastActor.named("cli-runner").whoCan(
         new BrowseTheWeb(session, [journey.recording.site]),
+        ...gate.abilities,
       );
       const runner = new JourneyRunner(actor, new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
-      const result = await runner.run({ journey, params, policy });
+      let result: JourneyRunResult;
+      try {
+        result = await runner.run({ journey, params, policy });
+      } finally {
+        await gate.done();
+      }
       if (fx === undefined) return result;
       await fx.restore();
       return { ...result, fixtures: fx.record() };

@@ -10,7 +10,7 @@ import {
   assertOriginBound,
   type SecretManagerPort,
 } from "@jevitate/secrets";
-import { PolicyEnforcementError } from "./runner.js";
+import { PolicyEnforcementError } from "./policy-error.js";
 import { isWriteStep, postconditionOf, healRecording, flattenRecording, type SelfHealer } from "./self-heal.js";
 
 /**

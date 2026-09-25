@@ -541,6 +541,8 @@ async function adjudicatedRun(
       transcript: run.transcript,
       finalUrl: run.finalUrl,
       ...(succeeded ? {} : { reason: whyNot(run, []) }),
+      // #126 evidence on the find-out path too, like every other outcome (surface-wiring audit).
+      ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     };
   }
 

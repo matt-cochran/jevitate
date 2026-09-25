@@ -175,9 +175,6 @@ importers:
       luxon:
         specifier: ^3.7.2
         version: 3.7.2
-      nanoid:
-        specifier: ^6.0.1
-        version: 6.0.1
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -301,9 +298,6 @@ importers:
       '@jevitate/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@jevitate/sources':
-        specifier: workspace:*
-        version: link:../sources
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.30.0(zod@4.6.5)
@@ -403,9 +397,6 @@ importers:
       '@jevitate/secrets':
         specifier: workspace:*
         version: link:../secrets
-      '@jevitate/site-sdk':
-        specifier: workspace:*
-        version: link:../site-sdk
     devDependencies:
       '@jevitate/example-site':
         specifier: workspace:*
@@ -431,18 +422,6 @@ importers:
         version: 1.63.0
 
   packages/secrets: {}
-
-  packages/site-sdk:
-    dependencies:
-      '@jevitate/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@jevitate/screenplay':
-        specifier: workspace:*
-        version: link:../screenplay
-      zod:
-        specifier: ^4.6.5
-        version: 4.6.5
 
   packages/skills: {}
 
@@ -491,37 +470,6 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
-
-  site-integrations/example-network:
-    dependencies:
-      '@jevitate/domain':
-        specifier: workspace:*
-        version: link:../../packages/domain
-      '@jevitate/screenplay':
-        specifier: workspace:*
-        version: link:../../packages/screenplay
-      '@jevitate/site-sdk':
-        specifier: workspace:*
-        version: link:../../packages/site-sdk
-      zod:
-        specifier: ^4.6.5
-        version: 4.6.5
-    devDependencies:
-      '@jevitate/application':
-        specifier: workspace:*
-        version: link:../../packages/application
-      '@jevitate/example-site':
-        specifier: workspace:*
-        version: link:../../apps/example-site
-      '@jevitate/playwright':
-        specifier: workspace:*
-        version: link:../../packages/playwright
-      '@jevitate/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-      '@jevitate/storage-sqlite':
-        specifier: workspace:*
-        version: link:../../packages/storage-sqlite
 
 packages:
 

@@ -18,14 +18,12 @@
     { "path": "packages/cli" },
     { "path": "packages/playwright" },
     { "path": "packages/screenplay" },
-    { "path": "packages/site-sdk" },
     { "path": "packages/runtime" },
     { "path": "packages/sources" },
     { "path": "packages/regression" },
     { "path": "packages/skills" },
     { "path": "packages/ux" },
     { "path": "packages/findings" },
-    { "path": "apps/example-site" },
-    { "path": "site-integrations/example-network" }
+    { "path": "apps/example-site" }
   ]
 }

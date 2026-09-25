@@ -141,3 +141,53 @@ describe("load run --storage-state", () => {
     }),
   );
 });
+
+describe("journey run / load run: --browser-* flags reach BrowserPort.open (surface-wiring audit)", () => {
+  const FLAGS = ["--browser-executable", "/opt/chromium/chrome", "--browser-channel", "chromium", "--browser-arg", "--lang=de"];
+  const cases: Array<{ name: string; argv: (dir: string) => string[] }> = [
+    { name: "journey run", argv: (dir) => ["journey", "run", "settings", "--dir", dir] },
+    { name: "load run", argv: (dir) => ["load", "run", "settings", "--dir", dir, "--authorized-origin", "https://example.test"] },
+  ];
+  for (const c of cases) {
+    it(`${c.name}: executable/channel/args are threaded through`, async () => {
+      const journeysDir = mkdtempSync(join(tmpdir(), "jev-journeys-"));
+      try {
+        await seedJourney(journeysDir);
+        const { program, opens } = capture();
+        await program.parseAsync([...c.argv(journeysDir), ...FLAGS, "--json"], { from: "user" });
+        expect(opens.length).toBeGreaterThan(0);
+        expect(opens[0]).toMatchObject({ executablePath: "/opt/chromium/chrome", channel: "chromium", args: ["--lang=de"] });
+      } finally {
+        rmSync(journeysDir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("regression run: --browser-* flags reach BrowserPort.open (surface-wiring audit)", () => {
+  it("executable/channel/args are threaded through the replay session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-regressions-"));
+    try {
+      const recording = {
+        version: "1",
+        site: "https://example.test",
+        pages: [{ url: "https://example.test/", steps: [{ step: { kind: "assert", check: { kind: "urlIncludes", text: "/never" } } }] }],
+      };
+      writeFileSync(join(dir, "r1.recording.json"), JSON.stringify(recording));
+      writeFileSync(
+        join(dir, "r1.meta.json"),
+        JSON.stringify({ id: "r1", capturedAtIso: "2026-09-25T00:00:00Z", fingerprint: { stepSignature: "x" }, reproduction: { attempts: 3, reproducedCount: 3, rate: 1 } }),
+      );
+      const { program, opens } = capture();
+      await program.parseAsync(
+        ["regression", "run", "r1", "--dir", dir, "--browser-executable", "/opt/chromium/chrome", "--browser-channel", "chromium", "--browser-arg", "--lang=de", "--json"],
+        { from: "user" },
+      );
+      expect(opens.length).toBeGreaterThan(0);
+      expect(opens[0]).toMatchObject({ executablePath: "/opt/chromium/chrome", channel: "chromium", args: ["--lang=de"], headless: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

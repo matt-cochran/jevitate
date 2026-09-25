@@ -8,6 +8,7 @@
 // This is the ONLY place @jevitate/ux meets @jevitate/explore — the dep
 // direction stays ux ⟂ explore (both are consumed here, neither imports the
 // other). Findings are advisory; a UX finding never gates a run.
+import { logsDirFor } from "./project-dir.js";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,6 +41,7 @@ import {
   secretFieldSecrets,
   detectOverflow,
   shouldCheckOverflow,
+  type CrashReport,
 } from "@jevitate/explore";
 import {
   UxAnalyzer,
@@ -348,7 +350,7 @@ export interface RunUxReviewOptions {
   /** Local file the `upload` op attaches (CLI `--fixture`); validated before any browser opens. */
   readonly fixture?: string;
   readonly judgmentBudget?: number;
-  /** Where to write the report. Default `~/.jevitate/ux-reports`. */
+  /** Where to write the report. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   readonly nowIso?: () => string;
   /**
@@ -442,7 +444,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
     evidenceCaveats,
     calibrationCaveats,
   });
-  const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
+  const outDir = opts.outDir ?? logsDirFor();
   await mkdir(outDir, { recursive: true });
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
@@ -683,6 +685,12 @@ export interface RunUsabilityMissionResult {
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
   readonly failure?: MissionFailure;
+  /** For a `crashed` review: the evidence and its attribution (jevitate / system under test / uncertain). */
+  readonly crash?: CrashReport;
+  /** Where the review ended (redacted), and how many decisions/actions it spent — as a goal run reports them. */
+  readonly finalUrl: string;
+  readonly decisions: number;
+  readonly actions: number;
   /** Why the analysis could not be produced (the run's evidence is still kept). */
   readonly analysisUnavailable?: string;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
@@ -763,7 +771,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     opts.extractText ??
     (async (s: { page: { evaluate: (fn: () => string) => Promise<string> } }) =>
       s.page.evaluate(() => (typeof document !== "undefined" && document.body ? document.body.innerText : "")));
-  const outDir = opts.outDir ?? resolveDataDir(["ux-reports"]);
+  const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const reportPath = join(outDir, `usability-${stamp}.json`);
@@ -1019,6 +1027,10 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
+      ...(run.crash === undefined ? {} : { crash: run.crash }),
+      finalUrl: run.finalUrl,
+      decisions: run.decisions,
+      actions: run.actions,
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is

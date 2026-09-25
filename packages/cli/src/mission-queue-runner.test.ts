@@ -285,3 +285,56 @@ describe("mission queue runner (#117)", () => {
     });
   });
 });
+
+describe("a mission left `running` by a drain that died is recovered, never re-run (surface-wiring audit)", () => {
+  const NOW = "2026-09-25T12:00:00.000Z";
+  const ids = {
+    dead: "11111111-1111-4111-8111-111111111111",
+    alive: "22222222-2222-4222-8222-222222222222",
+    otherHostOld: "33333333-3333-4333-8333-333333333333",
+    otherHostRecent: "44444444-4444-4444-8444-444444444444",
+    legacyOld: "55555555-5555-4555-8555-555555555555",
+  };
+
+  it("same host, owner gone → failed; owner alive → left alone; other host or old empty claim → failed only past the bound", async () => {
+    const root = mkdtempSync(join(tmpdir(), "jev-queue-orphans-"));
+    const queue = new FsMissionQueueStore(join(root, "queue"));
+    const store = new FsMissionTargetStore(join(root, "targets"));
+    await store.put(target);
+    const running = (id: string, startedAtIso: string) =>
+      mission({ id, strategy: "feature", feature: "billing", status: "running", startedAtIso });
+    const claim = (id: string, pid: number, host: string, at: string) => queue.claim(id, { pid, host, claimedAtIso: at });
+    await queue.enqueue(running(ids.dead, "2026-09-25T11:59:00Z"));
+    await claim(ids.dead, 4001, "box", "2026-09-25T11:59:00Z");
+    await queue.enqueue(running(ids.alive, "2026-09-25T11:59:00Z"));
+    await claim(ids.alive, 4002, "box", "2026-09-25T11:59:00Z");
+    await queue.enqueue(running(ids.otherHostOld, "2026-09-24T20:00:00Z"));
+    await claim(ids.otherHostOld, 7, "ci-runner", "2026-09-24T20:00:00Z");
+    await queue.enqueue(running(ids.otherHostRecent, "2026-09-25T11:00:00Z"));
+    await claim(ids.otherHostRecent, 7, "ci-runner", "2026-09-25T11:00:00Z");
+    await queue.enqueue(running(ids.legacyOld, "2026-09-24T20:00:00Z"));
+    writeFileSync(join(root, "queue", `${ids.legacyOld}.claim`), ""); // claimed before owners were recorded
+
+    const executed: string[] = [];
+    const report = await drainMissionQueue({
+      queue,
+      targets: new MissionTargetRegistry(store),
+      execute: async ({ mission: m }) => {
+        executed.push(m.id);
+        return { resultPath: "/r/x.result.json", missionOutcome: "clean", exitCode: 0 };
+      },
+      nowIso: () => NOW,
+      owner: { pid: 9999, host: "box" },
+      isAlive: (pid) => pid === 4002,
+    });
+
+    expect(report.recovered.map((r) => r.missionId).sort()).toEqual([ids.dead, ids.legacyOld, ids.otherHostOld].sort());
+    expect(executed).toEqual([]); // never re-run
+    const dead = await queue.get(ids.dead);
+    expect(dead).toMatchObject({ status: "failed", finishedAtIso: NOW });
+    expect(dead?.error).toMatch(/its drain \(pid 4001 on box\) stopped without finishing it; it was not re-run, since it may already have sent writes — enqueue it again to retry/);
+    expect((await queue.get(ids.otherHostOld))?.error).toMatch(/has not finished it after 12h/);
+    expect((await queue.get(ids.alive))?.status).toBe("running");
+    expect((await queue.get(ids.otherHostRecent))?.status).toBe("running");
+  });
+});

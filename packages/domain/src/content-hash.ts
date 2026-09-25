@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { IsoTimestamp } from "./primitives.js";
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -8,25 +7,7 @@ function canonical(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
 }
 
+/** SHA-256 of a value's canonical JSON (object keys sorted): equal values hash equal whatever their key order. */
 export function contentHash(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
-}
-
-export interface ApprovalBinding {
-  commandId: string;
-  recipientHash: string;
-  contentHash: string;
-  actionId: string;
-  actionVersion: string;
-  artifactHash: string;
-  settingsRevision: string;
-  expiresAt: IsoTimestamp;
-}
-
-export function bindingMatches(a: ApprovalBinding, b: ApprovalBinding): boolean {
-  return contentHash(a) === contentHash(b);
-}
-
-export function isExpired(a: ApprovalBinding, now: IsoTimestamp): boolean {
-  return new Date(now).getTime() > new Date(a.expiresAt).getTime();
 }

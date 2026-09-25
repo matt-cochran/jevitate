@@ -81,8 +81,9 @@ export type Assertion =
   | { kind: "flashed"; target: TargetDescriptor; className?: string; attr?: string; animation?: boolean; withinMs?: number };
 
 /** A comparison in a visual-state assertion. `=`/`!=` compare colors as colors (`red` = `rgb(255, 0, 0)`). */
-export type CompareOp = "=" | "!=" | ">" | ">=" | "<" | "<=";
-export const COMPARE_OPS: readonly CompareOp[] = [">=", "<=", "!=", "=", ">", "<"];
+/** The comparison operators, longest first (a parser trying them in order never reads `>=` as `>`). */
+export const COMPARE_OPS = [">=", "<=", "!=", "=", ">", "<"] as const;
+export type CompareOp = (typeof COMPARE_OPS)[number];
 /** One numeric channel of a computed style value: a color's `r`/`g`/`b`/`alpha`, a length's `px`. */
 export type StyleChannel = "alpha" | "r" | "g" | "b" | "px";
 export const STYLE_CHANNELS: readonly StyleChannel[] = ["alpha", "r", "g", "b", "px"];
@@ -392,7 +393,7 @@ export const AssertionSchema: z.ZodType<Assertion> = z.discriminatedUnion("kind"
       target: TargetDescriptorSchema,
       property: z.enum(STYLE_PROPERTIES),
       channel: z.enum(["alpha", "r", "g", "b", "px"]).optional(),
-      op: z.enum(["=", "!=", ">", ">=", "<", "<="]),
+      op: z.enum(COMPARE_OPS),
       value: z.string(),
     })
     .strict(),

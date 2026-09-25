@@ -1,4 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import type { EmulationSpec } from "@jevitate/playwright";
+import { withSiteGate } from "./site-gate-cli.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageCounts, type UsageTracker } from "@jevitate/ai-core";
@@ -12,7 +14,6 @@ import {
   scopeGlobs,
   secretFieldSecrets,
   SecretFieldSpecError,
-  type MisuseStrategy,
   type SecretField,
   type SuccessCheck,
 } from "@jevitate/explore";
@@ -32,17 +33,20 @@ import {
   type RunRecord,
 } from "@jevitate/findings";
 import {
+  CLI_ADVERSARIAL_STRATEGIES,
   parseSuccessSpec,
   resolveExploreAllowlist,
   runAdversarialCliMission,
   runCoverageMission,
   runExploration,
   runFeatureCliMission,
+  type ServerLogOptions,
 } from "./explore-api.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { runUsabilityMission } from "./ux-api.js";
 import { runVerifyFix } from "./verify-fix-api.js";
-import { loadInvariantFiles } from "./invariants-file.js";
+import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
+import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
@@ -113,22 +117,6 @@ const REAL_RUNNERS: CheckRunners = {
   verifyFix: runVerifyFix,
 };
 
-/** The adversarial strategies `explore --strategy adversarial` runs, in the same order. */
-const ADVERSARIAL_STRATEGIES: readonly MisuseStrategy[] = [
-  "double-submit",
-  "boundary-submit",
-  "edit-cancel-save",
-  "navigate-away-unsaved",
-  "act-while-pending",
-  "exercise-controls",
-  "ordering-violation",
-  "repeat-rapid",
-  "boundary-input",
-  "contradictory-actions",
-  "nav-during-pending",
-  "visit-route",
-];
-
 export interface RunCheckOptions {
   readonly suite: CheckSuite;
   /** Where results, JUnit, SARIF, the report and the check record go. */
@@ -147,6 +135,8 @@ export interface RunCheckOptions {
   readonly jsonPath?: string;
   /** Default Journeys dir (`~/.jevitate/journeys`) for targets that name none. */
   readonly journeysDir: string;
+  /** The site-policy database (`jevitate site policy set`): Journey items are paced, throttled and budgeted per origin. */
+  readonly sitePolicyDbPath?: string;
   /**
    * Builds the model gateways — called only when an item needs one. Throws when no gateway is
    * selected (fail closed, before anything runs).
@@ -441,6 +431,10 @@ interface PreparedTarget {
   readonly target: SuiteTarget;
   readonly allowlist: string[];
   readonly invariants?: InvariantSpec;
+  /** The invariants' `authFrom.secret` values, resolved from the environment at preflight (as `explore --invariants`). */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /** targets.json `logSources`/`logDefect` for the target's origin (as `explore` and the queue apply them). */
+  readonly serverLog?: ServerLogOptions;
   readonly config?: TargetConfig;
   readonly journeys: Map<string, Journey>;
   readonly goals: Map<string, SuccessCheck[]>;
@@ -551,6 +545,14 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     if (!(e instanceof SecretFieldSpecError)) throw e;
     throw new CheckPreflightError(`target ${t.name}: ${e.message}`);
   }
+  let invariantAuthTokens: Map<string, string> | undefined;
+  let serverLog: ServerLogOptions | undefined;
+  try {
+    invariantAuthTokens = invariants === undefined ? undefined : resolveInvariantAuthTokens(invariants, opts.env ?? process.env);
+    serverLog = serverLogFromTargetConfig(opts.targetsConfig, t.url);
+  } catch (e) {
+    throw new CheckPreflightError(`target ${t.name}: ${errorMessage(e)}`);
+  }
   const fixturesFile = t.fixtures ?? config?.fixtures;
   if (fixturesFile !== undefined || t.goals.some((g) => `${g.url ?? ""}${g.goal}${g.success.join("")}`.includes("${setup."))) {
     try {
@@ -567,6 +569,8 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     journeys,
     goals,
     ...(invariants === undefined ? {} : { invariants }),
+    ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
+    ...(serverLog === undefined ? {} : { serverLog }),
     config,
     secretFields,
     ...(fixturesFile === undefined ? {} : { fixturesFile }),
@@ -651,23 +655,37 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     ...(opts.browser === undefined ? {} : { browser: opts.browser }),
     ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
   };
-  const invariants = item.t.invariants === undefined ? {} : { invariants: item.t.invariants };
+  const invariants = {
+    ...(item.t.invariants === undefined ? {} : { invariants: item.t.invariants }),
+    ...(item.t.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: item.t.invariantAuthTokens }),
+  };
+  const withServerLog = item.t.serverLog === undefined ? {} : { serverLog: item.t.serverLog };
+  // An item's own viewport/device, else its target's.
+  const emulationFor = (own: EmulationSpec | undefined): { emulation?: EmulationSpec } => {
+    const e = own ?? t.emulation;
+    return e === undefined ? {} : { emulation: e };
+  };
   const targetConfig = item.t.config === undefined ? {} : { target: item.t.config };
+  // A feature mission takes the target's safety directly (it has no settle/hang config to apply).
+  const targetSafety = item.t.config?.safety === undefined ? {} : { safety: item.t.config.safety };
 
   if (item.kind === "journey" && item.journey !== undefined) {
     const j = item.t.journeys.get(item.journey.id);
     if (j === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
     const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const r = await runners.journey({
+    const sj = item.journey;
+    const r = await withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({
+      ...(siteGate === undefined ? {} : { siteGate }),
       dir: t.journeysDir ?? opts.journeysDir,
-      id: item.journey.id,
-      params: { ...item.journey.params },
+      id: sj.id,
+      params: { ...sj.params },
+      ...emulationFor(sj.emulation),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
       // #170: the target's session, exactly as `journey run --storage-state` (#118) and its fixtures.
       ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
       ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(item.t, site) }),
-    });
+    }));
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);
     const path = join(ctx.resultsDir, `journey-${artifactStamp(startedAt)}-${ctx.seq()}.result.json`);
@@ -712,8 +730,10 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       }
       const r = await runners.goal({
         ...common,
+        ...emulationFor(g.emulation),
         ...targetConfig,
         ...invariants,
+        ...withServerLog,
         url,
         goal,
         successChecks,
@@ -741,7 +761,10 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     if (m.strategy === "feature") {
       const r = await runners.feature({
         ...common,
+        ...emulationFor(m.emulation),
+        ...targetSafety,
         ...invariants,
+        ...withServerLog,
         seedUrl: url,
         allowlist: item.t.allowlist,
         capability: m.feature ?? m.name,
@@ -752,11 +775,14 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
     }
     const { judge, gen, usage } = await ctx.gateways();
-    if (m.strategy === "coverage") {
+    if (m.strategy === "coverage" || m.strategy === "exploratory") {
       const r = await runners.coverage({
         ...common,
+        ...emulationFor(m.emulation),
+        ...(m.strategy === "exploratory" ? { strategy: "exploratory" as const } : {}),
         ...targetConfig,
         ...invariants,
+        ...withServerLog,
         url,
         allowlist: item.t.allowlist,
         judge,
@@ -771,11 +797,13 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     if (m.strategy === "adversarial") {
       const r = await runners.adversarial({
         ...common,
+        ...emulationFor(m.emulation),
         ...targetConfig,
         ...invariants,
+        ...withServerLog,
         seedUrl: url,
         allowlist: item.t.allowlist,
-        strategies: ADVERSARIAL_STRATEGIES,
+        strategies: CLI_ADVERSARIAL_STRATEGIES,
         judgment: judge,
         generation: gen,
         usage,
@@ -788,7 +816,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     // usability: UX findings are advisory; the report file is the result the report reads.
     const r = await runners.usability({
       ...common,
+      ...emulationFor(m.emulation),
       ...targetConfig,
+      ...withServerLog,
       url,
       job: m.goal ?? "",
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },

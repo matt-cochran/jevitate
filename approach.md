@@ -1,3 +1,12 @@
+> **Historical design note (2026-09-25).** This is the original design for jevitate as an automation
+> platform that performs typed site Actions for a user from a queue. Jevitate became a testing tool
+> instead, and its parts were superseded: Actions by promoted **Journeys** (typed parameters,
+> MCP `run_journey`, trust-gated sources), the command queue by the **mission queue**
+> (`jevitate mission run`), and approvals by the inbox/`jevitate ui` flow and promotion gates. The
+> ActionRunner, site-sdk, example-network integration and SQLite command/event layer were removed.
+> What carried over: the Screenplay layer (`@jevitate/screenplay`), site policies with human-like
+> pacing, throttles, budgets and quiet hours (now enforced on Journey runs), and the example site.
+
 Yes. A Screenplay-inspired model fits this system well—especially if we adapt it for durable production automation instead of copying a UI-testing framework literally.
 
 The useful hierarchy is:

@@ -19,7 +19,7 @@ errors, failed requests), hangs, invariant violations and backend-log defects. I
 ## Committing a regression: `regression capture` and `regression run`
 
 `regression capture` turns a failing run into two files you can commit, `<id>.recording.json` and
-`<id>.meta.json`, under `--dir` (default `~/.jevitate/regressions`). It first replays the failure
+`<id>.meta.json`, under `--dir` (default the repo's `.jevitate/regressions`). It first replays the failure
 `--attempts` times (default 3) in fresh browser sessions. A failure that does not reproduce every
 time is labelled flaky and is not committed.
 
@@ -56,7 +56,7 @@ one carries its reproduction: the transcript steps that led to it and the
 Recording step to replay up to. To check a fix, replay the defect:
 
 ```bash
-jevitate verify-fix --result ~/.jevitate/recordings/adversarial-<stamp>.result.json --fingerprint <fp> --replays 3
+jevitate verify-fix --result .jevitate/logs/<date>/adversarial-<stamp>.result.json --fingerprint <fp> --replays 3
 # exit 0 fixed (signal absent on every replay) · 1 still reproduces · 2 inconclusive (replay could
 # not reach the step) · 4 intermittent (fired on some but not all replays — never reported as fixed)
 ```

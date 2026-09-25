@@ -120,6 +120,52 @@ Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API wit
 searches for an open issue carrying the same fingerprint marker and comments on
 that one instead.
 
+## Where jevitate keeps things
+
+`jevitate init` creates the app repo's own `.jevitate/` at the git root. Commands find it by
+walking up from the working directory.
+
+| In the repo's `.jevitate/` (committed) | In `~/.jevitate/` (per user, never in a repo) |
+| --- | --- |
+| `journeys/`: named Journeys; shared ones as git submodules under `journeys/<shared>/` | `credentials.json`, `config.json`, `targets.json` |
+| `regressions/`: committed regression artifacts | `profiles/`, browser storage states, the site-policy `db.sqlite` |
+| `baselines/`: `baseline tag` snapshots | `inbox/`, `missions/` (the queue), `trust/`, `sources/` (clones) |
+| `logs/<date>/`: run output (not committed) | `journeys/` and `logs/` when you are not in a repo |
+
+`.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`
+out of git, along with any secret or machine-local file that might be copied there: credentials,
+config, targets, the policy database, profiles and storage states, the inbox and queue, trust
+decisions, source clones, `.env` files, HAR captures and traces.
+
+Run output goes to `logs/<UTC date>/`, named by its artifact stem
+(`explore-2026-09-25T01-26-29-787Z.result.json`). `get_mission_result`, `verify_fix` and
+`report` find a result by its id in the project's logs, then in `~/.jevitate/logs`, then in the
+0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`.
+
+Logs are pruned at the start of every command that writes them: a run older than 14 days is
+deleted, but the newest 50 runs are always kept. Change it in `~/.jevitate/config.json`:
+
+```json
+{ "logs": { "ttlDays": 30, "keepLatest": 100 } }
+```
+
+`jevitate logs prune [--dry-run] [--dir <logs>]` runs it on demand.
+
+## Choosing the browser
+
+Every command that opens a browser (`explore`, `explore-author-journey`, `journey run`, `source run`,
+`load run`, `regression capture`, `regression run`, `verify-fix`, `mission run`, `check`) takes the same launch
+flags:
+
+- `--browser-executable <path>` launches that Chromium binary instead of Playwright's pinned one.
+- `--browser-channel <name>` launches a Playwright channel, e.g. `chrome` or `msedge`.
+- `--browser-arg <arg>` (repeatable) adds a Chromium switch. It extends the Linux defaults
+  `--no-sandbox --disable-dev-shm-usage`.
+
+```bash
+jevitate journey run checkout --browser-channel chrome --browser-arg=--lang=de
+```
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`
