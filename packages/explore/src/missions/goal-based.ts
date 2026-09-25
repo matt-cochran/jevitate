@@ -12,7 +12,7 @@ import {
 } from "../success-checks.js";
 import { redactText } from "../redact.js";
 import { explore, type ExploreConfig, type ExploreRun, type RunOutcome, type TranscriptEntry } from "../explore.js";
-import { NOT_REPLAYED, hangFinding, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
+import { NOT_REPLAYED, hangFinding, reproduceHang, withheldReason, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
@@ -25,6 +25,7 @@ import {
   type InvariantReport,
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
+import { goalAsksForChange } from "../read-only.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -44,7 +45,10 @@ import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
  * toast, a "saved" banner the run then dismissed). Under `held` the page checks are evaluated after
  * every settled step and the step they held at is reported. Network checks are capture-based over
  * the whole run either way; `reloadThen` is always judged on the final page (a mid-run reload would
- * throw away the state the run is building).
+ * throw away the state the run is building). Under `held` (#174) a page check counts only once it
+ * went from NOT holding to holding — one that already held on the start page and never changed is
+ * vacuous (failed, with a warning) — and once every check held (no `reloadThen` declared) the run
+ * stops before its next action, verified by the success condition, never acting past a met goal.
  *
  * Outcome:
  *  - `succeeded`  — the success assertion holds against the live final page.
@@ -158,6 +162,8 @@ export interface GoalBasedResult {
   readonly invariants?: InvariantReport[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
+  /** Operator-facing warnings about the verdict (#174: a `--success-when held` check vacuous on the start page). */
+  readonly warnings?: string[];
 }
 
 /** Does this result belong to a page check (the kind `held` can remember)? Matched by description. */
@@ -375,15 +381,32 @@ async function adjudicatedRun(
   let heldAtStep: number | null = null;
   let settledSteps = 0;
   const held = cfg.successWhen === "held" && pageChecks.length > 0;
+  /**
+   * #174: a held page check counts only once it CHANGED from not holding to holding — never because
+   * it already held on the start page (a placeholder that is there before anything was done).
+   */
+  let sawNotHolding = false;
+  /** #174: the page checks all held on the start state, before any action (vacuous there). */
+  let heldAtStart = false;
+  const networkChecks = checks.filter(
+    (c): c is Extract<SuccessCheck, { kind: "requestMade" | "responseStatus" }> => c.kind === "requestMade" || c.kind === "responseStatus",
+  );
+  // #174: under `held`, once every check has held the run stops — it never keeps acting (or writing)
+  // past a met goal. `reloadThen` is final-only, so a run that declares one keeps the model's `done`.
+  const stopWhenHeld = cfg.successWhen === "held" && checks.length > 0 && !checks.some((c) => c.kind === "reloadThen");
   // A find-out goal (#130d) has no page/network check to independently ground `done` with: it is
   // verified instead by a grounded `report` (#101), which `explore()` grounds on its own regardless
   // of `successCheck`. Leaving `successCheck` unset here (rather than wiring one that vacuously
   // "passes" over zero checks) sends `done` through the advisory goal-judgment path instead of a
   // false independent pass.
   const hasChecks = checks.length > 0;
+  // #158 — a find-out goal is READ-ONLY unless its text asks for a change or `--allow-writes`:
+  // independent code refuses write flows and aborts write requests; the model is told.
+  const readOnly = !hasChecks && cfg.safety?.allowWrites !== true && !goalAsksForChange(cfg.goal);
   const runOnce = (): Promise<ExploreRun> =>
     explore({
       ...cfg,
+      readOnly,
       missionContext: hasChecks
         ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
         : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
@@ -403,8 +426,24 @@ async function adjudicatedRun(
         settledSteps += 1;
         if (!held || heldAtStep !== null) return;
         const ok = await everyPageCheckHolds(cfg.actor, pageChecks).catch(() => false);
-        if (ok) heldAtStep = settledSteps;
+        if (!ok) sawNotHolding = true;
+        else if (sawNotHolding) heldAtStep = settledSteps;
+        else if (settledSteps === 1) heldAtStart = true;
       },
+      ...(stopWhenHeld
+        ? {
+            successMetNow: async (): Promise<string | null> => {
+              // Never before an action: the start state proves nothing was done.
+              if (settledSteps < 2) return null;
+              if (pageChecks.length > 0 && heldAtStep === null) return null;
+              const requests = capture?.requests() ?? [];
+              if (!networkChecks.every((c) => evaluateNetworkCheck(c, requests, capture?.truncated ?? false).passed)) return null;
+              return pageChecks.length > 0
+                ? `every --success check held (the page checks at settled step ${heldAtStep}; --success-when held)`
+                : "every --success check held (--success-when held)";
+            },
+          }
+        : {}),
       // The same independent oracle grounds a proposed `done` mid-run: `done` is accepted only when
       // the checks hold, so an early `done` never ends the run silently. `reloadThen` is left to the
       // final verdict — reloading mid-run would throw away the state the run is still building.
@@ -413,7 +452,13 @@ async function adjudicatedRun(
         ? {
             successCheck: () =>
               evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture).then(
-                (rs) => rs.every((r) => r.passed || (heldAtStep !== null && isPageCheck(r, pageChecks))),
+                (rs) =>
+                  rs.every((r) =>
+                    held && isPageCheck(r, pageChecks)
+                      ? // #174: under `held` a page check counts once it went from not holding to holding.
+                        heldAtStep !== null || (r.passed && sawNotHolding)
+                      : r.passed,
+                  ),
                 () => false,
               ),
           }
@@ -534,6 +579,27 @@ async function adjudicatedRun(
         : r,
     );
   }
+  // #174: under `held`, page checks that already held on the start page and never stopped holding
+  // prove nothing was done — vacuous, never a pass (not even on the final page).
+  const vacuous = held && heldAtStart && !sawNotHolding;
+  if (vacuous) {
+    results = results.map((r) =>
+      r.passed && isPageCheck(r, pageChecks)
+        ? {
+            ...r,
+            passed: false,
+            detail: `vacuous: already held on the start page before any action and never changed (--success-when held needs it to go from not holding to holding); ${r.detail}`,
+          }
+        : r,
+    );
+  }
+  const warnings: string[] = held && heldAtStart
+    ? [
+        vacuous
+          ? "--success-when held: the page checks already held on the start page, before any action, and never changed — vacuous, not counted"
+          : "--success-when held: the page checks already held on the start page, before any action (vacuous there); they counted only once they went from not holding to holding",
+      ]
+    : [];
   const assertionPassed = results.every((r) => r.passed);
   const outcome: GoalBasedOutcome = assertionPassed
     ? "succeeded"
@@ -562,6 +628,7 @@ async function adjudicatedRun(
     finalUrl: run.finalUrl,
     ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
     ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
+    ...(warnings.length === 0 ? {} : { warnings }),
   };
 }
 
@@ -587,6 +654,7 @@ async function reproduceSeedHang(
           ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
         },
         ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
+        ...(cfg.safety === undefined ? {} : { safety: cfg.safety }),
       });
 }
 
@@ -603,7 +671,12 @@ function hangResult(run: ExploreRun, h: NonNullable<ExploreRun["hang"]>, reprodu
     transcript: run.transcript,
     finalUrl: run.finalUrl,
     hang: finding,
-    reason: `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
+    reason:
+      reproduction.withheld !== undefined
+        ? `${finding.title} (${withheldReason(reproduction.withheld)})`
+        : reproduction.attempts === 0
+        ? `${finding.title} (unconfirmed: not replayed)`
+        : `${finding.title} (reproduced ${reproduction.reproduced}/${reproduction.attempts})`,
   };
 }
 

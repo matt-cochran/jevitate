@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { contentHash } from "@jevitate/domain";
-import type { UsageSink } from "./usage.js";
+import { FAKE_CALL_USAGE, type UsageSink } from "./usage.js";
 
 /**
  * The model-facing brief for a `form.value` (#71): the value for ONE field, never the whole goal.
@@ -269,7 +269,7 @@ export class FakeGenerationGateway implements GenerationPort {
     const parsed = GEN_TASKS[kind].input.parse(input);
     const raw = this.canned?.[kind] ?? this.defaultFor(kind, parsed);
     const output = GEN_TASKS[kind].output.parse(raw) as GenOutput<K>;
-    this.usage?.recordGeneration({ inputTokens: 0, outputTokens: 0 });
+    this.usage?.recordGeneration({ ...FAKE_CALL_USAGE, task: kind });
     return {
       output,
       provenance: {

@@ -2,6 +2,34 @@ import type { Recording } from "@jevitate/recording";
 import type { Control } from "../snapshot.js";
 import { controlIdentity, type FrontierOp } from "./fingerprint.js";
 
+/**
+ * Verb pairs at the START of a control's accessible name that mark it as one direction of a
+ * TOGGLE whose other direction relabels the SAME control (Collapse/Expand, Show/Hide, Open/Close…)
+ * — #160. Matched against either verb; the group key is role + whatever the name says once the
+ * verb is stripped, so "Collapse signal minimap" and "Expand signal minimap" resolve to the same
+ * group even though their accessible names (and so their `controlIdentity`) differ.
+ */
+const TOGGLE_VERB_PAIRS: ReadonlyArray<readonly [RegExp, RegExp]> = [
+  [/^collapse\b/i, /^expand\b/i],
+  [/^show\b/i, /^hide\b/i],
+  [/^open\b/i, /^close\b/i],
+  [/^enable\b/i, /^disable\b/i],
+  [/^minimi[sz]e\b/i, /^maximi[sz]e\b/i],
+  [/^mute\b/i, /^unmute\b/i],
+  [/^lock\b/i, /^unlock\b/i],
+  [/^pause\b/i, /^(?:resume|play)\b/i],
+];
+
+/** The toggle group a control's name pairs it into, or null when it matches no known verb. */
+function toggleGroupOf(c: Pick<Control, "role" | "name">): string | null {
+  const name = c.name.trim();
+  for (const [a, b] of TOGGLE_VERB_PAIRS) {
+    if (a.test(name)) return `${c.role}\u0001${name.replace(a, "").trim()}`;
+    if (b.test(name)) return `${c.role}\u0001${name.replace(b, "").trim()}`;
+  }
+  return null;
+}
+
 export interface FrontierItem {
   /** Unique `(state, op, control)` key — the dedup identity (see `actionKey`). */
   readonly key: string;
@@ -58,6 +86,12 @@ export interface FrontierOptions {
  *    not actionable) is never enqueued or popped again, however many new states re-offer it.
  *  - exercised preference (#75) — a control identity that has NEVER been successfully acted on yet
  *    is popped before one that has.
+ *  - toggle round trips (#160) — `noteTransition` recognises a control whose click reverted the
+ *    state it ran from (A→B→A: the SAME control, or its name-paired opposite — Collapse/Expand,
+ *    Show/Hide, …) and, once a toggle has gone both ways, blacklists AND purges every identity
+ *    involved, so a control that only ever flips between two states already proven is exercised
+ *    once in each direction and never offered again — instead of every near-duplicate state it
+ *    passes through re-queuing it afresh, forever.
  *  - chrome last (#115) — an item the mission classifies as chrome is popped only once no non-chrome
  *    item is left; each chrome destination is tried at most once per run; and chrome that leaves the
  *    target scope may never exceed `maxLeavingChromeShare` of the attempted actions.
@@ -72,6 +106,10 @@ export class Frontier {
   /** State fingerprint → its discovery index. */
   private readonly generations = new Map<string, number>();
   private readonly chromeDestinations = new Set<string>();
+  /** Toggle group -> control identities exercised in it so far (#160). */
+  private readonly toggleDirections = new Map<string, Set<string>>();
+  /** `"${before}\u0006${after}"` -> the identity of the item that produced that transition (#160). */
+  private readonly transitions = new Map<string, string>();
   private readonly order: FrontierOrder;
   private readonly classify: ((item: FrontierItem) => FrontierClass) | undefined;
   private readonly maxLeavingChromeShare: number;
@@ -98,6 +136,59 @@ export class Frontier {
   /** Never enqueue or pop this control identity again for the rest of the run. */
   blacklist(identity: string): void {
     this.blacklisted.add(identity);
+  }
+
+  /**
+   * Drops every currently QUEUED item for this control identity (already-popped items are
+   * untouched — only what is still waiting). Used together with `blacklist()` for a toggle
+   * completed in every direction (#160): purges the duplicate re-offers already queued from
+   * earlier, near-identical states, instead of leaving them to be popped and re-attempted one by
+   * one. `blacklist()` alone never does this (see its own test) — this is an explicit, separate
+   * step so #75's existing "refuses every FURTHER push" contract is unchanged.
+   */
+  private dropIdentity(identity: string): void {
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      if (controlIdentity((this.queue[i] as FrontierItem).control) === identity) this.queue.splice(i, 1);
+    }
+  }
+
+  /**
+   * Records the state transition an EXECUTED item produced (#160): `before` is the fingerprint it
+   * ran from, `after` the one it landed in. A toggle exercised once in each direction is fully
+   * covered — re-offering it forever (every near-duplicate state re-queuing it afresh) proves
+   * nothing new about the target, so it is then dropped for the rest of the run:
+   *
+   *  - name-paired (Collapse/Expand, Show/Hide, …): once BOTH directions of the same toggle group
+   *    have been exercised, every identity seen in that group is blacklisted and purged;
+   *  - same-control round trip (A→B→A): once a transition's exact reverse is already on record —
+   *    by this identity or another — both identities are blacklisted and purged.
+   *
+   * A no-op action (`before === after`) records nothing: nothing toggled.
+   */
+  noteTransition(before: string, control: Control, after: string): void {
+    if (before === after) return;
+    const identity = controlIdentity(control);
+    const finish = (id: string): void => {
+      this.blacklist(id);
+      this.dropIdentity(id);
+    };
+
+    const group = toggleGroupOf(control);
+    if (group !== null) {
+      const seen = this.toggleDirections.get(group) ?? new Set<string>();
+      seen.add(identity);
+      this.toggleDirections.set(group, seen);
+      if (seen.size >= 2) for (const id of seen) finish(id);
+    }
+
+    const key = `${before}\u0006${after}`;
+    const reverseKey = `${after}\u0006${before}`;
+    this.transitions.set(key, identity);
+    const reverseIdentity = this.transitions.get(reverseKey);
+    if (reverseIdentity !== undefined) {
+      finish(identity);
+      finish(reverseIdentity);
+    }
   }
 
   /**

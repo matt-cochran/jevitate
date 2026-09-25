@@ -16,7 +16,21 @@ import { withSession } from "../testkit.js";
  * edits, and acting while the save is still pending.
  */
 
-const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0 };
+const state = { puts: 0, lastName: "Lovelace", keySubmits: 0, signups: 0, nativeSignins: 0 };
+
+/**
+ * #155 — the issue's minimal repro: a submit button that native validation blocks (`required`
+ * email + a `required minlength=8` password). Its own `onsubmit` handler (the one that would POST)
+ * only runs when the browser's OWN constraint validation passes first — exactly the real-world
+ * case where a submit click never reaches the server.
+ */
+const NATIVE_VALIDATION_FORM = (): string => `<!doctype html><html><body><h1>Sign in</h1>
+  <form id="signin" onsubmit="event.preventDefault(); fetch('/api/signin-native', { method: 'POST' });">
+    <label>Email <input type="email" name="email" required aria-label="Email" /></label>
+    <label>Password <input type="password" name="password" required minlength="8" aria-label="Password" /></label>
+    <button type="submit" id="submit">Sign In</button>
+  </form>
+</body></html>`;
 
 /**
  * #76 — the issue's minimal repro: a form behind a modal trigger (an API-keys page: "Create new
@@ -53,6 +67,18 @@ const KEYS_AND_SIGNUP = (): string => `<!doctype html><html><body>
       await fetch("/api/keys", { method: "POST" });
     });
   </script>
+</body></html>`;
+
+/**
+ * #161 — a regression of #75: a visually-hidden "Skip to content" anchor (the sr-only clipping
+ * idiom) alongside two ordinary, always-actionable buttons.
+ */
+const SKIP_LINK_PAGE = (): string => `<!doctype html><html><body>
+  <a href="#main" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden">Skip to content</a>
+  <main id="main">
+    <button type="button" id="one" onclick="this.textContent='clicked one'">Action One</button>
+    <button type="button" id="two" onclick="this.textContent='clicked two'">Action Two</button>
+  </main>
 </body></html>`;
 
 /** A submit that never becomes enabled — the "never click a disabled control" guard's target. */
@@ -119,6 +145,19 @@ beforeAll(async () => {
     }
     if (path === "/app/keys-and-signup") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(KEYS_AND_SIGNUP());
+      return;
+    }
+    if (path === "/app/native-validation") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(NATIVE_VALIDATION_FORM());
+      return;
+    }
+    if (path === "/api/signin-native" && req.method === "POST") {
+      state.nativeSignins += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
+    if (path === "/app/skip-link") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(SKIP_LINK_PAGE());
       return;
     }
     if (path === "/app/stuck-submit") {
@@ -307,7 +346,7 @@ describe("adversarial — coverage and an honest outcome (#64)", () => {
       expect(result.coverage.sufficient).toBe(false);
       expect(result.coverage.controls.exercised).toBe(1);
       expect(result.coverage.controls.total).toBeGreaterThanOrEqual(6);
-      expect(result.coverage.forms).toEqual({ found: 1, submitted: 0 });
+      expect(result.coverage.forms).toEqual({ found: 1, submitted: 0, blocked: 0 });
       expect(result.coverage.shortfalls).toEqual(
         expect.arrayContaining([expect.stringMatching(/^1\/\d+ target controls exercised/), "no form was submitted (1 found)"]),
       );
@@ -412,6 +451,65 @@ describe("adversarial — a form behind a modal trigger, and a password-gated fo
         (e) => e.strategy === "double-submit" && e.op === null && e.reason?.includes("disabled"),
       );
       expect(noOps.length).toBeGreaterThan(0);
+    },
+    180_000,
+  );
+});
+
+describe("adversarial — a blocked submit is never counted as submitted (#155)", () => {
+  it(
+    "a submit the browser refuses with native validation (a still-empty required field) is recorded blocked, never submitted; the run is inconclusive, never clean",
+    async () => {
+      state.nativeSignins = 0;
+      // Only ONE decision: double-submit edits a single field (Email — leaving Password required
+      // and empty) and clicks Sign In twice. Both clicks are native-validation-blocked: no request
+      // ever reaches the server.
+      const result = await huntProfile(["double-submit"], {
+        seedUrl: `${origin}/app/native-validation`,
+        bounds: { maxDecisions: 1 },
+      });
+
+      expect(result.outcome).not.toBe("crashed");
+      // The real ground truth: the server never saw a single request.
+      expect(state.nativeSignins).toBe(0);
+
+      expect(result.coverage.forms.found).toBe(1);
+      expect(result.coverage.forms.submitted).toBe(0);
+      expect(result.coverage.forms.blocked).toBeGreaterThanOrEqual(1);
+      expect(result.coverage.shortfalls).toEqual(
+        expect.arrayContaining([expect.stringMatching(/^form submitted 0 times \(\d+ attempts? blocked by validation/)]),
+      );
+      // Never silently `clean`: a run whose submits never reached the server proved nothing.
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("insufficient-coverage");
+
+      // The submit clicks themselves were still real actions (the control was clicked); the
+      // Recording's own click steps prove that — this is about the SUBMIT COUNT, not the click.
+      const submitClicks = result.transcript.filter((e) => e.op === "click" && e.target?.includes('"Sign In"') === true && e.actOk);
+      expect(submitClicks.length).toBeGreaterThanOrEqual(1);
+    },
+    180_000,
+  );
+});
+
+describe("adversarial — a visually-hidden skip link is never chosen (#161, regression of #75)", () => {
+  it(
+    "exercise-controls / repeat-rapid / visit-route never target it, and it never appears as a not-actionable failure",
+    async () => {
+      const result = await huntProfile(["exercise-controls", "repeat-rapid", "visit-route"], {
+        seedUrl: `${origin}/app/skip-link`,
+        bounds: { maxDecisions: 10 },
+      });
+
+      expect(result.outcome).not.toBe("crashed");
+      // Never a target, under any strategy, at any step.
+      expect(result.transcript.some((e) => e.target?.includes("Skip to content") === true)).toBe(false);
+      // The old failure mode (#161's repro) never happens at all: the control is excluded from the
+      // start, so `act()`'s gate is never even asked about it.
+      expect(result.transcript.some((e) => (e.reason ?? "").includes("visually-hidden skip link"))).toBe(false);
+      // The run still did real work: the ordinary, fully-visible buttons WERE exercised.
+      expect(result.transcript.some((e) => e.target?.includes("Action One") === true && e.actOk)).toBe(true);
+      expect(result.transcript.some((e) => e.target?.includes("Action Two") === true && e.actOk)).toBe(true);
     },
     180_000,
   );

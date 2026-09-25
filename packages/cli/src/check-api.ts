@@ -1,12 +1,23 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { GenerationPort, JudgmentPort, UsageCounts, UsageTracker } from "@jevitate/ai-core";
+import { aggregateOf, formatUsageLine, type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageCounts, type UsageTracker } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import type { InvariantSpec } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import type { JourneyRunResult } from "@jevitate/runtime";
-import { matchGlob, scopeGlobs, type MisuseStrategy, type SuccessCheck } from "@jevitate/explore";
+import {
+  matchGlob,
+  parseSecretField,
+  scopeGlobs,
+  secretFieldSecrets,
+  SecretFieldSpecError,
+  type MisuseStrategy,
+  type SecretField,
+  type SuccessCheck,
+} from "@jevitate/explore";
+import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
+import { FixtureSpecError, SETUP_REF, UnboundSetupRefError, substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 import {
   consolidate,
   diffRuns,
@@ -145,6 +156,8 @@ export interface RunCheckOptions {
   readonly aiMode?: "real" | "fake";
   /** Per-origin settle/hang configuration (`~/.jevitate/targets.json`). */
   readonly targetsConfig?: Readonly<Record<string, TargetConfig>>;
+  /** Where a target's `secretFields` read their values (default `process.env`). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly browserPortFactory?: () => BrowserPort;
   readonly browser?: BrowserLaunchOptions;
   readonly runners?: Partial<CheckRunners>;
@@ -206,6 +219,12 @@ export interface CheckResult {
   readonly targetBuild?: string;
   readonly startedAt: string;
   readonly budget: BudgetReport;
+  /**
+   * Model usage summed over every item that ran (#163): calls, tokens, `jevUsd` + `generationUsd` =
+   * `totalUsd`, and `priced` (a `partial` total fails a `maxUsd` budget closed). Absent when no item
+   * needed a model gateway.
+   */
+  readonly usage?: UsageAggregate;
   readonly items: readonly CheckItemReport[];
   readonly findings: readonly CheckFinding[];
   readonly summary: {
@@ -226,6 +245,12 @@ export interface CheckResult {
 }
 
 // ── budget ───────────────────────────────────────────────────────────────────
+
+/** Why a spend is not measurable: what could not be priced. */
+function unmeasurable(usage: UsageCounts | undefined): string {
+  const missing = usage?.missing ?? [];
+  return `${usage?.priced === "none" ? "unpriced" : "only partially priced"}${missing.length === 0 ? "" : ` — missing: ${missing.join("; ")}`}`;
+}
 
 /** The suite's total budget. Exceeding any limit fails the check (fail closed). */
 export class BudgetMeter {
@@ -256,10 +281,15 @@ export class BudgetMeter {
     return (this.#now() - this.#start) / 60_000;
   }
 
-  /** The spend so far: 0 for fake gateways, the provider's reported cost, or undefined (not measurable). */
+  /**
+   * The spend so far: 0 when no model call was made (or the gateways are fakes), the FULL total
+   * (Jev + generation, #163) when every call was priced, else undefined — a partial total is not a
+   * measurable spend, so a `maxUsd` budget fails closed on it rather than passing on an undercount.
+   */
   usd(usage: UsageCounts | undefined): number | undefined {
-    if (usage === undefined || this.#costKnownZero || usage.judgments + usage.generations === 0) return usage?.usd ?? 0;
-    return usage.usd;
+    if (usage === undefined || usage.judgments + usage.generations === 0) return 0;
+    if (this.#costKnownZero) return usage.totalUsd ?? 0;
+    return usage.priced === "full" ? (usage.totalUsd ?? 0) : undefined;
   }
 
   /** Records an item's actions and re-checks every limit. Returns why the budget is now exceeded, if it is. */
@@ -274,7 +304,7 @@ export class BudgetMeter {
     }
     if (this.#exceeded === undefined && l.maxUsd !== undefined) {
       const usd = this.usd(usage);
-      if (usd === undefined) this.#exceeded = "usd budget set but the provider reported no cost for the model calls made (spend not measurable)";
+      if (usd === undefined) this.#exceeded = `usd budget set but the model spend is ${unmeasurable(usage)} (spend not measurable)`;
       else if (usd > l.maxUsd) this.#exceeded = `usd budget exceeded: $${usd.toFixed(4)} > $${l.maxUsd}`;
     }
     return this.#exceeded;
@@ -288,7 +318,7 @@ export class BudgetMeter {
     if (l.maxMinutes !== undefined && this.minutes() >= l.maxMinutes) return `time budget exhausted: ${l.maxMinutes} min`;
     if (l.maxUsd !== undefined) {
       const usd = this.usd(usage);
-      if (usd === undefined) return "usd budget set but spend is not measurable";
+      if (usd === undefined) return `usd budget set but the model spend is ${unmeasurable(usage)} (spend not measurable)`;
       if (usd >= l.maxUsd) return `usd budget exhausted: $${usd.toFixed(4)}/$${l.maxUsd}`;
     }
     return undefined;
@@ -414,6 +444,28 @@ interface PreparedTarget {
   readonly config?: TargetConfig;
   readonly journeys: Map<string, Journey>;
   readonly goals: Map<string, SuccessCheck[]>;
+  /** The target's `secretFields`, resolved from the environment at preflight (#170). */
+  readonly secretFields: readonly SecretField[];
+  /** The target's fixtures file (the suite's, else targets.json's), validated at preflight (#170). */
+  readonly fixturesFile?: string;
+}
+
+/**
+ * The target's fixture lifecycle for one item (#170), authenticated like the item's session: the
+ * target's storage state and `secretFields`. `undefined` when the target declares no fixtures.
+ */
+function fixturesFor(p: Pick<PreparedTarget, "target" | "allowlist" | "secretFields" | "fixturesFile">, baseUrl: string): MissionFixtures | undefined {
+  if (p.fixturesFile === undefined) return undefined;
+  return buildMissionFixtures(
+    { fixtures: p.fixturesFile },
+    {
+      allowlist: p.allowlist,
+      baseUrl: baseUrl.replace(SETUP_REF, "0"),
+      ...(p.target.storageState === undefined ? {} : { storageState: p.target.storageState }),
+      secretFields: p.secretFields,
+      secrets: secretFieldSecrets(p.secretFields),
+    },
+  );
 }
 
 interface Planned {
@@ -489,7 +541,36 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
   } catch (e) {
     throw new CheckPreflightError(`target ${t.name}: ${errorMessage(e)}`);
   }
-  return { target: t, allowlist, journeys, goals, ...(invariants === undefined ? {} : { invariants }), config };
+  // #170: secret fields are read from the environment now (an unset variable is a preflight
+  // refusal naming it, never its value); the fixtures spec and every ${setup.x} a goal uses are
+  // validated before anything runs.
+  let secretFields: SecretField[];
+  try {
+    secretFields = (t.secretFields ?? []).map((s) => parseSecretField(s, "value", opts.env ?? process.env));
+  } catch (e) {
+    if (!(e instanceof SecretFieldSpecError)) throw e;
+    throw new CheckPreflightError(`target ${t.name}: ${e.message}`);
+  }
+  const fixturesFile = t.fixtures ?? config?.fixtures;
+  if (fixturesFile !== undefined || t.goals.some((g) => `${g.url ?? ""}${g.goal}${g.success.join("")}`.includes("${setup."))) {
+    try {
+      const fx = fixturesFor({ target: t, allowlist, secretFields, ...(fixturesFile === undefined ? {} : { fixturesFile }) }, t.url);
+      for (const g of t.goals) checkSetupRefs({ [`goal ${g.name} url`]: g.url, [`goal ${g.name}`]: g.goal, [`goal ${g.name} success`]: g.success }, fx);
+    } catch (e) {
+      if (!(e instanceof FixtureSpecError || e instanceof UnboundSetupRefError)) throw e;
+      throw new CheckPreflightError(`target ${t.name}: fixtures: ${e.message}`);
+    }
+  }
+  return {
+    target: t,
+    allowlist,
+    journeys,
+    goals,
+    ...(invariants === undefined ? {} : { invariants }),
+    config,
+    secretFields,
+    ...(fixturesFile === undefined ? {} : { fixturesFile }),
+  };
 }
 
 function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | undefined): Planned[] {
@@ -583,6 +664,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       params: { ...item.journey.params },
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+      // #170: the target's session, exactly as `journey run --storage-state` (#118) and its fixtures.
+      ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
+      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(item.t, site) }),
     });
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);
@@ -612,23 +696,42 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
   if (item.kind === "goal" && item.goal !== undefined) {
     const g = item.goal;
     const { judge, gen, usage } = await ctx.gateways();
-    const r = await runners.goal({
-      ...common,
-      ...targetConfig,
-      ...invariants,
-      url: g.url ?? t.url,
-      goal: g.goal,
-      successChecks: item.t.goals.get(g.name) ?? [],
-      ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
-      allowlist: item.t.allowlist,
-      judge,
-      gen,
-      usage,
-      bounds: bounds(g.maxActions, g.maxDecisions, remaining),
-    });
-    stampResultFile(r.resultPath, stamp);
-    const executed = missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
-    return { ...executed, actions: r.actions };
+    // #170: the target's fixtures run around the goal (a failed setup is an item error, never a
+    // run on unknown state), and its secret fields are typed by code, as `explore --secret-field`.
+    let url = g.url ?? t.url;
+    let goal = g.goal;
+    let successChecks = item.t.goals.get(g.name) ?? [];
+    const fx = fixturesFor(item.t, url);
+    try {
+      if (fx !== undefined) {
+        await fx.setup();
+        const b = fx.bindings();
+        url = substituteSetupRefs(url, b, { where: `goal ${g.name} url` });
+        goal = substituteSetupRefs(goal, b, { where: `goal ${g.name}` });
+        successChecks = g.success.map((s) => parseSuccessSpec(substituteSetupRefs(s, b, { where: `goal ${g.name} success` })));
+      }
+      const r = await runners.goal({
+        ...common,
+        ...targetConfig,
+        ...invariants,
+        url,
+        goal,
+        successChecks,
+        ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
+        allowlist: item.t.allowlist,
+        judge,
+        gen,
+        usage,
+        bounds: bounds(g.maxActions, g.maxDecisions, remaining),
+        ...(item.t.secretFields.length === 0 ? {} : { secretFields: item.t.secretFields }),
+        ...(fx === undefined ? {} : { fixtures: fx }),
+      });
+      stampResultFile(r.resultPath, stamp);
+      const executed = missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
+      return { ...executed, actions: r.actions };
+    } finally {
+      await fx?.restore();
+    }
   }
 
   if (item.kind === "mission" && item.mission !== undefined) {
@@ -690,6 +793,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       job: m.goal ?? "",
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
       allowlist: item.t.allowlist,
+      ...(item.t.secretFields.length === 0 ? {} : { secretFields: item.t.secretFields }),
       judge,
       gen,
       usage,
@@ -912,6 +1016,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       ...(d.reproduce === undefined ? {} : { reproduce: d.reproduce }),
     };
   });
+  const finalUsage = await usage();
+  const suiteUsage = finalUsage === undefined ? undefined : aggregateOf(finalUsage, executed.filter((e) => e.ex !== undefined).length);
   const result: CheckResult = {
     kind: "jevitate-check",
     suite: opts.suite.name,
@@ -921,7 +1027,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     engine,
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     startedAt,
-    budget: meter.report(await usage(), exceeded),
+    budget: meter.report(finalUsage, exceeded),
+    ...(suiteUsage === undefined ? {} : { usage: suiteUsage }),
     items: itemReports,
     findings,
     summary: {
@@ -952,7 +1059,8 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
   await writeFile(
     reportPath,
-    renderReportMarkdown({ title: `jevitate check: ${opts.suite.name} — ${result.verdict}`, runs, defects, ...(diff === undefined ? {} : { diff }) }),
+    renderReportMarkdown({ title: `jevitate check: ${opts.suite.name} — ${result.verdict}`, runs, defects, ...(diff === undefined ? {} : { diff }) }) +
+      (suiteUsage === undefined ? "" : `\n## Model cost\n\n${formatUsageLine(suiteUsage)}\n`),
     "utf8",
   );
   await writeFile(jsonPath, `${JSON.stringify({ v: 1, ok: true, data: result }, null, 2)}\n`, "utf8");

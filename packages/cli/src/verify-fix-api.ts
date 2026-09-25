@@ -11,6 +11,7 @@ import {
   hookHash,
   loadFixtureFile,
   parseFixtureSpec,
+  secretFieldNames,
   type FixtureRecord,
   type FixtureSpec,
   type MissionFixtures,
@@ -69,6 +70,8 @@ export interface RunVerifyFixOptions {
   readonly invariantFiles?: readonly string[];
   /** Re-checking a `server-log` defect whose sources include a `cmd:` one needs this too (#142). */
   readonly allowLogCmd?: boolean;
+  /** `--hang-replay-writes` (#153): a hang's replay may re-send a paid/destructive write. */
+  readonly hangReplayWrites?: boolean;
   /**
    * Mission fixtures (#140/#144): every replay restores + re-runs the mission's own fixture (saved
    * with its result) so it starts from the same state. `fixtures` overrides the saved spec; the
@@ -294,13 +297,15 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
   // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
   const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
-  const storageState = opts.storageState ?? mission.target.storageStatePath;
+  const target = resolveTargetConfig(opts.targets ?? {}, origin);
+  // #175: the operator's targets.json session is the last fallback (verify_fix over MCP of a
+  // mission recorded without one); never an MCP argument.
+  const storageState = opts.storageState ?? mission.target.storageStatePath ?? target.storageState;
   if (storageState !== undefined && !existsSync(storageState)) {
     throw new VerifyFixInputError(`storage state not found: ${storageState}`);
   }
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
-  const target = resolveTargetConfig(opts.targets ?? {}, origin);
   const perceiveOpts = {
     ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
@@ -427,6 +432,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         defectKind: finding.kind,
         ...(declared === undefined ? {} : { invariant: declared }),
         ...(finding.hang === undefined ? {} : { hang: finding.hang }),
+        // #153: never re-send a paid/destructive write unless the operator opted in.
+        safety: { ...(target.safety ?? {}), ...(opts.hangReplayWrites === true ? { hangReplayWrites: true } : {}) },
         ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
         ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
         ...(opts.replays === undefined ? {} : { replays: opts.replays }),
@@ -479,7 +486,7 @@ function missionFixtures(
           ? parseFixtureSpec(saved.spec, bounds, openRefs)
           : undefined;
     // `--secret-field` bindings a spec authenticates with come from the same environment variables.
-    const names = [...(spec?.setup ?? []), ...(spec?.restore ?? [])].flatMap((s) => (s.auth?.from === "secretField" ? [s.auth.name] : []));
+    const names = secretFieldNames(spec); // `auth: {from: "secretField"}` and `${secretField.VAR}` (#166)
     const secretFields = names.flatMap((name) => {
       const secret = process.env[name];
       return secret === undefined ? [] : [{ descriptor: name, matcher: { key: "name" as const, value: name }, name, kind: "value" as const, secret }];

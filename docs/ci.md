@@ -70,12 +70,20 @@ relative paths resolve against the suite file):
 ```
 
 - `budget`: the total over every item. `maxActions` counts executed browser actions, and each item
-  is capped at what is left. `maxMinutes` is wall-clock time. `maxUsd` is the provider-reported
-  model spend. If a model call reports no cost, the spend cannot be measured, so the check fails.
-  Fake gateways cost nothing.
+  is capped at what is left. `maxMinutes` is wall-clock time. `maxUsd` is the full model spend:
+  Jev judgments plus generation (`usage.totalUsd`, see
+  [usage accounting](./operations.md#usage-accounting)). If any call cannot be priced
+  (`usage.priced` is `partial` or `none`), the spend cannot be measured, so the check fails.
+  Fake gateways cost nothing. The check result's `usage` sums every item that ran, and the human
+  summary prints it on a `COST` line.
 - `ai`: the gateway for goals and model-driven missions (`coverage`, `adversarial`, `usability`).
   `--real` or `--fake-ai` override it. If a suite needs a model and none is selected, it is refused
   before anything runs. Journeys, `feature` missions and verify-fix are model-free.
+- `storageState`, `secretFields`, `fixtures`: the target's auth and known state. Journeys run from
+  the storage state (as `journey run --storage-state`) and with the fixtures; goals get the
+  `secretFields` (env-sourced `--secret-field` specs, resolved before anything runs) and the
+  fixtures, and usability missions get the secret fields. Without `fixtures`, the target's entry
+  in `~/.jevitate/targets.json` applies.
 - `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
@@ -139,7 +147,8 @@ jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baselin
 
 `--target` takes an origin (or any URL on it), a suite target name, or a registered mission
 target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
-(default `~/.jevitate/recordings` and `~/.jevitate/ux-reports`). Each defect lists:
+(default `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
+subdirectories. Each defect lists:
 
 - every mode and run that observed it, with occurrence counts;
 - evidence refs (step, screenshot, request, URL, transcript);
@@ -173,7 +182,10 @@ Each finding is classified as one of:
 - **not-rerun:** a baseline finding that no current run could have seen. It is never reported as
   resolved without evidence.
 
-"Comparable" runs are runs of the modes that observed the finding: a goal run's silence is not
-evidence that an adversarial-only defect is gone. `last` means the previous run on the same
+"Comparable" runs are runs that could have observed the finding: the same mode, target and
+mission settings (goal, route globs or seed route, feature, Journey, verify-fix fingerprint) as a
+run that observed it, and that reached the finding's route. A goal run's silence is not evidence
+that an adversarial-only defect is gone. New and resolved are decided before flaky, and resolved
+needs enough comparable reruns to rule out the baseline's own hit rate. `last` means the previous run on the same
 target, per mode. A tag is a snapshot stored under `~/.jevitate/baselines/<name>.json`, so it
 survives pruned result files.

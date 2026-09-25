@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { choice, noul, score } from "@typesafe-ai/sdk";
 import type { Question } from "./judgment.js";
-import { UsageTracker } from "./usage.js";
+import { JEV_PRICE_TABLE, UsageTracker } from "./usage.js";
 import {
   JevResponseError,
   apiKeyFromAuthHeader,
@@ -123,7 +123,15 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
     };
     await call(args);
     await call(args); // a second attempt (e.g. RetryingJudgmentPort re-invoking this same seam) counts too
-    expect(usage.snapshot()).toEqual({ judgments: 2, generations: 0, inputTokens: 240, outputTokens: 60, priced: "none" });
+    // No model named by the response nor by the client: counted, but never silently priced (#163).
+    expect(usage.snapshot()).toEqual({
+      judgments: 2,
+      generations: 0,
+      inputTokens: 240,
+      outputTokens: 60,
+      priced: "none",
+      missing: ["jev: model not reported"],
+    });
   });
 
   test("#100: a missing/malformed usage on the SDK response counts as 0 tokens rather than throwing", async () => {
@@ -141,7 +149,7 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
       questions: { op: { kind: "choice", options: ["click", "done"] } },
       authHeader: "Bearer sk-test",
     });
-    expect(usage.snapshot()).toEqual({ judgments: 1, generations: 0, inputTokens: 0, outputTokens: 0, priced: "none" });
+    expect(usage.snapshot()).toEqual({ judgments: 1, generations: 0, inputTokens: 0, outputTokens: 0, priced: "none", missing: ["jev: model not reported"] });
   });
 
   test("#136: a provider-reported per-call cost (a future SDK) is recorded as jevUsd, no unit price needed", async () => {
@@ -164,8 +172,69 @@ describe("realJevClientCall — the lazy live seam (SDK loader injected)", () =>
     });
     const s = usage.snapshot();
     expect(s.jevUsd).toBeCloseTo(0.0012, 10);
-    expect(s.jevPriceSource).toBeUndefined();
+    expect(s.jevPriceSource).toBe("provider:typesafe");
     expect(s.priced).toBe("full");
+  });
+
+  const judgeArgs = {
+    state: { goal: "g", url: "u", controls: [], history: [] },
+    questions: { op: { kind: "choice" as const, options: ["click", "done"] } },
+    authHeader: "Bearer sk-test",
+  };
+
+  test("#163: with no SDK cost and no configured price, the response's model is priced from the default Jev table", async () => {
+    const fakeSdk = {
+      TypeSafeClient: class {
+        readonly defaultModel = "jev-latest";
+        async systemOne(): Promise<{ answers: unknown; usage: { input_tokens: number; output_tokens: number }; model: string }> {
+          return { answers: { op: { type: "choice", choice: "done", confidence: 0.7 } }, usage: { input_tokens: 1_000_000, output_tokens: 500 }, model: "jev-1.13.0" };
+        }
+      },
+    };
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(async () => fakeSdk, usage);
+    await call(judgeArgs);
+    const s = usage.snapshot();
+    // $0.042 per million input tokens; output tokens are free.
+    expect(s.jevUsd).toBeCloseTo(0.042, 10);
+    expect(s.priced).toBe("full");
+    expect(s.priceSource).toEqual([`table:${JEV_PRICE_TABLE.id} (${JEV_PRICE_TABLE.source})`]);
+    expect(usage.calls()[0]).toMatchObject({ kind: "judgment", model: "jev-1.13.0", ok: true, inputTokens: 1_000_000 });
+  });
+
+  test("#163: an unknown Jev model is partial/none and named in missing — never silently zero", async () => {
+    const fakeSdk = {
+      TypeSafeClient: class {
+        async systemOne(): Promise<{ answers: unknown; usage: { input_tokens: number; output_tokens: number }; model: string }> {
+          return { answers: { op: { type: "choice", choice: "done", confidence: 0.7 } }, usage: { input_tokens: 10, output_tokens: 1 }, model: "jev-9.0.0" };
+        }
+      },
+    };
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(async () => fakeSdk, usage);
+    await call(judgeArgs);
+    const s = usage.snapshot();
+    expect(s.jevUsd).toBeUndefined();
+    expect(s.priced).toBe("none");
+    expect(s.missing).toEqual(["jev: no price for model jev-9.0.0"]);
+  });
+
+  test("#163: a failed attempt is recorded (with the client's model and an error class only), then rethrown", async () => {
+    const fakeSdk = {
+      TypeSafeClient: class {
+        readonly defaultModel = "jev-latest";
+        async systemOne(): Promise<never> {
+          throw Object.assign(new Error("rate limited: secret-ish detail"), { status: 429 });
+        }
+      },
+    };
+    const usage = new UsageTracker();
+    const call = await realJevClientCall(async () => fakeSdk, usage);
+    await expect(call(judgeArgs)).rejects.toThrow("rate limited");
+    const [c] = usage.calls();
+    expect(c).toMatchObject({ kind: "judgment", ok: false, failure: "http-429", model: "jev-latest", inputTokens: 0 });
+    expect(JSON.stringify(usage.calls())).not.toContain("secret-ish");
+    expect(usage.snapshot()).toMatchObject({ judgments: 1, failedCalls: 1, priced: "none", missing: ["jev: failed attempt(s) reported no usage"] });
   });
 });
 

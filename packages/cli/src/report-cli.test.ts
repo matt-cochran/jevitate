@@ -119,6 +119,33 @@ describe("jevitate report (#139)", () => {
     expect(env.data.markdown).toContain("reproduce: `jevitate verify-fix --result");
   });
 
+  it("#163: sums the runs' persisted usage (Jev + generation) into one total, and flags a partial one", async () => {
+    const usage = (jevUsd: number, generationUsd: number, priced = "full", missing?: string[]) => ({
+      judgments: 10,
+      generations: 2,
+      inputTokens: 1000,
+      outputTokens: 50,
+      jevUsd,
+      generationUsd,
+      totalUsd: jevUsd + generationUsd,
+      priced,
+      ...(missing === undefined ? {} : { missing }),
+    });
+    writeResult("adversarial-2026-09-20T10-00-00-000Z", "clean", { defects: [], usage: usage(0.01, 0.02) });
+    writeResult("adversarial-2026-09-21T10-00-00-000Z", "clean", { defects: [], usage: usage(0.03, 0.04) });
+    const { out } = await cli(["report", "--target", ORIGIN, "--dir", results, "--json"]);
+    const env = JSON.parse(out) as { data: { usage: Record<string, unknown>; markdown: string } };
+    expect(env.data.usage).toMatchObject({ runs: 2, judgments: 20, generations: 4, tokens: 2100, priced: "full" });
+    expect(env.data.usage.totalUsd).toBeCloseTo(0.1, 12);
+    expect(env.data.markdown).toContain("## Model cost");
+    expect(env.data.markdown).toContain("cost $0.1000 (jev $0.0400 + generation $0.0600)");
+
+    writeResult("adversarial-2026-09-22T10-00-00-000Z", "clean", { defects: [], usage: usage(0, 0.01, "partial", ["jev: no price for model jev-9"]) });
+    const partial = JSON.parse((await cli(["report", "--target", ORIGIN, "--dir", results, "--json"])).out) as { data: { usage: Record<string, unknown>; markdown: string } };
+    expect(partial.data.usage).toMatchObject({ runs: 3, priced: "partial", missing: ["jev: no price for model jev-9"] });
+    expect(partial.data.markdown).toContain("(partial: jev: no price for model jev-9)");
+  });
+
   it("prints markdown by default and narrows with --since (a date or a run)", async () => {
     seed();
     const md = await cli(["report", "--target", ORIGIN, "--dir", results]);
@@ -177,6 +204,33 @@ describe("jevitate diff and --baseline (#138)", () => {
     expect(resolveRunRefs(["release-1"], { dirs: [results], baselinesDir: baselines })).toHaveLength(2);
     await expect(tagBaseline({ name: "../evil", runs, dir: baselines })).rejects.toThrow(/invalid baseline tag/);
     expect(readFileSync(join(baselines, "release-1.json"), "utf8")).toContain('"fingerprint": "fp503"');
+  });
+
+  it("#171: --dir walks a runs/<id>/… layout, and --baseline compares only runs of the same scope", async () => {
+    const runs = join(dir, "runs");
+    const put = (sub: string, stem: string, seedPath: string, defects: unknown[]): void => {
+      mkdirSync(join(runs, sub), { recursive: true });
+      writeFileSync(
+        join(runs, sub, `${stem}.result.json`),
+        JSON.stringify({
+          missionOutcome: defects.length > 0 ? "defects-found" : "clean",
+          exitCode: defects.length > 0 ? 1 : 0,
+          result: { target: { seedUrl: `${ORIGIN}${seedPath}`, allowlist: [ORIGIN] }, scope: { routeGlobs: [seedPath, `${seedPath}/**`] }, defects, hangs: [], advisories: [] },
+        }),
+      );
+    };
+    put("adv-settings-r2", "adversarial-2026-09-20T10-00-00-000Z", "/settings", [http503("fp503")]);
+    put("adv-admin-r2", "adversarial-2026-09-20T11-00-00-000Z", "/admin", []);
+    put("r3/adv-settings", "adversarial-2026-09-22T10-00-00-000Z", "/settings", []);
+    put("r3/adv-admin", "adversarial-2026-09-22T11-00-00-000Z", "/admin", [{ ...http503("fp500"), route: "/admin", url: `${ORIGIN}/admin` }]);
+    const { out } = await cli(["report", "--target", ORIGIN, "--dir", runs, "--since", "2026-09-22T00:00:00Z", "--baseline", "last", "--json"]);
+    const env = JSON.parse(out) as { data: { runs: unknown[]; diff: { entries: Array<{ status: string; defect: { fingerprints: string[] } }> } } };
+    expect(env.data.runs).toHaveLength(2);
+    const status = Object.fromEntries(env.data.diff.entries.map((e) => [e.defect.fingerprints[0], e.status]));
+    // `last` picks one earlier adversarial run (the admin one); the settings 503 was not re-checkable against it.
+    expect(status).toMatchObject({ fp500: "new" });
+    const all = await cli(["diff", join(runs, "adv-settings-r2", "adversarial-2026-09-20T10-00-00-000Z.result.json"), join(runs, "r3", "adv-settings", "adversarial-2026-09-22T10-00-00-000Z.result.json"), "--json"]);
+    expect((JSON.parse(all.out) as { data: { summary: Record<string, number> } }).data.summary).toMatchObject({ resolved: 1, flaky: 0 });
   });
 
   it("an unknown run reference is a typed refusal", async () => {

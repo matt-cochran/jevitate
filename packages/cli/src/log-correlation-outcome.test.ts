@@ -17,6 +17,7 @@ function run(opts: { defects?: number; oracleOk: boolean }): ServerLogRuntimeRes
       topMessages: [],
       attachedLines: 0,
       unattributedLines: 0,
+      ignoredLines: 0,
       oracleOk: opts.oracleOk,
     },
     defects: Array.from({ length: opts.defects ?? 0 }, (_, i) => ({

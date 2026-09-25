@@ -73,15 +73,16 @@ import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
-import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult } from "./mission-journal.js";
+import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
-import { serverLogResult, type ServerLogOptions } from "./explore-api.js";
+import { currentUrlSafe, persistStorageState, serverLogResult, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
+import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -392,6 +393,8 @@ const NO_TRANSCRIPT_CAVEAT =
  * a fabricated "clean" report.
  */
 export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReviewResult> {
+  // #163: this review's own share of a (possibly shared) tracker.
+  const runUsage = opts.usage?.scope();
   const minConfidence = resolveMinConfidence(
     opts.minConfidence,
     opts.env ?? process.env,
@@ -444,7 +447,8 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const reportPath = join(outDir, `ux-${iso.replace(/[:.]/g, "-")}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  return { report, reportPath, ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }) };
+  if (runUsage !== undefined) writeUsageSidecar(reportPath, runUsage);
+  return { report, reportPath, ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }) };
 }
 
 /** #134: the artifacts a run writes next to its Recording (`<stem>.recording.json`). */
@@ -591,6 +595,12 @@ export interface RunUsabilityMissionOptions {
    * browser, never to a model or a finding.
    */
   readonly storageState?: string;
+  /**
+   * Writes the browser context's storageState here when the run ends (CLI `--save-storage-state`) —
+   * see `RunExplorationOptions.saveStorageState`'s doc for the full behaviour (written on every exit
+   * path including a crash/kill signal, never over a lost/logged-out session, mode 0600).
+   */
+  readonly saveStorageState?: string;
   readonly nowIso?: () => string;
   /** The target's settle/hang configuration (`~/.jevitate/targets.json` + flags). */
   readonly target?: TargetConfig;
@@ -775,19 +785,29 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
   // Recording — so the killed run's result names the real file, and reports the live step list,
   // the tokens spent so far and the screens already observed.
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #159: see RunExplorationOptions.saveStorageState / runExploration's own doc comment.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
     partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
+    ...(opts.saveStorageState === undefined
+      ? {}
+      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
   });
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
   // chain; a server-log runtime (#142) is inserted in FRONT of it (never replacing it) so every step
-  // still gets its screenshot/flush exactly as before, whether or not --log-source was given.
+  // still gets its screenshot/flush exactly as before, whether or not --log-source was given. #159:
+  // every settled step also refreshes the in-memory storageState snapshot (a cheap no-op when
+  // `--save-storage-state` was not given).
   const journalListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(entry, all);
     journal.onTranscriptEntry(entry, capture.withScreenshots(all));
+    snapshotter.noteSettledStep(currentUrlSafe(session));
   };
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
@@ -964,6 +984,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         recordingStepIndex: h.recordingStepIndex,
         hang: h.signal,
         openSession: freshSessionOpener(portFactory, launch, opts.allowlist),
+        ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
         perceive: {
           ...(opts.target?.settle === undefined ? {} : { settleConfig: opts.target.settle }),
           ...(opts.target?.hangs === undefined ? {} : { hangConfig: opts.target.hangs }),
@@ -997,7 +1018,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...(run.failure === undefined ? {} : { failure: run.failure }),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
       // always advisory, and a `server-log` defect here is treated the same way.
@@ -1018,7 +1039,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         analysisUnavailable: why,
       };
       // Persisted like every other mission's typed result, so MCP `get_mission_result` can read it (#117).
-      return { ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable) };
+      return { ...unavailable, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, unavailable.exitCode, unavailable, runUsage) };
     }
     const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
@@ -1027,13 +1048,15 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
-    return { ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed) };
+    return { ...reviewed, resultPath: writeMissionResult(journal.recordingPath, runOutcome, reviewed.exitCode, reviewed, runUsage) };
   } finally {
     capture.detach();
     disarmKillSwitch();
     // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
+    // #159: reaches this even when the mission above threw — the context is still open here.
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
 }

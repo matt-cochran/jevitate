@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import type { Command } from "commander";
+import { resolve as resolvePath } from "node:path";
 import {
   FsMissionTargetStore,
   MissionTargetRegistry,
@@ -43,6 +46,73 @@ export interface AddMissionTargetInput {
   apiOrigins?: string[];
   baseUrl: string;
   description?: string;
+  /** #175: operator-declared session for queued missions (see `MissionTargetAuthInput`). */
+  auth?: MissionTargetAuthInput;
+}
+
+/**
+ * #175: the auth an operator sets on a mission target — CLI only (`mission target add|update`),
+ * never an MCP argument. `storageState` must exist; paths are made absolute here.
+ */
+export interface MissionTargetAuthInput {
+  storageState?: string;
+  /** `true` = write the rotated session back to `storageState`; a string = another path. */
+  saveStorageState?: true | string;
+  secretFields?: string[];
+  /** `update` only: drop every auth field first. */
+  clear?: boolean;
+}
+
+export class MissionTargetAuthError extends Error {}
+
+/** The CLI flags behind `MissionTargetAuthInput` (`mission target add|update`). */
+export interface MissionTargetAuthFlags {
+  storageState?: string;
+  saveStorageState?: true | string;
+  secretField?: string[];
+}
+
+/** Adds `--storage-state`, `--save-storage-state [file]` and `--secret-field` (repeatable). */
+export function withMissionTargetAuthFlags(cmd: Command): Command {
+  return cmd
+    .option("--storage-state <file>", "#175: Playwright storageState JSON queued missions on this target start from (must exist; wins over targets.json)")
+    .option(
+      "--save-storage-state [file]",
+      "#175: write the rotated session back after each queued mission — to --storage-state (no value) or to <file>; for rotating refresh tokens",
+    )
+    .option(
+      "--secret-field <spec>",
+      "#175: '<label|testId|type|id|name>=<value>=env:<VAR>' typed by queued goal missions (repeatable); the value is read from the environment at run time",
+      (v: string, prev: string[] | undefined) => [...(prev ?? []), v],
+    );
+}
+
+/** The auth input the flags ask for, or `undefined` when none was given. */
+export function missionTargetAuth(f: MissionTargetAuthFlags): MissionTargetAuthInput | undefined {
+  if (f.storageState === undefined && f.saveStorageState === undefined && (f.secretField ?? []).length === 0) return undefined;
+  return {
+    ...(f.storageState === undefined ? {} : { storageState: f.storageState }),
+    ...(f.saveStorageState === undefined ? {} : { saveStorageState: f.saveStorageState }),
+    ...((f.secretField ?? []).length === 0 ? {} : { secretFields: f.secretField }),
+  };
+}
+
+function applyAuth(target: MissionTarget, auth: MissionTargetAuthInput | undefined): MissionTarget {
+  if (auth === undefined) return target;
+  const base: MissionTarget = { ...target };
+  if (auth.clear === true) {
+    delete base.storageState;
+    delete base.saveStorageState;
+    delete base.secretFields;
+  }
+  if (auth.storageState !== undefined) {
+    const abs = resolvePath(auth.storageState);
+    if (!existsSync(abs)) throw new MissionTargetAuthError(`storage state not found: ${abs}`);
+    base.storageState = abs;
+  }
+  if (auth.saveStorageState !== undefined) base.saveStorageState = auth.saveStorageState === true ? true : resolvePath(auth.saveStorageState);
+  if (auth.secretFields !== undefined && auth.secretFields.length > 0) base.secretFields = [...auth.secretFields];
+  return base;
 }
 
 /**
@@ -58,18 +128,34 @@ export async function addMissionTarget(
   input: AddMissionTargetInput,
   nowIso: () => string = () => new Date().toISOString(),
 ): Promise<MissionTarget> {
-  const target: MissionTarget = {
-    id: input.id,
-    name: input.name,
-    authorizedOrigin: input.authorizedOrigin,
-    ...(input.apiOrigins !== undefined && input.apiOrigins.length > 0 ? { apiOrigins: [...input.apiOrigins] } : {}),
-    baseUrl: input.baseUrl,
-    ...(input.description !== undefined ? { description: input.description } : {}),
-    promoted: false,
-    createdAtIso: nowIso(),
-  };
+  const target: MissionTarget = applyAuth(
+    {
+      id: input.id,
+      name: input.name,
+      authorizedOrigin: input.authorizedOrigin,
+      ...(input.apiOrigins !== undefined && input.apiOrigins.length > 0 ? { apiOrigins: [...input.apiOrigins] } : {}),
+      baseUrl: input.baseUrl,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      promoted: false,
+      createdAtIso: nowIso(),
+    },
+    input.auth,
+  );
   await ctx.registry.put(target);
   return target;
+}
+
+/**
+ * #175: sets (or clears) a registered target's operator-declared auth. Keeps its promotion state —
+ * auth is not part of what promotion approved (origins are, and they cannot change here). An
+ * unknown id is refused with `UnknownMissionTargetError`.
+ */
+export async function updateMissionTargetAuth(ctx: MissionTargetContext, id: string, auth: MissionTargetAuthInput): Promise<MissionTarget> {
+  const existing = await ctx.store.get(id);
+  if (!existing) throw new UnknownMissionTargetError(`unknown mission target '${id}'`);
+  const next = applyAuth(existing, auth);
+  await ctx.registry.put(next);
+  return next;
 }
 
 /**

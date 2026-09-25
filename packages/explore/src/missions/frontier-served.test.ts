@@ -65,6 +65,26 @@ beforeAll(async () => {
             `<button onclick="this.dataset.n='1'">Archive</button></main>`,
         );
         return;
+      case "/toggle":
+        // #160: a Collapse/Expand toggle whose OTHER effect (the inner control's name) changes a
+        // little more each time it opens — mirrors "each toggle produces a 'new' state signature"
+        // (the issue's own description): the EXPANDED state's fingerprint is never quite the same
+        // twice, so a mission that (like the old code) never recognises "the same toggle, again"
+        // by CONTROL IDENTITY — only by exact state-fingerprint equality — keeps re-queuing and
+        // re-popping "Collapse details" from every one of these near-duplicate states.
+        ok(
+          `<main>` +
+            `<button onclick="` +
+            `var collapsed = this.textContent.indexOf('Expand') === 0;` +
+            `this.textContent = collapsed ? 'Collapse details' : 'Expand details';` +
+            `if (collapsed) { window.__n = (window.__n||0) + 1; document.getElementById('inner').textContent = 'Inner action ' + window.__n; }` +
+            `document.getElementById('d').hidden = !collapsed;` +
+            `">Expand details</button>` +
+            `<div id="d" hidden><button id="inner">Inner action 0</button></div>` +
+            `<button onclick="this.dataset.x='1'">Other action</button>` +
+            `</main>`,
+        );
+        return;
       case "/panels":
         ok(
           `<main>` +
@@ -242,6 +262,50 @@ describe("frontier missions — global nav is tried last, and sparingly (#115)",
         expect(names.slice(0, 3).sort()).toEqual(["Archive", "Export", "Refresh"]);
         expect(names.filter(isNav).length / names.length).toBeLessThanOrEqual(0.2);
         expect(result.transcript.some((e) => /chrome=true/.test(e.reason ?? "") && e.actOk)).toBe(false);
+      });
+    },
+    60_000,
+  );
+});
+
+describe("frontier missions — a toggle is exercised once in each direction, then dropped (#160)", () => {
+  it(
+    "--feature: Collapse/Expand never dominates the run — at most one action each way, and the run goes on to exercise the rest of the page",
+    async () => {
+      await withSession(async (session, actor) => {
+        const result = await runFeatureMission({
+          page: session.page,
+          actor,
+          seedUrl: `${origin}/toggle`,
+          allowlist: [origin],
+          scope: { name: "toggle the details panel", originAllowlist: [origin], routeGlobs: ["/toggle"] },
+          bounds: { maxActions: 12 },
+        });
+        const names = acted(result.transcript);
+        const toggleClicks = names.filter((n) => n === "Expand details" || n === "Collapse details");
+        // Old bug: most of the run's action budget oscillated Collapse/Expand. Fixed: each
+        // direction is exercised at most once, ever — from whichever state re-offers it.
+        expect(toggleClicks.length).toBeLessThanOrEqual(2);
+        // The run went on to exercise what the toggle actually reveals, and the ordinary control —
+        // proof this isn't just an early, accidental stop.
+        expect(names).toContain("Inner action 1");
+        expect(names).toContain("Other action");
+        expect(result.outcome).toBe("exhausted");
+      });
+    },
+    60_000,
+  );
+
+  it(
+    "coverage: the same toggle does not dominate the coverage frontier either (shared Frontier class)",
+    async () => {
+      await withSession(async (session, actor) => {
+        const result = await coverage(session, actor, { seedUrl: `${origin}/toggle`, bounds: { maxActions: 12, maxDecisions: 20 } });
+        const names = acted(result.transcript);
+        const toggleClicks = names.filter((n) => n === "Expand details" || n === "Collapse details");
+        expect(toggleClicks.length).toBeLessThanOrEqual(2);
+        expect(names).toContain("Inner action 1");
+        expect(names).toContain("Other action");
       });
     },
     60_000,

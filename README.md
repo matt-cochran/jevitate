@@ -159,7 +159,9 @@ forbidden. An agent can ask for a mission, but it never drives the page. See
 - **Only origins you authorize**, checked before the browser opens and during the run.
 - **Bounded**: hard action and decision ceilings, plus a no-progress detector, on every autonomous loop.
 - **No dangerous clicks by default**: sign-out, delete, revoke and paid controls are refused
-  unless you pass `--allow-destructive`. Every write request a run fires is listed.
+  unless you pass `--allow-destructive`. Find-out goals are read-only unless you pass
+  `--allow-writes`, and hang replays never re-send a paid write. Every write request a run
+  fires is listed.
 - **Secrets never reach a model**: a redaction guard that fails closed, and bound secrets typed
   by code.
 - **Page text is data, never instructions**: model prompts carry a prompt-injection guard.
@@ -194,7 +196,8 @@ model only sees `«secret:VAR»`. Details: [docs/authentication.md](./docs/authe
 Jevitate is pre-1.0 and under active development. Known limitations worth knowing:
 
 - Goal and usability runs need API keys (`--real`), and they cost money per model call. Runs
-  report `usage`, but Jev calls are priced only if you configure a unit price
+  report `usage` with the full cost of Jev and generation calls; a model with no known price
+  makes the total `partial` until you configure one
   ([operations](./docs/operations.md#usage-accounting)).
 - Stateful and conversational runs against one account must run sequentially
   ([why](./docs/authentication.md)).

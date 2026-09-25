@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { UsageTracker, type UsageCounts } from "@jevitate/ai-core";
 import {
   MultiRunArgsError,
   diffPersonas,
@@ -210,6 +211,49 @@ describe("plan and orchestration", () => {
       const onDisk = JSON.parse(readFileSync(result.resultPath, "utf8")) as { complete: boolean };
       expect(onDisk.complete).toBe(true);
       expect(JSON.parse(readFileSync(join(dir, "b", "run-2", "run.envelope.json"), "utf8"))).toMatchObject({ ok: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("multi-run usage (#163)", () => {
+  it("the aggregate's usage equals the sum of its runs; a run with no usage makes it partial", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-usage-"));
+    const perRun: UsageCounts[] = [1, 2, 3].map((n) => {
+      const t = new UsageTracker();
+      for (let i = 0; i < n; i++) t.recordJudgment({ inputTokens: 1_000_000, outputTokens: 0, model: "jev-1.13.0" });
+      t.recordGeneration({ inputTokens: 100, outputTokens: 10, usd: 0.01 * n, model: "openai/gpt-4o-mini", task: "form.value" });
+      return JSON.parse(JSON.stringify(t.snapshot())) as UsageCounts;
+    });
+    try {
+      let i = 0;
+      const result = await runMultiRun({
+        plan: { repeat: 3, minAgreement: 2, personas: null },
+        strategy: "adversarial",
+        outDir: dir,
+        runOnce: async (): Promise<RunEnvelope> => ({ ok: true, data: { outcome: "clean", missionOutcome: "clean", exitCode: 0, usage: perRun[i++] } }),
+      });
+      const sum = (f: (u: UsageCounts) => number): number => perRun.reduce((a, u) => a + f(u), 0);
+      expect(result.usage).toMatchObject({ runs: 3, judgments: 6, generations: 3, priced: "full" });
+      expect(result.usage.tokens).toBe(sum((u) => u.inputTokens + u.outputTokens));
+      expect(result.usage.jevUsd).toBeCloseTo(sum((u) => u.jevUsd ?? 0), 12);
+      expect(result.usage.generationUsd).toBeCloseTo(sum((u) => u.generationUsd ?? 0), 12);
+      expect(result.usage.totalUsd).toBeCloseTo(sum((u) => u.totalUsd ?? 0), 12);
+      expect(result.usage.totalUsd).toBeCloseTo(6 * 0.042 + 0.06, 12);
+      const onDisk = JSON.parse(readFileSync(result.resultPath, "utf8")) as { usage: { totalUsd: number } };
+      expect(onDisk.usage.totalUsd).toBeCloseTo(result.usage.totalUsd ?? NaN, 12);
+
+      const crashed = await runMultiRun({
+        plan: { repeat: 2, minAgreement: 1, personas: null },
+        strategy: "adversarial",
+        outDir: join(dir, "second"),
+        runOnce: async ({ outDir }): Promise<RunEnvelope> =>
+          outDir.endsWith("run-1")
+            ? { ok: true, data: { outcome: "clean", missionOutcome: "clean", exitCode: 0, usage: perRun[0] } }
+            : { ok: false, error: { code: "E_EXPLORE_RUN", message: "browser died" } },
+      });
+      expect(crashed.usage).toMatchObject({ runs: 2, judgments: 1, priced: "partial", unreportedRuns: 1, missing: ["1 run(s) reported no usage"] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

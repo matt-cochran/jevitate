@@ -85,6 +85,16 @@ function withScheme(scheme: string | undefined, value: string, fallback: string)
 }
 
 /**
+ * A storageState file's `localStorage[key]` for `origin` (or null) — the same lookup `authHeaders`
+ * does for its `localStorage` source, exposed on its own for #173: an observer's cross-actor probe
+ * authenticates from its OWN storageState file this way, with no browser and no navigation needed.
+ */
+export function localStorageValue(storageStatePath: string, origin: string, key: string): string | null {
+  const state = readStorageState(storageStatePath);
+  return state.origins.find((o) => o.origin === origin)?.localStorage.find((i) => i.name === key)?.value ?? null;
+}
+
+/**
  * The header(s) `auth` adds to a request to `url`. Throws `FixtureAuthError` (naming the source,
  * never a value) when the source is missing — a fixture never silently runs unauthenticated.
  */

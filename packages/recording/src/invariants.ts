@@ -82,8 +82,15 @@ export interface DomObservable {
    * state (#148) — see `DomRead`.
    */
   read?: DomRead;
-  /** Parse the first number out of what was read (`"≈ 1,240 credits"` → 1240). */
-  number?: boolean;
+  /**
+   * Parse the number(s) out of what was read (`"≈ 1,240 credits"` → 1240; a Unicode minus U+2212 and
+   * thousands separators are handled). `true` reads the FIRST number (index 0, the default); `{
+   * index }` reads the number at that 0-based position (negative counts from the end, so `-1` is the
+   * LAST) — e.g. `"≈ 30–90 credits"` with `{ index: 1 }` reads 90, a range's upper bound; `"all"`
+   * reads every number as a LIST observable (#147/#148's list-valued reads) — a scalar consumer (like
+   * #150's `BudgetMonitor`) treats it as unreadable, same as a `[*]` network/probe read.
+   */
+  number?: boolean | "all" | { readonly index: number };
   /** When the element is absent the value is `null` (instead of "could not be read"). */
   optional?: boolean;
 }
@@ -735,7 +742,7 @@ const DomObservableSchema = z
         z.object({ attr: z.string().regex(ATTR_NAME_RE) }).strict(),
       ])
       .optional(),
-    number: z.boolean().optional(),
+    number: z.union([z.boolean(), z.literal("all"), z.object({ index: z.number().int() }).strict()]).optional(),
     optional: z.boolean().optional(),
   })
   .strict()
@@ -829,6 +836,20 @@ const BudgetDeclarationSchema = z
   })
   .strict();
 
+/**
+ * The action-op vocabulary `when.op` / `capture.*.after.op` may name (#124, #176): every op the
+ * explore engine can gate an invariant around (`packages/explore/src/actions.ts` `OPS`), minus the
+ * loop-control pseudo-ops (`done`, `report`, `blocked`, `edit_text` — never the op an app-declared
+ * invariant is written against). An unknown name (a natural but unsupported guess like `"navigate"`
+ * or `"scroll"`) used to validate fine and then never fire (#176) — now it is refused up front.
+ */
+export const ACTION_OPS = ["click", "type", "send", "select", "upload", "scroll_up", "scroll_down", "wait", "reload"] as const;
+export type ActionOp = (typeof ACTION_OPS)[number];
+
+const OpSchema = z.enum(ACTION_OPS, {
+  error: (issue) => `unknown op ${JSON.stringify(issue.input)} (expected one of ${ACTION_OPS.join(", ")})`,
+});
+
 const WhenSchema = z
   .object({
     after: z
@@ -837,7 +858,7 @@ const WhenSchema = z
       .optional(),
     control: z.object({ name: TextPatternSchema }).strict().optional(),
     route: z.string().min(1).optional(),
-    op: z.array(z.string().min(1)).min(1).optional(),
+    op: z.array(OpSchema).min(1).optional(),
   })
   .strict();
 
@@ -854,7 +875,7 @@ const CaptureWhenSchema = z
   .object({
     control: z.object({ name: TextPatternSchema }).strict().optional(),
     route: z.string().min(1).optional(),
-    op: z.array(z.string().min(1)).min(1).optional(),
+    op: z.array(OpSchema).min(1).optional(),
   })
   .strict()
   .refine((w) => w.control !== undefined || w.route !== undefined || w.op !== undefined, "after names at least one of control, route or op");

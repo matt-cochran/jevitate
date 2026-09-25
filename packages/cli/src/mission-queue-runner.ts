@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { GenerationPort, JudgmentPort, UsageTracker } from "@jevitate/ai-core";
 import { validateInvariantSpec } from "@jevitate/recording";
@@ -17,10 +18,13 @@ import {
   runFeatureCliMission,
   type ServerLogOptions,
 } from "./explore-api.js";
+import { parseSecretField, secretFieldSecrets, type SecretField } from "@jevitate/explore";
 import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
-import { parseLogDefectSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
+import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 
 /**
  * The queue drain behind `jevitate mission run` (#117). `queue_exploration` (MCP) only ENQUEUES —
@@ -180,6 +184,57 @@ export interface RealExecutorOptions {
    * default for the target's origin. Omitted or empty ⇒ no log sources for any queued mission.
    */
   readonly targets?: Readonly<Record<string, TargetConfig>>;
+  /** Where a target's `secretFields` read their values (default `process.env`). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}
+
+/** The operator-declared auth for one queued mission's target (#175). */
+interface QueuedAuth {
+  readonly storageState?: string;
+  /** Where the rotated session is written back after the mission (#82/#159 machinery). */
+  readonly saveStorageState?: string;
+  readonly secretFields: readonly SecretField[];
+  readonly fixtures?: string;
+}
+
+/**
+ * #175: a queued mission never carries a credential (a `QueuedMission` cannot name a path or a
+ * secret), so its session is only ever the OPERATOR's: the mission target record (`mission target
+ * add|update --storage-state/--save-storage-state/--secret-field`) first, then the
+ * `~/.jevitate/targets.json` entry for the target's origin — field by field. `saveStorageState: true`
+ * writes back to the effective `storageState`, so the next queued mission (they run one at a time)
+ * starts from the rotated session. Throws — the caller records a `failed` mission — when the
+ * declared file is missing or a variable is unset (naming the path or variable, never a value);
+ * never silently runs logged out.
+ */
+function queuedAuth(
+  target: MissionTarget,
+  targets: Readonly<Record<string, TargetConfig>> | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+): QueuedAuth {
+  let config: TargetConfig = {};
+  if (targets !== undefined) {
+    try {
+      config = resolveTargetConfig(targets, new URL(target.baseUrl).origin);
+    } catch {
+      config = {};
+    }
+  }
+  const fromRecord = target.storageState !== undefined;
+  const storageState = target.storageState ?? config.storageState;
+  if (storageState !== undefined && !existsSync(storageState)) {
+    throw new Error(`${fromRecord ? `mission target ${target.id}` : `targets.json entry for ${target.authorizedOrigin}`}: storageState not found: ${storageState}`);
+  }
+  const save = target.saveStorageState ?? config.saveStorageState;
+  if (save === true && storageState === undefined) throw new Error(`mission target ${target.id}: saveStorageState needs a storageState to write back to`);
+  const saveStorageState = save === true ? storageState : save;
+  const secretFields = (target.secretFields ?? config.secretFields ?? []).map((s) => parseSecretField(s, "value", env));
+  return {
+    ...(storageState === undefined ? {} : { storageState }),
+    ...(saveStorageState === undefined ? {} : { saveStorageState }),
+    secretFields,
+    ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
+  };
 }
 
 /** The operator-declared `--log-source`/`--log-defect` for one origin, already parsed (#142 follow-up).
@@ -200,6 +255,8 @@ function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig
     sources: parseLogSourceSpecs(config.logSources ?? [], allowLogCmd),
     logDefect: parseLogDefectSpecs(config.logDefect ?? []),
     allowLogCmd,
+    quietOk: config.logQuietOk ?? [],
+    logIgnore: parseLogIgnoreSpecs(config.logIgnore ?? []),
   };
 }
 
@@ -224,6 +281,13 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     const routeGlobs = mission.route === undefined ? [] : [mission.route];
     const serverLog = serverLogFromTargetConfig(opts.targets, target.baseUrl);
     const withServerLog = serverLog === undefined ? {} : { serverLog };
+    // #175: the operator's session for this target (never the request's): every strategy starts
+    // from its storage state; a goal mission also types its secret fields and runs its fixtures.
+    const auth = queuedAuth(target, opts.targets, opts.env ?? process.env);
+    const withStorageState = {
+      ...(auth.storageState === undefined ? {} : { storageState: auth.storageState }),
+      ...(auth.saveStorageState === undefined ? {} : { saveStorageState: auth.saveStorageState }),
+    };
     // #149: per-mission viewport/device emulation. `MissionRequestSchema` already refused an
     // unknown --device / viewport+device together at enqueue time; `resolveEmulation` here is a
     // second, defense-in-depth check — refused BEFORE any browser opens — since a device could in
@@ -248,6 +312,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...invariants,
         ...withServerLog,
         ...withEmulation,
+        ...withStorageState,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -268,6 +333,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...invariants,
         ...withServerLog,
         ...withEmulation,
+        ...withStorageState,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -285,23 +351,52 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...invariants,
         ...withServerLog,
         ...withEmulation,
+        ...withStorageState,
       });
       return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
     }
-    const r = await runExploration({
-      ...common,
-      url: target.baseUrl,
-      goal: mission.goal!,
-      ...(mission.successAssertion === undefined ? {} : { successAssertion: mission.successAssertion }),
-      allowlist,
-      judge,
-      gen,
-      usage,
-      bounds,
-      ...invariants,
-      ...withServerLog,
-      ...withEmulation,
-    });
-    return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
+    // A goal mission runs the target's fixtures around it (authenticated from the same session and
+    // secret fields; validated before any browser) — as `explore --fixtures` does on the CLI.
+    const fx: MissionFixtures | undefined = buildMissionFixtures(
+      {},
+      {
+        allowlist,
+        baseUrl: target.baseUrl,
+        ...(auth.storageState === undefined ? {} : { storageState: auth.storageState }),
+        secretFields: auth.secretFields,
+        secrets: secretFieldSecrets(auth.secretFields),
+        ...(auth.fixtures === undefined ? {} : { targetFixtures: auth.fixtures }),
+      },
+    );
+    let goal = mission.goal!;
+    checkSetupRefs({ goal }, fx);
+    try {
+      // A failed setup throws (`fixture setup failed: …`, redacted): the mission is recorded
+      // `failed` and never runs on unknown state.
+      if (fx !== undefined) {
+        await fx.setup();
+        goal = substituteSetupRefs(goal, fx.bindings(), { where: "goal" });
+      }
+      const r = await runExploration({
+        ...common,
+        url: target.baseUrl,
+        goal,
+        ...(mission.successAssertion === undefined ? {} : { successAssertion: mission.successAssertion }),
+        allowlist,
+        judge,
+        gen,
+        usage,
+        bounds,
+        ...invariants,
+        ...withServerLog,
+        ...withEmulation,
+        ...withStorageState,
+        ...(auth.secretFields.length === 0 ? {} : { secretFields: auth.secretFields }),
+        ...(fx === undefined ? {} : { fixtures: fx }),
+      });
+      return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
+    } finally {
+      await fx?.restore();
+    }
   };
 }
