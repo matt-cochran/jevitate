@@ -1,7 +1,7 @@
 {
   "name": "@jevitate/cli",
   "version": "0.1.0",
-  "description": "Jevitate CLI — author, run, and orchestrate browser-automation Journeys from the command line.",
+  "description": "Autonomous browser testing that turns discovered bugs into deterministic regression tests: explore a web app in a real browser, confirm findings with evidence, and replay them as regressions in CI.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -13,15 +13,19 @@
   "bugs": "https://github.com/matt-cochran/jevitate/issues",
   "author": "Matt Cochran",
   "keywords": [
+    "browser-testing",
     "browser-automation",
+    "autonomous-testing",
+    "regression-testing",
     "testing",
+    "test-automation",
     "e2e",
+    "e2e-testing",
     "playwright",
-    "screenplay",
-    "journeys",
     "exploration",
     "usability",
     "mcp",
+    "ai-agents",
     "cli",
     "jevitate"
   ],

@@ -1,7 +1,7 @@
 {
   "name": "jevitate",
   "version": "0.1.0",
-  "description": "Bare-name alias for @jevitate/cli — installs the `jevitate` command.",
+  "description": "Bare-name alias for @jevitate/cli, autonomous browser testing that turns discovered bugs into deterministic regression tests. Installs the `jevitate` command.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -12,7 +12,7 @@
   "homepage": "https://jevitate.com",
   "bugs": "https://github.com/matt-cochran/jevitate/issues",
   "author": "Matt Cochran",
-  "keywords": ["jevitate", "browser-automation", "testing", "cli"],
+  "keywords": ["jevitate", "browser-testing", "browser-automation", "regression-testing", "testing", "cli"],
   "engines": {
     "node": ">=20"
   },
