@@ -23,7 +23,8 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
 import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
-import { decide, judgeGoalMet } from "./decide.js";
+import { decide, judgeGoalCompletion } from "./decide.js";
+import { AuthProgress } from "./auth-completion.js";
 import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
 import {
   type SecretField,
@@ -446,6 +447,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let answer: RunAnswer | undefined;
   /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
   const goalChecked = new Set<string>();
+  /** The run's own sign-in steps and the sign-in completion code observes on each state (#188). */
+  const auth = new AuthProgress();
+  const isBound = (c: Control): boolean => boundSecretField(c, cfg.secretFields) !== null;
   let idleSteps = 0;
   let idleSince: number | null = null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
@@ -1019,6 +1023,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       ): void => {
         const op = extra.op ?? decision.op;
         const target = extra.control === undefined ? decision.control : extra.control;
+        if (op === "type" || op === "send") auth.noteTyped(target, snap.url, actOk, target !== null && isBound(target));
         if (actOk && target !== null && (op === "click" || op === "type" || op === "select")) {
           const steps = nextFrom.get(snap.signature) ?? [];
           // The first visit's steps only: a return must not overwrite what the state led to.
@@ -1049,6 +1054,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // Grounds "the goal is met on this page" (guardrail #4): typed-but-unsent text, the mission's
       // independent success condition, or — without one — an advisory goal judgment on the visible
       // page (the run's own messages removed) and its status text, which must clear the threshold.
+      // A run that typed sign-in credentials also carries what code observed about the sign-in
+      // (#188): shown to the judgment as a trusted fact, and weighed by `groundDone`.
+      const signIn = auth.signal(snap, isBound);
       const groundGoal = async (): Promise<{
         verdict: ReturnType<typeof groundDone>;
         judgments: Record<string, { value: boolean; probability: number }> | undefined;
@@ -1056,6 +1064,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const unsubmittedLabels = [...unsent.pending().values()].map((p) => p.label);
         let successCheck: boolean | undefined;
         let goalMet: number | null | undefined;
+        let goalIsSignIn: number | null = null;
         if (unsubmittedLabels.length === 0) {
           if (cfg.successCheck !== undefined) {
             successCheck = await cfg.successCheck().then(
@@ -1064,39 +1073,44 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             );
           } else {
             const pageText = withoutAuthored(await readPageText(page), conversation.sent);
-            goalMet = await judgeGoalMet(cfg.judge, {
+            const judged = await judgeGoalCompletion(cfg.judge, {
               goal: cfg.goal,
               url: snap.url,
               pageText,
               history,
               secrets,
               ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
-            }).catch(() => null);
+              ...(signIn === null ? {} : { signInFacts: signIn.facts }),
+            }).catch(() => ({ goalMet: null, goalIsSignIn: null }));
+            goalMet = judged.goalMet;
+            goalIsSignIn = judged.goalIsSignIn;
           }
         }
         const verdict = groundDone({
           unsubmitted: unsubmittedLabels,
           ...(successCheck === undefined ? {} : { successCheck }),
           ...(goalMet === undefined ? {} : { goalMetProbability: goalMet }),
+          ...(signIn === null || goalMet === undefined ? {} : { signIn: { completed: signIn.completed, goalIsSignIn } }),
         });
         // `value` is code's reading of the probability (the acceptance threshold), not the port's
         // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).
-        const judgments =
-          goalMet === undefined || goalMet === null
-            ? undefined
-            : { goalMet: { value: goalMet >= GOAL_MET_THRESHOLD, probability: goalMet } };
-        return { verdict, judgments };
+        const judgments: Record<string, { value: boolean; probability: number }> = {};
+        if (goalMet !== undefined && goalMet !== null) judgments.goalMet = { value: goalMet >= GOAL_MET_THRESHOLD, probability: goalMet };
+        if (goalIsSignIn !== null) judgments.goalIsSignIn = { value: goalIsSignIn >= GOAL_MET_THRESHOLD, probability: goalIsSignIn };
+        return { verdict, judgments: Object.keys(judgments).length === 0 ? undefined : judgments };
       };
 
       // The decision's advisory "already met?" signal (#91): the loop used to act past a met goal
       // because the model never proposed `done`. Code grounds it BEFORE acting — once per page
       // state — and stops `done` only on the same grounded verdict a proposed `done` needs.
+      // Also grounded (#188): a model `blocked` — giving up on a page that already shows the goal met
+      // must not end the run incomplete — and a state where code observed the run's sign-in complete.
       if (
-        decision.goalMet !== null &&
-        decision.goalMet >= GOAL_CHECK_TRIGGER &&
+        (decision.op === "blocked" ||
+          signIn?.completed === true ||
+          (decision.goalMet !== null && decision.goalMet >= GOAL_CHECK_TRIGGER)) &&
         decision.op !== "done" &&
         decision.op !== "report" &&
-        decision.op !== "blocked" &&
         !goalChecked.has(snap.signature)
       ) {
         goalChecked.add(snap.signature);
@@ -1111,7 +1125,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               strategy: "goal-check",
               judgments: {
                 ...(judgments ?? {}),
-                goalAlreadyMet: { value: true, probability: decision.goalMet },
+                ...(decision.goalMet === null
+                  ? {}
+                  : { goalAlreadyMet: { value: decision.goalMet >= GOAL_CHECK_TRIGGER, probability: decision.goalMet } }),
               },
             },
           );

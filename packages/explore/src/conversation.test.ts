@@ -89,6 +89,22 @@ describe("groundDone — a proposed done is weighed by code", () => {
     expect(groundDone({ unsubmitted: [], goalMetProbability: null })).toMatchObject({ accept: false, reason: /could not be judged/ });
     expect(groundDone({ unsubmitted: [] })).toMatchObject({ accept: false });
   });
+
+  it("#188: code-observed sign-in completion proves a sign-in-only goal — never without the observation, the scope, or over an oracle", () => {
+    const signedIn = { completed: true, goalIsSignIn: 0.9 };
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.3, signIn: signedIn })).toEqual({
+      accept: true,
+      outcome: { status: "completed", verifiedBy: "sign-in-signals" },
+    });
+    // Code did not observe the sign-in complete (still on the 2FA form): the model's scope alone is nothing.
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.3, signIn: { completed: false, goalIsSignIn: 0.99 } })).toMatchObject({ accept: false });
+    // The goal asks for more than signing in, or the scope is unavailable.
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.3, signIn: { completed: true, goalIsSignIn: 0.2 } })).toMatchObject({ accept: false });
+    expect(groundDone({ unsubmitted: [], goalMetProbability: null, signIn: { completed: true, goalIsSignIn: null } })).toMatchObject({ accept: false });
+    // Unsent text and an independent success condition still decide first.
+    expect(groundDone({ unsubmitted: ["Code"], goalMetProbability: 0.3, signIn: signedIn })).toMatchObject({ accept: false });
+    expect(groundDone({ unsubmitted: [], successCheck: false, signIn: signedIn })).toMatchObject({ accept: false });
+  });
 });
 
 describe("messages and options", () => {

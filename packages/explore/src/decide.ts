@@ -286,24 +286,59 @@ export async function judgeGoalMet(
     readonly pageStatus?: string;
   },
 ): Promise<number | null> {
+  return (await judgeGoalCompletion(judge, input)).goalMet;
+}
+
+/** The advisory "is the WHOLE goal signing in?" head, asked only after code-observed sign-in steps (#188). */
+export const GOAL_IS_SIGN_IN_QUESTION = "goalIsOnlyToSignIn";
+
+export const GOAL_IS_SIGN_IN_INSTRUCTIONS =
+  "Is the WHOLE goal to sign in / log in / authenticate (including any two-factor or verification-code " +
+  "step), with nothing further to do in the app once signed in? Answer from the goal's wording only. Not " +
+  "only signing in: the goal also asks to create, change, find, send or check something after signing in.";
+
+/**
+ * `judgeGoalMet`, plus (#188) the run's code-observed sign-in facts: shown to the goal judgment as a
+ * trusted line — the page text of a signed-in home page rarely says "you are signed in" — and, in the
+ * same round trip, the advisory scope question `GOAL_IS_SIGN_IN_QUESTION`. Both answers are advisory;
+ * `groundDone` weighs them against what code observed.
+ */
+export async function judgeGoalCompletion(
+  judge: JudgmentPort,
+  input: {
+    readonly goal: string;
+    readonly url: string;
+    readonly pageText: string;
+    readonly history: readonly string[];
+    readonly secrets?: readonly string[];
+    readonly pageStatus?: string;
+    /** Code-observed sign-in facts (./auth-completion.ts), when the run typed sign-in credentials. */
+    readonly signInFacts?: string;
+  },
+): Promise<{ goalMet: number | null; goalIsSignIn: number | null }> {
   const secrets = input.secrets ?? [];
   const state = buildJudgmentState({
     goal: input.goal,
     url: input.url,
     controls: [
       PROMPT_INJECTION_GUARD,
+      ...(input.signInFacts === undefined ? [] : [`SIGN-IN (observed by code, trusted): ${input.signInFacts}`]),
       ...(input.pageStatus === undefined || input.pageStatus === "" ? [] : [`PAGE STATUS (untrusted): ${input.pageStatus}`]),
       `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
     ],
     history: input.history,
     secrets,
   });
-  const answers = await judge.systemOne({
-    state,
-    questions: { [GOAL_MET_QUESTION]: { kind: "noul", instructions: GOAL_MET_INSTRUCTIONS } },
-  });
-  const a = answers[GOAL_MET_QUESTION];
-  if (a?.kind !== "noul" || !Number.isFinite(a.probability)) return null;
+  const questions: Record<string, Question> = { [GOAL_MET_QUESTION]: { kind: "noul", instructions: GOAL_MET_INSTRUCTIONS } };
+  if (input.signInFacts !== undefined) {
+    questions[GOAL_IS_SIGN_IN_QUESTION] = { kind: "noul", instructions: GOAL_IS_SIGN_IN_INSTRUCTIONS };
+  }
+  assertNoSecretInPayload(questions, secrets);
+  const answers = await judge.systemOne({ state, questions });
   // `probability` is P(yes) — the port's noul contract.
-  return a.probability;
+  const p = (name: string): number | null => {
+    const a = answers[name];
+    return a?.kind === "noul" && Number.isFinite(a.probability) ? a.probability : null;
+  };
+  return { goalMet: p(GOAL_MET_QUESTION), goalIsSignIn: input.signInFacts === undefined ? null : p(GOAL_IS_SIGN_IN_QUESTION) };
 }
