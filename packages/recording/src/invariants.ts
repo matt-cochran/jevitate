@@ -836,6 +836,20 @@ const BudgetDeclarationSchema = z
   })
   .strict();
 
+/**
+ * The action-op vocabulary `when.op` / `capture.*.after.op` may name (#124, #176): every op the
+ * explore engine can gate an invariant around (`packages/explore/src/actions.ts` `OPS`), minus the
+ * loop-control pseudo-ops (`done`, `report`, `blocked`, `edit_text` — never the op an app-declared
+ * invariant is written against). An unknown name (a natural but unsupported guess like `"navigate"`
+ * or `"scroll"`) used to validate fine and then never fire (#176) — now it is refused up front.
+ */
+export const ACTION_OPS = ["click", "type", "send", "select", "upload", "scroll_up", "scroll_down", "wait", "reload"] as const;
+export type ActionOp = (typeof ACTION_OPS)[number];
+
+const OpSchema = z.enum(ACTION_OPS, {
+  error: (issue) => `unknown op ${JSON.stringify(issue.input)} (expected one of ${ACTION_OPS.join(", ")})`,
+});
+
 const WhenSchema = z
   .object({
     after: z
@@ -844,7 +858,7 @@ const WhenSchema = z
       .optional(),
     control: z.object({ name: TextPatternSchema }).strict().optional(),
     route: z.string().min(1).optional(),
-    op: z.array(z.string().min(1)).min(1).optional(),
+    op: z.array(OpSchema).min(1).optional(),
   })
   .strict();
 
@@ -861,7 +875,7 @@ const CaptureWhenSchema = z
   .object({
     control: z.object({ name: TextPatternSchema }).strict().optional(),
     route: z.string().min(1).optional(),
-    op: z.array(z.string().min(1)).min(1).optional(),
+    op: z.array(OpSchema).min(1).optional(),
   })
   .strict()
   .refine((w) => w.control !== undefined || w.route !== undefined || w.op !== undefined, "after names at least one of control, route or op");
