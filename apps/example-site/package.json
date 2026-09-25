@@ -7,5 +7,5 @@
   "types": "dist/index.d.ts",
   "exports": { ".": "./dist/index.js" },
   "dependencies": { "@fastify/cookie": "^10.0.0", "@fastify/formbody": "^8.0.0", "fastify": "^5.0.0" },
-  "scripts": { "build": "tsc --build" }
+  "scripts": { "build": "tsc --build", "demo": "node dist/serve.js" }
 }

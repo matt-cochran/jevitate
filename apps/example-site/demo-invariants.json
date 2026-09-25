@@ -1,0 +1,36 @@
+{
+  "observe": {
+    "saidSaved": {
+      "dom": {
+        "selector": "[data-testid=status][data-state=saved]",
+        "read": "count"
+      }
+    },
+    "typedName": {
+      "dom": {
+        "selector": "input[name=displayName]",
+        "read": "value"
+      }
+    },
+    "storedName": {
+      "probe": {
+        "get": "/demo/api/profile",
+        "json": "$.displayName"
+      }
+    }
+  },
+  "invariants": [
+    {
+      "id": "saved-means-stored",
+      "when": {
+        "control": {
+          "name": "Save"
+        },
+        "op": [
+          "click"
+        ]
+      },
+      "require": "saidSaved >= 1 -> storedName == typedName"
+    }
+  ]
+}
