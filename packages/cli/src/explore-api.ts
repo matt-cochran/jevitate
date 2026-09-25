@@ -741,7 +741,14 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
   });
 
   if (result.outcome === "authored") {
-    await new FsJourneyStore(opts.journeysDir).put(result.journey);
+    // #170: a Journey authored behind a login (--storage-state) declares it, so a run without a
+    // storage state fails fast as a configuration error instead of a gating step-1 assertion.
+    const journey =
+      opts.storageState !== undefined && result.journey.metadata.requiresAuth !== true
+        ? { ...result.journey, metadata: { ...result.journey.metadata, requiresAuth: true } }
+        : result.journey;
+    await new FsJourneyStore(opts.journeysDir).put(journey);
+    return journey === result.journey ? result : { ...result, journey };
   }
   return result;
 }

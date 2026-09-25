@@ -6,7 +6,18 @@ import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import type { InvariantSpec } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import type { JourneyRunResult } from "@jevitate/runtime";
-import { matchGlob, scopeGlobs, type MisuseStrategy, type SuccessCheck } from "@jevitate/explore";
+import {
+  matchGlob,
+  parseSecretField,
+  scopeGlobs,
+  secretFieldSecrets,
+  SecretFieldSpecError,
+  type MisuseStrategy,
+  type SecretField,
+  type SuccessCheck,
+} from "@jevitate/explore";
+import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
+import { FixtureSpecError, SETUP_REF, UnboundSetupRefError, substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 import {
   consolidate,
   diffRuns,
@@ -145,6 +156,8 @@ export interface RunCheckOptions {
   readonly aiMode?: "real" | "fake";
   /** Per-origin settle/hang configuration (`~/.jevitate/targets.json`). */
   readonly targetsConfig?: Readonly<Record<string, TargetConfig>>;
+  /** Where a target's `secretFields` read their values (default `process.env`). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly browserPortFactory?: () => BrowserPort;
   readonly browser?: BrowserLaunchOptions;
   readonly runners?: Partial<CheckRunners>;
@@ -431,6 +444,28 @@ interface PreparedTarget {
   readonly config?: TargetConfig;
   readonly journeys: Map<string, Journey>;
   readonly goals: Map<string, SuccessCheck[]>;
+  /** The target's `secretFields`, resolved from the environment at preflight (#170). */
+  readonly secretFields: readonly SecretField[];
+  /** The target's fixtures file (the suite's, else targets.json's), validated at preflight (#170). */
+  readonly fixturesFile?: string;
+}
+
+/**
+ * The target's fixture lifecycle for one item (#170), authenticated like the item's session: the
+ * target's storage state and `secretFields`. `undefined` when the target declares no fixtures.
+ */
+function fixturesFor(p: Pick<PreparedTarget, "target" | "allowlist" | "secretFields" | "fixturesFile">, baseUrl: string): MissionFixtures | undefined {
+  if (p.fixturesFile === undefined) return undefined;
+  return buildMissionFixtures(
+    { fixtures: p.fixturesFile },
+    {
+      allowlist: p.allowlist,
+      baseUrl: baseUrl.replace(SETUP_REF, "0"),
+      ...(p.target.storageState === undefined ? {} : { storageState: p.target.storageState }),
+      secretFields: p.secretFields,
+      secrets: secretFieldSecrets(p.secretFields),
+    },
+  );
 }
 
 interface Planned {
@@ -506,7 +541,36 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
   } catch (e) {
     throw new CheckPreflightError(`target ${t.name}: ${errorMessage(e)}`);
   }
-  return { target: t, allowlist, journeys, goals, ...(invariants === undefined ? {} : { invariants }), config };
+  // #170: secret fields are read from the environment now (an unset variable is a preflight
+  // refusal naming it, never its value); the fixtures spec and every ${setup.x} a goal uses are
+  // validated before anything runs.
+  let secretFields: SecretField[];
+  try {
+    secretFields = (t.secretFields ?? []).map((s) => parseSecretField(s, "value", opts.env ?? process.env));
+  } catch (e) {
+    if (!(e instanceof SecretFieldSpecError)) throw e;
+    throw new CheckPreflightError(`target ${t.name}: ${e.message}`);
+  }
+  const fixturesFile = t.fixtures ?? config?.fixtures;
+  if (fixturesFile !== undefined || t.goals.some((g) => `${g.url ?? ""}${g.goal}${g.success.join("")}`.includes("${setup."))) {
+    try {
+      const fx = fixturesFor({ target: t, allowlist, secretFields, ...(fixturesFile === undefined ? {} : { fixturesFile }) }, t.url);
+      for (const g of t.goals) checkSetupRefs({ [`goal ${g.name} url`]: g.url, [`goal ${g.name}`]: g.goal, [`goal ${g.name} success`]: g.success }, fx);
+    } catch (e) {
+      if (!(e instanceof FixtureSpecError || e instanceof UnboundSetupRefError)) throw e;
+      throw new CheckPreflightError(`target ${t.name}: fixtures: ${e.message}`);
+    }
+  }
+  return {
+    target: t,
+    allowlist,
+    journeys,
+    goals,
+    ...(invariants === undefined ? {} : { invariants }),
+    config,
+    secretFields,
+    ...(fixturesFile === undefined ? {} : { fixturesFile }),
+  };
 }
 
 function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | undefined): Planned[] {
@@ -600,6 +664,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       params: { ...item.journey.params },
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+      // #170: the target's session, exactly as `journey run --storage-state` (#118) and its fixtures.
+      ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
+      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(item.t, site) }),
     });
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);
@@ -629,23 +696,42 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
   if (item.kind === "goal" && item.goal !== undefined) {
     const g = item.goal;
     const { judge, gen, usage } = await ctx.gateways();
-    const r = await runners.goal({
-      ...common,
-      ...targetConfig,
-      ...invariants,
-      url: g.url ?? t.url,
-      goal: g.goal,
-      successChecks: item.t.goals.get(g.name) ?? [],
-      ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
-      allowlist: item.t.allowlist,
-      judge,
-      gen,
-      usage,
-      bounds: bounds(g.maxActions, g.maxDecisions, remaining),
-    });
-    stampResultFile(r.resultPath, stamp);
-    const executed = missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
-    return { ...executed, actions: r.actions };
+    // #170: the target's fixtures run around the goal (a failed setup is an item error, never a
+    // run on unknown state), and its secret fields are typed by code, as `explore --secret-field`.
+    let url = g.url ?? t.url;
+    let goal = g.goal;
+    let successChecks = item.t.goals.get(g.name) ?? [];
+    const fx = fixturesFor(item.t, url);
+    try {
+      if (fx !== undefined) {
+        await fx.setup();
+        const b = fx.bindings();
+        url = substituteSetupRefs(url, b, { where: `goal ${g.name} url` });
+        goal = substituteSetupRefs(goal, b, { where: `goal ${g.name}` });
+        successChecks = g.success.map((s) => parseSuccessSpec(substituteSetupRefs(s, b, { where: `goal ${g.name} success` })));
+      }
+      const r = await runners.goal({
+        ...common,
+        ...targetConfig,
+        ...invariants,
+        url,
+        goal,
+        successChecks,
+        ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
+        allowlist: item.t.allowlist,
+        judge,
+        gen,
+        usage,
+        bounds: bounds(g.maxActions, g.maxDecisions, remaining),
+        ...(item.t.secretFields.length === 0 ? {} : { secretFields: item.t.secretFields }),
+        ...(fx === undefined ? {} : { fixtures: fx }),
+      });
+      stampResultFile(r.resultPath, stamp);
+      const executed = missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
+      return { ...executed, actions: r.actions };
+    } finally {
+      await fx?.restore();
+    }
   }
 
   if (item.kind === "mission" && item.mission !== undefined) {
@@ -707,6 +793,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       job: m.goal ?? "",
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
       allowlist: item.t.allowlist,
+      ...(item.t.secretFields.length === 0 ? {} : { secretFields: item.t.secretFields }),
       judge,
       gen,
       usage,

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageTracker } from "@jevitate/ai-core";
+import { FsJourneyStore } from "@jevitate/journey";
 import { BudgetMeter, affectedBy, runCheck, type CheckGateways, type CheckRunners } from "./check-api.js";
 import { parseSuite, SuiteError } from "./check-suite.js";
 import { loadRunFile, tagBaseline } from "./report-api.js";
@@ -249,6 +250,88 @@ describe("check gating (#137)", () => {
   });
 });
 
+describe("a target's session reaches every item (#170)", () => {
+  async function authedSuite(extraTarget: Record<string, unknown> = {}) {
+    await new FsJourneyStore(dir).put({
+      metadata: { id: "plan-status", name: "Plan status", promoted: true, params: [], createdAtIso: "2026-09-24T00:00:00.000Z" },
+      recording: { version: "1.0.0", site: "https://shop.example", pages: [{ url: "/settings", steps: [{ step: { kind: "navigate", url: "/settings", expect: { kind: "urlIncludes", text: "/settings" } } }] }] },
+    });
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ cookies: [], origins: [] }));
+    writeFileSync(
+      join(dir, "fixtures.json"),
+      JSON.stringify({ setup: [{ method: "POST", url: "/api/reset", json: { password: "${secretField.SHOP_PASSWORD}" } }] }),
+    );
+    return suite(0, {}, {
+      storageState: "state.json",
+      secretFields: ["label=Password=env:SHOP_PASSWORD"],
+      fixtures: "fixtures.json",
+      journeys: [{ id: "plan-status", routes: ["/settings"] }],
+      goals: [{ name: "plan", goal: "find the plan", success: ["urlIncludes:/settings"] }],
+      ...extraTarget,
+    });
+  }
+
+  it("a Journey item runs with the target's storageState and fixtures; a goal also gets its secret fields", async () => {
+    const s = await authedSuite();
+    const journeyCalls: Array<Record<string, unknown>> = [];
+    const journey = (async (o: Record<string, unknown>) => {
+      journeyCalls.push(o);
+      return { outcome: "ok" };
+    }) as unknown as CheckRunners["journey"];
+    const goalCalls: Array<Record<string, unknown>> = [];
+    const goal = (async (o: Record<string, unknown> & { outDir?: string }) => {
+      goalCalls.push(o);
+      const resultPath = join(o.outDir ?? dir, "explore-2026-09-24T10-00-00-000Z.result.json");
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "succeeded", exitCode: 0, result: { outcome: "succeeded", checks: [], target: { seedUrl: URL0 } } }));
+      return { outcome: "succeeded", actions: 1, resultPath };
+    }) as unknown as CheckRunners["goal"];
+    const fetched: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: { body?: string }) => {
+      fetched.push(`${url} ${init.body ?? ""}`);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage: new UsageTracker() };
+    let r: Awaited<ReturnType<typeof runCheck>>;
+    try {
+      r = await runCheck({
+        suite: s,
+        outDir: join(dir, "out"),
+        journeysDir: dir,
+        runners: { journey, goal },
+        gateways: async () => gw,
+        aiMode: "fake",
+        env: { SHOP_PASSWORD: "hunter2-secret" },
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(r.items.map((i) => [i.kind, i.name, i.verdict])).toEqual([
+      ["journey", "plan-status", "passed"],
+      ["goal", "plan", "passed"],
+    ]);
+    expect(journeyCalls[0]).toMatchObject({ id: "plan-status", storageState: join(dir, "state.json") });
+    const fx = (journeyCalls[0]?.fixtures as (site: string) => { specHash: string } | undefined)("https://shop.example");
+    expect(fx?.specHash).toMatch(/^[0-9a-f]{16}$/);
+    expect(goalCalls[0]).toMatchObject({ storageState: join(dir, "state.json"), secretFields: [{ name: "SHOP_PASSWORD", kind: "value" }] });
+    expect(goalCalls[0]?.fixtures).toBeDefined();
+    // The goal's fixture ran (the secret only in the request body) and nothing written holds it.
+    expect(fetched).toEqual(['https://shop.example/api/reset {"password":"hunter2-secret"}']);
+    for (const f of [r.junitPath, r.sarifPath, r.jsonPath, r.reportPath, ...r.results]) expect(readFileSync(f, "utf8")).not.toContain("hunter2-secret");
+  });
+
+  it("an unset secret-field variable is a preflight refusal naming it, before anything runs", async () => {
+    const s = await authedSuite();
+    const journeyCalls: unknown[] = [];
+    const journey = (async (o: unknown) => {
+      journeyCalls.push(o);
+      return { outcome: "ok" };
+    }) as unknown as CheckRunners["journey"];
+    await expect(runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { journey }, env: {} })).rejects.toThrow(/SHOP_PASSWORD is not set/);
+    expect(journeyCalls).toEqual([]);
+  });
+});
+
 describe("changed-route matching", () => {
   it("matches concrete routes and globs both ways; unknown routes always run", () => {
     expect(affectedBy(["/cart"], ["/cart/**"])).toBe(true);
@@ -271,7 +354,7 @@ describe("suite validation", () => {
       throw new Error("accepted");
     };
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, jouneys: [] }] })).toBe(
-      "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, invariants, journeysDir, journeys, goals, missions, verifyFix)",
+      "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix)",
     );
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, goals: [{ goal: "g" }] }] })).toMatch(/goals\[0\]\.success: at least one success check/);
     expect(refuse({ version: 2, targets: [] })).toBe("s.json: $.version: must be 1");
