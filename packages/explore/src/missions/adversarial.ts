@@ -10,7 +10,7 @@ import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
 import { monitorFor, type PageMonitor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
-import { hangFingerprint, type HangSignal } from "../hang.js";
+import { hangFingerprint, outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
 import { hostProbe, type HostPressure, type HostProbe } from "../host-pressure.js";
 import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
@@ -42,8 +42,18 @@ import {
 } from "../adversarial/defect-fingerprint.js";
 import type { MisuseStrategy } from "../adversarial/misuse.js";
 import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
-import { planMisuseEpisode, type LastAction, type MisuseStep } from "../adversarial/form-misuse.js";
+import {
+  FORM_MISUSE_STRATEGIES,
+  controlKey,
+  detectForms,
+  planMisuseEpisode,
+  type EpisodeContext,
+  type LastAction,
+  type MisuseStep,
+} from "../adversarial/form-misuse.js";
 import { controlIdentity } from "../coverage/fingerprint.js";
+import { ChromeTracker } from "../feature/relevance.js";
+import { affordedOp } from "../actions.js";
 import {
   CoverageTracker,
   resolveCoverageThresholds,
@@ -320,6 +330,8 @@ export interface AdversarialScope {
 }
 
 const MAX_LISTED_DEPARTURES = 50;
+
+const FORM_STRATEGY: ReadonlySet<MisuseStrategy> = new Set(FORM_MISUSE_STRATEGIES);
 
 /**
  * A failed act whose reason names a timeout, or a target this gate refused as not actionable (a
@@ -1012,6 +1024,42 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
      * An enabled plan ends the streak.
      */
     const disabledNow = new Set<string>();
+    /**
+     * Controls the safety policy refused (#116) — never re-planned by any strategy (#193), so a
+     * denied submit is attempted (and its refusal recorded) once, not every turn.
+     */
+    const refusedIds = new Set<string>();
+    /**
+     * A click-afforded control the safety policy refuses (#116: `--deny`, paid, destructive) is never
+     * offered as a target (#193) — withheld at planning, its refusal recorded once, like the
+     * frontier missions do (#186).
+     */
+    const refuses = (c: Control): boolean =>
+      affordedOp(c) === "click" &&
+      safety.withholds("click", c, (reason) =>
+        transcript.record({
+          op: null,
+          control: c,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "safety-policy",
+          actOk: false,
+          reason,
+          snapshot: snap,
+        }),
+      );
+    /** Page chrome (#115/#193): a landmark control, or one seen unchanged on 2+ in-scope pathnames. */
+    const chrome = new ChromeTracker();
+    const isChrome = (c: Control): boolean => (c.landmark ?? null) !== null || chrome.isChrome(c);
+    /** What clicks revealed (#193): a control that made a form appear, and disclosures that showed none. */
+    const revealed = new Map<string, readonly string[]>();
+    const barren = new Set<string>();
+    /** Whether the run hunts with `exercise-controls` — then no strategy idles while controls remain (#193). */
+    const exercises = params.strategies.includes("exercise-controls");
+    const observeTarget = (on: Snapshot): void => {
+      cov.observe(on);
+      if (inScope(on.url)) chrome.observe(new URL(on.url).pathname, on.controls);
+    };
     /** How many episodes each strategy has run (rotates its form, field and value). */
     const rounds = new Map<MisuseStrategy, number>();
     let stop: AdversarialStop | null = null;
@@ -1112,7 +1160,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       );
       lastRecordedTarget = null;
       let restarted: Awaited<ReturnType<typeof restartAtSeed>>;
-      if (next.hang !== null) {
+      // Only IN-SCOPE pages are hang-checked (#193): a page reached by a departure is outside the
+      // target, so its hang signal is advisory (noted on the departure), never a finding.
+      if (next.hang !== null && inScope(snap.url)) {
         await recordHang(next.hang, next.snapshot, next.timing);
         // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
         // budget. The hung route is not followed again (visit-route remembers it).
@@ -1132,12 +1182,21 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           chosenBy: "strategy",
           strategy: "scope-reset",
           actOk: true,
-          reason: `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+          reason: joinReasons([
+            `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+            next.hang === null ? undefined : outOfScopeHangNote(next.hang),
+          ]),
           snapshot: snap,
           ...(snapTiming === undefined ? {} : { timing: snapTiming }),
         });
         snapTiming = undefined;
-        await sessions.fresh();
+        // A page that still looked hung is left the way a hang is (a fresh page, or — when none can
+        // be opened — a stop if it is unresponsive); any other departure just moves to a fresh page.
+        if (next.hang === null) await sessions.fresh();
+        else if (!(await sessions.reset(next.hang))) {
+          last = null;
+          return { kind: "stop", stop: "hang" };
+        }
         restarted = await restartAtSeed();
       } else {
         return { kind: "ok" };
@@ -1174,20 +1233,38 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       let stepSnap = snap;
       let stepTiming = snapTiming;
       snapTiming = undefined;
-      cov.observe(snap);
-      const episode = planMisuseEpisode({
-        snapshot: snap,
-        strategy,
-        round,
+      observeTarget(snap);
+      const planning = (on: Snapshot, as: MisuseStrategy, extra: Partial<EpisodeContext> = {}): EpisodeContext => ({
+        snapshot: on,
+        strategy: as,
+        round: rounds.get(as) ?? 0,
         last,
         visitedLinks,
         exercised: cov.exercisedKeys,
-        blacklisted: unactionable,
+        blacklisted: refusedIds.size === 0 ? unactionable : new Set([...unactionable, ...refusedIds]),
         inScope,
+        refuses,
+        isChrome,
+        disclosures: { revealed, barren },
         rng: Math.random,
+        ...extra,
       });
+      let episode = planMisuseEpisode(planning(snap, strategy));
+      /** The strategy the episode actually runs (a fallback to `exercise-controls`, #193). */
+      let ran: MisuseStrategy = strategy;
 
       cov.strategy(strategy, episode !== null);
+      // #193: a strategy with nothing to do here never idles while target controls are still
+      // unexercised — when the run hunts with `exercise-controls`, the turn exercises one instead.
+      if (episode === null && exercises && strategy !== "exercise-controls") {
+        const fallback = planMisuseEpisode(planning(snap, "exercise-controls"));
+        if (fallback !== null) {
+          ran = "exercise-controls";
+          cov.strategy(ran, true);
+          const note = (st: MisuseStep): string => joinReasons([`no ${strategy} action applies`, st.note]) ?? st.note;
+          episode = { steps: fallback.steps.map((st, i) => (i === 0 ? { ...st, note: note(st) } : st)) };
+        }
+      }
       if (episode === null) {
         idleStreak += 1;
         // Independent oracle — runs EVERY step, even when a strategy chose no action: the user
@@ -1216,10 +1293,37 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         continue;
       }
       idleStreak = 0;
-      rounds.set(strategy, round + 1);
+      rounds.set(ran, (ran === strategy ? round : (rounds.get(ran) ?? 0)) + 1);
 
-      for (const s of episode.steps) {
+      // A queue, not a fixed list: a disclosure that reveals a form is followed, in the same turn,
+      // by this strategy's own episode on the revealed form (#193).
+      const queue: MisuseStep[] = [...episode.steps];
+      /** Whether `stepSnap` was re-perceived after an earlier step of this episode. */
+      let refreshed = false;
+      /** Whether an earlier step of this episode acted without settling (the page may have moved on). */
+      let pendingEarlier = false;
+      while (queue.length > 0) {
+        const s = queue.shift() as MisuseStep;
         if (actions >= bounds.maxActions) break;
+        // An earlier step of this episode removed this step's control (a Cancel closed the dialog
+        // the Save lived in): the rest of the episode was planned for a state that is gone. It ends
+        // here, without spending an action — never a failed act that reads as a broken control.
+        const gone = s.control;
+        if (refreshed && gone !== null && !stepSnap.controls.some((c) => controlKey(c) === controlKey(gone))) {
+          transcript.record({
+            op: null,
+            control: gone,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: ran,
+            actOk: false,
+            reason: joinReasons([s.note, "no longer on the page after the previous step — episode ends"]),
+            snapshot: stepSnap,
+            ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          });
+          stepTiming = undefined;
+          break;
+        }
         // A click on a control that is disabled RIGHT NOW is never attempted: it can never mutate
         // anything, so it is a no-op, not an action — counted against no budget, and the episode
         // moves on rather than spending its remaining steps (and the next loop turn's strategy pick)
@@ -1234,12 +1338,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             stepTiming = undefined;
             break;
           }
+          // #155/#193: a submit that could not be attempted is recorded with WHY — never silently.
+          if (s.submitsForm !== undefined) cov.blocked(stepSnap.url, s.submitsForm, "the submit control is disabled", "disabled");
           transcript.record({
             op: null,
             control: s.control,
             confidence: null,
             chosenBy: "strategy",
-            strategy,
+            strategy: ran,
             actOk: false,
             reason: joinReasons([s.note, "target disabled — no-op, choosing another action"]),
             snapshot: stepSnap,
@@ -1253,12 +1359,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         // never clicked — a no-op like a disabled target, counted against no budget.
         const unsafe = safety.gate(s.op, s.control);
         if (unsafe !== null) {
+          if (s.control !== null) refusedIds.add(controlIdentity(s.control));
+          if (s.submitsForm !== undefined) cov.blocked(stepSnap.url, s.submitsForm, unsafe.reason, "denied");
           transcript.record({
             op: null,
             control: s.control,
             confidence: null,
             chosenBy: "strategy",
-            strategy,
+            strategy: ran,
             actOk: false,
             reason: joinReasons([s.note, unsafe.reason]),
             snapshot: stepSnap,
@@ -1279,7 +1387,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
               control: s.control,
               confidence: null,
               chosenBy: "strategy",
-              strategy,
+              strategy: ran,
               actOk: false,
               reason: joinReasons([s.note, g.reason]),
               snapshot: stepSnap,
@@ -1312,11 +1420,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             cov.blocked(stepSnap.url, s.submitsForm, await nativeValidationMessage(sessions.page));
           }
         }
-        if (strategy === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
+        if (ran === "visit-route" && s.control !== null) visitedLinks.add(s.control.name);
         // #161 (a regression of #75): a control refused as not-actionable (occluded, detached, a
         // clipped/offscreen anchor the static `isExercisable` check missed) is never re-chosen by
         // any strategy for the rest of the run — and never blindly repeated by `repeat-rapid`.
-        if (!result.ok && s.control !== null && isUnactionableFailure(result.reason)) {
+        // Only when the step acted on the state it was planned on (#193): a control an earlier,
+        // unsettled step of THIS episode just removed (a second Save after the first one closed
+        // its dialog) is not unactionable — it is simply gone, and the form stays plannable.
+        if (!result.ok && s.control !== null && !pendingEarlier && isUnactionableFailure(result.reason)) {
           unactionable.add(controlIdentity(s.control));
         }
         last =
@@ -1335,7 +1446,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           control: s.control,
           confidence: null,
           chosenBy: "strategy" as const,
-          strategy,
+          strategy: ran,
           actOk: result.ok,
           snapshot: stepSnap,
           ...(stepTiming === undefined ? {} : { timing: stepTiming }),
@@ -1346,6 +1457,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         if (!s.settle) {
           // The next step fires at once, without waiting for this one to settle (that is the misuse).
           transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
+          pendingEarlier = pendingEarlier || result.ok;
           continue;
         }
         const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn });
@@ -1367,6 +1479,30 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         }
         // The rest of the episode was planned for a page that is gone.
         if (after.kind === "reset") break;
+        observeTarget(snap);
+        // #193: what did this click reveal? A form that was not there before → remember the control
+        // as the way back to it (and, for a disclosure, run this strategy's episode on it now); a
+        // disclosure that showed no form is never re-opened "to look for a form".
+        if (result.ok && s.op === "click" && s.control !== null) {
+          const id = controlIdentity(s.control);
+          const before = new Set(detectForms(stepSnap.controls, inScope).map((f) => f.key));
+          const appeared = detectForms(snap.controls, inScope)
+            .map((f) => f.key)
+            .filter((k) => !before.has(k));
+          if (appeared.length > 0) {
+            revealed.set(id, appeared);
+            barren.delete(id);
+            if (s.discloses === true && ran !== "exercise-controls" && FORM_STRATEGY.has(ran)) {
+              // Same round as the disclosure's own turn (its counter was already advanced).
+              const follow = planMisuseEpisode(planning(snap, ran, { disclose: false, round: (rounds.get(ran) ?? 1) - 1 }));
+              if (follow !== null) queue.push(...follow.steps);
+            }
+          } else if (s.discloses === true && !revealed.has(id)) {
+            barren.add(id);
+          }
+        }
+        refreshed = true;
+        pendingEarlier = false;
         // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
         if (budget !== null) {
           const b = await budget.afterSettle(sessions.page, step);
