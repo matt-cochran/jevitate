@@ -57,6 +57,12 @@ export interface MisuseStep {
    * the transcript — a password field's value is never persisted in the clear, synthetic or not.
    */
   readonly redacted?: boolean;
+  /**
+   * True for a disclosure click ("open X to look for a form", #193): the mission checks what it
+   * revealed (a new form, or nothing) and, when a form appeared, plans the SAME strategy's form
+   * episode on the revealed state in the same turn.
+   */
+  readonly discloses?: boolean;
 }
 
 export interface MisuseEpisode {
@@ -240,8 +246,41 @@ export interface EpisodeContext {
   readonly blacklisted?: ReadonlySet<string>;
   /** Is a URL inside the mission's scope? Default: everything is. */
   readonly inScope?: (url: string) => boolean;
+  /**
+   * Controls the run's safety policy refuses to click (#116: `--deny`, paid, destructive — #193):
+   * never offered as an exercise or disclosure target, so a refused control is not re-planned
+   * turn after turn while other controls wait. Default: none.
+   */
+  readonly refuses?: (c: Control) => boolean;
+  /**
+   * Page chrome (#115/#193): a control in a `<nav>` / page-level `<header>`/`<footer>` landmark, or
+   * one repeated across pathnames. Chrome is tried last as an exercise target and as a disclosure
+   * target. Default: the control's own `landmark`.
+   */
+  readonly isChrome?: (c: Control) => boolean;
+  /** What each disclosure opened so far revealed (#193), by `controlIdentity`. Default: nothing known. */
+  readonly disclosures?: DisclosureMemory;
+  /**
+   * Whether a strategy that finds nothing to do may fall back to opening a disclosure control.
+   * Default true; false when the mission re-plans the SAME strategy right after a disclosure (#193).
+   */
+  readonly disclose?: boolean;
   readonly rng: () => number;
 }
+
+/**
+ * What the run's clicks revealed (#193), by `controlIdentity`: `revealed` maps a control whose
+ * click made a new form appear to that form's key(s) — worth re-opening to get back to the form
+ * once something closed it; `barren` holds the disclosures opened "to look for a form" that showed
+ * none — never re-opened for that purpose.
+ */
+export interface DisclosureMemory {
+  readonly revealed: ReadonlyMap<string, readonly string[]>;
+  readonly barren: ReadonlySet<string>;
+}
+
+const NO_DISCLOSURES: DisclosureMemory = { revealed: new Map(), barren: new Set() };
+const byLandmark = (c: Control): boolean => (c.landmark ?? null) !== null;
 
 const EMPTY_IDENTITIES: ReadonlySet<string> = new Set();
 
@@ -405,13 +444,19 @@ function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ct
 function planExercise(ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
   const blacklisted = ctx.blacklisted ?? EMPTY_IDENTITIES;
-  const next = ctx.snapshot.controls.find(
+  const refuses = ctx.refuses ?? (() => false);
+  const isChrome = ctx.isChrome ?? byLandmark;
+  const candidates = ctx.snapshot.controls.filter(
     (c) =>
       isExercisable(c, inScope) &&
       !blacklisted.has(controlIdentity(c)) &&
+      !refuses(c) &&
       !ctx.exercised.has(controlKey(c)) &&
       !(c.role === "checkbox" && c.checked === true),
   );
+  // The target's own content first; page chrome (header/nav/footer, repeated controls) last (#193,
+  // the frontier's own rule since #115).
+  const next = candidates.find((c) => !isChrome(c)) ?? candidates[0];
   if (next === undefined) return null;
   const op = affordedOp(next);
   if (op === "type") return { steps: [edit(next, "normal", "exercise a field", true)] };
@@ -438,22 +483,45 @@ function isFormStrategy(s: MisuseStrategy): s is FormMisuseStrategy {
 
 /**
  * When a form strategy finds nothing to work with on the current page, open a disclosure control (a
- * "Create new key" button, a `aria-haspopup=dialog` trigger…) instead of giving up: the next
- * snapshot then shows whatever it revealed (typically a dialog with its own form), which the SAME
- * strategies apply to on a later round. An UNEXERCISED one is preferred, but this is reached ONLY
- * when nothing else applies (the caller already tried), so a previously-opened one is fair game
- * too — opening it is idempotent, and it is the only way back in after something else (e.g. a
- * `navigate-away-unsaved` reload) closed what it revealed before it could be submitted.
+ * "Create new key" button, a `aria-haspopup=dialog` trigger…) instead of giving up: whatever it
+ * reveals (typically a dialog with its own form) is planned on by the SAME strategy in the same
+ * turn (the mission re-plans after a revealing disclosure — #193).
+ *
+ * Which one (#193), in order:
+ *  1. an unexercised one in the target's own content;
+ *  2. one that already revealed a form this run whose form is not on the page now — the way back
+ *     to a form something else (a `navigate-away-unsaved` reload, a Cancel) closed before it could
+ *     be submitted (never while its form is still open: re-clicking a toggle would close it);
+ *  3. an unexercised one in page chrome (a header user menu, a nav menu);
+ *  4. a previously-opened content one whose outcome is not known.
+ * A disclosure that was opened and showed NO form (`barren`) is never picked again.
  */
 function planDisclosure(ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
   const blacklisted = ctx.blacklisted ?? EMPTY_IDENTITIES;
-  const candidates = ctx.snapshot.controls.filter(
-    (c) => isExercisable(c, inScope) && !blacklisted.has(controlIdentity(c)) && isDisclosureControl(c),
-  );
-  const disclosure = candidates.find((c) => !ctx.exercised.has(controlKey(c))) ?? candidates[0];
+  const refuses = ctx.refuses ?? (() => false);
+  const isChrome = ctx.isChrome ?? byLandmark;
+  const memory = ctx.disclosures ?? NO_DISCLOSURES;
+  const candidates = ctx.snapshot.controls.filter((c) => {
+    if (!isExercisable(c, inScope) || !isDisclosureControl(c) || refuses(c)) return false;
+    const id = controlIdentity(c);
+    return !blacklisted.has(id) && !memory.barren.has(id);
+  });
+  const fresh = (c: Control): boolean => !ctx.exercised.has(controlKey(c));
+  const present = new Set(detectForms(ctx.snapshot.controls, inScope).map((f) => f.key));
+  const reopens = (c: Control): boolean => {
+    const keys = memory.revealed.get(controlIdentity(c));
+    return keys !== undefined && !keys.some((k) => present.has(k));
+  };
+  const disclosure =
+    candidates.find((c) => fresh(c) && !isChrome(c)) ??
+    candidates.find(reopens) ??
+    candidates.find((c) => fresh(c) && isChrome(c)) ??
+    candidates.find((c) => !isChrome(c) && !memory.revealed.has(controlIdentity(c)));
   if (disclosure === undefined) return null;
-  return { steps: [{ op: "click", control: disclosure, settle: true, note: `open "${disclosure.name}" to look for a form` }] };
+  return {
+    steps: [{ op: "click", control: disclosure, settle: true, note: `open "${disclosure.name}" to look for a form`, discloses: true }],
+  };
 }
 
 /**
@@ -468,9 +536,9 @@ export function planMisuseEpisode(ctx: EpisodeContext): MisuseEpisode | null {
   if (isFormStrategy(strategy)) {
     const direct = strategy === "exercise-controls" ? planExercise(ctx) : planForm(strategy, ctx);
     // Nothing to work with for THIS strategy on THIS page (no form at all, or e.g. `edit-cancel-save`
-    // on a form with no Cancel): try opening an unexercised disclosure control instead of giving up —
-    // whatever it reveals (typically a dialog with its own form) benefits every strategy from here on.
-    return direct ?? planDisclosure(ctx);
+    // on a form with no Cancel): try opening a disclosure control instead of giving up — whatever it
+    // reveals (typically a dialog with its own form) benefits every strategy from here on.
+    return direct ?? (ctx.disclose === false ? null : planDisclosure(ctx));
   }
   const find = (c: Control | null): Control | undefined =>
     c === null ? undefined : snapshot.controls.find((x) => controlKey(x) === controlKey(c));

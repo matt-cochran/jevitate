@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Control, Snapshot } from "../snapshot.js";
 import { controlKey, detectForms, isExercisable, planMisuseEpisode, type EpisodeContext } from "./form-misuse.js";
+import { controlIdentity } from "../coverage/fingerprint.js";
 
 let n = 0;
 function control(p: Partial<Control> & { name: string; role: string; tag: string }): Control {
@@ -310,5 +311,69 @@ describe("destructive controls are never misuse targets", () => {
 
   it("a form whose only submit is destructive is not a misuse target at all", () => {
     expect(detectForms([field("Confirm name"), button("Delete workspace", { submits: true })])).toEqual([]);
+  });
+});
+
+describe("planMisuseEpisode — modal forms, chrome disclosures and refused controls (#193)", () => {
+  const userMenu = (): Control =>
+    control({ name: "Open user menu", role: "button", tag: "button", form: null, ariaHasPopup: "menu", landmark: "banner" });
+  const addNumber = (): Control => button("Add New Phone Number", { form: null, ariaHasPopup: "dialog" });
+  const plain = (name: string): Control => button(name, { form: null });
+
+  it("opens the target's own disclosure before the header's user menu, whatever the DOM order", () => {
+    const ep = planMisuseEpisode(ctx([userMenu(), addNumber()]));
+    expect(ep?.steps[0]).toMatchObject({ op: "click", discloses: true, control: expect.objectContaining({ name: "Add New Phone Number" }) });
+  });
+
+  it("re-opens the disclosure that revealed the form once it is closed — never the chrome menu that showed none", () => {
+    const menu = userMenu();
+    const add = addNumber();
+    const page = [menu, add];
+    const ep = planMisuseEpisode(
+      ctx(page, {
+        exercised: new Set([controlKey(menu), controlKey(add)]),
+        disclosures: { revealed: new Map([[controlIdentity(add), ["dialog#add-phone"]]]), barren: new Set([controlIdentity(menu)]) },
+      }),
+    );
+    expect(ep?.steps[0]?.control?.name).toBe("Add New Phone Number");
+  });
+
+  it("never re-opens a disclosure that showed no form", () => {
+    const menu = userMenu();
+    const ep = planMisuseEpisode(
+      ctx([menu], { exercised: new Set([controlKey(menu)]), disclosures: { revealed: new Map(), barren: new Set([controlIdentity(menu)]) } }),
+    );
+    expect(ep).toBeNull();
+  });
+
+  it("never re-opens a revealing disclosure while its form is still open (a toggle would close it)", () => {
+    const add = addNumber();
+    const noCancel = [field("Phone Number", null), button("Save", { form: null, container: "dialog#add-phone" })].map((c) => ({
+      ...c,
+      container: "dialog#add-phone",
+    }));
+    const ep = planMisuseEpisode(
+      ctx([add, ...noCancel], {
+        strategy: "edit-cancel-save",
+        exercised: new Set([controlKey(add)]),
+        disclosures: { revealed: new Map([[controlIdentity(add), ["dialog#add-phone"]]]), barren: new Set() },
+      }),
+    );
+    expect(ep).toBeNull();
+  });
+
+  it("with disclose:false a strategy that finds no form plans nothing (the mission's same-turn re-plan)", () => {
+    expect(planMisuseEpisode(ctx([addNumber()], { disclose: false }))).toBeNull();
+  });
+
+  it("exercise-controls takes the target's content before page chrome, and never a refused control", () => {
+    const buy = plain("Purchase number");
+    const menu = userMenu();
+    const sort = plain("Sort by field 1");
+    const refuses = (c: Control): boolean => c.name === "Purchase number";
+    const ep = planMisuseEpisode(ctx([menu, buy, sort], { strategy: "exercise-controls", refuses }));
+    expect(ep?.steps[0]?.control?.name).toBe("Sort by field 1");
+    const next = planMisuseEpisode(ctx([menu, buy, sort], { strategy: "exercise-controls", refuses, exercised: new Set([controlKey(sort)]) }));
+    expect(next?.steps[0]?.control?.name).toBe("Open user menu");
   });
 });

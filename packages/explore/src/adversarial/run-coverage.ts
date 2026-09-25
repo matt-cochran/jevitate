@@ -42,6 +42,9 @@ export function resolveCoverageThresholds(partial?: Partial<CoverageThresholds>)
   return t;
 }
 
+/** Why a submit attempt never reached the server (#155, #193). */
+export type SubmitBlock = "validation" | "disabled" | "denied";
+
 export interface StrategyCoverage {
   readonly applied: number;
   readonly foundNothing: number;
@@ -57,8 +60,17 @@ export interface AdversarialCoverage {
    * never expected to equal a single step's `controlCount` (#121).
    */
   readonly controls: { readonly total: number; readonly exercised: number; readonly ratio: number };
-  /** `blocked` (#155): submit attempts the browser refused with native validation — never a submit. */
-  readonly forms: { readonly found: number; readonly submitted: number; readonly blocked: number };
+  /**
+   * `blocked` (#155): submit attempts that never reached the server — never a submit. `blockedBy`
+   * (#193, present when any was blocked) says why: the browser's native validation, a submit
+   * control still disabled, or one the safety policy refused (`--deny`, paid, destructive).
+   */
+  readonly forms: {
+    readonly found: number;
+    readonly submitted: number;
+    readonly blocked: number;
+    readonly blockedBy?: Partial<Record<SubmitBlock, number>>;
+  };
   /** Actions executed on the target (any op). */
   readonly actionsOnTarget: number;
   readonly strategies: Readonly<Record<string, StrategyCoverage>>;
@@ -77,8 +89,8 @@ export class CoverageTracker {
   readonly #exercised = new Set<string>();
   readonly #forms = new Set<string>();
   readonly #submitted = new Set<string>();
-  /** route|formKey -> how many attempts the browser blocked, and its last validation message. */
-  readonly #blocked = new Map<string, { count: number; message?: string }>();
+  /** route|formKey|why -> how many attempts were blocked that way, and the first message. */
+  readonly #blocked = new Map<string, { form: string; why: SubmitBlock; count: number; message?: string }>();
   readonly #strategies = new Map<string, { applied: number; foundNothing: number }>();
   #actions = 0;
 
@@ -126,15 +138,17 @@ export class CoverageTracker {
   }
 
   /**
-   * A submit click on `formKey` (on page `url`) was refused by the browser's own native validation
-   * (`required`, `type=email`, `minlength`…) — no request ever left the page, so it never counts
-   * toward `forms.submitted` (#155). `message` is the browser's own `validationMessage`, when known.
+   * A submit of `formKey` (on page `url`) never reached the server, so it never counts toward
+   * `forms.submitted` (#155). `why` (#193): the browser's own native validation (`required`,
+   * `type=email`, `minlength`… — `message` is its `validationMessage`, when known), a submit control
+   * still disabled, or one the safety policy refused (`message` is the policy's reason).
    */
-  blocked(url: string, formKey: string, message?: string): void {
+  blocked(url: string, formKey: string, message?: string, why: SubmitBlock = "validation"): void {
     if (!this.#inScope(url)) return;
-    const key = `${routeOf(url)}|${formKey}`;
+    const form = `${routeOf(url)}|${formKey}`;
+    const key = `${form}|${why}`;
     const cur = this.#blocked.get(key);
-    this.#blocked.set(key, { count: (cur?.count ?? 0) + 1, message: message ?? cur?.message });
+    this.#blocked.set(key, { form, why, count: (cur?.count ?? 0) + 1, message: cur?.message ?? message });
   }
 
   /** A strategy's turn: it applied (planned something) or found nothing to do. */
@@ -149,13 +163,15 @@ export class CoverageTracker {
     const total = this.#controls.size;
     const exercised = [...this.#exercised].filter((k) => this.#controls.has(k)).length;
     const ratio = total === 0 ? 0 : exercised / total;
-    const blockedEntries = [...this.#blocked.entries()].filter(([k]) => this.#forms.has(k));
-    const blockedCount = blockedEntries.reduce((sum, [, v]) => sum + v.count, 0);
-    const blockedMessage = blockedEntries.map(([, v]) => v.message).find((m): m is string => m !== undefined);
+    const blockedEntries = [...this.#blocked.values()].filter((v) => this.#forms.has(v.form));
+    const blockedCount = blockedEntries.reduce((sum, v) => sum + v.count, 0);
+    const blockedBy: Partial<Record<SubmitBlock, number>> = {};
+    for (const v of blockedEntries) blockedBy[v.why] = (blockedBy[v.why] ?? 0) + v.count;
     const forms = {
       found: this.#forms.size,
       submitted: [...this.#submitted].filter((k) => this.#forms.has(k)).length,
       blocked: blockedCount,
+      ...(blockedCount === 0 ? {} : { blockedBy }),
     };
     const shortfalls: string[] = [];
     if (total === 0) shortfalls.push("the target offered no control to exercise");
@@ -168,11 +184,17 @@ export class CoverageTracker {
     if (thresholds.requireFormSubmit && forms.found > 0 && forms.submitted === 0) {
       // #155: a submit the browser refused with native validation never reached the server — it is
       // never silently counted as a submit, and the shortfall says so (with the message, when known).
-      shortfalls.push(
-        forms.blocked > 0
-          ? `form submitted 0 times (${forms.blocked} attempt${forms.blocked === 1 ? "" : "s"} blocked by validation${blockedMessage === undefined ? "" : `: "${blockedMessage}"`})`
-          : `no form was submitted (${forms.found} found)`,
-      );
+      // #193: a submit blocked another way (disabled, refused by the safety policy) says so too.
+      const why = (["validation", "disabled", "denied"] as const)
+        .map((w) => {
+          const n = blockedBy[w];
+          if (n === undefined) return null;
+          const message = blockedEntries.find((v) => v.why === w && v.message !== undefined)?.message;
+          const label = w === "validation" ? "by validation" : w === "disabled" ? "with the submit disabled" : "by the safety policy";
+          return `${n} attempt${n === 1 ? "" : "s"} blocked ${label}${message === undefined ? "" : `: "${message}"`}`;
+        })
+        .filter((x): x is string => x !== null);
+      shortfalls.push(forms.blocked > 0 ? `form submitted 0 times (${why.join("; ")})` : `no form was submitted (${forms.found} found)`);
     }
     return {
       controls: { total, exercised, ratio },
