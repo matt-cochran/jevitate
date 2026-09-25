@@ -1,4 +1,6 @@
+import { join } from "node:path";
 import type { Command } from "commander";
+import { logsDirFor } from "./project-dir.js";
 import { resolveDataDir } from "./data-dir.js";
 import { artifactStamp } from "./mission-journal.js";
 import { runMultiRun, type MultiRunPlan, type MultiRunResult, type RunEnvelope } from "./multi-run.js";
@@ -78,7 +80,7 @@ export interface ExploreMultiRunArgs {
 
 export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<MultiRunResult> {
   const { cmd, plan } = args;
-  const outDir = args.out ?? resolveDataDir(["multi-runs", `multi-${artifactStamp((args.nowIso ?? (() => new Date().toISOString()))())}`]);
+  const outDir = args.out ?? join(logsDirFor((args.nowIso ?? (() => new Date().toISOString()))()), `multi-${artifactStamp((args.nowIso ?? (() => new Date().toISOString()))())}`);
   // With personas, each run's --storage-state is the persona's; otherwise the mission's own is kept.
   const base = forwardedArgv(cmd, plan.personas === null ? new Set() : new Set(["storageState"]));
   return runMultiRun({

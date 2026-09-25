@@ -155,7 +155,8 @@ jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baselin
 
 `--target` takes an origin (or any URL on it), a suite target name, or a registered mission
 target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
-(default `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
+(default: every dated `.jevitate/logs/<date>/` dir, in the project and in `~/.jevitate`, then
+the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
 subdirectories. Each defect lists:
 
 - every mode and run that observed it, with occurrence counts;
@@ -195,5 +196,5 @@ mission settings (goal, route globs or seed route, feature, Journey, verify-fix 
 run that observed it, and that reached the finding's route. A goal run's silence is not evidence
 that an adversarial-only defect is gone. New and resolved are decided before flaky, and resolved
 needs enough comparable reruns to rule out the baseline's own hit rate. `last` means the previous run on the same
-target, per mode. A tag is a snapshot stored under `~/.jevitate/baselines/<name>.json`, so it
-survives pruned result files.
+target, per mode. A tag is a snapshot stored under `.jevitate/baselines/<name>.json` (commit it
+with the repo), so it survives pruned result files.

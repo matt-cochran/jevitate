@@ -140,15 +140,21 @@ export interface McpApiDeps {
    */
   aiGenerateText?: (args: AiGenerateTextArgs) => Promise<AiGenerateTextResult | SetupRequiredResult>;
   /**
-   * Directory holding mission artifacts (`~/.jevitate/recordings` in production): the typed
+   * Directory holding mission artifacts (the logs root in production): the typed
    * `<id>.result.json` files `get_mission_result` reads. A missing dir is a config refusal.
    */
   recordingsDir?: string;
   /**
-   * Where usability reviews write their artifacts (`~/.jevitate/ux-reports` in production): a
+   * Where usability reviews write their artifacts (0.1.0: `~/.jevitate/ux-reports`): a
    * `usability-<stamp>` result is looked up here after `recordingsDir`.
    */
   uxReportsDir?: string;
+  /**
+   * The directories a result id's files may be in, most likely first (production: its dated
+   * `.jevitate/logs/<date>` dir in the project, then `~/.jevitate`, then the 0.1.0 locations).
+   * Replaces `recordingsDir`/`uxReportsDir` for the lookup when given.
+   */
+  resultDirsFor?: (resultId: string) => string[];
   /**
    * Test seam. Defaults to `runVerifyFix` over `<recordingsDir>/<id>.result.json`: replays the
    * finding's repro in a fresh browser (authorized against the mission's own allowlist).
@@ -363,7 +369,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   /** The dirs a result may live in: recordings, and (usability reviews) the UX reports dir. */
   const resultPathsFor = (resultId: string): string[] => {
     const file = missionResultFileName(resultId);
-    const dirs = [deps.recordingsDir, ...(resultId.startsWith("usability-") ? [deps.uxReportsDir] : [])];
+    const dirs = deps.resultDirsFor?.(resultId) ?? [deps.recordingsDir, ...(resultId.startsWith("usability-") ? [deps.uxReportsDir] : [])];
     return dirs.filter((d): d is string => d !== undefined).map((d) => join(d, file));
   };
 

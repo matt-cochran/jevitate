@@ -15,7 +15,7 @@ installMissionKillSwitch();
 // `~/.jevitate/*` is the product's runtime-data convention. See data-dir.ts.
 const profiles = new ProfileManager(resolveDataDir(["profiles"]));
 const dbPath = resolveDataDir(["db.sqlite"]);
-const program = buildProgram({ profiles, dbPath });
+const program = buildProgram({ profiles, dbPath, logs: { autoPrune: true } });
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(`${String(err)}\n`);
   process.exitCode = 1;

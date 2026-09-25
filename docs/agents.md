@@ -61,7 +61,7 @@ Journey, never drive the page directly. The served tool list is checked against 
 
 `queue_exploration` only enqueues a mission (`~/.jevitate/missions/queue/<missionId>.json`).
 `jevitate mission run` drains the queue: each mission runs through the runner its strategy uses on
-the CLI, its result lands in `~/.jevitate/recordings`, and its queue record moves
+the CLI, its result lands in `.jevitate/logs/<date>/`, and its queue record moves
 `queued → running → done | failed`. `get_mission_result {id: missionId}` reports `queued`/`running`
 (`pending: true`), the finished result, or `failed` (an error: it could not run, e.g. its target was
 unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
