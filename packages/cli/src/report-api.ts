@@ -80,20 +80,31 @@ export function loadRunFile(path: string): RunRecord | null {
   return runFromMissionResult(path, raw);
 }
 
-/** Every result in `dirs` (non-recursive), oldest first. Missing dirs are skipped. */
+const MAX_SCAN_DEPTH = 8;
+
+/**
+ * Every result in `dirs` and their subdirectories (#171: a `runs/<id>/…result.json` layout), oldest
+ * first. Missing dirs are skipped; dot-dirs, `node_modules` and symlinked dirs are not walked.
+ */
 export function scanRuns(dirs: readonly string[]): RunRecord[] {
   const seen = new Set<string>();
   const runs: RunRecord[] = [];
-  for (const dir of dirs) {
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
-    for (const name of readdirSync(dir).sort()) {
-      if (!isResultName(name)) continue;
-      const path = resolve(dir, name);
-      if (seen.has(path)) continue;
+  const walk = (dir: string, depth: number): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < MAX_SCAN_DEPTH && !entry.name.startsWith(".") && entry.name !== "node_modules") walk(path, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || !isResultName(entry.name) || seen.has(path)) continue;
       seen.add(path);
       const run = loadRunFile(path);
       if (run !== null) runs.push(run);
     }
+  };
+  for (const dir of dirs) {
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+    walk(dir, 0);
   }
   return runs.sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.runId.localeCompare(b.runId));
 }
@@ -200,7 +211,9 @@ export function resolveRunRef(ref: string, ctx: RunRefContext): RunRecord[] {
     return [run];
   }
   const tag = readBaseline(ref, ctx.baselinesDir);
-  if (tag !== null) return [...tag.runs];
+  // #171: a tag snapshotted before runs carried their scope re-reads it from the result file, when
+  // that still exists (otherwise the run compares by mode and target only).
+  if (tag !== null) return tag.runs.map((r) => (r.scope === undefined && existsSync(r.path) ? (loadRunFile(r.path) ?? r) : r));
   const id = runIdOf(ref);
   for (const dir of ctx.dirs) {
     for (const candidate of [join(dir, `${id}.result.json`), join(dir, `${id}.json`)]) {
