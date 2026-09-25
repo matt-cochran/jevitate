@@ -29,7 +29,7 @@ import {
 } from "../index.js";
 import type { MissionFailure } from "@jevitate/domain";
 import type { SettleConfig, TimingConfig } from "../settle-config.js";
-import type { HangSignal } from "../hang.js";
+import { outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
@@ -746,9 +746,12 @@ async function runInductionFrontier(
       }
 
       // A hang: record it (reproduced from the path that led here), reset to a known state and keep
-      // exploring the rest of the frontier. The hung state is never expanded.
+      // exploring the rest of the frontier. The hung state is never expanded. Only IN-SCOPE pages
+      // are hang-checked (#193): a page reached only by a departure is outside the target, so —
+      // like every other out-of-scope page — it is never judged; its hang signal is noted on the
+      // departure below as advisory, never a finding, and never part of the mission outcome.
       const hang = seenHang.last;
-      if (hang !== null) {
+      if (hang !== null && inScope(snap.url)) {
         transcript.record({
           op: item.op,
           control: liveControl,
@@ -809,12 +812,23 @@ async function runInductionFrontier(
           chosenBy: "strategy",
           strategy: strategyLabel,
           actOk: true,
-          reason: `left the target scope (landed on ${landed}); not expanded`,
+          reason: joinReasons([
+            `left the target scope (landed on ${landed}); not expanded`,
+            hang === null ? undefined : outOfScopeHangNote(hang),
+          ]),
           snapshot: decidedOn,
           ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
         });
         currentFingerprint = newFingerprint;
         departed = true;
+        if (hang !== null) {
+          // The page still looked hung: leave it for a fresh one when the mission can open one (the
+          // next item's reach re-navigates to the seed either way). Never a finding, never a stop.
+          await guard(sessions.reset(hang));
+          await guard(monitorFor(sessions.page).instrument());
+          safety.attach(monitorFor(sessions.page));
+          currentFingerprint = "";
+        }
         continue;
       }
 
@@ -901,6 +915,11 @@ async function runInductionFrontier(
     watchdog.stop();
     await sessions.closeOwned();
   }
+}
+
+/** Joins the non-empty parts of a transcript reason. */
+function joinReasons(parts: ReadonlyArray<string | undefined>): string {
+  return parts.filter((p): p is string => p !== undefined && p !== "").join("; ");
 }
 
 function pathOf(url: string): string {

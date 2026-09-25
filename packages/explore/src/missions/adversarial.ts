@@ -10,7 +10,7 @@ import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
 import { monitorFor, type PageMonitor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
-import { hangFingerprint, type HangSignal } from "../hang.js";
+import { hangFingerprint, outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
 import { hostProbe, type HostPressure, type HostProbe } from "../host-pressure.js";
 import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
@@ -1112,7 +1112,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       );
       lastRecordedTarget = null;
       let restarted: Awaited<ReturnType<typeof restartAtSeed>>;
-      if (next.hang !== null) {
+      // Only IN-SCOPE pages are hang-checked (#193): a page reached by a departure is outside the
+      // target, so its hang signal is advisory (noted on the departure), never a finding.
+      if (next.hang !== null && inScope(snap.url)) {
         await recordHang(next.hang, next.snapshot, next.timing);
         // Keep hunting: reset to a known state (a fresh page at the start URL) and go on, within
         // budget. The hung route is not followed again (visit-route remembers it).
@@ -1132,12 +1134,21 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           chosenBy: "strategy",
           strategy: "scope-reset",
           actOk: true,
-          reason: `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+          reason: joinReasons([
+            `left the target scope (landed on ${landed}); reset to the start URL${fresh ? " in a fresh page" : ""}`,
+            next.hang === null ? undefined : outOfScopeHangNote(next.hang),
+          ]),
           snapshot: snap,
           ...(snapTiming === undefined ? {} : { timing: snapTiming }),
         });
         snapTiming = undefined;
-        await sessions.fresh();
+        // A page that still looked hung is left the way a hang is (a fresh page, or — when none can
+        // be opened — a stop if it is unresponsive); any other departure just moves to a fresh page.
+        if (next.hang === null) await sessions.fresh();
+        else if (!(await sessions.reset(next.hang))) {
+          last = null;
+          return { kind: "stop", stop: "hang" };
+        }
         restarted = await restartAtSeed();
       } else {
         return { kind: "ok" };
