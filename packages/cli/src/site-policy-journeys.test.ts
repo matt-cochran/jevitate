@@ -52,7 +52,9 @@ async function withPolicy(policy: object, fn: (h: ReturnType<typeof harness>, di
     const h = harness(db);
     writeFileSync(join(root, "policy.json"), JSON.stringify(policy));
     // Set by a page URL: the policy is keyed by its origin.
-    expect((await h.run(["site", "policy", "set", `${ORIGIN}/cart`, "--file", join(root, "policy.json"), "--json"])).ok).toBe(true);
+    const set = (await h.run(["site", "policy", "set", `${ORIGIN}/cart`, "--file", join(root, "policy.json"), "--json"])) as { ok: boolean; data?: { site: string } };
+    expect(set.ok).toBe(true);
+    expect(set.data?.site).toBe(ORIGIN); // reported under the origin it is stored by, not the page URL given
     await fn(h, { journeys, db });
   } finally {
     rmSync(root, { recursive: true, force: true });

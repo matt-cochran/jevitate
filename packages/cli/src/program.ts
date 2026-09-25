@@ -785,13 +785,15 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const dbPath = resolveDbPath(deps, db);
-        await withSitePolicyRepository(dbPath, (repository) => repository.set(sitePolicyKey(siteId), account, policy));
-        const envelope = ok({ site: siteId, account, version: policy.version });
+        // The policy is stored (and reported) under the site's origin: a page URL names its origin.
+        const site = sitePolicyKey(siteId);
+        await withSitePolicyRepository(dbPath, (repository) => repository.set(site, account, policy));
+        const envelope = ok({ site, account, version: policy.version });
         if (json) {
           emitJson(program, envelope);
         } else {
           program.configureOutput().writeOut?.(
-            `policy for '${siteId}' (account '${account}') set to version ${policy.version}\n`
+            `policy for '${site}' (account '${account}') set to version ${policy.version}\n`
           );
           process.exitCode = 0;
         }

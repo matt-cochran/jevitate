@@ -360,6 +360,7 @@ describe("shared decision transcript — every model-deciding strategy writes on
           nowIso: () => "2026-09-23T00:00:00.000Z",
         });
         expect(result.transcriptPath).toBe(join(outDir, "coverage-2026-09-23T00-00-00-000Z.transcript.json"));
+        expect(result.strategy).toBe("coverage");
         const transcript = await readTranscript(result.transcriptPath);
         expect(transcript.length).toBe(result.coverage.transitionsExercised);
         expect(transcript.every((e) => e.op === "click" && e.strategy === "coverage-frontier" && e.actOk)).toBe(true);
@@ -400,7 +401,7 @@ describe("shared decision transcript — every model-deciding strategy writes on
   );
 
   it(
-    "coverage: --save-storage-state writes the context's storageState at the end, mode 0600 (#82)",
+    "coverage (exploratory): --save-storage-state writes the context's storageState at the end, mode 0600 (#82)",
     async () => {
       const outDir = await mkdtemp(join(tmpdir(), "jevitate-cov-save-state-"));
       const saveTo = join(outDir, "state.json");
@@ -412,8 +413,11 @@ describe("shared decision transcript — every model-deciding strategy writes on
           gen: new FakeGenerationGateway(),
           outDir,
           saveStorageState: saveTo,
+          strategy: "exploratory",
         });
         expect(result.outcome).toBe("exhausted");
+        // The result says which frontier ran (both write `coverage-*` files).
+        expect(result.strategy).toBe("exploratory");
         const written = JSON.parse(await readFile(saveTo, "utf8"));
         expect(written).toHaveProperty("cookies");
         expect(written).toHaveProperty("origins");
