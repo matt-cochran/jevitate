@@ -1714,6 +1714,13 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--paid <pattern>",
+      "an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze|Draft|Improve)\\b/i: treated like the built-in paid " +
+        "vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--allow-destructive",
       "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
     )
@@ -1916,6 +1923,7 @@ export function buildProgram(deps: CliDeps): Command {
         replyMaxChars?: string;
         jobWaitMs?: string;
         deny: string[];
+        paid: string[];
         allowDestructive?: boolean;
         allowWrites?: boolean;
         allowWrite: string[];
@@ -1977,6 +1985,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         validateDenyPatterns(o.deny);
+        validateDenyPatterns(o.paid, "--paid");
       } catch (err) {
         emitJson(program, fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -2022,6 +2031,7 @@ export function buildProgram(deps: CliDeps): Command {
             ignoreNoProgress: o.ignoreNoProgress,
             apiPrefixes: o.apiPrefix,
             deny: o.deny,
+            paid: o.paid,
             readRpc: o.readRpc,
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
             ...(o.allowWrites === true ? { allowWrites: true } : {}),

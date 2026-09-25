@@ -9,7 +9,7 @@ import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
 import type { MissionOutcome } from "@jevitate/domain";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
-import { SafetyPolicy, controlRisk, type SafetyConfig } from "./safety.js";
+import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
@@ -50,12 +50,15 @@ export interface WithheldWrite {
   readonly step: number;
   /** The recorded control's name. */
   readonly control: string;
-  readonly risk: "paid" | "destructive" | "denied";
+  /** `write` (#181): the run's own recorded side effects show this step sent a write, whatever its name. */
+  readonly risk: "paid" | "destructive" | "denied" | "write";
 }
 
 /** The inconclusive reason for a replay that was withheld. */
 export function withheldReason(w: WithheldWrite): string {
-  return `inconclusive: replay would repeat a paid/destructive write (step ${w.step}: "${w.control}", ${w.risk}); pass --hang-replay-writes to allow it`;
+  return w.risk === "write"
+    ? `inconclusive: replay would repeat a write the run recorded (step ${w.step}: "${w.control}" sent it); pass --hang-replay-writes to allow it`
+    : `inconclusive: replay would repeat a paid/destructive write (step ${w.step}: "${w.control}", ${w.risk}); pass --hang-replay-writes to allow it`;
 }
 
 /**
@@ -64,9 +67,20 @@ export function withheldReason(w: WithheldWrite): string {
  * `allowDestructive` / a goal that asked for the action lift the ORIGINAL run's refusal, never the
  * replay's: the run already sent that write once.
  */
-export function replayWouldRepeatWrite(recording: Recording, upTo: number, safety: SafetyConfig | undefined): WithheldWrite | null {
+export function replayWouldRepeatWrite(
+  recording: Recording,
+  upTo: number,
+  safety: SafetyConfig | undefined,
+  writtenBy: readonly string[] = [],
+): WithheldWrite | null {
   if (safety?.hangReplayWrites === true) return null;
-  const deny = new SafetyPolicy({ ...(safety?.deny === undefined ? {} : { deny: safety.deny }), allowDestructive: true });
+  const deny = new SafetyPolicy({
+    ...(safety?.deny === undefined ? {} : { deny: safety.deny }),
+    ...(safety?.paid === undefined ? {} : { paid: safety.paid }),
+    allowDestructive: true,
+  });
+  const norm = (n: string): string => n.replace(/\s+/g, " ").trim().toLowerCase();
+  const wrote = new Set(writtenBy.map(norm));
   let i = 0;
   for (const page of recording.pages) {
     for (const recorded of page.steps) {
@@ -76,9 +90,11 @@ export function replayWouldRepeatWrite(recording: Recording, upTo: number, safet
         const t = step.target;
         const name = (t.name ?? t.text ?? t.label ?? step.label ?? "").replace(/\s+/g, " ").trim();
         if (name !== "") {
-          const r = controlRisk(name, t.role);
-          if (r !== null && (r.risk === "paid" || r.risk === "destructive")) return { step: i + 1, control: name, risk: r.risk };
+          const r = deny.riskOf({ name, role: t.role ?? "", descriptor: t });
+          if (r === "paid" || r === "destructive") return { step: i + 1, control: name, risk: r };
           if (deny.refuses({ name, role: t.role ?? "", descriptor: t }) !== null) return { step: i + 1, control: name, risk: "denied" };
+          // #181: the run recorded this control firing a write — a replay would send it again.
+          if (wrote.has(norm(name))) return { step: i + 1, control: name, risk: "write" };
         }
       }
       i += 1;
@@ -229,6 +245,11 @@ export interface ReproduceHangParams {
    * `hangReplayWrites` opts in.
    */
   readonly safety?: SafetyConfig;
+  /**
+   * The controls the run's recorded side effects show firing a write (#181, `SideEffect.control`):
+   * a replay through one is withheld like a paid write, whatever the control's name.
+   */
+  readonly writtenBy?: readonly string[];
 }
 
 function firstLine(e: unknown): string {
@@ -239,7 +260,7 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
 
 /** One attempt: fresh session → replay → re-detect. Never throws. */
 export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangAttempt> {
-  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety);
+  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety, p.writtenBy);
   if (withheld !== null) {
     // Never replayed, so no evidence either way: not reproduced, not "fixed" — inconclusive.
     return { reproduced: false, kind: null, replay: "failed", ran: false, detail: withheldReason(withheld), withheld };
@@ -356,7 +377,7 @@ export async function reproduceHang(p: ReproduceHangParams): Promise<HangReprodu
   // stays UNCONFIRMED — inconclusive, never a crash and never a non-reproduction.
   if (attempts === 0) return NOT_REPLAYED;
   // #153: a replay that would re-send a paid/destructive write is not run at all (by default).
-  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety);
+  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety, p.writtenBy);
   if (withheld !== null) return { attempts, ran: 0, reproduced: 0, status: "inconclusive", runs: [], withheld };
   const runs: HangAttempt[] = [];
   for (let i = 0; i < attempts; i++) runs.push(await replayAndDetectHang(p));
