@@ -1,6 +1,6 @@
 import { redactText } from "@jevitate/ai-core";
 import { worstOutcome, type MissionOutcome } from "@jevitate/domain";
-import type { TranscriptEntry } from "@jevitate/explore";
+import { normalizeRoute, type TranscriptEntry } from "@jevitate/explore";
 import {
   closeLogSources,
   openLogSources,
@@ -10,11 +10,14 @@ import {
 import {
   DotnetEntryGrouper,
   matchesLogDefect,
+  matchesLogIgnore,
   normalizeLogMessage,
   parseLogDefectSpec,
+  parseLogIgnoreSpec,
   parseLogLine,
   serverLogFingerprint,
   type LogDefectMatcher,
+  type LogIgnoreMatcher,
   type LogLevel,
   type LogLine,
 } from "./log-lines.js";
@@ -43,6 +46,8 @@ export interface ServerLogEvidence {
   readonly raw: string;
   readonly source: string;
   readonly epochMs: number;
+  /** The logger's own target/category, when known (#169). */
+  readonly target?: string;
 }
 
 export type TranscriptEntryWithLogs = TranscriptEntry & { readonly serverLogs?: readonly ServerLogEvidence[] };
@@ -73,6 +78,9 @@ export interface ServerLogsSummary {
   readonly topMessages: readonly ServerLogTopMessage[];
   readonly attachedLines: number;
   readonly unattributedLines: number;
+  /** Lines excluded by `--log-ignore` (#169 item 3) — known noise, never attached, never a defect
+   *  candidate, not counted in `byLevel`/`topMessages`. */
+  readonly ignoredLines: number;
   /**
    * False when `--log-defect` was given but at least one declared source is unhealthy: it never
    * opened/errored, OR it opened and delivered not one line while NOT declared `--log-quiet-ok`
@@ -133,6 +141,9 @@ export interface ServerLogRuntimeOptions {
   /** Raw `--log-source` specs (matched against a source's own `spec.raw`) that are allowed to
    *  deliver zero lines without making `oracleOk` false (#169's `--log-quiet-ok`). */
   readonly quietOk?: readonly string[];
+  /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
+   *  correlation AND the defect oracle, counted separately (`serverLogs.ignoredLines`). */
+  readonly logIgnore?: readonly LogIgnoreMatcher[];
   /** The journal's own listener — still called for every entry (the crash-safe flush is unchanged). */
   readonly onTranscriptEntry?: (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
 }
@@ -156,6 +167,8 @@ export class ServerLogRuntime {
   readonly #matchers: readonly LogDefectMatcher[];
   readonly #drainMs: number;
   readonly #quietOk: ReadonlySet<string>;
+  readonly #logIgnore: readonly LogIgnoreMatcher[];
+  #ignoredLines = 0;
   readonly #inner: ((entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void) | undefined;
   readonly #maxTotalLines = 20_000;
   #finished = false;
@@ -168,6 +181,7 @@ export class ServerLogRuntime {
     this.#matchers = opts.logDefect;
     this.#drainMs = opts.drainMs ?? DEFAULT_SERVER_LOG_DRAIN_MS;
     this.#quietOk = new Set(opts.quietOk ?? []);
+    this.#logIgnore = opts.logIgnore ?? [];
     this.#inner = opts.onTranscriptEntry;
     // One `openLogSources` call per spec: each source's `onLine` must stamp ITS OWN spec onto every
     // `LogLine` (a shared callback across sources could not tell them apart). Each source also gets
@@ -186,7 +200,15 @@ export class ServerLogRuntime {
 
   #pushLine(raw: string, epochMs: number, sourceRaw: string): void {
     if (this.#lines.length >= this.#maxTotalLines) return;
-    this.#lines.push(parseLogLine(raw, epochMs, sourceRaw));
+    const parsed = parseLogLine(raw, epochMs, sourceRaw);
+    // #169 item 3: a known-noise line is dropped here, BEFORE it can become step evidence, a
+    // `topMessages`/`byLevel` entry or a defect candidate — but it was still delivered by the
+    // source (already counted in `linesRead`), so it says nothing about the oracle's health.
+    if (this.#logIgnore.some((m) => matchesLogIgnore(parsed, m))) {
+      this.#ignoredLines += 1;
+      return;
+    }
+    this.#lines.push(parsed);
   }
 
   /** Flushes any still-pending `DotnetEntryGrouper` entry per source — the last entry in a .NET log
@@ -253,6 +275,7 @@ export class ServerLogRuntime {
         raw: redactText(line.raw, this.#secrets),
         source: line.source,
         epochMs: line.epochMs,
+        ...(line.target === undefined ? {} : { target: redactText(line.target, this.#secrets) }),
       });
       perStep.set(win.step, list);
       const rawList = perStepRaw.get(win.step) ?? [];
@@ -288,14 +311,18 @@ export class ServerLogRuntime {
         existing.count += 1;
         return;
       }
+      // #169 item 3: the STORED route is templated too (the shared #95/#127 templater, same as the
+      // fingerprint already used internally) — two occurrences that only differ by an id in the URL
+      // read as the same defect everywhere, not just in the hash.
+      const templatedRoute = route === UNATTRIBUTED_ROUTE ? route : normalizeRoute(route);
       grouped.set(fp, {
         count: 1,
         defect: {
           fingerprint: fp,
           related: [fp],
           kind: "server-log",
-          title: `Server log ${line.level} on ${route === UNATTRIBUTED_ROUTE ? "(unattributed)" : route}${line.target === undefined ? "" : ` (${line.target})`}: ${normalizedMessage.slice(0, 80)}`,
-          route,
+          title: `Server log ${line.level} on ${templatedRoute === UNATTRIBUTED_ROUTE ? "(unattributed)" : templatedRoute}${line.target === undefined ? "" : ` (${line.target})`}: ${normalizedMessage.slice(0, 80)}`,
+          route: templatedRoute,
           level: line.level,
           message: redactText(line.message, this.#secrets),
           occurrences: 1,
@@ -371,6 +398,7 @@ export class ServerLogRuntime {
       topMessages,
       attachedLines,
       unattributedLines: unattributed.length,
+      ignoredLines: this.#ignoredLines,
       oracleOk,
       ...(oracleReason === undefined ? {} : { oracleReason }),
     };
@@ -416,6 +444,11 @@ function recordingStepIndexFor(transcript: readonly TranscriptEntry[], uptoStep:
 /** Parses `--log-defect` values, failing closed on the first bad one. */
 export function parseLogDefectSpecs(raw: readonly string[]): LogDefectMatcher[] {
   return raw.map(parseLogDefectSpec);
+}
+
+/** Parses `--log-ignore` values, failing closed on the first bad one (#169 item 3). */
+export function parseLogIgnoreSpecs(raw: readonly string[]): LogIgnoreMatcher[] {
+  return raw.map(parseLogIgnoreSpec);
 }
 
 /**

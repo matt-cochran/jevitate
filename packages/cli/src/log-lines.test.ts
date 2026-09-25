@@ -3,8 +3,10 @@ import {
   DotnetEntryGrouper,
   levelAtLeast,
   matchesLogDefect,
+  matchesLogIgnore,
   normalizeLogMessage,
   parseLogDefectSpec,
+  parseLogIgnoreSpec,
   parseLogLine,
   serverLogFingerprint,
   LogSpecError,
@@ -185,6 +187,56 @@ describe("parseLogLine — .NET default console format (#165)", () => {
   });
 });
 
+describe("parseLogLine — .NET JSON console format (#165)", () => {
+  // `Console.UseSystemdLogging`/the JSON console formatter's own capitalized keys.
+  const LINE = '{"Timestamp":"2026-09-24T21:00:00.000Z","LogLevel":"Error","Category":"OutboundLabs.Orchestrate.Administration.StripeReconciliationHostedService","Message":"Stripe reconciliation sweep failed"}';
+
+  it("reads LogLevel/Message/Category/Timestamp (capitalized keys)", () => {
+    const l = parseLogLine(LINE, 1000, "x");
+    expect(l.level).toBe("error");
+    expect(l.message).toBe("Stripe reconciliation sweep failed");
+    expect(l.target).toBe("OutboundLabs.Orchestrate.Administration.StripeReconciliationHostedService");
+    expect(l.ownTimestamp).toBe(true);
+    expect(l.epochMs).toBe(Date.parse("2026-09-24T21:00:00.000Z"));
+  });
+
+  it("a Warning LogLevel maps to warn", () => {
+    const l = parseLogLine('{"LogLevel":"Warning","Message":"careful"}', 1000, "x");
+    expect(l.level).toBe("warn");
+  });
+});
+
+describe("parseLogLine — Serilog bracketed console format (#165)", () => {
+  it("reads [HH:mm:ss ERR] message", () => {
+    const l = parseLogLine("[21:03:11 ERR] duplicate key value violates unique constraint", 1000, "x");
+    expect(l.level).toBe("error");
+    expect(l.message).toBe("duplicate key value violates unique constraint");
+    expect(l.target).toBeUndefined();
+  });
+
+  it("reads [HH:mm:ss.fff WRN] SourceContext message, splitting the dotted SourceContext into target", () => {
+    const l = parseLogLine("[21:03:11.442 WRN] MyApp.Services.FooService request took longer than expected", 1000, "x");
+    expect(l.level).toBe("warn");
+    expect(l.target).toBe("MyApp.Services.FooService");
+    expect(l.message).toBe("request took longer than expected");
+  });
+
+  it("maps every Serilog abbreviation (VRB/DBG/INF/WRN/ERR/FTL)", () => {
+    expect(parseLogLine("[10:00:00 VRB] x", 1000, "x").level).toBe("debug");
+    expect(parseLogLine("[10:00:00 DBG] x", 1000, "x").level).toBe("debug");
+    expect(parseLogLine("[10:00:00 INF] x", 1000, "x").level).toBe("info");
+    expect(parseLogLine("[10:00:00 WRN] x", 1000, "x").level).toBe("warn");
+    expect(parseLogLine("[10:00:00 ERR] x", 1000, "x").level).toBe("error");
+    expect(parseLogLine("[10:00:00 FTL] x", 1000, "x").level).toBe("error");
+  });
+
+  it("does not misparse a plain [LEVEL] bracket (no time-of-day) as Serilog", () => {
+    const l = parseLogLine("[ERROR] request failed", 1000, "x");
+    expect(l.level).toBe("error");
+    expect(l.target).toBeUndefined();
+  });
+});
+
 describe("DotnetEntryGrouper (#165)", () => {
   it("buffers a header, then flushes it as one entry once a non-continuation line arrives", () => {
     const g = new DotnetEntryGrouper();
@@ -341,5 +393,39 @@ describe("matchesLogDefect", () => {
     const m = parseLogDefectSpec("/Not Authorized for feature/");
     expect(matchesLogDefect({ level: "unknown", raw: "Not Authorized for feature AllOrganizations_View" }, m)).toBe(true);
     expect(matchesLogDefect({ level: "unknown", raw: "all good" }, m)).toBe(false);
+  });
+});
+
+describe("parseLogIgnoreSpec / matchesLogIgnore (#169 item 3)", () => {
+  it("parses a plain substring", () => {
+    const m = parseLogIgnoreSpec("plan lifecycle step failed");
+    expect(m).toEqual({ kind: "substring", value: "plan lifecycle step failed", raw: "plan lifecycle step failed" });
+  });
+
+  it("parses a /regex/flags pattern", () => {
+    const m = parseLogIgnoreSpec("/retry tick$/i");
+    expect(m.kind).toBe("pattern");
+    if (m.kind === "pattern") {
+      expect(m.re.test("scheduler RETRY TICK")).toBe(true);
+      expect(m.re.flags).toBe("i");
+    }
+  });
+
+  it("rejects an empty substring and an invalid/overly long regex", () => {
+    expect(() => parseLogIgnoreSpec("")).toThrow(LogSpecError);
+    expect(() => parseLogIgnoreSpec("/(unterminated/")).toThrow(LogSpecError);
+    expect(() => parseLogIgnoreSpec(`/${"a".repeat(600)}/`)).toThrow(LogSpecError);
+  });
+
+  it("a substring matcher matches anywhere in the RAW line", () => {
+    const m = parseLogIgnoreSpec("background retry");
+    expect(matchesLogIgnore({ raw: "ERROR: background retry tick for job 3" }, m)).toBe(true);
+    expect(matchesLogIgnore({ raw: "ERROR: real bug" }, m)).toBe(false);
+  });
+
+  it("a pattern matcher matches the RAW line", () => {
+    const m = parseLogIgnoreSpec("/^ERROR: background/");
+    expect(matchesLogIgnore({ raw: "ERROR: background retry tick" }, m)).toBe(true);
+    expect(matchesLogIgnore({ raw: "WARN: background retry tick" }, m)).toBe(false);
   });
 });

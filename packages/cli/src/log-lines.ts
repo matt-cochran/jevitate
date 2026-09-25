@@ -23,12 +23,13 @@ function normalizeLevelName(raw: string): LogLevel {
   const v = raw.trim().toLowerCase();
   // "fail"/"crit" are .NET's `Microsoft.Extensions.Logging` console-formatter tokens (#165): `fail`
   // maps to `error`, and `crit`("critical") also maps to `error` — this LogLevel enum has no
-  // separate "critical" tier, so both collapse the same way `fatal` already did.
-  if (v === "error" || v === "err" || v === "fatal" || v === "critical" || v === "crit" || v === "fail") return "error";
-  if (v === "warn" || v === "warning") return "warn";
-  if (v === "info" || v === "notice") return "info";
-  // "dbug"/"trce" are .NET's own short tokens for debug/trace.
-  if (v === "debug" || v === "trace" || v === "verbose" || v === "dbug" || v === "trce") return "debug";
+  // separate "critical" tier, so both collapse the same way `fatal` already did. "err"/"ftl" are
+  // Serilog's own 3-letter abbreviations (its default console theme: VRB/DBG/INF/WRN/ERR/FTL).
+  if (v === "error" || v === "err" || v === "fatal" || v === "critical" || v === "crit" || v === "fail" || v === "ftl") return "error";
+  if (v === "warn" || v === "warning" || v === "wrn") return "warn";
+  if (v === "info" || v === "notice" || v === "inf") return "info";
+  // "dbug"/"trce" are .NET's own short tokens for debug/trace; "dbg"/"vrb" are Serilog's.
+  if (v === "debug" || v === "trace" || v === "verbose" || v === "dbug" || v === "trce" || v === "dbg" || v === "vrb") return "debug";
   return "unknown";
 }
 
@@ -73,7 +74,9 @@ function firstDefined(obj: Readonly<Record<string, unknown>>, keys: readonly str
 }
 
 const LEVEL_KEYS = ["level", "severity", "loglevel", "log_level", "LogLevel"];
-const TIME_KEYS = ["time", "timestamp", "ts", "@timestamp"];
+// "Timestamp" (capital T, #165/#169): the .NET JSON console formatter's own key
+// (`{"Timestamp":…,"LogLevel":"Error","Category":…,"Message":…}`).
+const TIME_KEYS = ["time", "timestamp", "ts", "@timestamp", "Timestamp"];
 /** Top-level message-ish keys, highest priority first. */
 const TOP_MESSAGE_KEYS = ["message", "msg", "Message"];
 /** `fields.<key>` — Rust `tracing`/`tracing-subscriber`'s JSON formatter (#169) nests the actual
@@ -208,6 +211,36 @@ function parseDotnetLine(trimmedWhole: string, source: string, arrivalEpochMs: n
   };
 }
 
+/**
+ * Serilog's default console theme: `[HH:mm:ss(.fff) LVL] rest`, `LVL` one of its 3-letter
+ * abbreviations (VRB/DBG/INF/WRN/ERR/FTL). A custom output template commonly puts `SourceContext`
+ * right after the bracket (`[10:00:00 ERR] MyApp.Services.FooService request failed`) — detected as
+ * a dotted identifier with no spaces, immediately followed by the rest of the message.
+ */
+const SERILOG_RE = /^\[(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)\s+(VRB|DBG|INF|WRN|ERR|FTL)\]\s*(.*)$/i;
+const SERILOG_SOURCE_CONTEXT_RE = /^([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s+(.+)$/;
+
+function parseSerilogLine(trimmed: string, source: string, arrivalEpochMs: number): LogLine | null {
+  const m = SERILOG_RE.exec(trimmed);
+  if (m === null) return null;
+  const level = normalizeLevelName(m[2] ?? "");
+  const rest = (m[3] ?? "").trim();
+  const scMatch = SERILOG_SOURCE_CONTEXT_RE.exec(rest);
+  const target = scMatch === null ? undefined : scMatch[1];
+  const message = scMatch === null ? rest : (scMatch[2] ?? "").trim();
+  return {
+    level,
+    message: message !== "" ? message : rest,
+    raw: trimmed,
+    // Serilog's default theme has no date, only a time-of-day — too ambiguous to trust as the
+    // line's own epoch (which day?); the arrival time is the honest choice.
+    epochMs: arrivalEpochMs,
+    ownTimestamp: false,
+    source,
+    ...(target === undefined ? {} : { target }),
+  };
+}
+
 const BRACKETED_LEVEL = /\[(ERROR|ERR|FATAL|CRITICAL|CRIT|WARN(?:ING)?|INFO|NOTICE|DEBUG|TRACE)\]/i;
 const BARE_LEVEL = /\b(ERROR|FATAL|WARN(?:ING)?|INFO|DEBUG|TRACE)\b:?/;
 
@@ -223,8 +256,9 @@ function parseBracketedLine(trimmed: string, source: string, arrivalEpochMs: num
  * Parses one raw log line — or, for the .NET console format (#165), one already-grouped multi-line
  * entry (see `DotnetEntryGrouper`): JSON (`level`/`severity` + `time`/`timestamp`/`ts`), then logfmt
  * (`level=error msg="…" time=…`), then the .NET default console formatter (`lvl: Category[id]` +
- * indented continuation lines), then a bracketed/bare level with an optional leading ISO timestamp,
- * else falls back to the line verbatim with an `unknown` level and the arrival time. Never throws.
+ * indented continuation lines), then Serilog's bracketed console theme (`[HH:mm:ss ERR] …`), then a
+ * generic bracketed/bare level with an optional leading ISO timestamp, else falls back to the line
+ * verbatim with an `unknown` level and the arrival time. Never throws.
  */
 export function parseLogLine(raw: string, arrivalEpochMs: number, source: string): LogLine {
   const trimmed = raw.trim();
@@ -233,6 +267,7 @@ export function parseLogLine(raw: string, arrivalEpochMs: number, source: string
     parseJsonLine(trimmed, source, arrivalEpochMs) ??
     parseLogfmtLine(trimmed, source, arrivalEpochMs) ??
     parseDotnetLine(trimmed, source, arrivalEpochMs) ??
+    parseSerilogLine(trimmed, source, arrivalEpochMs) ??
     parseBracketedLine(trimmed, source, arrivalEpochMs)
   );
 }
@@ -372,4 +407,46 @@ export function parseLogDefectSpec(raw: string): LogDefectMatcher {
 /** Whether a parsed line matches a `--log-defect` matcher. */
 export function matchesLogDefect(line: Pick<LogLine, "level" | "raw">, matcher: LogDefectMatcher): boolean {
   return matcher.kind === "level" ? levelAtLeast(line.level, matcher.level) : matcher.re.test(line.raw);
+}
+
+/**
+ * A `--log-ignore` matcher (#169 item 3): known-noise lines (a periodic background job's own
+ * expected error, say) excluded from BOTH correlation (never attached as step evidence) and the
+ * `--log-defect` oracle (never a candidate defect, never counted in `topMessages`/`byLevel`) — but
+ * still counted toward the source's `linesRead` (the oracle demonstrably tailed something) and
+ * reported separately as `serverLogs.ignoredLines`, so an operator can see what was filtered.
+ */
+export type LogIgnoreMatcher =
+  | { readonly kind: "pattern"; readonly re: RegExp; readonly raw: string }
+  | { readonly kind: "substring"; readonly value: string; readonly raw: string };
+
+const MAX_IGNORE_LENGTH = 500;
+
+/**
+ * Parses one `--log-ignore` value: `/pattern/flags` (bounded length, compiled once via `new RegExp`
+ * — never `eval`ed) or a plain substring, matched against the line's RAW text. Throws `LogSpecError`
+ * on anything empty/invalid/too long, failing closed before any browser opens.
+ */
+export function parseLogIgnoreSpec(raw: string): LogIgnoreMatcher {
+  const m = REGEX_SPEC.exec(raw);
+  if (m !== null) {
+    const pattern = m[1] ?? "";
+    const flags = m[2] ?? "";
+    if (pattern.length > MAX_IGNORE_LENGTH) {
+      throw new LogSpecError(`--log-ignore pattern is too long (max ${MAX_IGNORE_LENGTH} chars): ${raw.slice(0, 40)}…`);
+    }
+    try {
+      return { kind: "pattern", re: new RegExp(pattern, flags), raw };
+    } catch (e) {
+      throw new LogSpecError(`--log-ignore: invalid regex ${JSON.stringify(raw)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (raw === "") throw new LogSpecError("--log-ignore: empty pattern");
+  if (raw.length > MAX_IGNORE_LENGTH) throw new LogSpecError(`--log-ignore substring is too long (max ${MAX_IGNORE_LENGTH} chars)`);
+  return { kind: "substring", value: raw, raw };
+}
+
+/** Whether a parsed line matches a `--log-ignore` matcher (substring/regex over the RAW line). */
+export function matchesLogIgnore(line: Pick<LogLine, "raw">, matcher: LogIgnoreMatcher): boolean {
+  return matcher.kind === "pattern" ? matcher.re.test(line.raw) : line.raw.includes(matcher.value);
 }

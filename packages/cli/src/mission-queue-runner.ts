@@ -20,7 +20,7 @@ import {
 import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
-import { parseLogDefectSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
 
 /**
  * The queue drain behind `jevitate mission run` (#117). `queue_exploration` (MCP) only ENQUEUES —
@@ -201,6 +201,7 @@ function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig
     logDefect: parseLogDefectSpecs(config.logDefect ?? []),
     allowLogCmd,
     quietOk: config.logQuietOk ?? [],
+    logIgnore: parseLogIgnoreSpecs(config.logIgnore ?? []),
   };
 }
 

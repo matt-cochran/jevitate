@@ -144,7 +144,7 @@ import {
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
-import { parseLogDefectSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
 import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
@@ -1803,6 +1803,12 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--log-ignore <regex|substring>",
+      "excludes known-noise backend log lines (repeatable, /regex/flags/ over the raw line or a plain substring) from BOTH correlation and the --log-defect oracle (#169 item 3) — e.g. a periodic background job's own expected error. Counted separately as serverLogs.ignoredLines; never makes --log-quiet-ok unnecessary, since an ignored line still proves the source is being tailed",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
     )
@@ -1863,6 +1869,7 @@ export function buildProgram(deps: CliDeps): Command {
         allowLogCmd?: boolean;
         logDefect: string[];
         logQuietOk: string[];
+        logIgnore: string[];
         serverLogDrainMs?: string;
         actor: string[];
         repeat?: string;
@@ -2108,11 +2115,13 @@ export function buildProgram(deps: CliDeps): Command {
         try {
           const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
           const logDefect = parseLogDefectSpecs(o.logDefect);
+          const logIgnore = parseLogIgnoreSpecs(o.logIgnore);
           serverLog = {
             sources,
             logDefect,
             allowLogCmd: o.allowLogCmd ?? false,
             quietOk: o.logQuietOk,
+            logIgnore,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {

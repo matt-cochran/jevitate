@@ -47,6 +47,9 @@ export interface TargetConfig {
   readonly allowLogCmd?: boolean;
   /** Raw `logSources` entries declared legitimately quiet (mirrors `--log-quiet-ok`, #169). */
   readonly logQuietOk?: readonly string[];
+  /** Raw `--log-ignore` specs (a `/regex/` or a plain substring), evaluated the same way as the CLI
+   *  flag (#169 item 3). */
+  readonly logIgnore?: readonly string[];
 }
 
 export class TargetConfigError extends Error {
@@ -73,6 +76,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logDefect?: string[];
     allowLogCmd?: boolean;
     logQuietOk?: string[];
+    logIgnore?: string[];
   } = {};
   if (o.fixtures !== undefined) {
     if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
@@ -81,6 +85,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   if (o.logSources !== undefined) out.logSources = strings(o.logSources, `${where}.logSources`);
   if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
   if (o.logQuietOk !== undefined) out.logQuietOk = strings(o.logQuietOk, `${where}.logQuietOk`);
+  if (o.logIgnore !== undefined) out.logIgnore = strings(o.logIgnore, `${where}.logIgnore`);
   if (o.allowLogCmd !== undefined) {
     if (typeof o.allowLogCmd !== "boolean") throw new TargetConfigError(`${where}.allowLogCmd must be a boolean`);
     out.allowLogCmd = o.allowLogCmd;
@@ -212,5 +217,6 @@ export function resolveTargetConfig(
     ...(base.logDefect === undefined ? {} : { logDefect: base.logDefect }),
     ...(base.allowLogCmd === undefined ? {} : { allowLogCmd: base.allowLogCmd }),
     ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
+    ...(base.logIgnore === undefined ? {} : { logIgnore: base.logIgnore }),
   };
 }
