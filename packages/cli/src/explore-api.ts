@@ -44,6 +44,7 @@ import {
   type SuccessCheckResult,
   type SuccessWhen,
   type SecretField,
+  type BudgetTrajectory,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
@@ -396,6 +397,8 @@ export interface RunExplorationResult {
   readonly timing: TimingSummary;
   /** Hang findings (0 or 1: the loop stops at a hang), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
+  /** Declared mission spend budgets (#150/#180): the observed trajectory, whatever the outcome. */
+  readonly budget?: BudgetTrajectory[];
   /** The run's Recording (also written to `recordingPath`). */
   readonly recording: Recording;
   /** Where the run happened — what `verify-fix` needs to replay a finding. */
@@ -669,6 +672,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       },
       recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
+      // #180: the declared budgets' observed trajectory, whatever the outcome (a hang included).
+      ...(mission.budget === undefined ? {} : { budget: mission.budget }),
       sideEffects: mission.run.sideEffects,
       ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
       engine,
@@ -921,6 +926,8 @@ export interface RunCoverageMissionResult {
   readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
+  /** Declared mission spend budgets (#150/#180): the observed trajectory, whatever the outcome. */
+  readonly budget?: BudgetTrajectory[];
   /** A coverage run has no single Recording: each finding carries the path that reached it. */
   readonly recording: null;
   /** Where the run happened — what `verify-fix` needs to replay a finding. */
@@ -1096,6 +1103,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       transcriptPath: journal.transcriptPath,
       sideEffects: result.sideEffects ?? [],
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
+      ...(result.budget === undefined ? {} : { budget: result.budget }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
