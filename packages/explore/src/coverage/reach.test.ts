@@ -84,4 +84,36 @@ describe("reachFrontierState", () => {
     });
     expect(result).toEqual({ ok: false, reason: "timeout", detail: "the reset to the seed did not finish within 50ms" });
   });
+
+  test("#183: the seed loaded but the prefix replay hung or failed — the ITEM is stale, never an unreachable seed", async () => {
+    let calls = 0;
+    const actor = {
+      ...fakeActor(),
+      // The seed navigate answers; anything the prefix replay asks of the actor never does.
+      attemptsTo: vi.fn(() => (calls++ === 0 ? Promise.resolve() : new Promise<void>(() => undefined))),
+      abilityTo: vi.fn(() => new Promise<never>(() => undefined)),
+    };
+    const withPrefix: FrontierItem = {
+      ...baseItem,
+      pathPrefix: {
+        version: "1",
+        site: "https://x.test",
+        pages: [{ url: "https://x.test/a", steps: [{ step: { kind: "click", target: { role: "button", name: "Frameworks" }, expect: { kind: "urlIncludes", text: "" } } }] }],
+      } as never,
+    };
+    const result = await reachFrontierState({
+      actor: actor as never,
+      seedUrl: "https://x.test/a",
+      item: withPrefix,
+      snapshotNow: async () => ({ url: "https://x.test/a", signature: "s", truncated: false, controls: [] }),
+      homeUrl: "https://x.test/a",
+      currentUrl: () => "https://x.test/a",
+      timeoutMs: 200,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("stale");
+      expect(result.detail).toMatch(/^the seed loaded, but replaying the path to this state failed at step 1: /);
+    }
+  });
 });
