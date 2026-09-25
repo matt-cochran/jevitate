@@ -1310,6 +1310,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
           track.lastRecordedTarget = null;
           tracker.countAction();
+          // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
+          valueLog.reloaded();
           history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
         } else {
           history.push(`reload failed: ${r.reason ?? "?"}`);

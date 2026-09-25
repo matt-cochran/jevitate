@@ -125,6 +125,36 @@ describe("fill — add-another flows take the next item (#123)", () => {
     expect(goalListsSeveral("Sign up as ada@example.com")).toBe(false);
   });
 
+  it("a count word in a compound or qualifier phrase lists no items (#184)", () => {
+    for (const goal of [
+      "Sign in as d3@test.allumata.dev with the bound password, then complete the two-factor authentication step with the code from the authenticator.",
+      "Set up two-factor authentication",
+      "Enable 2FA on the account",
+      "Enter the one-time code",
+      "Complete the second factor",
+      "Connect a third-party integration",
+      "Finish the 2-step verification",
+      "Retry the login each time it fails",
+    ]) {
+      expect(goalListsSeveral(goal), goal).toBe(false);
+    }
+    for (const goal of ["Create two interview links", "Add both customers", "Add 3 contacts", "Invite dana@example.com and lee@example.com", "Add another address"]) {
+      expect(goalListsSeveral(goal), goal).toBe(true);
+    }
+  });
+
+  it("FieldValueLog: a reload undoes the last submit — retyping its value is a retry (#184)", () => {
+    const log = new FieldValueLog();
+    log.typed("Email", "dana@example.com");
+    log.submitted();
+    log.typed("Email", "lee@example.com");
+    log.submitted();
+    log.reloaded();
+    expect(log.used("Email")).toEqual(["dana@example.com"]);
+    log.reloaded();
+    expect(log.used("Email")).toEqual(["dana@example.com"]);
+  });
+
   it("FieldValueLog: a typed value is used only once submitted, keyed by the bare label", () => {
     const log = new FieldValueLog();
     log.typed("Name *", "Dana Ruiz");

@@ -194,7 +194,12 @@ export function fieldKind(fieldLabel: string, field: FieldShape): FieldKind | nu
  * "another", or several email addresses) — an add-another flow, where one field's values differ.
  */
 export function goalListsSeveral(goal: string): boolean {
-  if (/\b(two|three|four|five|six|seven|eight|nine|ten|several|multiple|each|both|another|second|third)\b/i.test(goal)) return true;
+  // A count word inside a compound or a fixed phrase ("two-factor", "second factor", "2-step",
+  // "third-party") names no items (#184): hyphen-joined words are fused into one token first, and a
+  // count word before a qualifier noun ("second factor", "each time") is no count.
+  const COUNT = String.raw`\b(?:two|three|four|five|six|seven|eight|nine|ten|several|multiple|each|both|another|second|third)\b`;
+  const QUALIFIED = String.raw`(?!\s+(?:factors?|steps?|party|parties|hand|half|time|times|level|tier|way|place|attempt|try|opinion|thoughts?|nature|glance|look)\b)`;
+  if (new RegExp(COUNT + QUALIFIED, "i").test(goal.replace(/\b\w+-(?=\w)/g, (m) => m.replace(/\W/g, "_")))) return true;
   if (/\b(?:[2-9]|1\d)\s+(?:new\s+|more\s+|separate\s+|different\s+)?[a-z]+s\b/i.test(goal)) return true;
   const emails = new Set(goal.match(/[^\s@,;:"'<>()]+@[^\s@,;:"'<>()]+\.[a-z]{2,}/gi) ?? []);
   return emails.size >= 2;
@@ -211,6 +216,8 @@ const sameValue = (a: string, b: string): boolean =>
 export class FieldValueLog {
   readonly #pending = new Map<string, string>();
   readonly #used = new Map<string, string[]>();
+  /** What the latest submit sent, per field — undone by a reload (#184). */
+  readonly #lastBatch = new Map<string, string>();
 
   static key(label: string): string {
     return bareLabel(label).toLowerCase();
@@ -223,11 +230,29 @@ export class FieldValueLog {
 
   /** The form was submitted (or the page navigated): every typed value is now used. */
   submitted(): void {
+    if (this.#pending.size > 0) this.#lastBatch.clear();
     for (const [k, v] of this.#pending) {
+      this.#lastBatch.set(k, v);
       const list = this.#used.get(k) ?? [];
       if (!list.some((u) => sameValue(u, v))) list.push(v);
       this.#used.set(k, list);
     }
+    this.#pending.clear();
+  }
+
+  /**
+   * The page was reloaded (#184): the last submit did not take, so what it sent is a retry, not a
+   * used item — retyping the same value is allowed again.
+   */
+  reloaded(): void {
+    for (const [k, list] of this.#used) {
+      const last = this.#lastBatch.get(k);
+      if (last === undefined) continue;
+      const rest = list.filter((u) => !sameValue(u, last));
+      if (rest.length === 0) this.#used.delete(k);
+      else this.#used.set(k, rest);
+    }
+    this.#lastBatch.clear();
     this.#pending.clear();
   }
 
