@@ -202,6 +202,62 @@ describe("MissionFixtures — lifecycle", () => {
     expect(calls.at(-1)).toMatchObject({ method: "DELETE" });
   });
 
+  it("#166: a login step puts ${secretField.VAR} in its JSON body only; its secret token authenticates the next step", async () => {
+    // The in-memory-token SPA: log in with the --secret-field password, capture the token as a
+    // secret output, reset state through the API with it.
+    const raw = {
+      setup: [
+        { name: "login", method: "POST", url: "/Login", json: { email: "qa@example.test", password: "${secretField.APP_PASSWORD}" }, outputs: { token: "$.data" }, secretOutputs: ["token"] },
+        { name: "reset", method: "POST", url: "/api/v1/tool/profile", headers: { Authorization: "Bearer ${setup.token}" }, body: "reset=${secretField.APP_PASSWORD}" },
+      ],
+    };
+    const calls: Call[] = [];
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec(raw, BOUNDS),
+      auth: { secretFields: { APP_PASSWORD: "pw-SECRET-166" } },
+      fetchImpl: fakeFetch(calls, (c) => (c.url.endsWith("/Login") ? Response.json({ data: "tok-SECRET-166" }) : new Response(null, { status: 204 }))),
+    });
+    await fx.setup();
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({ email: "qa@example.test", password: "pw-SECRET-166" });
+    expect(calls[1]?.headers.Authorization).toBe("Bearer tok-SECRET-166");
+    expect(calls[1]?.body).toBe("reset=pw-SECRET-166");
+    // Never in the recorded log, the result record or what a replay persists.
+    for (const out of [fx.record(), fx.persisted()]) expect(JSON.stringify(out)).not.toMatch(/SECRET-166/);
+    expect(JSON.stringify(fx.persisted())).toContain("${secretField.APP_PASSWORD}");
+
+    // A failing step's detail is redacted too.
+    const failing = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ setup: [{ method: "POST", url: "/Login", json: { p: "${secretField.APP_PASSWORD}" } }] }, BOUNDS),
+      auth: { secretFields: { APP_PASSWORD: "pw-SECRET-166" } },
+      fetchImpl: (async () => {
+        throw new Error("socket hang up sending pw-SECRET-166");
+      }) as unknown as typeof fetch,
+    });
+    const err = await failing.setup().catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/fixture setup failed/);
+    expect((err as Error).message).not.toContain("pw-SECRET-166");
+    expect(JSON.stringify(failing.record())).not.toContain("pw-SECRET-166");
+  });
+
+  it("#166: an unknown ${secretField.VAR} is refused at validation; a secret never goes in a URL or a public credential header", () => {
+    const spec = parseFixtureSpec({ setup: [{ method: "POST", url: "/Login", json: { password: "${secretField.NOPE}" } }] }, BOUNDS);
+    expect(() => new MissionFixtures({ ...BOUNDS, spec, auth: { secretFields: { APP_PASSWORD: "x" } } })).toThrow(
+      /references \$\{secretField\.NOPE\}, but the run has no --secret-field bound to env:NOPE/,
+    );
+    expect(() => buildMissionFixtures({}, { ...BOUNDS, spec })).toThrow(FixtureSpecError);
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/x?p=${secretField.APP_PASSWORD}" }] }, BOUNDS)).toThrow(/allowed only in json, body or headers/);
+    expect(() =>
+      parseFixtureSpec(
+        { setup: [{ method: "POST", url: "/Login", outputs: { token: "$.data" } }, { method: "GET", url: "/me", headers: { Authorization: "Bearer ${setup.token}" } }] },
+        BOUNDS,
+      ),
+    ).toThrow(/carries a credential — list it in secretOutputs/);
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/me", headers: { "X-Api-Key": "${secretField.API_KEY}" } }] }, BOUNDS)).not.toThrow();
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/me", headers: { Authorization: "Bearer abc${secretField.K}" } }] }, BOUNDS)).toThrow(/no literal credentials/);
+  });
+
   it("auth from a missing source fails setup rather than running unauthenticated", async () => {
     const fx = new MissionFixtures({
       ...BOUNDS,

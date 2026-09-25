@@ -175,6 +175,21 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     const persisted = await new FsJourneyStore(journeysDir).get("explore-checkout");
     expect(persisted?.metadata.authoredBy).toBe("jev-driven");
     expect(persisted?.metadata.promoted).toBe(false);
+    expect(persisted?.metadata.requiresAuth).toBeUndefined();
+
+    // #170: authored behind a login ⇒ it declares requiresAuth, so a run without a session fails fast.
+    await runAuthorJourney({
+      url: "https://fixture.test/checkout",
+      goal: "reach the confirmation page",
+      successAssertion: parseAssertionSpec("visible:testId=confirmed"),
+      allowlist: ["https://fixture.test"],
+      journeysDir,
+      journeyId: "explore-checkout",
+      journeyName: "Explore: checkout",
+      storageState: "/unused/state.json",
+      authorImpl: async () => ({ outcome: "authored", journey: authored }),
+    });
+    expect((await new FsJourneyStore(journeysDir).get("explore-checkout"))?.metadata.requiresAuth).toBe(true);
   });
 
   it("runAuthorJourney refuses an off-allowlist target BEFORE authoring", async () => {

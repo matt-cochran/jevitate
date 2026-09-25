@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { contentHash } from "@jevitate/domain";
 import {
   findingKey,
   requestIdentity,
@@ -55,6 +56,18 @@ export interface EngineStamp {
   readonly builtAt?: string;
 }
 
+/**
+ * What a run could observe (#171): two runs are comparable for a finding only when they were set up
+ * to look at the same thing — the same mission kind and settings (goal, route scope, feature,
+ * Journey, verify-fix fingerprint), not merely the same mode.
+ */
+export interface RunScope {
+  /** Mode-specific settings, as a stable string (`goal|/settings|intent:1a2b…`). Equal ⇔ same mission set-up. */
+  readonly settings: string;
+  /** Route templates the run actually reached (from its embedded transcript), when known. */
+  readonly routes?: readonly string[];
+}
+
 export interface RunRecord {
   /** The result file's stem (e.g. `adversarial-2026-09-24T10-00-00-000Z`) — how a run is named. */
   readonly runId: string;
@@ -75,6 +88,8 @@ export interface RunRecord {
   readonly observations: readonly FindingObservation[];
   /** The run's persisted model `usage` object (#163), as written — summed by `jevitate report`. */
   readonly usage?: Readonly<Record<string, unknown>>;
+  /** What the run could observe (#171); absent on older records (then only its mode and target compare). */
+  readonly scope?: RunScope;
 }
 
 type Json = Record<string, unknown>;
@@ -417,6 +432,62 @@ function engineOf(v: unknown): EngineStamp | undefined {
   return Object.fromEntries(Object.entries(e).filter(([, x]) => x !== undefined)) as EngineStamp;
 }
 
+const MAX_SCOPE_ROUTES = 200;
+
+function hashOf(text: string): string {
+  return contentHash(text).slice(0, 12);
+}
+
+/** The route templates a run reached: its seed, every embedded transcript step's URL, its final URL. */
+function reachedRoutes(result: Json, seedUrl: string | undefined): string[] | undefined {
+  const steps = arr(result.transcript).filter(isRecord);
+  if (steps.length === 0) return undefined;
+  const routes = new Set<string>();
+  for (const u of [seedUrl, ...steps.map((s) => str(s.url)), str(result.finalUrl)]) {
+    const r = routeTemplate(u);
+    if (r !== undefined && routes.size < MAX_SCOPE_ROUTES) routes.add(r);
+  }
+  return routes.size === 0 ? undefined : [...routes].sort();
+}
+
+/**
+ * A mission result's scope (#171): the settings that decide what it could observe. A goal (or
+ * usability) run is keyed by its start route and its goal (the Recording's intent, else the suite
+ * item); an adversarial/coverage/feature run by its route scope (globs, else its start route; a
+ * feature run also by its capability); a Journey by its id; a verify-fix record by the fingerprint
+ * it re-checked. Viewport/device is deliberately not part of it: the same scope at another size is
+ * still evidence about the same defects.
+ */
+function missionScope(mode: RunMode, result: Json): RunScope | undefined {
+  const target = isRecord(result.target) ? result.target : undefined;
+  const seedUrl = str(target?.seedUrl);
+  const seed = routeTemplate(seedUrl);
+  const recording = isRecord(result.recording) ? result.recording : undefined;
+  const intent = str(recording?.intent) ?? str(result.goal);
+  const suite = isRecord(result.suite) ? result.suite : undefined;
+  const scoped = isRecord(result.scope) ? result.scope : isRecord(result.coverage) && isRecord(result.coverage.scope) ? result.coverage.scope : undefined;
+  const globs = [...new Set(strings(scoped?.routeGlobs))].sort();
+  let parts: string[] | undefined;
+  if (mode === "journey") {
+    const id = str(result.journeyId);
+    parts = id === undefined ? undefined : [id];
+  } else if (mode === "verify-fix") {
+    const fp = str(result.fingerprint);
+    parts = fp === undefined ? undefined : [fp];
+  } else if (mode === "goal" || mode === "usability") {
+    const item = str(suite?.item);
+    const what = intent !== undefined ? `intent:${hashOf(intent)}` : item !== undefined ? `item:${item}` : undefined;
+    parts = seed === undefined && what === undefined ? undefined : [seed ?? "", what ?? ""];
+  } else {
+    const where = globs.length > 0 ? globs.join(",") : seed;
+    const what = mode === "feature" && intent !== undefined ? `intent:${hashOf(intent)}` : "";
+    parts = where === undefined ? undefined : [where, what];
+  }
+  if (parts === undefined) return undefined;
+  const routes = reachedRoutes(result, seedUrl);
+  return { settings: [mode, ...parts].join("|"), ...(routes === undefined ? {} : { routes }) };
+}
+
 /**
  * Reads one persisted mission result (`{missionOutcome, exitCode, result}`) into a `RunRecord`.
  * Returns null for anything that is not one (a Recording, a transcript, an issue draft).
@@ -452,6 +523,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const engine = engineOf(result.engine);
   const startedAt = str(result.startedAt) ?? stampToIso(runId);
   const origin = originOf(str(target?.seedUrl)) ?? originOf(str(result.site));
+  const scope = missionScope(mode, result);
   return {
     runId,
     mode,
@@ -465,6 +537,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     ...(engine === undefined ? {} : { engine }),
     ...(str(result.targetBuild) === undefined ? {} : { targetBuild: str(result.targetBuild) }),
     ...(isRecord(result.usage) ? { usage: result.usage } : {}),
+    ...(scope === undefined ? {} : { scope }),
   };
 }
 

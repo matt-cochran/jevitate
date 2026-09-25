@@ -25,6 +25,10 @@ import { resolveDataDir } from "./data-dir.js";
  *
  * `fixtures` — a mission fixtures file (#140/#144) for goal runs on this origin when `--fixtures`
  * is absent; a relative path resolves against the targets file's directory.
+ *
+ * `storageState` / `secretFields` (#175) — the operator's auth for missions drained from the queue
+ * (`jevitate mission run`) and `verify_fix` over MCP: a storageState path (relative to this file)
+ * and env-sourced `--secret-field` specs. Never an MCP argument.
  */
 
 export interface TargetConfig {
@@ -45,7 +49,22 @@ export interface TargetConfig {
   readonly logDefect?: readonly string[];
   /** Opt-in for a `cmd:` source in `logSources` (mirrors `--allow-log-cmd`). Default `false`. */
   readonly allowLogCmd?: boolean;
+  /**
+   * #175: the session queued missions on this origin start from (a Playwright storageState JSON,
+   * absolute) — `jevitate mission run` and `verify_fix` over MCP apply it. Operator-declared only:
+   * a `queue_exploration`/MCP argument can never name one, and its contents are never logged or
+   * returned (the browser reads the file).
+   */
+  readonly storageState?: string;
+  /**
+   * #175: `--secret-field` specs (`label=Password=env:APP_PASSWORD`) for queued goal missions on
+   * this origin — the value is read from the environment at run time, never written here. Also
+   * what the target's `fixtures` may authenticate with (`${secretField.APP_PASSWORD}`, #166).
+   */
+  readonly secretFields?: readonly string[];
 }
+
+const SECRET_FIELD_SPEC = /^(label|testId|type|id|name)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class TargetConfigError extends Error {
   readonly code = "E_TARGET_CONFIG" as const;
@@ -70,7 +89,23 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logSources?: string[];
     logDefect?: string[];
     allowLogCmd?: boolean;
+    storageState?: string;
+    secretFields?: string[];
   } = {};
+  if (o.storageState !== undefined) {
+    if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
+    out.storageState = resolvePath(baseDir, o.storageState);
+  }
+  if (o.secretFields !== undefined) {
+    const specs = strings(o.secretFields, `${where}.secretFields`);
+    // The spec is never echoed: a value pasted in place of `env:<VAR>` must not reach a log.
+    specs.forEach((s, i) => {
+      if (!SECRET_FIELD_SPEC.test(s)) {
+        throw new TargetConfigError(`${where}.secretFields[${i}] must be '<label|testId|type|id|name>=<value>=env:<VAR>' — the secret itself comes from the environment`);
+      }
+    });
+    out.secretFields = specs;
+  }
   if (o.fixtures !== undefined) {
     if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
     out.fixtures = resolvePath(baseDir, o.fixtures);
@@ -207,5 +242,8 @@ export function resolveTargetConfig(
     ...(base.logSources === undefined ? {} : { logSources: base.logSources }),
     ...(base.logDefect === undefined ? {} : { logDefect: base.logDefect }),
     ...(base.allowLogCmd === undefined ? {} : { allowLogCmd: base.allowLogCmd }),
+    // #175: pass-through, like logSources — the operator's own session for queued missions.
+    ...(base.storageState === undefined ? {} : { storageState: base.storageState }),
+    ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
   };
 }
