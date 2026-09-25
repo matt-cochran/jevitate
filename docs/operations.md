@@ -120,6 +120,21 @@ Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API wit
 searches for an open issue carrying the same fingerprint marker and comments on
 that one instead.
 
+## Choosing the browser
+
+Every command that opens a browser (`explore`, `explore-author-journey`, `journey run`, `load run`,
+`regression capture`, `regression run`, `verify-fix`, `mission run`, `check`) takes the same launch
+flags:
+
+- `--browser-executable <path>` launches that Chromium binary instead of Playwright's pinned one.
+- `--browser-channel <name>` launches a Playwright channel, e.g. `chrome` or `msedge`.
+- `--browser-arg <arg>` (repeatable) adds a Chromium switch. It extends the Linux defaults
+  `--no-sandbox --disable-dev-shm-usage`.
+
+```bash
+jevitate journey run checkout --browser-channel chrome --browser-arg=--lang=de
+```
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`

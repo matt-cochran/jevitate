@@ -358,9 +358,12 @@ async function makeRealBrowserActor(
   site: string,
   storageState?: string,
   emulation?: EmulationSpec,
+  browser?: BrowserLaunchOptions,
+  portFactory: () => BrowserPort = () => new PlaywrightBrowserPort(),
 ): Promise<{ actor: Actor; close: () => Promise<void> }> {
-  const port = new PlaywrightBrowserPort();
+  const port = portFactory();
   const session = await port.open({
+    ...browser,
     headless: true,
     allowedOrigins: [site],
     baseUrl: site,
@@ -406,6 +409,12 @@ function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOptions | u
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
   };
   return Object.keys(launch).length > 0 ? launch : undefined;
+}
+
+/** `{ browser }` for the parsed `--browser-*` flags, or `{}` when none were given — spread into a runner's options. */
+function browserOption(o: BrowserLaunchFlags): { browser?: BrowserLaunchOptions } {
+  const launch = browserLaunchFromFlags(o);
+  return launch === undefined ? {} : { browser: launch };
 }
 
 /** Raw commander values of the shared `--viewport`/`--device` emulation flags (#149). */
@@ -1028,7 +1037,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  withEmulationFlags(withFixtureFlags(journey.command("run <id>")))
+  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>"))))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1112,6 +1121,7 @@ export function buildProgram(deps: CliDeps): Command {
           policy,
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
@@ -1492,7 +1502,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   const load = program.command("load");
 
-  withEmulationFlags(load.command("run <journeyId>"))
+  withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>")))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
@@ -1552,6 +1562,7 @@ export function buildProgram(deps: CliDeps): Command {
           seed: Number(seed),
           authorizedOrigins: authorizedOrigin,
           browserPortFactory: deps.explore?.browserPortFactory,
+          ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
         }).then((r) => withEngine(r));
@@ -2888,7 +2899,7 @@ export function buildProgram(deps: CliDeps): Command {
   // `runRegressionCapture`.
   const regression = program.command("regression");
 
-  withEmulationFlags(withFixtureFlags(regression.command("capture")))
+  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture"))))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
@@ -2963,7 +2974,7 @@ export function buildProgram(deps: CliDeps): Command {
           fingerprint,
           makeActor: async () => {
             await replayFixture?.reset();
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
             opened.push(close);
             if (replayFixture !== undefined) {
               rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
@@ -2991,7 +3002,7 @@ export function buildProgram(deps: CliDeps): Command {
   // `regression capture` wrote — a step-oracle, network-check, or declared-invariant one) and
   // reports "reproduces" or "fixed". The one CLI/MCP surface `loadRegressions`/`replayRegression`
   // (`@jevitate/regression`) previously had none of.
-  withEmulationFlags(regression.command("run"))
+  withBrowserLaunchFlags(withEmulationFlags(regression.command("run")))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)")
@@ -3029,7 +3040,7 @@ export function buildProgram(deps: CliDeps): Command {
           regressionsDir,
           ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
           makeActor: async () => {
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
             opened.push(close);
             return actor;
           },
