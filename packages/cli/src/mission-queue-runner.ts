@@ -191,36 +191,47 @@ export interface RealExecutorOptions {
 /** The operator-declared auth for one queued mission's target (#175). */
 interface QueuedAuth {
   readonly storageState?: string;
+  /** Where the rotated session is written back after the mission (#82/#159 machinery). */
+  readonly saveStorageState?: string;
   readonly secretFields: readonly SecretField[];
   readonly fixtures?: string;
 }
 
 /**
  * #175: a queued mission never carries a credential (a `QueuedMission` cannot name a path or a
- * secret), so its session is only ever the operator's own `~/.jevitate/targets.json` entry for the
- * target's origin: a `storageState` path, env-sourced `secretFields` and `fixtures`. Throws — the
- * caller records a `failed` mission — when the declared file is missing or a variable is unset
- * (naming the path or variable, never a value); never silently runs logged out.
+ * secret), so its session is only ever the OPERATOR's: the mission target record (`mission target
+ * add|update --storage-state/--save-storage-state/--secret-field`) first, then the
+ * `~/.jevitate/targets.json` entry for the target's origin — field by field. `saveStorageState: true`
+ * writes back to the effective `storageState`, so the next queued mission (they run one at a time)
+ * starts from the rotated session. Throws — the caller records a `failed` mission — when the
+ * declared file is missing or a variable is unset (naming the path or variable, never a value);
+ * never silently runs logged out.
  */
-function authFromTargetConfig(
+function queuedAuth(
+  target: MissionTarget,
   targets: Readonly<Record<string, TargetConfig>> | undefined,
-  baseUrl: string,
   env: Readonly<Record<string, string | undefined>>,
 ): QueuedAuth {
-  if (targets === undefined) return { secretFields: [] };
-  let origin: string;
-  try {
-    origin = new URL(baseUrl).origin;
-  } catch {
-    return { secretFields: [] };
+  let config: TargetConfig = {};
+  if (targets !== undefined) {
+    try {
+      config = resolveTargetConfig(targets, new URL(target.baseUrl).origin);
+    } catch {
+      config = {};
+    }
   }
-  const config = resolveTargetConfig(targets, origin);
-  if (config.storageState !== undefined && !existsSync(config.storageState)) {
-    throw new Error(`targets.json storageState for ${origin} not found: ${config.storageState}`);
+  const fromRecord = target.storageState !== undefined;
+  const storageState = target.storageState ?? config.storageState;
+  if (storageState !== undefined && !existsSync(storageState)) {
+    throw new Error(`${fromRecord ? `mission target ${target.id}` : `targets.json entry for ${target.authorizedOrigin}`}: storageState not found: ${storageState}`);
   }
-  const secretFields = (config.secretFields ?? []).map((s) => parseSecretField(s, "value", env));
+  const save = target.saveStorageState ?? config.saveStorageState;
+  if (save === true && storageState === undefined) throw new Error(`mission target ${target.id}: saveStorageState needs a storageState to write back to`);
+  const saveStorageState = save === true ? storageState : save;
+  const secretFields = (target.secretFields ?? config.secretFields ?? []).map((s) => parseSecretField(s, "value", env));
   return {
-    ...(config.storageState === undefined ? {} : { storageState: config.storageState }),
+    ...(storageState === undefined ? {} : { storageState }),
+    ...(saveStorageState === undefined ? {} : { saveStorageState }),
     secretFields,
     ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
   };
@@ -270,8 +281,11 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     const withServerLog = serverLog === undefined ? {} : { serverLog };
     // #175: the operator's session for this target (never the request's): every strategy starts
     // from its storage state; a goal mission also types its secret fields and runs its fixtures.
-    const auth = authFromTargetConfig(opts.targets, target.baseUrl, opts.env ?? process.env);
-    const withStorageState = auth.storageState === undefined ? {} : { storageState: auth.storageState };
+    const auth = queuedAuth(target, opts.targets, opts.env ?? process.env);
+    const withStorageState = {
+      ...(auth.storageState === undefined ? {} : { storageState: auth.storageState }),
+      ...(auth.saveStorageState === undefined ? {} : { saveStorageState: auth.saveStorageState }),
+    };
     // #149: per-mission viewport/device emulation. `MissionRequestSchema` already refused an
     // unknown --device / viewport+device together at enqueue time; `resolveEmulation` here is a
     // second, defense-in-depth check — refused BEFORE any browser opens — since a device could in

@@ -57,6 +57,12 @@ export interface TargetConfig {
    */
   readonly storageState?: string;
   /**
+   * #175: write the rotated session back after each queued mission (#82/#159 semantics: live
+   * capture, snapshot fallback, never a logged-out state, mode 0600) — `true` = back to
+   * `storageState`, or a path (absolute). For apps with rotating refresh tokens.
+   */
+  readonly saveStorageState?: true | string;
+  /**
    * #175: `--secret-field` specs (`label=Password=env:APP_PASSWORD`) for queued goal missions on
    * this origin — the value is read from the environment at run time, never written here. Also
    * what the target's `fixtures` may authenticate with (`${secretField.APP_PASSWORD}`, #166).
@@ -90,11 +96,22 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logDefect?: string[];
     allowLogCmd?: boolean;
     storageState?: string;
+    saveStorageState?: true | string;
     secretFields?: string[];
   } = {};
   if (o.storageState !== undefined) {
     if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
     out.storageState = resolvePath(baseDir, o.storageState);
+  }
+  if (o.saveStorageState !== undefined) {
+    if (o.saveStorageState === true) {
+      if (out.storageState === undefined) throw new TargetConfigError(`${where}.saveStorageState: true writes back to storageState, which is not set`);
+      out.saveStorageState = true;
+    } else if (typeof o.saveStorageState === "string" && o.saveStorageState !== "") {
+      out.saveStorageState = resolvePath(baseDir, o.saveStorageState);
+    } else {
+      throw new TargetConfigError(`${where}.saveStorageState must be true or a file path`);
+    }
   }
   if (o.secretFields !== undefined) {
     const specs = strings(o.secretFields, `${where}.secretFields`);
@@ -244,6 +261,7 @@ export function resolveTargetConfig(
     ...(base.allowLogCmd === undefined ? {} : { allowLogCmd: base.allowLogCmd }),
     // #175: pass-through, like logSources — the operator's own session for queued missions.
     ...(base.storageState === undefined ? {} : { storageState: base.storageState }),
+    ...(base.saveStorageState === undefined ? {} : { saveStorageState: base.saveStorageState }),
     ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
   };
 }
