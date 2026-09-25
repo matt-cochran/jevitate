@@ -122,8 +122,8 @@ that one instead.
 
 ## Choosing the browser
 
-Every command that opens a browser (`explore`, `explore-author-journey`, `journey run`, `load run`,
-`regression capture`, `regression run`, `verify-fix`, `mission run`, `check`) takes the same launch
+Every command that opens a browser (`explore`, `explore-author-journey`, `journey run`, `source run`,
+`load run`, `regression capture`, `regression run`, `verify-fix`, `mission run`, `check`) takes the same launch
 flags:
 
 - `--browser-executable <path>` launches that Chromium binary instead of Playwright's pinned one.

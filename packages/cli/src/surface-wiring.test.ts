@@ -2,6 +2,9 @@ import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import type { Command } from "commander";
+import { ProfileManager } from "@jevitate/daemon";
+import { buildProgram } from "./program.js";
 
 /**
  * Surface wiring (the orphan/brownout guard). Every user-facing surface — the `explore` CLI, the
@@ -328,6 +331,34 @@ describe("result exposure — every engine result field reaches the user's envel
   it("every listed drop is still a drop (the list never goes stale)", () => {
     const stale = dropped.flatMap((d) => Object.keys(ENVELOPES[d.pair] ?? {}).filter((p) => !d.dropped.includes(p)).map((p) => `${d.pair}: ${p}`));
     expect(stale).toEqual([]);
+  });
+});
+
+/** Commands that take a session/emulation flag but never open a browser themselves (they store config). */
+const NOT_BROWSER_COMMANDS: Readonly<Record<string, string>> = {
+  "mission target add": "stores a target's session path; `mission run` opens the browser",
+  "mission target update": "stores a target's session path; `mission run` opens the browser",
+};
+
+describe("flag exposure — every browser-opening command takes the shared --browser-* launch flags", () => {
+  const commands: Array<{ path: string; flags: string[] }> = [];
+  const walk = (c: Command, path: string): void => {
+    commands.push({ path, flags: c.options.map((o) => o.long ?? "") });
+    for (const sub of c.commands) walk(sub, path === "" ? sub.name() : `${path} ${sub.name()}`);
+  };
+  walk(buildProgram({ profiles: new ProfileManager("/unused-in-this-test") }), "");
+
+  it("a command with --viewport or --storage-state (it opens a browser) also takes --browser-executable/-channel/-arg", () => {
+    const missing = commands
+      .filter((c) => (c.flags.includes("--viewport") || c.flags.includes("--storage-state")) && NOT_BROWSER_COMMANDS[c.path] === undefined)
+      .filter((c) => !["--browser-executable", "--browser-channel", "--browser-arg"].every((f) => c.flags.includes(f)))
+      .map((c) => c.path);
+    expect(missing).toEqual([]);
+  });
+
+  it("every NOT_BROWSER_COMMANDS entry still exists", () => {
+    const paths = new Set(commands.map((c) => c.path));
+    expect(Object.keys(NOT_BROWSER_COMMANDS).filter((p) => !paths.has(p))).toEqual([]);
   });
 });
 

@@ -1,6 +1,6 @@
 import { deriveParamSchema, validateParams } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
@@ -38,6 +38,8 @@ export type RunResolvedJourney = (
   storageState?: string,
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   emulation?: EmulationSpec,
+  /** Chromium launch options (CLI `--browser-executable` / `--browser-channel` / `--browser-arg`). */
+  browser?: BrowserLaunchOptions,
 ) => Promise<JourneyRunResult>;
 
 /**
@@ -52,7 +54,7 @@ export type RunResolvedJourney = (
  * A `SharedJourneyFile` IS a `Journey` (+ `declaredOrigins`), so it runs
  * through the standard `JourneyRunner` unchanged.
  */
-export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState, emulation) => {
+export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState, emulation, browser) => {
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
   if (file.metadata.requiresAuth === true && storageState === undefined) {
@@ -69,6 +71,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
 
   const port = new PlaywrightBrowserPort();
   const session = await port.open({
+    ...browser,
     headless: true,
     allowedOrigins,
     baseUrl: file.recording.site,
@@ -110,6 +113,8 @@ export interface RunSourceJourneyRequest {
   storageState?: string;
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   emulation?: EmulationSpec;
+  /** Chromium launch options (CLI `--browser-*`). */
+  browser?: BrowserLaunchOptions;
 }
 
 /** Resolves a registered source's recorded pin, or throws `UnknownSourceError`
@@ -164,5 +169,5 @@ export async function runSourceJourney(
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
-  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation);
+  return run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser);
 }

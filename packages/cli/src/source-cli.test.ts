@@ -200,6 +200,22 @@ test("source run --json runs a read-only journey from a trusted, ToU-acked sourc
   expect(spy.calls).toEqual([{ id: "checkout", params: {} }]);
 });
 
+test("source run: --browser-* flags reach the journey runner (surface-wiring audit)", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+  const seen: unknown[] = [];
+  const runJourney: RunResolvedJourney = async (file, _params, _policy, _state, _emulation, browser) => {
+    seen.push(browser);
+    return { outcome: "ok", output: { ran: file.metadata.id } } satisfies JourneyRunResult;
+  };
+  const { program } = await newProgram({ git, runJourney });
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--accept-tou", "--json"], { from: "user" });
+  await program.parseAsync(
+    ["source", "run", "shop", "checkout", "--browser-channel", "chrome", "--browser-arg", "--lang=de", "--json"],
+    { from: "user" },
+  );
+  expect(seen).toEqual([{ channel: "chrome", args: ["--lang=de"] }]);
+});
+
 test("SECURITY: source run refuses an UNTRUSTED risky journey -> E_SOURCE_RUN_UNTRUSTED (never runs)", async () => {
   const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("risky", true)]));
   const spy = makeRunnerSpy();

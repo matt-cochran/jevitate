@@ -1428,7 +1428,7 @@ export function buildProgram(deps: CliDeps): Command {
   // run` stays the LOCAL FsJourneyStore path; keeping remote runs here keeps the
   // two trust boundaries visibly separate. The run NEVER bypasses a gate: every
   // refusal below is a typed error thrown by `resolveForRun` BEFORE any browser.
-  withEmulationFlags(source.command("run <name> <journeyId>"))
+  withBrowserLaunchFlags(withEmulationFlags(source.command("run <name> <journeyId>")))
     .description("run a Journey from a trusted remote source through the run-gate")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -1464,6 +1464,7 @@ export function buildProgram(deps: CliDeps): Command {
           params: param,
           ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
+          ...browserOption(this.opts<BrowserLaunchFlags>()),
         }));
         const envelope = ok(result);
         if (json) {
