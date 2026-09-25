@@ -86,6 +86,7 @@ const SETTINGS = page(`
 <button type="button" onclick="fetch('/api/logout',{method:'POST'});document.getElementById('s').textContent='Signed out'">Sign out</button>
 <button type="button" onclick="fetch('/api/account',{method:'DELETE'});document.getElementById('s').textContent='Account deleted'">Delete account</button>
 <p id="s">Signed in</p>
+<button type="button" onclick="document.getElementById('s').textContent='Export queued'">Export data</button>
 <button type="button" onclick="document.getElementById('d').hidden=!document.getElementById('d').hidden">Show details</button>
 <p id="d" hidden>Plan: Pro</p>`);
 
@@ -258,7 +259,7 @@ describe("#92 — an in-progress status the page shows is pending work", () => {
 });
 
 describe("#116 — coverage never clicks session-ending or destructive controls by default", () => {
-  const cover = (allowDestructive: boolean) =>
+  const cover = (allowDestructive: boolean, deny?: readonly string[]) =>
     withSession(
       "side-effects-coverage-",
       async (session) => {
@@ -271,7 +272,7 @@ describe("#116 — coverage never clicks session-ending or destructive controls 
           seedUrl: `${base}/settings`,
           allowlist: [base],
           bounds: { maxActions: 12, maxDecisions: 24 },
-          ...(allowDestructive ? { safety: { allowDestructive: true } } : {}),
+          ...(allowDestructive ? { safety: { allowDestructive: true } } : deny === undefined ? {} : { safety: { deny } }),
         });
       },
       base,
@@ -288,6 +289,22 @@ describe("#116 — coverage never clicks session-ending or destructive controls 
     ]);
     expect(result.transcript.some((e) => e.strategy === "coverage-frontier" && e.actOk)).toBe(true);
     expect(result.sideEffects).toEqual([]);
+  }, 90_000);
+
+  it("#186 — a refused control never enters the frontier: refused once at enqueue, before any action, never reset to", async () => {
+    const result = await cover(false, ["Export"]);
+    expect(result.transcript.some((e) => e.op === "click" && e.control?.name === "Export data")).toBe(false);
+    const refusals = result.transcript.filter((e) => e.strategy === "safety-policy");
+    expect(refusals.map((e) => e.reason)).toEqual([
+      expect.stringMatching(/"Sign out" ends the session/),
+      expect.stringMatching(/"Delete account" is destructive/),
+      expect.stringMatching(/"Export data" matches --deny/),
+    ]);
+    const firstAction = result.transcript.findIndex((e) => e.strategy === "coverage-frontier");
+    expect(firstAction).toBeGreaterThan(0);
+    expect(result.transcript.slice(0, firstAction).every((e) => e.strategy === "safety-policy")).toBe(true);
+    expect(result.transcript.slice(firstAction).some((e) => e.strategy === "safety-policy")).toBe(false);
+    expect(result.transcript.some((e) => e.strategy === "coverage-frontier" && e.actOk)).toBe(true);
   }, 90_000);
 
   it("--allow-destructive lifts it, and the result marks the destructive side effects", async () => {
