@@ -362,6 +362,8 @@ export interface RunExplorationResult {
   readonly assertionPassed: boolean;
   /** Each success check's verdict and what the oracle saw. */
   readonly checks: SuccessCheckResult[];
+  /** Warnings about the verdict (#174: a `--success-when held` check that already held on the start page). */
+  readonly checkWarnings?: string[];
   readonly stop: StopReason;
   readonly finalUrl: string;
   readonly decisions: number;
@@ -593,6 +595,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
+      ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,

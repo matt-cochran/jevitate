@@ -52,14 +52,39 @@ const PAGES: Record<string, string> = {
     <script>
       document.getElementById('save').addEventListener('click', () => { fetch('/api/save', { method: 'POST' }); });
     </script></body></html>`,
+  // #174: the check's testid is on the page from the start (a placeholder receipt).
+  "/placeholder": `<!doctype html><html><body><h1>Bet</h1>
+    <div id="v" data-testid="verdict">Verdict: pending</div>
+    <button type="button">Recalculate</button>
+    <button type="button" onclick="document.getElementById('v').hidden = true">Clear verdict</button>
+    <button type="button" onclick="const v = document.getElementById('v'); v.textContent = 'Verdict: go ahead'; v.hidden = false">Show verdict</button>
+    </body></html>`,
+  // #174: after Verify the goal is met; "Create product" is a write the goal never asked for.
+  "/verify": `<!doctype html><html><body><h1>Sign in</h1>
+    <button type="button" id="verify">Verify</button>
+    <div id="onb" hidden><p data-testid="onboarding">Welcome — set up your first product</p>
+      <button type="button" id="product">Create product</button></div>
+    <script>
+      document.getElementById('verify').addEventListener('click', () => { document.getElementById('onb').hidden = false; });
+      document.getElementById('product').addEventListener('click', () => { fetch('/api/product', { method: 'POST' }); });
+    </script></body></html>`,
 };
 
 let server: Server;
 let origin: string;
+/** #174: POSTs to /api/product (an unrequested write) and to /api/save. */
+let writes = 0;
+let saves = 0;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/api/product") {
+      writes += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/save") {
+      saves += 1;
       res.writeHead(200, { "content-type": "application/json" }).end("{}");
       return;
     }
@@ -162,7 +187,13 @@ describe("goal loop — status text, quiet waits, held success, concrete reasons
       expect(held.result.outcome).toBe("succeeded");
       expect(held.result.run.stop).toBe("done");
       expect(held.result.checks[0]?.passed).toBe(true);
-      expect(held.result.checks[0]?.detail).toMatch(/^held at settled step 2 \(--success-when held\); did not hold on the final page/);
+      // #174: once the held check held (settled step 2, after Create), the run stopped — it never
+      // went on to dismiss the secret, so the check also holds on the final page.
+      const last = held.result.transcript.at(-1);
+      expect(last?.strategy).toBe("success-held");
+      expect(last?.reason).toMatch(/goal already met — stopped before the next action: every --success check held \(the page checks at settled step 2/);
+      expect(held.result.transcript.filter((e) => e.op === "click").length).toBe(1);
+      expect(held.result.run.outcome).toEqual({ status: "completed", verifiedBy: "success-condition" });
     },
     120_000,
   );
@@ -223,6 +254,76 @@ describe("goal loop — status text, quiet waits, held success, concrete reasons
       expect(result.reason).not.toContain("last blocker");
       // The near-miss hint (#130b) names what actually happened instead.
       expect(result.reason).toContain("saw POST /api/save → 200 (1×)");
+    },
+    120_000,
+  );
+});
+
+describe("#174 — --success-when held: never vacuous on the start page; stop once every check held", () => {
+  it(
+    "a held check that already holds on the start page (a placeholder) is vacuous: not succeeded, with a warning",
+    async () => {
+      // Controls: [0] Recalculate (does nothing the check can see).
+      const { result } = await run("/placeholder", [{ op: "click", target: "0" }, { op: "done" }], [visible("verdict")], {
+        successWhen: "held",
+        maxDecisions: 6,
+      });
+      expect(result.outcome).not.toBe("succeeded");
+      expect(result.assertionPassed).toBe(false);
+      expect(result.checks[0]?.passed).toBe(false);
+      expect(result.checks[0]?.detail).toMatch(/^vacuous: already held on the start page before any action/);
+      expect(result.warnings?.[0]).toMatch(/already held on the start page, before any action, and never changed — vacuous/);
+      // The in-run `done` was not accepted on the vacuous check either.
+      expect(result.transcript.some((e) => e.op === "done" && /done rejected/.test(e.reason ?? ""))).toBe(true);
+      expect(result.run.outcome.status).toBe("incomplete");
+    },
+    120_000,
+  );
+
+  it(
+    "a check that held on the start page counts once it went from not holding to holding (with a warning)",
+    async () => {
+      // Controls: [0] Recalculate, [1] Clear verdict (hides it), [2] Show verdict (shows the real one).
+      const { result } = await run("/placeholder", [{ op: "click", target: "1" }, { op: "click", target: "2" }], [visible("verdict")], {
+        successWhen: "held",
+      });
+      expect(result.outcome).toBe("succeeded");
+      expect(result.warnings?.[0]).toMatch(/counted only once they went from not holding to holding/);
+    },
+    120_000,
+  );
+
+  it(
+    "once every held check held, the run stops before its next action — it never goes on to write",
+    async () => {
+      writes = 0;
+      // Controls: [0] Verify; after it, [1] Create product (a write the goal did not ask for).
+      const { result } = await run("/verify", [{ op: "click", target: "0" }, { op: "click", target: "1" }, { op: "done" }], [visible("onboarding")], {
+        successWhen: "held",
+      });
+      expect(result.outcome).toBe("succeeded");
+      expect(result.run.stop).toBe("done");
+      expect(writes).toBe(0);
+      expect(result.transcript.filter((e) => e.op === "click").length).toBe(1);
+      expect(result.transcript.at(-1)?.strategy).toBe("success-held");
+    },
+    120_000,
+  );
+
+  it(
+    "a network-only held check stops the run once the request was seen — no `done` needed, no second write",
+    async () => {
+      saves = 0;
+      // Controls: [0] Phone, [1] Last name, [2] Save.
+      const { result } = await run(
+        "/mixed",
+        [{ op: "click", target: "2" }, { op: "click", target: "2" }, { op: "click", target: "2" }],
+        [{ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }],
+        { successWhen: "held" },
+      );
+      expect(result.outcome).toBe("succeeded");
+      expect(saves).toBe(1);
+      expect(result.transcript.at(-1)?.strategy).toBe("success-held");
     },
     120_000,
   );

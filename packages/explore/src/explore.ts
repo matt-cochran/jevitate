@@ -245,6 +245,13 @@ export interface ExploreConfig {
    * run cleanly with `stop: "budget"`, before the next decision.
    */
   readonly onSettled?: (snap: Snapshot) => Promise<{ readonly stop: true; readonly reason: string } | { readonly stop: false }>;
+  /**
+   * #174: independent code's "the success condition is already met" (e.g. `--success-when held`
+   * checks that held), asked after each settled snapshot. A non-null note ends the run `done`,
+   * verified by the success condition, BEFORE the next decision — the run never keeps acting
+   * (or writing) past a met goal. Its result is code's verdict, never the model's.
+   */
+  readonly successMetNow?: () => Promise<string | null>;
 }
 
 export interface ExploreRun {
@@ -726,6 +733,27 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           });
           incomplete = budget.reason;
           stop = "budget";
+          break;
+        }
+      }
+
+      // #174 — the success condition is already met (independent code): stop now, never act past it.
+      if (cfg.successMetNow !== undefined) {
+        const met = await cfg.successMetNow().catch(() => null);
+        if (met !== null) {
+          transcript.record({
+            op: "done",
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "success-held",
+            actOk: true,
+            reason: `goal already met — stopped before the next action: ${met}`,
+            snapshot: snap,
+            timing: perception.timing,
+          });
+          outcome = { status: "completed", verifiedBy: "success-condition" };
+          stop = "done";
           break;
         }
       }
