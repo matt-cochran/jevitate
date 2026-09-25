@@ -121,6 +121,14 @@ mission and reading the result honestly.
   (`pending: true` — poll again), the typed result, or `failed`. `verify_fix`
   accepts the missionId once it is done.
 
+## Further reading (full schemas, in the jevitate repo)
+
+- Mission fixtures (`--fixtures`/`--before`/`--after`, goal-only): `docs/fixtures.md`.
+- App-declared invariants, budgets and multi-actor `capture`/`deniedAs`: `docs/invariants.md`.
+- `--repeat`/`--min-agreement`, `--persona`/`--personas`, `--actor`: `docs/multi-run.md`.
+- The safety model, including `--read-rpc`/`safety.readRequests`: `docs/safety.md`.
+- Build identity, usage/cost accounting, crashes and packaging: `docs/operations.md`.
+
 ## Known gaps
 
 - `queue_exploration` enqueues but does not itself run the mission; nothing

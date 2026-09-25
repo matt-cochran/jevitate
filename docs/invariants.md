@@ -116,6 +116,59 @@ by replaying up to the step. `--invariants` on `verify-fix` overrides the saved 
 Over MCP, `queue_exploration` takes the same spec inline as `invariants`. It never takes
 a path, and its probes are checked against the target's origin.
 
+## Multi-actor checks: `capture` and `deniedAs`
+
+With [multiple `--actor`s](./multi-run.md#multi-actor-missions---actor-goal-missions) declared, the
+same invariants file can add cross-actor checks: bind something the **primary** actor created, then
+verify from an **observer**'s own browser context that it can (or cannot) see it.
+
+```json
+{
+  "capture": {
+    "itemId": { "network": { "url": "**/api/items", "method": "POST", "json": "$.id" } }
+  },
+  "invariants": [
+    { "id": "cross-tenant-item-hidden", "when": { "after": "capture.itemId" },
+      "deniedAs": { "actor": "other", "open": "/items/${capture.itemId}",
+        "expect": { "documentStatus": [404], "appResponses": { "url": "/api/items/*", "status": [404] } } } }
+  ]
+}
+```
+
+**`capture`** binds a resource id or URL from the primary actor's own run, once, read-only, and
+never from an observer. Exactly one of:
+
+- `network`: a JSON path in a captured response, from a request whose URL matches a glob
+  (`{ "network": { "url": "**/api/items", "method": "POST", "json": "$.id" } }`).
+- `dom`: the first match's `text` (default), `value`, or `attr:<name>`, of a CSS `selector` on the
+  primary's page, optionally gated on `after` (see below).
+- `url`: the primary's own page URL once an action matching `after` settles, optionally narrowed
+  further to a path glob with `route`.
+
+A `dom`/`url` capture's own `after` (`CaptureWhen`: `control.name`, `route`, `op`) names which of
+the primary's actions binds it — the same vocabulary as an invariant's `when`.
+
+**`when.after: "capture.<name>"`** gates an invariant to run exactly once, right after that capture
+first binds — a capture-gated invariant takes no other `when` key (no `control`/`route`/`op`), and
+is either a `require` (over an observer's own `probe` observable, `as: "<actor>"`) or a `deniedAs`.
+
+**`deniedAs`** navigates the named observer actor's own context to `open` (`${capture.<name>}`
+substituted; passive — the app makes its own reads, nothing is clicked) and holds only when **any**
+declared `expect` is observed:
+
+- `documentStatus`: the observer's main-frame response status is one of these.
+- `appResponses`: `{url, status?, connectCode?}` — an app request matching the `url` glob answers
+  with one of `status` or one of `connectCode` (snake_case Connect/gRPC-web codes, e.g.
+  `"not_found"`; at least one of `status`/`connectCode` is required).
+- `orVisible`: page text matching this pattern is visible.
+
+A 200 page with **none** of the declared expectations is a violation. An observer redirected to a
+login page ("session lost") is undecided — never counted as "denied." A violation is a defect, like
+any other invariant; the observer only ever probes and navigates, it never clicks or types.
+
+See [multi-run.md](./multi-run.md#worked-example-cross-tenant-isolation-on-an-spa-behind-a-dev-proxy)
+for the same example run end to end.
+
 ## Mission spend budgets
 
 A `budget` key in the same invariants file caps cumulative spend on a declared observable, such

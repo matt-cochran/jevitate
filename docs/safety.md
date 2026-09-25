@@ -42,6 +42,37 @@ security bug, and how to report one.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 
+**gRPC-web/Connect reads.** gRPC-web, Connect and Twirp send every RPC as a POST, including pure
+reads, so the method alone can't tell a read from a write. Code classifies a request as a write
+unless: it isn't `POST`/`PUT`/`PATCH`/`DELETE` (GET/HEAD/OPTIONS are always reads); or it's an
+RPC-shaped POST (`/<pkg>.<Service>/<Method>`, sent as gRPC-web/Connect/Twirp/protobuf/JSON, or with
+no content type) whose method name starts with a built-in read verb — `Get`, `List`, `Search`,
+`Find`, `Watch`, `Stream`, `Count`, `Describe`, `Read`, `Query`, `Fetch`, `Lookup`, `BatchGet` or
+`BatchRead` (`GetItem`, `ListItems`, `BatchGetItems`, … ; `CreateItem`/`UpdateItem` are still
+writes); or it matches an operator-supplied pattern — `--read-rpc <pattern>` (repeatable) or
+`safety.readRequests` in `~/.jevitate/targets.json`: a pattern starting with `/` is a path glob
+(`/api/search*`), any other pattern a glob over the RPC method (`Estimate*`, `pkg.Service/Estimate*`).
+An unknown request is always a write — a misclassified read only costs a guard/finding; a
+misclassified write could let a run repeat a real side effect.
+
+```json
+{ "http://localhost:5173": {
+    "safety": { "readRequests": ["pkg.BillingService/Estimate*", "/api/search*"] } } }
+```
+
+```bash
+jevitate explore --strategy goal --url http://localhost:5173/billing \
+  --goal "check the plan estimate" --success 'visible:text=Estimated' \
+  --read-rpc "pkg.BillingService/Estimate*" --real
+```
+
+`pkg.BillingService/EstimateCost`, sent as `application/connect+json` to
+`/pkg.BillingService/EstimateCost`, does **not** start with a built-in read verb, so without the
+pattern above it is treated as a write and refused/repeat-guarded like any other. `--read-rpc
+"pkg.BillingService/Estimate*"` (or the equivalent `safety.readRequests` entry) marks it a read
+explicitly — the same fix applies to any Connect/gRPC-web method whose name doesn't start with a
+built-in verb (`Preview*`, `Recalculate*`, …).
+
 **Secrets stay out of models and artifacts.**
 
 - Outbound model payloads pass a redaction guard that fails closed. `--secret` values, bound

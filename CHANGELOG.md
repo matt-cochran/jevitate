@@ -132,6 +132,7 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - Fixed general skill/README drift (mission-target flags, `get_site_health`, the source manifest, invariants `when.op`, `--allow` semantics, `profile`, `diff`/postdoc input error, `journey promote`, `record`, `usd`), and documented that `--headless` plus SIGINT still saves the take ([#124](https://github.com/matt-cochran/jevitate/issues/124)).
 - The README is rewritten around the discover → verify → regression loop, and the reference docs have moved from the README into `docs/`.
 - Added a no-key demo (`pnpm --filter @jevitate/example-site demo`) that walks the whole loop against a planted-bug profile form in the example app, documented in `docs/demo.md`.
+- Documented what was previously only in `--help`/source comments: the persona matrix's diff shape (`diff.controlsOnlyIn`/`requestsOnlyIn`/`rbacCandidates`) and `--repeat`'s on-disk layout (`multi-run.result.json`, `complete`, per-run dirs) in `docs/multi-run.md`; the multi-actor `capture`/`deniedAs` schema in `docs/invariants.md`; the default gRPC-web/Connect read-verb list with a Connect example in `docs/safety.md`; `jevPriceSource` in `docs/operations.md`; the fixtures shell-hook stdin/stdout contract and a worked SPA example (localStorage token, API behind the dev proxy) in `docs/fixtures.md`; and pointer lines to each in `jevitate-explore/SKILL.md` ([#177](https://github.com/matt-cochran/jevitate/issues/177)).
 
 ### Behaviour changes
 
