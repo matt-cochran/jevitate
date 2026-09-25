@@ -237,10 +237,20 @@ function queuedAuth(
   };
 }
 
+/** The operator's targets.json config for `baseUrl`'s origin, or undefined when there is no targets file. */
+function targetConfigFor(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): TargetConfig | undefined {
+  if (targets === undefined) return undefined;
+  try {
+    return resolveTargetConfig(targets, new URL(baseUrl).origin);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The operator-declared `--log-source`/`--log-defect` for one origin, already parsed (#142 follow-up).
  *  Throws (via `parseLogSourceSpecs`/`parseLogDefectSpecs`) on a malformed targets.json entry — the
  *  caller's existing per-mission try/catch turns that into a `failed` queue record, never a crash. */
-function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): ServerLogOptions | undefined {
+export function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig>> | undefined, baseUrl: string): ServerLogOptions | undefined {
   if (targets === undefined) return undefined;
   let origin: string;
   try {
@@ -281,6 +291,12 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     const routeGlobs = mission.route === undefined ? [] : [mission.route];
     const serverLog = serverLogFromTargetConfig(opts.targets, target.baseUrl);
     const withServerLog = serverLog === undefined ? {} : { serverLog };
+    // The operator's targets.json entry for this origin — safety (deny/paid/allowDestructive/
+    // readRequests/hangReplayWrites), settle, hangs, timing — applies to a queued mission exactly as
+    // to `explore` on the CLI. Never from the request.
+    const config = targetConfigFor(opts.targets, target.baseUrl);
+    const withTarget = config === undefined ? {} : { target: config };
+    const withSafety = config?.safety === undefined ? {} : { safety: config.safety };
     // #175: the operator's session for this target (never the request's): every strategy starts
     // from its storage state; a goal mission also types its secret fields and runs its fixtures.
     const auth = queuedAuth(target, opts.targets, opts.env ?? process.env);
@@ -310,6 +326,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         routeGlobs,
         bounds,
         ...invariants,
+        ...withSafety,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
@@ -331,6 +348,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
+        ...withTarget,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
@@ -349,6 +367,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         bounds,
         ...(routeGlobs.length > 0 ? { routeGlobs } : {}),
         ...invariants,
+        ...withTarget,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
@@ -388,6 +407,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         usage,
         bounds,
         ...invariants,
+        ...withTarget,
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,

@@ -38,11 +38,13 @@ import {
   runCoverageMission,
   runExploration,
   runFeatureCliMission,
+  type ServerLogOptions,
 } from "./explore-api.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { runUsabilityMission } from "./ux-api.js";
 import { runVerifyFix } from "./verify-fix-api.js";
-import { loadInvariantFiles } from "./invariants-file.js";
+import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
+import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
@@ -441,6 +443,10 @@ interface PreparedTarget {
   readonly target: SuiteTarget;
   readonly allowlist: string[];
   readonly invariants?: InvariantSpec;
+  /** The invariants' `authFrom.secret` values, resolved from the environment at preflight (as `explore --invariants`). */
+  readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /** targets.json `logSources`/`logDefect` for the target's origin (as `explore` and the queue apply them). */
+  readonly serverLog?: ServerLogOptions;
   readonly config?: TargetConfig;
   readonly journeys: Map<string, Journey>;
   readonly goals: Map<string, SuccessCheck[]>;
@@ -551,6 +557,14 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     if (!(e instanceof SecretFieldSpecError)) throw e;
     throw new CheckPreflightError(`target ${t.name}: ${e.message}`);
   }
+  let invariantAuthTokens: Map<string, string> | undefined;
+  let serverLog: ServerLogOptions | undefined;
+  try {
+    invariantAuthTokens = invariants === undefined ? undefined : resolveInvariantAuthTokens(invariants, opts.env ?? process.env);
+    serverLog = serverLogFromTargetConfig(opts.targetsConfig, t.url);
+  } catch (e) {
+    throw new CheckPreflightError(`target ${t.name}: ${errorMessage(e)}`);
+  }
   const fixturesFile = t.fixtures ?? config?.fixtures;
   if (fixturesFile !== undefined || t.goals.some((g) => `${g.url ?? ""}${g.goal}${g.success.join("")}`.includes("${setup."))) {
     try {
@@ -567,6 +581,8 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     journeys,
     goals,
     ...(invariants === undefined ? {} : { invariants }),
+    ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
+    ...(serverLog === undefined ? {} : { serverLog }),
     config,
     secretFields,
     ...(fixturesFile === undefined ? {} : { fixturesFile }),
@@ -651,8 +667,14 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     ...(opts.browser === undefined ? {} : { browser: opts.browser }),
     ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
   };
-  const invariants = item.t.invariants === undefined ? {} : { invariants: item.t.invariants };
+  const invariants = {
+    ...(item.t.invariants === undefined ? {} : { invariants: item.t.invariants }),
+    ...(item.t.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: item.t.invariantAuthTokens }),
+  };
+  const withServerLog = item.t.serverLog === undefined ? {} : { serverLog: item.t.serverLog };
   const targetConfig = item.t.config === undefined ? {} : { target: item.t.config };
+  // A feature mission takes the target's safety directly (it has no settle/hang config to apply).
+  const targetSafety = item.t.config?.safety === undefined ? {} : { safety: item.t.config.safety };
 
   if (item.kind === "journey" && item.journey !== undefined) {
     const j = item.t.journeys.get(item.journey.id);
@@ -714,6 +736,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...common,
         ...targetConfig,
         ...invariants,
+        ...withServerLog,
         url,
         goal,
         successChecks,
@@ -741,7 +764,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     if (m.strategy === "feature") {
       const r = await runners.feature({
         ...common,
+        ...targetSafety,
         ...invariants,
+        ...withServerLog,
         seedUrl: url,
         allowlist: item.t.allowlist,
         capability: m.feature ?? m.name,
@@ -757,6 +782,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...common,
         ...targetConfig,
         ...invariants,
+        ...withServerLog,
         url,
         allowlist: item.t.allowlist,
         judge,
@@ -773,6 +799,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...common,
         ...targetConfig,
         ...invariants,
+        ...withServerLog,
         seedUrl: url,
         allowlist: item.t.allowlist,
         strategies: ADVERSARIAL_STRATEGIES,
@@ -789,6 +816,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     const r = await runners.usability({
       ...common,
       ...targetConfig,
+      ...withServerLog,
       url,
       job: m.goal ?? "",
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
