@@ -655,6 +655,8 @@ async function reproduceSeedHang(
         },
         ...(cfg.stallMs === undefined ? {} : { stallMs: cfg.stallMs }),
         ...(cfg.safety === undefined ? {} : { safety: cfg.safety }),
+        // #181: a control the run saw fire a write is never replayed by default, whatever its name.
+        writtenBy: run.sideEffects.map((e) => e.control),
       });
 }
 

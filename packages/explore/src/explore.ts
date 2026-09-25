@@ -24,7 +24,7 @@ import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalMet } from "./decide.js";
-import { FieldValueLog, FillHelper, capMessage, chatReply, matchOption } from "./fill.js";
+import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
 import {
   type SecretField,
   boundSecretField,
@@ -455,6 +455,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** The page text before the last message, and the message — to keep listening for its reply. */
   let lastTurn: { baseline: string; sent: string } | null = null;
   let lastPath: string | null = null;
+  // #188 — an add-another flow (the goal lists several items) comes back to a state it already went
+  // through (the second item's one-time dialog, identical to the first's). The model is reminded of
+  // what it did next from there, once per return — it read the history as those steps being done.
+  const listsSeveral = goalListsSeveral(cfg.goal);
+  const nextFrom = new Map<string, string[]>();
+  let prevSignature: string | null = null;
   /** The page's status text (alerts, invalid fields) at the latest perception (#79). */
   let status: PageStatus = EMPTY_STATUS;
   /** The step whose effect the next status read reports ("after <step>: alert …"). */
@@ -904,6 +910,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         valueLog.submitted();
       }
       lastPath = path;
+      if (listsSeveral && prevSignature !== null && prevSignature !== snap.signature) {
+        const next = nextFrom.get(snap.signature);
+        if (next !== undefined) {
+          history.push(
+            `this page is in the same state as earlier, where you went on with: ${next.join(", ")} — the goal lists several items: if one is still to do, the same steps apply to it`,
+          );
+        }
+      }
+      prevSignature = snap.signature;
       const keys = new Map<string, Control>(snap.controls.map((c) => [keyOf(c), c]));
       unsent.retain(new Set(keys.keys()));
       if (offerBaseline !== null) {
@@ -1002,6 +1017,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           origin?: "engine";
         } = {},
       ): void => {
+        const op = extra.op ?? decision.op;
+        const target = extra.control === undefined ? decision.control : extra.control;
+        if (actOk && target !== null && (op === "click" || op === "type" || op === "select")) {
+          const steps = nextFrom.get(snap.signature) ?? [];
+          // The first visit's steps only: a return must not overwrite what the state led to.
+          if (!nextFrom.has(snap.signature) || steps.length < 4) {
+            if (!steps.includes(`${op} ${quote(target.name || target.summary, 60)}`)) steps.push(`${op} ${quote(target.name || target.summary, 60)}`);
+            nextFrom.set(snap.signature, steps);
+          }
+        }
         transcript.record({
           op: extra.op ?? decision.op,
           control: extra.control === undefined ? decision.control : extra.control,
@@ -1310,6 +1335,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
           track.lastRecordedTarget = null;
           tracker.countAction();
+          // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
+          valueLog.reloaded();
           history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
         } else {
           history.push(`reload failed: ${r.reason ?? "?"}`);

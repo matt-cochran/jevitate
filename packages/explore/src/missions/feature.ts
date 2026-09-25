@@ -413,9 +413,26 @@ async function runFeatureFrontier(
     /** The last transition left the scope — the next reset is a return after a departure. */
     let departed = false;
 
+    // A candidate the safety policy refuses is withheld at push time (#186), its refusal recorded once.
+    const withheld = (control: Control, op: FrontierOp, on: Snapshot): boolean =>
+      safety.withholds(op, control, (reason) =>
+        transcript.record({
+          op: null,
+          control,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "safety-policy",
+          origin: "engine",
+          actOk: false,
+          reason,
+          snapshot: on,
+        }),
+      );
+
     const seedRec = seedRecording(params.seedUrl, site);
     leaves.set(currentFingerprint, seedRec);
     for (const { control, op } of rankedFrontierCandidates(snap.controls, words, chrome)) {
+      if (withheld(control, op, snap)) continue;
       frontier.push({ key: actionKey(currentFingerprint, control, op), fromFingerprint: currentFingerprint, pathPrefix: seedRec, control, op });
     }
 
@@ -620,6 +637,7 @@ async function runFeatureFrontier(
         leaves.set(newFingerprint, branch);
         pathsDiscovered += 1;
         for (const { control, op } of rankedFrontierCandidates(snap.controls, words, chrome)) {
+          if (withheld(control, op, snap)) continue;
           frontier.push({ key: actionKey(newFingerprint, control, op), fromFingerprint: newFingerprint, pathPrefix: branch, control, op });
         }
       }

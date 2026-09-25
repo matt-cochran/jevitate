@@ -1005,6 +1005,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
      * consult), so the mission loop tracks this itself.
      */
     const unactionable = new Set<string>();
+    /**
+     * Controls found disabled when last planned (#188). Filling a form over several episodes may
+     * enable its submit, so a disabled plan is never blacklisted — but it is recorded once per
+     * disabled streak, not once per episode (a disabled "Create key" read as 7 clicks in one run).
+     * An enabled plan ends the streak.
+     */
+    const disabledNow = new Set<string>();
     /** How many episodes each strategy has run (rotates its form, field and value). */
     const rounds = new Map<MisuseStrategy, number>();
     let stop: AdversarialStop | null = null;
@@ -1220,6 +1227,13 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         // an earlier step in THIS episode may just have made it enabled (e.g. filling the last
         // required field) — the same live truth `act()`'s own gate re-checks right before clicking.
         if (s.op === "click" && s.control !== null && (await isDisabledNow(sessions.page, s.control))) {
+          const id = controlIdentity(s.control);
+          const again = disabledNow.has(id);
+          disabledNow.add(id);
+          if (again) {
+            stepTiming = undefined;
+            break;
+          }
           transcript.record({
             op: null,
             control: s.control,
@@ -1234,6 +1248,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           stepTiming = undefined;
           break;
         }
+        if (s.op === "click" && s.control !== null) disabledNow.delete(controlIdentity(s.control));
         // The shared safety policy (#116): a paid / session-ending / destructive / --deny'd control is
         // never clicked — a no-op like a disabled target, counted against no budget.
         const unsafe = safety.gate(s.op, s.control);

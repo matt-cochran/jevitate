@@ -58,6 +58,12 @@ export interface SafetyConfig {
    * must match: role, name, label, testId, text; `name`/`text` are case-insensitive substrings).
    */
   readonly deny?: readonly string[];
+  /**
+   * The app's own paid controls (`--paid`, repeatable; `safety.paid` in targets.json, #181): same
+   * pattern syntax as `deny`. A match is in the `paid` category like the built-in vocabulary — the
+   * budget guard sees it, a hang replay withholds it, and it is clickable when the goal asks for it.
+   */
+  readonly paid?: readonly string[];
   /** Lift the built-in session-end / destructive / paid categories (`--deny` still holds). */
   readonly allowDestructive?: boolean;
   /** Extra read-request patterns for the write classifier (`--read-rpc`, #110). */
@@ -166,17 +172,17 @@ function compileDeny(pattern: string): DenyMatcher {
 }
 
 /** Throws a message naming the bad pattern (CLI validation before any browser opens). */
-export function validateDenyPatterns(patterns: readonly string[]): void {
+export function validateDenyPatterns(patterns: readonly string[], flag = "--deny"): void {
   for (const p of patterns) {
     const slashed = /^\/(.*)\/([a-z]*)$/s.exec(p.trim());
     if (slashed !== null) {
       try {
         new RegExp(slashed[1]!, slashed[2]);
       } catch (e) {
-        throw new Error(`--deny ${JSON.stringify(p)}: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`${flag} ${JSON.stringify(p)}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    if (p.trim() === "") throw new Error("--deny needs a non-empty pattern");
+    if (p.trim() === "") throw new Error(`${flag} needs a non-empty pattern`);
   }
 }
 
@@ -188,18 +194,28 @@ export interface SafetyVerdict {
 
 export class SafetyPolicy {
   readonly #deny: Array<{ readonly pattern: string; readonly match: DenyMatcher }>;
+  readonly #paid: DenyMatcher[];
   readonly #allowDestructive: boolean;
   readonly #goal: string | null;
 
   constructor(cfg: SafetyConfig = {}, opts: { readonly goal?: string } = {}) {
     this.#deny = (cfg.deny ?? []).map((pattern) => ({ pattern, match: compileDeny(pattern) }));
+    this.#paid = (cfg.paid ?? []).map(compileDeny);
     this.#allowDestructive = cfg.allowDestructive === true;
     this.#goal = opts.goal ?? null;
   }
 
+  /** The built-in category, else `paid` when an operator `--paid` pattern matches (#181). */
+  #risk(c: Pick<Control, "name" | "role" | "descriptor">): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
+    const r = controlRisk(c.name, c.role);
+    if (r !== null) return r;
+    const name = c.name.replace(/\s+/g, " ").trim();
+    return name !== "" && this.#paid.some((m) => m(c)) ? { risk: "paid", matched: name } : null;
+  }
+
   /** The risk category of a control's name (for marking the side effects a click fired). */
-  riskOf(c: Pick<Control, "name" | "role">): Exclude<ControlRisk, "denied"> | null {
-    return controlRisk(c.name, c.role)?.risk ?? null;
+  riskOf(c: Pick<Control, "name" | "role"> & { readonly descriptor?: Control["descriptor"] }): Exclude<ControlRisk, "denied"> | null {
+    return this.#risk({ ...c, descriptor: c.descriptor ?? {} })?.risk ?? null;
   }
 
   /** Why this control may not be clicked, or null when it may. */
@@ -209,7 +225,7 @@ export class SafetyPolicy {
       if (d.match(c)) return { risk: "denied", reason: `refused by the safety policy: "${name}" matches --deny ${JSON.stringify(d.pattern)}` };
     }
     if (this.#allowDestructive) return null;
-    const r = controlRisk(name, c.role);
+    const r = this.#risk(c);
     if (r === null) return null;
     if (this.#goal !== null && goalAsksFor(this.#goal, r.matched)) return null;
     const what = r.risk === "session-end" ? "ends the session" : r.risk === "destructive" ? "is destructive" : "may cost money or contact real people";

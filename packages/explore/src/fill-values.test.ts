@@ -125,6 +125,36 @@ describe("fill — add-another flows take the next item (#123)", () => {
     expect(goalListsSeveral("Sign up as ada@example.com")).toBe(false);
   });
 
+  it("a count word in a compound or qualifier phrase lists no items (#184)", () => {
+    for (const goal of [
+      "Sign in as d3@test.allumata.dev with the bound password, then complete the two-factor authentication step with the code from the authenticator.",
+      "Set up two-factor authentication",
+      "Enable 2FA on the account",
+      "Enter the one-time code",
+      "Complete the second factor",
+      "Connect a third-party integration",
+      "Finish the 2-step verification",
+      "Retry the login each time it fails",
+    ]) {
+      expect(goalListsSeveral(goal), goal).toBe(false);
+    }
+    for (const goal of ["Create two interview links", "Add both customers", "Add 3 contacts", "Invite dana@example.com and lee@example.com", "Add another address"]) {
+      expect(goalListsSeveral(goal), goal).toBe(true);
+    }
+  });
+
+  it("FieldValueLog: a reload undoes the last submit — retyping its value is a retry (#184)", () => {
+    const log = new FieldValueLog();
+    log.typed("Email", "dana@example.com");
+    log.submitted();
+    log.typed("Email", "lee@example.com");
+    log.submitted();
+    log.reloaded();
+    expect(log.used("Email")).toEqual(["dana@example.com"]);
+    log.reloaded();
+    expect(log.used("Email")).toEqual(["dana@example.com"]);
+  });
+
   it("FieldValueLog: a typed value is used only once submitted, keyed by the bare label", () => {
     const log = new FieldValueLog();
     log.typed("Name *", "Dana Ruiz");
@@ -148,5 +178,49 @@ describe("chat.reply — answer the question; the stuck brief (#122)", () => {
     expect(CHAT_REPLY_INSTRUCTIONS).toMatch(/Never merely acknowledge/);
     expect(CHAT_REPLY_STUCK_INSTRUCTIONS.length).toBeLessThanOrEqual(1000);
     expect(CHAT_REPLY_INSTRUCTIONS.length).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe("fill — never the field's own label; `exactly:` literals typed verbatim (#185)", () => {
+  const M05_GOAL =
+    'Switch the editor task to "Edit". In the FIRST block, replace its text with exactly: Dogfood3 edit marker kept after reload. Then click that block\'s "Save block" button and wait for it to finish saving.';
+
+  it.each([
+    ["the label itself", "Edit block text", TEXTAREA, "Edit block text"],
+    ["the label minus its imperative", "Edit block text", TEXTAREA, "block text"],
+    ["a placeholder-style label", "Enter your name", TEXT, "Enter your name"],
+    ["the label with a trailing ellipsis", "Write a note…", TEXTAREA, "write a note"],
+  ])("rejects %s", (_what, label, field, value) => {
+    expect(checkFieldValue(value, field, label, "Update the note")).toMatch(/field's own label/);
+  });
+
+  it("accepts a value the goal quotes even when it equals the label", () => {
+    expect(checkFieldValue("Block text", TEXTAREA, "Block text", 'Type "Block text" into the box')).toBeNull();
+  });
+
+  it("the `exactly:` literal is not a goal echo, and the pre-pass types it without the model", async () => {
+    expect(echoesGoal("Dogfood3 edit marker kept after reload", M05_GOAL)).toBeNull();
+    const { gen, inputs } = valueGen("Edit block text");
+    const helper = new FillHelper(gen);
+    const r = await helper.valueFor({ fieldLabel: "Edit block text", goal: M05_GOAL, visibleContext: "", field: TEXTAREA });
+    expect(r).toEqual({ text: "Dogfood3 edit marker kept after reload", source: "goal" });
+    expect(inputs).toHaveLength(0);
+  });
+
+  it("a model value that is the field's label is rejected, never typed", async () => {
+    const { gen } = valueGen("Edit block text");
+    const r = await new FillHelper(gen).valueFor({ fieldLabel: "Edit block text", goal: "Rewrite the first block", visibleContext: "", field: TEXTAREA });
+    expect(r.text).toBeNull();
+    expect(r.rejected).toMatch(/field's own label/);
+  });
+
+  it("the `exactly:` literal never fills a typed input (the caller cannot tell which field it is for)", async () => {
+    const { gen, inputs } = valueGen("Dana Ruiz");
+    await new FillHelper(gen).valueFor({ fieldLabel: "Participant name", goal: M05_GOAL, visibleContext: "", field: TEXT });
+    expect(inputs).toHaveLength(1);
+  });
+
+  it("the prompt forbids typing the label", () => {
+    expect(FORM_VALUE_INSTRUCTIONS).toMatch(/NEVER the field's own label/);
   });
 });
