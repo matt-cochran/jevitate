@@ -1,6 +1,6 @@
 import type { Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
-import { perceive, type PerceiveOptions } from "./perceive.js";
+import { RENDER_WAIT_MS, perceive, type PerceiveOptions } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { observeAfterStep } from "./record.js";
 import { hangFingerprint, type HangKind, type HangSignal } from "./hang.js";
@@ -86,6 +86,17 @@ export function replayWouldRepeatWrite(recording: Recording, upTo: number, safet
   }
   return null;
 }
+/**
+ * How long a replayed step may wait for its recorded target to render before it is
+ * `replay-target-not-found` (#164): the SAME bounded render wait the explore loop gives a page
+ * (`renderWaitMs`, default `RENDER_WAIT_MS`) — a control on a lazily loaded route that renders
+ * seconds after load is waited for, never declared missing on first look; never unbounded. An
+ * explicit `targetTimeoutMs` wins.
+ */
+export function replayTargetWaitMs(o: { readonly targetTimeoutMs?: number | undefined; readonly renderWaitMs?: number | undefined }): number {
+  return o.targetTimeoutMs ?? o.renderWaitMs ?? RENDER_WAIT_MS;
+}
+
 /** How long a replayed page must stay stuck to count as the same no-progress hang (ms). */
 export const DEFAULT_STALL_MS = 8_000;
 
@@ -207,6 +218,8 @@ export interface ReproduceHangParams {
   readonly perceive?: PerceiveOptions;
   /** For a stalled-state `ui-no-progress`: how long the state must stay stuck. */
   readonly stallMs?: number;
+  /** How long a replayed step may wait for its target (ms). Default: `replayTargetWaitMs` (the render wait). */
+  readonly targetTimeoutMs?: number;
   /** Bound on the replay itself (a hung page can block a step). Default 60s. */
   readonly replayBoundMs?: number;
   /** Sleep seam for the stall window (default: a real timer). */
@@ -243,7 +256,9 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Replay up to the step that led to the hang, then OBSERVE (that step's own postcondition is not
     // the verdict — the hang rule applied afterwards is).
-    const replayP = new RecordingInterpreter().runToCheckpoint(
+    const replayP = new RecordingInterpreter({
+      targetTimeoutMs: replayTargetWaitMs({ targetTimeoutMs: p.targetTimeoutMs, renderWaitMs: p.perceive?.renderWaitMs }),
+    }).runToCheckpoint(
       session.actor,
       observeAfterStep(p.recording, p.recordingStepIndex),
       p.recordingStepIndex,

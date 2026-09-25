@@ -5,7 +5,7 @@ import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interp
 import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
 import type { HangSignal } from "./hang.js";
-import { replayAndDetectHang, type HangRule } from "./hang-repro.js";
+import { replayAndDetectHang, replayTargetWaitMs, type HangRule } from "./hang-repro.js";
 import type { SafetyConfig } from "./safety.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
@@ -83,7 +83,10 @@ export interface VerifyFixParams {
    * `hangReplayWrites` opts in — the verdict is then `inconclusive`, never `fixed`.
    */
   readonly safety?: SafetyConfig;
-  /** How long a recorded target may take to appear on replay (ms). Default: the interpreter's. */
+  /**
+   * How long a recorded target may take to appear on replay (ms). Default (#164): the render wait —
+   * `perceive.renderWaitMs`, else `settleCeilingMs`, else `RENDER_WAIT_MS` (`replayTargetWaitMs`).
+   */
   readonly targetTimeoutMs?: number;
   /** Fresh-context replays for a non-hang defect signal (#74). Default `DEFAULT_VERIFY_REPLAYS`. */
   readonly replays?: number;
@@ -165,6 +168,11 @@ export function verifyReplayVerdict(runs: readonly Pick<ReplayAttemptEvidence, "
 
 export const DEFAULT_VERIFY_REPLAYS = 3;
 
+/** A replayed step's bounded target wait (#164): explicit, else the render wait this verify uses. */
+function targetWaitOf(params: VerifyFixParams): number {
+  return replayTargetWaitMs({ targetTimeoutMs: params.targetTimeoutMs, renderWaitMs: params.perceive?.renderWaitMs ?? params.settleCeilingMs });
+}
+
 function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
@@ -189,6 +197,7 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
       ...(params.perceive === undefined ? {} : { perceive: params.perceive }),
       ...(params.stallMs === undefined ? {} : { stallMs: params.stallMs }),
       ...(params.safety === undefined ? {} : { safety: params.safety }),
+      targetTimeoutMs: targetWaitOf(params),
     });
     const replay: VerifyFixResult["replay"] =
       attempt.replay === "failed" ? { outcome: "failed", at: -1, error: attempt.detail } : { outcome: "completed" };
@@ -307,7 +316,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     await monitorFor(session.page).instrument();
     const index = params.recordingStepIndex;
     const upTo = truncateAt(observeAfterStep(params.recording, index), index);
-    const interpreter = new RecordingInterpreter(params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs });
+    const interpreter = new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params) });
     const settle = (): Promise<unknown> =>
       perceive(session.page, { ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }) }).catch(() => undefined);
     const failedAt = (r: Awaited<ReturnType<RecordingInterpreter["run"]>>): SingleReplayAttempt | null => {
@@ -402,9 +411,7 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     await monitorFor(session.page).instrument();
     // The defect's step is replayed to OBSERVE what the app does next — its own postcondition is not
     // the verdict (a fixed app may legitimately behave differently after it); the signal check is.
-    const result = await new RecordingInterpreter(
-      params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs },
-    ).runToCheckpoint(
+    const result = await new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params) }).runToCheckpoint(
       session.actor,
       observeAfterStep(params.recording, params.recordingStepIndex),
       params.recordingStepIndex,
