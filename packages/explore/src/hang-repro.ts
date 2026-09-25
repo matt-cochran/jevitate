@@ -75,7 +75,7 @@ export function replayWouldRepeatWrite(recording: Recording, upTo: number, safet
         const t = step.target;
         const name = (t.name ?? t.text ?? t.label ?? step.label ?? "").replace(/\s+/g, " ").trim();
         if (name !== "") {
-          const r = controlRisk(name);
+          const r = controlRisk(name, t.role);
           if (r !== null && (r.risk === "paid" || r.risk === "destructive")) return { step: i + 1, control: name, risk: r.risk };
           if (deny.refuses({ name, role: t.role ?? "", descriptor: t }) !== null) return { step: i + 1, control: name, risk: "denied" };
         }

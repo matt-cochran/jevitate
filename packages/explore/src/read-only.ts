@@ -117,7 +117,7 @@ export class ReadOnlyGuard {
     if (op === "send") return `refused: this find-out goal is read-only — sending a message is a write (pass --allow-writes to permit it)`;
     if (op === "upload") return `refused: this find-out goal is read-only — uploading is a write (pass --allow-writes to permit it)`;
     if (op !== "click" || control === null) return null;
-    const risk = controlRisk(name);
+    const risk = controlRisk(name, control.role);
     const why =
       risk !== null
         ? `${risk.risk === "session-end" ? "ends the session" : risk.risk === "destructive" ? "is destructive" : "may cost money or contact real people"} (${risk.risk})`

@@ -446,6 +446,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let blockedInterceptors: readonly string[] = [];
   /** The page signature blocked interceptors were recorded against — cleared once it changes. */
   let blockedSinceSignature: string | null = null;
+  /**
+   * Controls the shared safety policy (#116) has refused this run (#168): once refused, a control is
+   * withheld from the model's candidates for the rest of the run — same as the interceptor-blocked
+   * set above — so a re-decide never re-chooses the same refused control.
+   */
+  const refusedKeys = new Set<string>();
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -822,6 +828,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         if (covered.size > 0) modelControls = snap.controls.filter((c) => !covered.has(c.index));
       }
+      // #168 — a control the safety policy already refused this run is withheld from now on (never
+      // re-offered, so the model cannot re-choose it and burn another action on the same refusal).
+      if (refusedKeys.size > 0) modelControls = modelControls.filter((c) => !refusedKeys.has(keyOf(c)));
 
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
@@ -1262,6 +1271,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (decision.op === "click") {
         const unsafe = safety.refuses(control);
         if (unsafe !== null) {
+          refusedKeys.add(keyOf(control));
           history.push(unsafe.reason);
           record(false, unsafe.reason, { origin: "engine" });
           lastActedOp = decision.op;
