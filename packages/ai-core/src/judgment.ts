@@ -1,5 +1,11 @@
 // judgment.ts — typed DRIVING decisions (Jev shape: Choice / Noul / Score)
 import { FAKE_CALL_USAGE, type UsageSink } from "./usage.js";
+/**
+ * The most options one choice question may carry: the judgment API refuses more (`400 Too many
+ * choices. Must have at most 255 choices.`, #192). Callers bound their option lists to it.
+ */
+export const MAX_CHOICE_OPTIONS = 255;
+
 export interface ChoiceQuestion<T extends string> {
   kind: "choice";
   options: readonly T[];
