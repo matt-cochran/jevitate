@@ -297,13 +297,15 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
   // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
   const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
-  const storageState = opts.storageState ?? mission.target.storageStatePath;
+  const target = resolveTargetConfig(opts.targets ?? {}, origin);
+  // #175: the operator's targets.json session is the last fallback (verify_fix over MCP of a
+  // mission recorded without one); never an MCP argument.
+  const storageState = opts.storageState ?? mission.target.storageStatePath ?? target.storageState;
   if (storageState !== undefined && !existsSync(storageState)) {
     throw new VerifyFixInputError(`storage state not found: ${storageState}`);
   }
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
-  const target = resolveTargetConfig(opts.targets ?? {}, origin);
   const perceiveOpts = {
     ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
