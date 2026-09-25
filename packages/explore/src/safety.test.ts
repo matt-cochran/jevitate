@@ -8,6 +8,18 @@ const btn = (name: string, extra: { testId?: string } = {}) => ({
 });
 
 describe("the shared safety policy (#116)", () => {
+  it("#181: a --paid pattern puts the app's own control in the paid category — refused unless the goal asks for it", () => {
+    const paid = { paid: ["/^(Analyze|Draft|Improve|Run)\\b/i"] };
+    expect(new SafetyPolicy().riskOf(btn("Analyze now"))).toBeNull();
+    const p = new SafetyPolicy(paid);
+    expect(p.riskOf(btn("Analyze now"))).toBe("paid");
+    expect(p.riskOf(btn("Save"))).toBeNull();
+    expect(p.refuses(btn("Analyze now"))).toMatchObject({ risk: "paid" });
+    expect(new SafetyPolicy(paid, { goal: 'Click "Analyze now" once and wait for the analysis' }).refuses(btn("Analyze now"))).toBeNull();
+    expect(new SafetyPolicy({ ...paid, allowDestructive: true }).refuses(btn("Analyze now"))).toBeNull();
+    expect(() => validateDenyPatterns(["/(/"], "--paid")).toThrow(/^--paid/);
+  });
+
   it("classifies session-ending, destructive and paid controls by name", () => {
     expect(controlRisk("Sign out")?.risk).toBe("session-end");
     expect(controlRisk("Log out")?.risk).toBe("session-end");
