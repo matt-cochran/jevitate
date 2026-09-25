@@ -109,6 +109,15 @@ export const MAX_REPEAT_TYPE_SIGNALS = 3;
  * indicator, no awaited reply) before the run stops as stuck, naming what the page shows (#79).
  */
 export const MAX_QUIET_WAITS = 3;
+/**
+ * Consecutive scrolls that MOVED the page (with no new page state) that count as progress (#172):
+ * scrolling to read a long page is progress until the end is reached; past this bound (e.g. a
+ * scroll up/down loop) a moved scroll counts as an unchanged step again.
+ */
+export const MAX_MOVING_SCROLLS = 12;
+/** The one "last chance" turn the model gets before a no-progress stop (#172). */
+export const LAST_CHANCE_NOTE =
+  "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
 
 
 
@@ -380,6 +389,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let stop: StopReason = "exhausted";
   let failure: MissionFailure | undefined;
   let lastActedOp: string | null = null;
+  /** #172: did the last scroll move the page, and how many moved scrolls in a row on one state. */
+  let lastScrollMoved = false;
+  let movingScrolls = 0;
+  let movingScrollsSignature: string | null = null;
+  /** #172: the no-progress last-chance turn was given (it is given once per run). */
+  let lastChanceGiven = false;
+  /** #172: this decision is the last-chance turn. */
+  let lastChanceTurn = false;
   let fixtureAttached = false;
   let hang: ExploreRun["hang"];
   let outcome: RunOutcome | null = null;
@@ -741,8 +758,17 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         statusAfter = null;
       }
 
+      // #172 — a scroll that MOVED the page is progress (the model is reading a long page), even
+      // though the control set — the signature — is the same; bounded, so a scroll loop still stops.
+      const scrolledMoved = (lastActedOp === "scroll_down" || lastActedOp === "scroll_up") && lastScrollMoved;
+      if (!scrolledMoved || snap.signature !== movingScrollsSignature) movingScrolls = 0;
+      movingScrollsSignature = snap.signature;
+      if (scrolledMoved) movingScrolls += 1;
+      const scrollProgress = scrolledMoved && movingScrolls <= MAX_MOVING_SCROLLS;
+      if (scrollProgress) noProgress.progress(snap.signature);
+      lastChanceTurn = false;
       // #2 — no-progress: the last executed op left the page unchanged N times.
-      if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
+      if (lastActedOp !== null && !scrollProgress && noProgress.note(lastActedOp, snap.signature)) {
         // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
         // sent it BACK to a state it had already been in (it changed, then reverted — an action
         // that silently undid itself, like an import that never starts), and it stays there for
@@ -801,9 +827,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             break;
           }
         }
-        stop = "no-progress";
-        break;
+        if (!lastChanceGiven) {
+          // #172 — one last-chance turn before the stop: the model has seen the page; it acts,
+          // reports, or says done/blocked. For a find-out goal an idle choice becomes a report.
+          lastChanceGiven = true;
+          lastChanceTurn = true;
+          history.push(LAST_CHANCE_NOTE);
+        } else {
+          stop = "no-progress";
+          break;
+        }
       }
+      // Progress was made: a later stuck episode gets its own last chance.
+      if (noProgress.streak === 0) lastChanceGiven = false;
       seen.add(snap.signature);
 
       // #90 — an interceptor proven by a real click failure stays blocked only while the page it was
@@ -902,6 +938,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         break;
       }
       tracker.countDecision();
+      if (
+        lastChanceTurn &&
+        cfg.readOnly === true &&
+        (decision.op === "scroll_down" || decision.op === "scroll_up" || decision.op === "wait" || decision.op === "blocked")
+      ) {
+        // #172 — a find-out goal that has seen the whole page and still only idles (or gives up)
+        // ends with a report ATTEMPT, grounded by code like any report, never a bare `blocked`.
+        history.push(`last chance: "${decision.op}" became a report attempt — the answer must be on the pages already seen`);
+        decision = { ...decision, op: "report", control: null, targetMissing: false };
+      }
 
       const record = (
         actOk: boolean,
@@ -1161,6 +1207,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
           changed = r.moved === true;
+          lastScrollMoved = r.ok && changed;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
           record(r.ok, r.ok ? note : r.reason);
         }

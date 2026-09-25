@@ -133,4 +133,13 @@ export class NoProgressDetector {
     this.#lastSignature = signature;
     return this.#streak >= this.limit;
   }
+
+  /**
+   * Records a step that made progress the signature cannot show (#172: a scroll that MOVED the
+   * page — the control set is the same, the viewport is not): the streak restarts from here.
+   */
+  progress(signature: string): void {
+    this.#streak = 0;
+    this.#lastSignature = signature;
+  }
 }
