@@ -1,17 +1,21 @@
 import { readFileSync } from "node:fs";
-import type { JevPricing } from "@jevitate/ai-core";
+import type { ConfiguredModelPrices, JevPricing, ModelPrice, UsagePricing } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
  * The usage-pricing slice of `~/.jevitate/config.json` (#136):
  *
  * ```json
- * { "usage": { "jevUnitPriceUsd": 0.006 } }
+ * { "usage": {
+ *     "jevUnitPriceUsd": 0.006,
+ *     "modelPrices": { "openai/gpt-4o": { "inputUsdPerMtok": 2.5, "outputUsdPerMtok": 10 } } } }
  * ```
  *
- * `jevUnitPriceUsd` prices a Jev judgment call when the provider itself reports no cost (today,
- * always — see `@jevitate/ai-core`'s usage.ts). A missing file (or missing key) is "not configured";
- * a malformed file or a non-numeric/negative value fails closed rather than being silently ignored.
+ * `jevUnitPriceUsd` prices each Jev judgment call when the provider itself reports no cost (it
+ * overrides the built-in Jev price table). `modelPrices` (#163) prices any model per million tokens
+ * — Jev or generation — overriding the built-in tables (and pricing a model they don't list). A
+ * missing file (or key) is "not configured"; a malformed file or a non-numeric/negative value fails
+ * closed rather than being silently ignored.
  */
 export class UsageConfigError extends Error {
   readonly code = "E_USAGE_CONFIG" as const;
@@ -80,4 +84,38 @@ export function resolveJevUnitPrice(
   const fromConfig = loadJevUnitPriceUsd(configPath);
   if (fromConfig === undefined) return undefined;
   return { unitPriceUsd: fromConfig, source: `config:${configPath} usage.jevUnitPriceUsd` };
+}
+
+/** `usage.modelPrices` from the config file (#163). Undefined when the file or key is absent. */
+export function loadModelPrices(path = resolveDataDir(["config.json"])): ConfiguredModelPrices | undefined {
+  const v = loadUsageSection(path)?.modelPrices;
+  if (v === undefined) return undefined;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new UsageConfigError(`${path}: usage.modelPrices must be an object of { "<model>": { inputUsdPerMtok, outputUsdPerMtok } }`);
+  }
+  const prices: Record<string, ModelPrice> = {};
+  for (const [model, p] of Object.entries(v as Record<string, unknown>)) {
+    if (p === null || typeof p !== "object" || Array.isArray(p)) {
+      throw new UsageConfigError(`${path}: usage.modelPrices.${model} must be { inputUsdPerMtok, outputUsdPerMtok }`);
+    }
+    const o = p as Record<string, unknown>;
+    prices[model] = {
+      inputUsdPerMtok: positiveNumber(o.inputUsdPerMtok, `${path}: usage.modelPrices.${model}.inputUsdPerMtok`),
+      outputUsdPerMtok: positiveNumber(o.outputUsdPerMtok, `${path}: usage.modelPrices.${model}.outputUsdPerMtok`),
+    };
+  }
+  return { prices, source: `config:${path} usage.modelPrices` };
+}
+
+/**
+ * Every configured price (#163): the Jev unit price (`resolveJevUnitPrice`) and `usage.modelPrices`.
+ * Whatever is not configured is priced from the built-in tables in `@jevitate/ai-core`'s usage.ts.
+ */
+export function resolveUsagePricing(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  configPath = resolveDataDir(["config.json"]),
+): UsagePricing {
+  const jevUnitPrice = resolveJevUnitPrice(env, configPath);
+  const modelPrices = loadModelPrices(configPath);
+  return { ...(jevUnitPrice === undefined ? {} : { jevUnitPrice }), ...(modelPrices === undefined ? {} : { modelPrices }) };
 }

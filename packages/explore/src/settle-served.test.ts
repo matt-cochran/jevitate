@@ -76,6 +76,25 @@ beforeAll(async () => {
           </script>`),
         );
         return;
+      case "/charge": {
+        // #152: a click whose effect lands LATER (a timer, as a deferred state update would) on a page
+        // that was already quiet before the click.
+        const ms = Number(new URL(req.url ?? "", "http://x").searchParams.get("ms") ?? "0");
+        const update = `document.querySelector('[data-testid=credit-balance-indicator]').textContent='10 credits';document.body.insertAdjacentHTML('beforeend','<div>Editor</div>')`;
+        const handler = ms === 0 ? update : `setTimeout(() => { ${update} }, ${ms})`;
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<a data-testid="credit-balance-indicator" href="#">90 credits</a><button type="button" onclick="${handler.replace(/"/g, "&quot;")}">Open in editor</button>`),
+        );
+        return;
+      }
+      case "/poller":
+        // A page-level poller (not scheduled by a user action) re-arms a timer forever: never tracked.
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<button type="button" onclick="document.getElementById('o').textContent='clicked'">Go</button><span id="o"></span><script>
+            const tick = () => setTimeout(tick, 300); tick();
+          </script>`),
+        );
+        return;
       case "/import":
         res.writeHead(200, { "content-type": "text/html" }).end(
           html(`<div id="root"></div><script>
@@ -145,6 +164,47 @@ describe("long-lived and live-updating pages settle and are not hangs", () => {
     expect(p.settle.settled).toBe(true);
     expect(p.settle.waitedMs).toBeLessThan(1_000); // no long-poll wait needed: declared up front
     expect(p.settle.background).toMatchObject([{ why: "ignored" }]);
+  });
+});
+
+describe("#152 — the quiet window starts AFTER the action", () => {
+  /** Load a quiet page, let it stay quiet, click, and perceive the click's result. */
+  async function clickAndLook(path: string, button: string) {
+    return withSession(
+      "settle-served-after-",
+      async (session) => {
+        const page = session.page;
+        const monitor = monitorFor(page);
+        await monitor.instrument();
+        await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
+        const first = await perceive(page, BOUNDS);
+        expect(first.settle.settled).toBe(true);
+        await page.waitForTimeout(800); // the page is QUIET well before the action
+        monitor.markAction();
+        await page.getByRole("button", { name: button }).click();
+        return perceive(page, BOUNDS);
+      },
+      origin,
+    );
+  }
+  const balance = (p: Awaited<ReturnType<typeof perceive>>): string | undefined =>
+    p.snapshot.controls.map((c) => c.summary).find((s) => s.includes("credits"));
+
+  it.each([
+    ["synchronously", 0],
+    ["300ms later (a deferred update)", 300],
+    ["1500ms later (a timer the click scheduled)", 1500],
+  ])("an effect that lands %s is perceived as THIS action's result", async (_name, ms) => {
+    const p = await clickAndLook(`/charge?ms=${ms}`, "Open in editor");
+    expect(p.settle.settled).toBe(true);
+    expect(balance(p)).toContain("10 credits");
+    expect(balance(p)).not.toContain("90 credits");
+  });
+
+  it("a page-level poller (timers not scheduled by the action) still settles promptly", async () => {
+    const p = await clickAndLook("/poller", "Go");
+    expect(p.settle.settled).toBe(true);
+    expect(p.settle.waitedMs).toBeLessThan(2_000);
   });
 });
 

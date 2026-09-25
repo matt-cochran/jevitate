@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -241,6 +241,129 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
       expect(result.outcome).toBe("inconclusive");
       expect(result.exitCode).toBe(2);
       expect(result.reason).toMatch(/--log-defect oracle could not run/);
+
+      await rm(outDir, { recursive: true, force: true });
+    },
+    180_000,
+  );
+
+  it(
+    "a quiet-but-OPENED log source (file exists, zero lines) also makes an otherwise-clean run inconclusive, with its own distinct reason (#169)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-server-log-quiet-out-"));
+      const logFile = join(await mkdtemp(join(tmpdir(), "jevitate-server-log-quiet-file-")), "app.log");
+      // Exists BEFORE the source opens (unlike the dead-source case above): `openFileSource` confirms
+      // `opened: true` immediately. Nothing in this mission ever appends to it.
+      await writeFile(logFile, "");
+      process.env.EXAMPLE_SITE_LOG = logFile;
+
+      const lines: string[] = [];
+      const program = buildProgram({
+        profiles: new ProfileManager("/unused"),
+        explore: {
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway({}),
+        },
+      });
+      program.configureOutput({ writeOut: (s) => lines.push(s) });
+      program.exitOverride();
+
+      await program.parseAsync(
+        [
+          "explore",
+          "--url",
+          `${site.url}/server-log-mission/page`,
+          "--goal",
+          "do nothing",
+          "--success",
+          "urlIncludes:/server-log-mission/page",
+          "--allow",
+          site.url,
+          "--log-source",
+          `file:${logFile}`,
+          "--log-defect",
+          "error",
+          "--server-log-drain-ms",
+          "300",
+          "--out",
+          outDir,
+          "--json",
+        ],
+        { from: "user" },
+      );
+
+      const parsed = JSON.parse(lines.join(""));
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+      const result = parsed.data;
+      expect(result.serverLogs.sources[0].opened).toBe(true);
+      expect(result.serverLogs.sources[0].linesRead).toBe(0);
+      expect(result.serverLogDefects ?? []).toHaveLength(0);
+      expect(result.serverLogs.oracleOk).toBe(false);
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.exitCode).toBe(2);
+      // Distinct from the "failed to open" wording above — this source WAS readable, it just never
+      // produced a line, so the oracle's health is unknown rather than proven broken.
+      expect(result.reason).toBe("log source produced no lines");
+
+      await rm(outDir, { recursive: true, force: true });
+    },
+    180_000,
+  );
+
+  it(
+    "--log-quiet-ok keeps a legitimately-quiet source's otherwise-clean run clean (#169)",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-server-log-quietok-out-"));
+      const logFile = join(await mkdtemp(join(tmpdir(), "jevitate-server-log-quietok-file-")), "app.log");
+      await writeFile(logFile, "");
+      process.env.EXAMPLE_SITE_LOG = logFile;
+
+      const lines: string[] = [];
+      const program = buildProgram({
+        profiles: new ProfileManager("/unused"),
+        explore: {
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway({}),
+        },
+      });
+      program.configureOutput({ writeOut: (s) => lines.push(s) });
+      program.exitOverride();
+
+      await program.parseAsync(
+        [
+          "explore",
+          "--url",
+          `${site.url}/server-log-mission/page`,
+          "--goal",
+          "do nothing",
+          "--success",
+          "urlIncludes:/server-log-mission/page",
+          "--allow",
+          site.url,
+          "--log-source",
+          `file:${logFile}`,
+          "--log-defect",
+          "error",
+          "--log-quiet-ok",
+          `file:${logFile}`,
+          "--server-log-drain-ms",
+          "300",
+          "--out",
+          outDir,
+          "--json",
+        ],
+        { from: "user" },
+      );
+
+      const parsed = JSON.parse(lines.join(""));
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+      const result = parsed.data;
+      expect(result.serverLogs.sources[0].quietOk).toBe(true);
+      expect(result.serverLogs.sources[0].linesRead).toBe(0);
+      expect(result.serverLogs.oracleOk).toBe(true);
+      expect(result.outcome).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.reason).toBeUndefined();
 
       await rm(outDir, { recursive: true, force: true });
     },

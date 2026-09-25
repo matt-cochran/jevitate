@@ -1,6 +1,6 @@
 import type { Answer, Question } from "./judgment.js";
 import type { JevClientCall } from "./jev.js";
-import type { UsageSink } from "./usage.js";
+import { failureClass, type UsageSink } from "./usage.js";
 
 /**
  * The Jev SDK adapter — lives next to `JevJudgmentGateway` (they change together): pure
@@ -115,7 +115,9 @@ interface SdkUsage {
 /** The slice of `@typesafe-ai/sdk` (v0.6) the live Jev seam uses. */
 interface TypeSafeSdk {
   TypeSafeClient: new (config: { apiKey: string }) => {
-    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown; usage: SdkUsage }>;
+    /** The model a request that names none is sent to (`jev-latest` unless configured). */
+    readonly defaultModel?: string;
+    systemOne(req: { state: unknown; questions: Record<string, SdkQuestion> }): Promise<{ answers: unknown; usage: SdkUsage; model?: string }>;
   };
 }
 
@@ -150,11 +152,23 @@ export async function realJevClientCall(load: SdkLoader = defaultSdkLoader, usag
   const sdk = mod;
   return async ({ state, questions, authHeader }) => {
     const client = new sdk.TypeSafeClient({ apiKey: apiKeyFromAuthHeader(authHeader) });
-    const result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
+    const requested = typeof client.defaultModel === "string" ? client.defaultModel : undefined;
+    let result: { answers: unknown; usage: SdkUsage; model?: string };
+    try {
+      result = await client.systemOne({ state, questions: toSdkQuestions(questions) });
+    } catch (e) {
+      // #163: a failed attempt is still a call — recorded (unpriced unless it reported usage), then rethrown.
+      usage?.recordJudgment({ inputTokens: 0, outputTokens: 0, ...(requested === undefined ? {} : { model: requested }), failure: failureClass(e) });
+      throw e;
+    }
+    // Recorded BEFORE the answers are parsed: a response that fails closed below was still billed.
+    // The response names the versioned model that answered (what the price table is keyed by).
+    const model = typeof result.model === "string" && result.model !== "" ? result.model : requested;
     usage?.recordJudgment({
       inputTokens: result.usage?.input_tokens ?? 0,
       outputTokens: result.usage?.output_tokens ?? 0,
-      ...(result.usage?.cost === undefined ? {} : { usd: result.usage.cost }),
+      ...(model === undefined ? {} : { model }),
+      ...(typeof result.usage?.cost === "number" ? { usd: result.usage.cost } : {}),
     });
     return fromSdkAnswers(questions, result.answers);
   };

@@ -92,9 +92,48 @@ function bareQuote(q: string): string {
     .trim();
 }
 
+/**
+ * Unit suffixes a figure may carry and still be a stated figure ("5GB", "30s", "24h", "10x", "3rd").
+ * Any OTHER letters glued to digits make the token a word, not a figure ("2FA", "v2", "no2fa", "S3").
+ */
+const FIGURE_UNITS = new Set([
+  "k", "m", "b", "bn", "mm", "kb", "mb", "gb", "tb", "pb", "x", "h", "hr", "hrs", "min", "mins", "s", "sec", "secs", "ms",
+  "d", "w", "wk", "wks", "mo", "mos", "y", "yr", "yrs", "st", "nd", "rd", "th", "am", "pm", "px", "pt", "em", "rem",
+  "kg", "g", "lb", "lbs", "km", "cm", "mi", "ft", "in", "usd", "eur", "gbp",
+]);
+
+/**
+ * A free-standing figure (#157): digits (with `.`/`,` groups) that do not sit inside a word — a
+ * letter, digit or `_` may not precede them, and anything glued after them must be a unit
+ * (`FIGURE_UNITS`). Currency/percent marks around a figure are not letters: "$25", "25%", "€1,234".
+ */
+const FIGURE = /(?<![\p{L}\p{N}_])(\d+(?:[.,]\d+)*)([\p{L}\p{N}_]*)/gu;
+
+/** One figure a text states: its value (thousands separators folded) and the token it came from. */
+interface Figure {
+  readonly value: string;
+  readonly token: string;
+}
+
 /** Figures (with thousands separators folded): "1,200" and "1200" are the same number. */
+function figuresIn(s: string): Figure[] {
+  const out: Figure[] = [];
+  for (const m of s.matchAll(FIGURE)) {
+    const digits = m[1]!.replace(/[.,]$/, "");
+    const suffix = m[2] ?? "";
+    if (suffix !== "" && !FIGURE_UNITS.has(suffix.toLowerCase())) continue;
+    out.push({ value: digits.replace(/,(?=\d{3}\b)/g, ""), token: m[0] });
+  }
+  return out;
+}
+
 function numbersIn(s: string): string[] {
-  return (s.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/,(?=\d{3}\b)/g, ""));
+  return figuresIn(s).map((f) => f.value);
+}
+
+/** "3" or `5 (in "5GB")` — the offending token quoted so the model can repair its answer. */
+function describeFigures(figs: readonly Figure[]): string {
+  return figs.map((f) => (f.token === f.value ? f.value : `${f.value} (in "${f.token}")`)).join(", ");
 }
 
 const STOPWORDS = new Set([
@@ -109,16 +148,16 @@ function contentWords(s: string): string[] {
 }
 
 /** Grounds one claim against the observed pages. */
-function groundClaim(claim: string, quote: string, pages: readonly ObservedPage[]): AnswerEvidence {
+function groundClaim(claim: string, quote: string, pages: readonly ObservedPage[], given: ReadonlySet<string>): AnswerEvidence {
   const q = bareQuote(quote);
   const base = { claim, quote };
   if (q.replace(/\s/g, "").length < MIN_QUOTE_CHARS) return { ...base, url: null, grounded: false, why: "no quote" };
   const page = pages.find((p) => fold(p.text).includes(q));
   if (page === undefined) return { ...base, url: null, grounded: false, why: "quote not found on any observed page" };
   const quoted = new Set(numbersIn(q));
-  const missing = numbersIn(claim).filter((n) => !quoted.has(n));
+  const missing = figuresIn(claim).filter((f) => !quoted.has(f.value) && !given.has(f.value));
   if (missing.length > 0) {
-    return { ...base, url: page.url, grounded: false, why: `figure ${missing.join(", ")} is not in its quote` };
+    return { ...base, url: page.url, grounded: false, why: `figure ${describeFigures(missing)} is not in its quote` };
   }
   const words = contentWords(claim);
   if (words.length > 0 && quoted.size === 0 && !words.some((w) => q.includes(w))) {
@@ -130,15 +169,18 @@ function groundClaim(claim: string, quote: string, pages: readonly ObservedPage[
 /**
  * Independent code's verdict on a reported answer: accepted only when there is an answer, it states
  * at least one claim, EVERY claim's quote is on an observed page (with the claim's figures in it),
- * and every figure the answer text states comes from a grounded quote.
+ * and every figure the answer text states comes from a grounded quote. A figure the GOAL itself states
+ * (the operator supplied it: "a key named 'key-42'") needs no page to show it (#157).
  */
 export function groundAnswer(
   proposed: { readonly answer: string | null; readonly claims: ReadonlyArray<{ readonly claim: string; readonly quote: string }> },
   pages: readonly ObservedPage[],
+  opts: { readonly goal?: string } = {},
 ): AnswerVerdict {
   const text = (proposed.answer ?? "").trim();
   if (text === "") return { accept: false, reason: "no answer was found on the pages seen", answer: null };
-  const evidence = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages));
+  const given = new Set(numbersIn(opts.goal ?? ""));
+  const evidence = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given));
   const answer: RunAnswer = { text, evidence };
   if (evidence.length === 0) return { accept: false, reason: "the answer cites no page text", answer };
   const bad = evidence.find((e) => !e.grounded);
@@ -146,9 +188,9 @@ export function groundAnswer(
     return { accept: false, reason: `the answer is not grounded: "${bad.claim}" — ${bad.why ?? "ungrounded"}`, answer };
   }
   const grounded = new Set(evidence.flatMap((e) => numbersIn(e.quote)));
-  const invented = numbersIn(text).filter((n) => !grounded.has(n));
+  const invented = figuresIn(text).filter((f) => !grounded.has(f.value) && !given.has(f.value));
   if (invented.length > 0) {
-    return { accept: false, reason: `the answer states ${invented.join(", ")}, which no observed page shows`, answer };
+    return { accept: false, reason: `the answer states ${describeFigures(invented)}, which no observed page shows`, answer };
   }
   return { accept: true, answer };
 }
@@ -188,5 +230,5 @@ export async function reportAnswer(
     pages: pagesContext(input.pages),
     history: input.history.slice(-20).map((h) => redactContext(h, secrets)),
   });
-  return groundAnswer(res.output, input.pages);
+  return groundAnswer(res.output, input.pages, { goal: input.goal });
 }

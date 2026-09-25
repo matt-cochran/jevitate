@@ -7,6 +7,8 @@ import {
   FakeGenerationGateway,
   FakeJudgmentGateway,
   type Answer,
+  UsageTracker,
+  type GenerationPort,
   type JudgmentPort,
 } from "@jevitate/ai-core";
 import { RecordingSchema } from "@jevitate/recording";
@@ -149,6 +151,65 @@ describe("jevitate explore — real-browser fixture smoke (Task 12)", () => {
   );
 });
 
+describe("jevitate explore — #163 full run cost (Jev + generation) with known per-call costs", () => {
+  it(
+    "totalUsd is exactly the sum of every call's cost, the sidecar lists every call, and stderr shows the cost",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-explore-cost-"));
+      const lines: string[] = [];
+      const errs: string[] = [];
+      const usage = new UsageTracker();
+      const JEV_USD = 0.001;
+      const GEN_USD = 0.0025;
+      const inner = new ScriptedJudge([{ op: "type", target: "0" }, { op: "click", target: "1" }, { op: "done" }]);
+      const judge: JudgmentPort = {
+        async systemOne(args) {
+          usage.recordJudgment({ inputTokens: 1_000, outputTokens: 0, usd: JEV_USD, model: "jev-1.13.0" });
+          return inner.systemOne(args);
+        },
+      };
+      const fakeGen = new FakeGenerationGateway({ "form.value": { text: "jane" } });
+      const gen: GenerationPort = {
+        async generate(kind, input) {
+          usage.recordGeneration({ inputTokens: 50, outputTokens: 5, usd: GEN_USD, model: "openai/gpt-4o-mini", task: kind });
+          return fakeGen.generate(kind, input);
+        },
+      };
+      const program = buildProgram({ profiles: new ProfileManager("/unused"), explore: { judge, gen, usage } });
+      program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: (s) => errs.push(s) });
+      program.exitOverride();
+      try {
+        await program.parseAsync(
+          ["explore", "--url", `${site.url}/login`, "--goal", "sign in and reach the inbox", "--success", "urlIncludes:/inbox", "--allow", site.url, "--out", outDir, "--json"],
+          { from: "user" },
+        );
+        const parsed = JSON.parse(lines.join(""));
+        expect(parsed.ok).toBe(true);
+        const u = parsed.data.usage;
+        expect(u.judgments).toBeGreaterThanOrEqual(3);
+        expect(u.generations).toBeGreaterThanOrEqual(1);
+        expect(u.jevUsd).toBeCloseTo(u.judgments * JEV_USD, 12);
+        expect(u.generationUsd).toBeCloseTo(u.generations * GEN_USD, 12);
+        expect(u.totalUsd).toBeCloseTo(u.judgments * JEV_USD + u.generations * GEN_USD, 12);
+        expect(u.priced).toBe("full");
+
+        const sidecarPath = parsed.data.resultPath.replace(/\.result\.json$/, ".usage.json");
+        const sidecar = JSON.parse(await readFile(sidecarPath, "utf8"));
+        expect(sidecar.version).toBe(1);
+        expect(sidecar.calls).toHaveLength(u.judgments + u.generations);
+        expect(sidecar.calls.filter((c: { kind: string }) => c.kind === "generation").every((c: { task?: string }) => c.task === "form.value")).toBe(true);
+        expect(sidecar.usage.totalUsd).toBeCloseTo(u.totalUsd, 12);
+        expect(JSON.stringify(sidecar)).not.toMatch(/jane|sign in|Bearer/);
+
+        expect(errs.join("")).toMatch(/^usage: cost \$0\.\d+ \(jev \$[\d.]+ \+ generation \$[\d.]+\) · \d+ judgments, \d+ generations?, [\d,]+ tokens\n$/);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+});
+
 describe("jevitate explore — --fake-ai smoke answers the candidate-action question", () => {
   it(
     "the fake judge proposes done (advisory), the oracle refuses it, and the transcript is written",
@@ -192,7 +253,9 @@ describe("jevitate explore — --fake-ai smoke answers the candidate-action ques
         expect(parsed.data.usage.judgments).toBeGreaterThanOrEqual(1);
         expect(parsed.data.usage.inputTokens).toBe(0);
         expect(parsed.data.usage.outputTokens).toBe(0);
-        expect(parsed.data.usage.usd).toBeUndefined();
+        // #163: a fake call ran no model, so it is known to cost $0 — fully priced, never "unpriced".
+        expect(parsed.data.usage.totalUsd).toBe(0);
+        expect(parsed.data.usage.priced).toBe("full");
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }

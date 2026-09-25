@@ -241,6 +241,9 @@ export class PlaywrightBrowserPort implements BrowserPort {
       async saveStorageState(file: string) {
         await context.storageState({ path: file });
       },
+      async captureStorageState() {
+        return JSON.stringify(await context.storageState());
+      },
       async close() {
         await context.close();
       },
@@ -268,6 +271,10 @@ function pooledSession(lease: ContextLease<BrowserContext>, page: Page): Browser
     async saveStorageState(file: string) {
       alive();
       await context.storageState({ path: file });
+    },
+    async captureStorageState() {
+      alive();
+      return JSON.stringify(await context.storageState());
     },
     async close() {
       await lease.release();

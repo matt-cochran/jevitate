@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { MissingCredentialError } from "@jevitate/ai-core";
+import { MissingCredentialError, formatUsageLine } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { CheckAiSetupError, CheckPreflightError, runCheck, type CheckGateways, type CheckRunners } from "./check-api.js";
@@ -100,6 +100,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           for (const i of result.items) {
             out?.(`${i.verdict.toUpperCase().padEnd(7)} ${i.target} ${i.kind} ${i.name}${i.error === undefined ? "" : ` — ${i.error.message}`}\n`);
           }
+          if (result.usage !== undefined) out?.(`COST    ${formatUsageLine(result.usage)}\n`);
           if (result.budget.exceeded !== undefined) out?.(`BUDGET  ${result.budget.exceeded}\n`);
           out?.(`${result.verdict.toUpperCase()}: ${result.summary.gatingFindings} gating finding(s) · ${result.jsonPath}\n`);
           process.exitCode = result.exitCode;

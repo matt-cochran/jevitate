@@ -23,8 +23,14 @@ has no `<form>`). It then tries misuse around submitting:
 - a reload with unsaved edits;
 - acting again while the save request is still pending.
 
-It also acts once on every other control on the target. Password fields, file inputs
-and log-out controls are never targets.
+It also acts once on every other control on the target. Password fields, file inputs,
+log-out controls and visually hidden skip links are never targets, and a toggle pair
+(Collapse/Expand, Show/Hide) is exercised once in each direction, not over and over.
+
+A submit counts as submitted only once a request (a write or a navigation) actually left
+the page. A submit the browser's own validation blocked (`required`, `type=email`,
+`minlength`) is recorded as "blocked by validation" with the browser's message, and a run
+whose only submits were blocked is `inconclusive`, never `clean`.
 
 Every adversarial result reports **coverage**:
 
@@ -51,7 +57,11 @@ action while the page is still alive (a busy indicator that never ends, or an
 action that silently puts the page back in an earlier state). The evidence is
 recorded: pending requests, the last page state, timings and the JS heap. The
 steps that led to the hang are then replayed in fresh browser contexts
-(`--hang-replays`, default 2). If any replay hangs again, it is a confirmed
+(`--hang-replays`, default 2; `0` skips the replays and reports the hang unconfirmed,
+`inconclusive`). Each replayed step waits for its target for the same bounded render
+wait the run itself uses, so a lazily rendered control is not mistaken for a missing one.
+A replay never re-sends a paid or destructive write unless you pass `--hang-replay-writes`
+([safety](./safety.md)). If any replay hangs again, it is a confirmed
 `hang`. If none did but at least one replay ran all the way, it is
 `intermittent`. If no replay could run at all (the fresh session could not
 open, or the replay failed before it reached the step), it is `inconclusive`:
@@ -66,10 +76,22 @@ hang, because the hang blocks its goal.
 `verify-fix` works on a hang too: it passes only if the replay now settles within
 the bound.
 
+Legitimate long-running work is not a hang. A response that has started streaming
+(gRPC-web, Connect streams, NDJSON, JSON-seq, multipart replace, SSE) is not pending
+work. A page that acknowledges the work (the pressed control disabled as "Analyzing…",
+or an in-progress status with Cancel/Stop or a determinate progress bar) is waited out
+within the job-wait budget, and past it the hang stands; a main thread that does not
+answer is never "working". A link click to a route visited earlier is navigation, not an
+action that silently undid itself.
+
 ### When is a page "settled"?
 
 No request in flight and no *structural* DOM change (nodes added or removed, or an
-attribute that changes what can be acted on) for 500ms, within a 15s ceiling.
+attribute that changes what can be acted on) for 500ms, within a 15s ceiling. The
+quiet time counts from the action itself (or later activity), so an already-quiet page
+does not settle instantly, and timers the action's input handler scheduled (up to 5s)
+are awaited until they fire or are cleared. A deferred effect is attributed to the action
+that caused it, not to the next one.
 These do not count:
 
 - long-lived connections: WebSocket, EventSource, and any response streamed as

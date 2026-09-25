@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Recording } from "@jevitate/recording";
 import type { TranscriptEntry } from "@jevitate/explore";
+import { usageSidecar, type UsageLedger } from "@jevitate/ai-core";
 import { transcriptPathFor } from "./transcript-file.js";
 
 /**
@@ -75,10 +76,40 @@ export function writeMissionResult(
   missionOutcome: string,
   exitCode: number,
   result: unknown,
+  usage?: UsageLedger,
 ): string {
   const path = resultPathFor(recordingPath);
   writeFileSync(path, `${JSON.stringify({ missionOutcome, exitCode, result }, null, 2)}\n`, "utf8");
+  if (usage !== undefined) writeUsageSidecar(path, usage);
   return path;
+}
+
+/**
+ * `<dir>/<stem>.result.json` (or any `<stem>.json`) → `<dir>/<stem>.usage.json`: the run's per-call
+ * usage breakdown (#163), next to its result.
+ */
+export function usagePathFor(resultPath: string): string {
+  const stem = resultPath.endsWith(".result.json")
+    ? resultPath.slice(0, -".result.json".length)
+    : resultPath.endsWith(".json")
+      ? resultPath.slice(0, -".json".length)
+      : resultPath;
+  return `${stem}.usage.json`;
+}
+
+/**
+ * Writes the per-call usage sidecar (#163): kind, task, model, tokens, cost and its source for every
+ * model call the run made — never prompt contents, answers or credentials (a `UsageCall` has no
+ * field that could hold one). Best-effort: accounting never replaces a run's result with an error.
+ */
+export function writeUsageSidecar(resultPath: string, usage: UsageLedger): string | undefined {
+  const path = usagePathFor(resultPath);
+  try {
+    writeFileSync(path, `${JSON.stringify(usageSidecar(usage), null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    return path;
+  } catch {
+    return undefined;
+  }
 }
 
 /** `<prefix>-<iso with : and . replaced>` — the artifact stamp every mission file uses. */

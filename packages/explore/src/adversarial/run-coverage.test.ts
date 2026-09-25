@@ -34,7 +34,7 @@ describe("CoverageTracker", () => {
     t.acted("https://app.test/elsewhere", control("Other", "button", "button"));
     const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 1);
     expect(r.controls).toEqual({ total: 2, exercised: 1, ratio: 0.5 });
-    expect(r.forms).toEqual({ found: 1, submitted: 0 });
+    expect(r.forms).toEqual({ found: 1, submitted: 0, blocked: 0 });
     expect(r.actionsOnTarget).toBe(1);
     expect(r.outOfScopeSteps).toBe(1);
     expect(r.sufficient).toBe(false);
@@ -44,9 +44,35 @@ describe("CoverageTracker", () => {
   it("a submitted form and enough controls make a run sufficient", () => {
     const t = new CoverageTracker(inScope);
     t.observe(snap("https://app.test/profile", [NAME, SAVE]));
-    t.acted("https://app.test/profile", SAVE, "form#f");
+    t.acted("https://app.test/profile", SAVE);
+    t.submitted("https://app.test/profile", "form#f");
     const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
-    expect(r).toMatchObject({ sufficient: true, shortfalls: [], forms: { found: 1, submitted: 1 } });
+    expect(r).toMatchObject({ sufficient: true, shortfalls: [], forms: { found: 1, submitted: 1, blocked: 0 } });
+  });
+
+  it("a submit the browser blocked with native validation never counts as submitted (#155)", () => {
+    const t = new CoverageTracker(inScope);
+    t.observe(snap("https://app.test/profile", [NAME, SAVE]));
+    t.acted("https://app.test/profile", SAVE);
+    t.blocked("https://app.test/profile", "form#f", "Please fill out this field");
+    const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
+    expect(r.forms).toEqual({ found: 1, submitted: 0, blocked: 1 });
+    expect(r.sufficient).toBe(false);
+    expect(r.shortfalls).toEqual([
+      'form submitted 0 times (1 attempt blocked by validation: "Please fill out this field")',
+    ]);
+  });
+
+  it("several blocked attempts pluralize; a later successful submit still counts as submitted", () => {
+    const t = new CoverageTracker(inScope);
+    t.observe(snap("https://app.test/profile", [NAME, SAVE]));
+    t.acted("https://app.test/profile", SAVE);
+    t.blocked("https://app.test/profile", "form#f", "Please fill out this field");
+    t.blocked("https://app.test/profile", "form#f", "Please fill out this field");
+    t.submitted("https://app.test/profile", "form#f");
+    const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
+    expect(r.forms).toEqual({ found: 1, submitted: 1, blocked: 2 });
+    expect(r.sufficient).toBe(true);
   });
 
   it("whatever the thresholds, a run that exercised nothing is never sufficient", () => {

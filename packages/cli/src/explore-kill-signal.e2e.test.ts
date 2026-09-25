@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,13 +43,30 @@ afterAll(async () => {
  *  returns the exit info, everything it printed, and the outDir it wrote into. */
 async function runAndSignal(
   signal: "SIGTERM" | "SIGINT",
-  opts: { judgeDelayMs?: number; mode?: "explore" | "usability"; fastCalls?: number } = {},
+  opts: {
+    judgeDelayMs?: number;
+    mode?: "explore" | "usability";
+    fastCalls?: number;
+    saveStorageState?: string;
+    /** Default `/login` — every EXISTING test's seed. #159's own tests use a non-login-like seed
+     *  (`isLoginLikeUrl` would otherwise treat every settled step on `/login` itself as unsafe to
+     *  snapshot, since the whole point of the guard is to never capture a login-like page). */
+    seedPath?: string;
+  } = {},
 ) {
-  const { judgeDelayMs = 8000, mode = "explore", fastCalls = 0 } = opts;
+  const { judgeDelayMs = 8000, mode = "explore", fastCalls = 0, saveStorageState, seedPath = "/login" } = opts;
   const outDir = await mkdtemp(join(tmpdir(), "jevitate-kill-signal-"));
   const child = spawn(
     process.execPath,
-    [HARNESS, `${site.url}/login`, outDir, String(judgeDelayMs), mode, String(fastCalls)],
+    [
+      HARNESS,
+      `${site.url}${seedPath}`,
+      outDir,
+      String(judgeDelayMs),
+      mode,
+      String(fastCalls),
+      ...(saveStorageState ? [saveStorageState] : []),
+    ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 
@@ -181,6 +198,61 @@ describe("a killed run's result describes the run it killed (#120, #112)", () =>
       expect(envelope).toMatchObject({ v: 1, ok: true, data: { steps: 2, transcriptPath: result.transcriptPath } });
 
       await rm(outDir, { recursive: true, force: true });
+    },
+    90_000,
+  );
+});
+
+describe("--save-storage-state on a kill (#159)", () => {
+  it(
+    "goal: SIGTERM still writes the storageState snapshot captured from the fast steps taken before the signal, mode 0600",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-kill-signal-state-"));
+      const saveTo = join(outDir, "state.json");
+      try {
+        const { code } = await runAndSignal("SIGTERM", {
+          fastCalls: 2,
+          saveStorageState: saveTo,
+          seedPath: "/exploratory-testing/cycle-a",
+        });
+        expect(code).toBe(143);
+
+        expect(existsSync(saveTo)).toBe(true);
+        const written = JSON.parse(await readFile(saveTo, "utf8"));
+        expect(written).toHaveProperty("cookies");
+        expect(written).toHaveProperty("origins");
+        const mode = (await stat(saveTo)).mode & 0o777;
+        expect(mode).toBe(0o600);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    90_000,
+  );
+
+  it(
+    "usability: SIGTERM still writes the storageState snapshot, mode 0600",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-kill-signal-state-"));
+      const saveTo = join(outDir, "state.json");
+      try {
+        const { code } = await runAndSignal("SIGTERM", {
+          mode: "usability",
+          fastCalls: 2,
+          saveStorageState: saveTo,
+          seedPath: "/exploratory-testing/cycle-a",
+        });
+        expect(code).toBe(143);
+
+        expect(existsSync(saveTo)).toBe(true);
+        const written = JSON.parse(await readFile(saveTo, "utf8"));
+        expect(written).toHaveProperty("cookies");
+        expect(written).toHaveProperty("origins");
+        const mode = (await stat(saveTo)).mode & 0o777;
+        expect(mode).toBe(0o600);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
     },
     90_000,
   );

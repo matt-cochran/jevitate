@@ -209,6 +209,59 @@ describe("explore — an overlay opened by a click covers sr-only controls behin
   );
 });
 
+describe("explore — a control the safety policy refuses is never re-offered (#168)", () => {
+  let paidServer: Server;
+  let paidOrigin: string;
+
+  beforeAll(async () => {
+    paidServer = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html><body><button type="button">Buy now</button></body></html>`);
+    });
+    await new Promise<void>((resolve) => paidServer.listen(0, "127.0.0.1", resolve));
+    paidOrigin = `http://127.0.0.1:${(paidServer.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    paidServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => paidServer.close((e) => (e ? reject(e) : resolve())));
+  });
+
+  it(
+    "a refused paid control is refused once, dropped from the candidates, and never re-chosen",
+    async () => {
+      // Scripted to re-pick the same (only) control 3 times in a row — the #168 dogfood repro. Without
+      // the per-run exclusion set it would be refused 3 times running (burning 3 of the run's steps).
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "click", target: "0" }, { op: "click", target: "0" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-168-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [paidOrigin]));
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "read what the page shows",
+            allowlist: [paidOrigin],
+            startUrl: paidOrigin,
+            bounds: { maxDecisions: 5 },
+          });
+        },
+        paidOrigin,
+      );
+
+      // Offered on the first decision, refused, and never offered again.
+      expect(judge.states[0]!.controls.join("\n")).toContain("Buy now");
+      for (const s of judge.states.slice(1)) expect(s.controls.join("\n")).not.toContain("Buy now");
+
+      const refusals = run.transcript.filter((t) => typeof t.reason === "string" && t.reason.includes("refused by the safety policy"));
+      expect(refusals).toHaveLength(1);
+      // The 2nd decision has nothing left to act on (the only control was excluded) — fails closed,
+      // never a 2nd/3rd refusal and never a no-progress stall from repeating the same refusal.
+      expect(run.stop).not.toBe("no-progress");
+    },
+    30_000,
+  );
+});
+
 describe("explore — typed stops instead of throws (owner ruling 1)", () => {
   it(
     "a model decision that stays unavailable ends the run `inconclusive` with its transcript and Recording",

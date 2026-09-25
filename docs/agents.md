@@ -82,3 +82,22 @@ cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven miss
 (reported as `skipped`) and only feature missions run. The exit code is 1 only when a mission could
 not run at all; each mission's own outcome is in its result. A drain killed mid-mission records
 that mission `done` with its partial `inconclusive` result, never leaves it `running`.
+
+**Authenticated queued missions.** An MCP request can never carry a session or a secret. The
+operator declares them per origin in `~/.jevitate/targets.json`, next to `fixtures` and
+`logSources`:
+
+```json
+{ "https://app.example.test": {
+    "storageState": "auth/app.json", "saveStorageState": true,
+    "secretFields": ["label=Password=env:APP_PASSWORD"] } }
+```
+
+Every queued strategy starts from `storageState`; a goal mission also types the `secretFields`
+(values read from the environment at run time) and runs the target's fixtures around it, and
+`verify_fix` uses the same storage state. `saveStorageState` (`true` writes back to
+`storageState`, or a path) writes the rotated session back after each mission; missions drain one
+at a time, so the next one starts from it. The same auth can live on the target record instead,
+which wins field by field: `jevitate mission target add|update <id> --storage-state <file>
+--save-storage-state [file] --secret-field <spec>`, and `update --clear-auth` drops it. A missing
+file or unset variable fails the mission by name before any browser opens.

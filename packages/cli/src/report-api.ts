@@ -12,6 +12,7 @@ import {
   type FindingsDiff,
   type RunRecord,
 } from "@jevitate/findings";
+import { formatUsageLine, sumUsage, usageCountsFrom, type UsageAggregate } from "@jevitate/ai-core";
 import { resolveDataDir } from "./data-dir.js";
 
 /**
@@ -79,20 +80,31 @@ export function loadRunFile(path: string): RunRecord | null {
   return runFromMissionResult(path, raw);
 }
 
-/** Every result in `dirs` (non-recursive), oldest first. Missing dirs are skipped. */
+const MAX_SCAN_DEPTH = 8;
+
+/**
+ * Every result in `dirs` and their subdirectories (#171: a `runs/<id>/…result.json` layout), oldest
+ * first. Missing dirs are skipped; dot-dirs, `node_modules` and symlinked dirs are not walked.
+ */
 export function scanRuns(dirs: readonly string[]): RunRecord[] {
   const seen = new Set<string>();
   const runs: RunRecord[] = [];
-  for (const dir of dirs) {
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
-    for (const name of readdirSync(dir).sort()) {
-      if (!isResultName(name)) continue;
-      const path = resolve(dir, name);
-      if (seen.has(path)) continue;
+  const walk = (dir: string, depth: number): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < MAX_SCAN_DEPTH && !entry.name.startsWith(".") && entry.name !== "node_modules") walk(path, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || !isResultName(entry.name) || seen.has(path)) continue;
       seen.add(path);
       const run = loadRunFile(path);
       if (run !== null) runs.push(run);
     }
+  };
+  for (const dir of dirs) {
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+    walk(dir, 0);
   }
   return runs.sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.runId.localeCompare(b.runId));
 }
@@ -199,7 +211,9 @@ export function resolveRunRef(ref: string, ctx: RunRefContext): RunRecord[] {
     return [run];
   }
   const tag = readBaseline(ref, ctx.baselinesDir);
-  if (tag !== null) return [...tag.runs];
+  // #171: a tag snapshotted before runs carried their scope re-reads it from the result file, when
+  // that still exists (otherwise the run compares by mode and target only).
+  if (tag !== null) return tag.runs.map((r) => (r.scope === undefined && existsSync(r.path) ? (loadRunFile(r.path) ?? r) : r));
   const id = runIdOf(ref);
   for (const dir of ctx.dirs) {
     for (const candidate of [join(dir, `${id}.result.json`), join(dir, `${id}.json`)]) {
@@ -320,6 +334,11 @@ export interface ReportResult {
   readonly runs: readonly RunSummary[];
   readonly defects: readonly ConsolidatedDefect[];
   readonly summary: { readonly defects: number; readonly advisory: number; readonly runs: number };
+  /**
+   * Model usage summed over the reported runs (#163). Runs whose result carries no `usage` (they made
+   * no model call, or predate usage accounting) are counted in `unreportedRuns`, not priced.
+   */
+  readonly usage: UsageAggregate;
   readonly diff?: FindingsDiff;
   readonly baselineRuns?: readonly RunSummary[];
   readonly markdown: string;
@@ -359,12 +378,14 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
     baselineRuns = resolveBaseline(opts.baseline, runs, { ...ctx, pool: scanRuns(dirs) });
     diff = diffRuns(baselineRuns, runs);
   }
-  const markdown = renderReportMarkdown({
-    title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}`,
-    runs,
-    defects,
-    ...(diff === undefined ? {} : { diff }),
-  });
+  const usage = usageOfRuns(runs);
+  const markdown =
+    renderReportMarkdown({
+      title: `Defect report${targetLabel === undefined ? "" : ` — ${targetLabel}`}${since === undefined ? "" : ` since ${since}`}`,
+      runs,
+      defects,
+      ...(diff === undefined ? {} : { diff }),
+    }) + usageMarkdown(usage);
   return {
     ...(targetLabel === undefined ? {} : { target: targetLabel }),
     ...(since === undefined ? {} : { since }),
@@ -375,10 +396,26 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
       advisory: defects.filter((d) => d.severity === "advisory").length,
       runs: runs.length,
     },
+    usage,
     ...(diff === undefined ? {} : { diff }),
     ...(baselineRuns === undefined ? {} : { baselineRuns: baselineRuns.map(summarizeRun) }),
     markdown,
   };
+}
+
+/** Sums the runs' persisted usage (#163). */
+export function usageOfRuns(runs: readonly RunRecord[]): UsageAggregate {
+  return sumUsage(
+    runs.map((r) => usageCountsFrom(r.usage)),
+    { unreported: "ignore" },
+  );
+}
+
+/** The report's cost section: the full total, flagged when partial. */
+export function usageMarkdown(u: UsageAggregate): string {
+  if (u.judgments + u.generations === 0) return "";
+  const unreported = u.unreportedRuns === undefined ? "" : ` (${u.unreportedRuns} run(s) carried no usage)`;
+  return `\n## Model cost\n\n${formatUsageLine(u)} over ${u.runs} run(s)${unreported}\n`;
 }
 
 /** `jevitate diff <runA> <runB>`: A is the baseline side, B the current side. */

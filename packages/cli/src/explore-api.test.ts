@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
-import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { UnauthorizedExploreTargetError, type GoalBasedOutcome } from "@jevitate/explore";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
+import type { TranscriptEntryWithLogs } from "./log-correlation.js";
 import {
   parseAssertionSpec,
   parseSuccessSpec,
@@ -16,7 +17,100 @@ import {
   runCoverageMission,
   runAdversarialCliMission,
   runFeatureCliMission,
+  withServerCause,
 } from "./explore-api.js";
+
+const step = (url: string, serverLogs?: TranscriptEntryWithLogs["serverLogs"]): TranscriptEntryWithLogs => ({
+  step: 1,
+  op: "click",
+  target: 'button "Go"',
+  confidence: null,
+  chosenBy: "strategy",
+  actOk: true,
+  url,
+  signature: "s1",
+  controlCount: 1,
+  ...(serverLogs === undefined ? {} : { serverLogs }),
+});
+
+describe("withServerCause (#165 'Also' — pairs a UI blocker with its correlated server cause, pure)", () => {
+  it("appends the last step's error line to an already-computed reason, for a blocked/exhausted/inconclusive outcome", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/signup", [
+        { level: "error", message: "duplicate key value violates unique constraint", raw: "…", source: "file:app.log", epochMs: 1 },
+      ]),
+    ];
+    const reason = withServerCause('field "Email" is invalid — "already taken"', "blocked", transcript);
+    expect(reason).toBe(
+      'field "Email" is invalid — "already taken"; server: error "duplicate key value violates unique constraint"',
+    );
+  });
+
+  it("includes the logger's target/category when known", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/signup", [
+        { level: "error", message: "duplicate key", raw: "…", source: "file:app.log", epochMs: 1, target: "Api.Controllers.Signup" },
+      ]),
+    ];
+    const reason = withServerCause("blocked: no valid target", "blocked", transcript);
+    expect(reason).toBe('blocked: no valid target; server: error Api.Controllers.Signup "duplicate key"');
+  });
+
+  it("prefers an error line over a warn line attached to the same step", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/signup", [
+        { level: "warn", message: "slow query", raw: "…", source: "file:app.log", epochMs: 1 },
+        { level: "error", message: "the real cause", raw: "…", source: "file:app.log", epochMs: 2 },
+      ]),
+    ];
+    const reason = withServerCause("blocked", "blocked", transcript);
+    expect(reason).toContain("the real cause");
+  });
+
+  it("falls back to a warn line when no error is attached", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "warn", message: "slow query", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    const reason = withServerCause("blocked", "blocked", transcript);
+    expect(reason).toBe('blocked; server: warn "slow query"');
+  });
+
+  it("truncates a long message", () => {
+    const long = "x".repeat(300);
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "error", message: long, raw: "…", source: "file:app.log", epochMs: 1 }])];
+    const reason = withServerCause("blocked", "blocked", transcript);
+    expect(reason?.length).toBeLessThan(long.length + 40);
+    expect(reason).toContain("…");
+  });
+
+  it("is a no-op when there is no server-log evidence at all (no --log-source)", () => {
+    expect(withServerCause("blocked", "blocked", undefined)).toBe("blocked");
+  });
+
+  it("is a no-op when the last step has no warn/error server-log evidence", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "info", message: "handled", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    expect(withServerCause("blocked", "blocked", transcript)).toBe("blocked");
+  });
+
+  it("is a no-op when reason itself is undefined", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "error", message: "x", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    expect(withServerCause(undefined, "blocked", transcript)).toBeUndefined();
+  });
+
+  it("is a no-op for outcomes outside blocked/exhausted/inconclusive (e.g. succeeded, defects-found)", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "error", message: "x", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    const succeeded: GoalBasedOutcome = "succeeded";
+    const defectsFound: GoalBasedOutcome = "defects-found";
+    expect(withServerCause("all good", succeeded, transcript)).toBe("all good");
+    expect(withServerCause("already reported separately", defectsFound, transcript)).toBe("already reported separately");
+  });
+
+  it("only looks at the LAST transcript entry — a stale error from an earlier step is not the current blocker", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/step1", [{ level: "error", message: "earlier unrelated error", raw: "…", source: "file:app.log", epochMs: 1 }]),
+      { ...step("http://x.test/step2"), step: 2, signature: "s2" },
+    ];
+    expect(withServerCause("blocked", "blocked", transcript)).toBe("blocked");
+  });
+});
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
   it("parses urlIncludes / visible / textIncludes / count specs", () => {
@@ -175,6 +269,21 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     const persisted = await new FsJourneyStore(journeysDir).get("explore-checkout");
     expect(persisted?.metadata.authoredBy).toBe("jev-driven");
     expect(persisted?.metadata.promoted).toBe(false);
+    expect(persisted?.metadata.requiresAuth).toBeUndefined();
+
+    // #170: authored behind a login ⇒ it declares requiresAuth, so a run without a session fails fast.
+    await runAuthorJourney({
+      url: "https://fixture.test/checkout",
+      goal: "reach the confirmation page",
+      successAssertion: parseAssertionSpec("visible:testId=confirmed"),
+      allowlist: ["https://fixture.test"],
+      journeysDir,
+      journeyId: "explore-checkout",
+      journeyName: "Explore: checkout",
+      storageState: "/unused/state.json",
+      authorImpl: async () => ({ outcome: "authored", journey: authored }),
+    });
+    expect((await new FsJourneyStore(journeysDir).get("explore-checkout"))?.metadata.requiresAuth).toBe(true);
   });
 
   it("runAuthorJourney refuses an off-allowlist target BEFORE authoring", async () => {

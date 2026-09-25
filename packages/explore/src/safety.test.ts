@@ -49,4 +49,33 @@ describe("the shared safety policy (#116)", () => {
     expect(() => validateDenyPatterns([" "])).toThrow(/non-empty/);
     expect(() => validateDenyPatterns(["Archive", "/^x$/i", "role=button;name=Go"])).not.toThrow();
   });
+
+  it("#168: a long question/answer merely CONTAINING a risky word is never classified — only a short, verb-led label", () => {
+    // The Preveti round-3 repros: a chat question card and a radio answer, each merely containing a
+    // risky word deep in a sentence, are never refused.
+    expect(controlRisk("No — every user must pay today, so there is no free cohort")).toBeNull();
+    expect(controlRisk("No — every user must pay today, so there is no free cohort", "radio")).toBeNull();
+    expect(controlRisk("How many qualified PM teams sign up but never start a trial today, and what happens to them?")).toBeNull();
+    expect(controlRisk("Which upgrade trigger is primary — usage/capacity limits, locked advanced features, or both — …?")).toBeNull();
+    expect(controlRisk("There is a meaningful pool of qualified PM teams who currently never start a trial, and what happens to them?")).toBeNull();
+    // The correctly-paid, short verb-led label is still caught.
+    expect(controlRisk("Generate customer research")?.risk).toBe("paid");
+  });
+
+  it("#168: a radio/checkbox/option answer is never paid unless it explicitly names a charge", () => {
+    expect(controlRisk("Start trial", "radio")).toBeNull();
+    expect(controlRisk("Upgrade", "checkbox")).toBeNull();
+    expect(controlRisk("Buy now", "option")).toBeNull();
+    // A choice control that explicitly names a charge is still caught.
+    expect(controlRisk("Pay $99/mo", "radio")?.risk).toBe("paid");
+    expect(controlRisk("Buy now", "button")?.risk).toBe("paid");
+    // Session-end/destructive still classify normal short buttons regardless of role.
+    expect(controlRisk("Sign out", "button")?.risk).toBe("session-end");
+  });
+
+  it("#168: a refused control is refused by the SafetyPolicy the same way, role-aware", () => {
+    const p = new SafetyPolicy();
+    expect(p.refuses({ ...btn("No — every user must pay today, so there is no free cohort"), role: "radio" })).toBeNull();
+    expect(p.refuses(btn("Generate customer research"))).not.toBeNull();
+  });
 });

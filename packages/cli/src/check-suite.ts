@@ -19,6 +19,8 @@ import { dirname, isAbsolute, resolve } from "node:path";
  *     "url": "https://staging.shop.example/",
  *     "allow": ["https://staging.shop.example"],
  *     "storageState": "auth.json",
+ *     "secretFields": ["label=Password=env:SHOP_PASSWORD"],
+ *     "fixtures": "fixtures/shop.json",
  *     "invariants": ["invariants/credits.json"],
  *     "journeys": ["login", { "id": "checkout", "params": { "sku": "A1" }, "routes": ["/cart/**"] }],
  *     "goals": [{ "name": "export", "goal": "export the report as CSV", "success": ["requestMade:GET /api/export"], "routes": ["/reports/**"] }],
@@ -84,7 +86,16 @@ export interface SuiteTarget {
   readonly name: string;
   readonly url: string;
   readonly allow: readonly string[];
+  /** Applied to every item of the target — Journeys, goals, missions, verify-fix (#170). */
   readonly storageState?: string;
+  /**
+   * `--secret-field` specs (`label=Password=env:APP_PASSWORD`, #170): the value is read from the
+   * environment when the check starts, never written in the suite. Typed by goal and usability
+   * items; also what the target's fixtures may authenticate with.
+   */
+  readonly secretFields?: readonly string[];
+  /** Mission fixtures file (#140/#144) run around each goal and Journey item; default: the targets.json one. */
+  readonly fixtures?: string;
   readonly invariants: readonly string[];
   readonly journeysDir?: string;
   readonly journeys: readonly SuiteJourney[];
@@ -259,11 +270,13 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "url", "allow", "storageState", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix"]);
+  r.keys(v, path, ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix"]);
   const name = r.string(v, "name", path);
   if (!NAME.test(name)) r.fail(`${path}.name`, "must match [A-Za-z0-9][A-Za-z0-9._-]*");
   const url = r.url(v, "url", path) ?? r.fail(`${path}.url`, "is required");
   const storageState = r.string(v, "storageState", path, true);
+  const secretFields = r.strings(v, "secretFields", path);
+  const fixtures = r.string(v, "fixtures", path, true);
   const journeysDir = r.string(v, "journeysDir", path, true);
   const goals = r.list(v, "goals", path);
   return {
@@ -271,6 +284,8 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
     url,
     allow: r.strings(v, "allow", path),
     ...(storageState === undefined ? {} : { storageState: r.resolvePath(storageState) }),
+    ...(secretFields.length === 0 ? {} : { secretFields }),
+    ...(fixtures === undefined ? {} : { fixtures: r.resolvePath(fixtures) }),
     invariants: r.strings(v, "invariants", path).map((f) => r.resolvePath(f)),
     ...(journeysDir === undefined ? {} : { journeysDir: r.resolvePath(journeysDir) }),
     journeys: r.list(v, "journeys", path).map((j, i) => journeyOf(r, j, `${path}.journeys[${i}]`)),

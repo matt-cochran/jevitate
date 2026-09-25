@@ -149,7 +149,7 @@ export function isEmptyStatus(s: PageStatus): boolean {
  * progress". Returns what it saw (for the transcript), or null.
  */
 export const IN_PROGRESS_WORDS =
-  "simulating|processing|running|generating|analy[sz]ing|computing|calculating|loading|preparing|working|thinking|uploading|importing|exporting|syncing|saving|submitting|creating|building|training|indexing|queued|in progress";
+  "simulating|processing|running|generating|drafting|fetching|rendering|publishing|analy[sz]ing|computing|calculating|loading|preparing|working|thinking|uploading|importing|exporting|syncing|saving|submitting|creating|building|training|indexing|queued|in progress";
 
 /** BROWSER CODE — serialized by `page.evaluate`: no imports, no closure over module scope. */
 function inProgressInPage(words: string): string | null {
@@ -187,4 +187,62 @@ function inProgressInPage(words: string): string | null {
 /** The in-progress status the page shows, or null (a page that cannot be read shows none). */
 export async function readInProgressStatus(page: Page): Promise<string | null> {
   return page.evaluate(inProgressInPage, IN_PROGRESS_WORDS).catch(() => null);
+}
+
+/**
+ * BROWSER CODE — does the page ACKNOWLEDGE work it is doing (#153)? A visible, enabled Cancel /
+ * Stop / Abort control (the app offers to cancel the job), a disabled control whose label is a
+ * progress phrase ("Analyzing...", the button the user pressed, now busy), or a determinate
+ * progress bar. Returns what it saw. Serialized by `page.evaluate`: self-contained.
+ */
+function workAcknowledgedInPage(words: string): { busyControl: string | null; cancel: string | null; bar: string | null } {
+  const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
+  const shown = (el: Element): boolean => {
+    const h = el as HTMLElement;
+    if (h.closest("[hidden],[aria-hidden=true]") !== null) return false;
+    const st = window.getComputedStyle(h);
+    const r = h.getBoundingClientRect();
+    return st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  };
+  const label = (el: Element): string =>
+    el instanceof HTMLInputElement ? norm(el.value) : norm(el.getAttribute("aria-label") ?? (el as HTMLElement).innerText ?? el.textContent);
+  const disabled = (el: Element): boolean => (el as HTMLButtonElement).disabled === true || el.getAttribute("aria-disabled") === "true";
+  const controls = Array.from(document.querySelectorAll("button,[role=button],input[type=button],input[type=submit]")).filter(shown);
+  const progress = new RegExp(`^\\W*(?:${words})\\b[^.!?]{0,60}(?:…|\\.\\.\\.)?\\s*$`, "i");
+  let cancel: string | null = null;
+  let busyControl: string | null = null;
+  for (const el of controls) {
+    const n = label(el);
+    if (cancel === null && !disabled(el) && /^\W*(?:cancel|stop|abort)\b/i.test(n)) cancel = `an enabled "${n.slice(0, 40)}" control`;
+    if (busyControl === null && disabled(el) && n !== "" && progress.test(n)) busyControl = `a disabled "${n.slice(0, 40)}" control`;
+  }
+  let bar: string | null = null;
+  for (const el of Array.from(document.querySelectorAll("[role=progressbar][aria-valuenow],progress[value]"))) {
+    if (!shown(el)) continue;
+    const now = Number(el.getAttribute("aria-valuenow") ?? (el as HTMLProgressElement).value);
+    const max = Number(el.getAttribute("aria-valuemax") ?? (el as HTMLProgressElement).max) || 100;
+    if (Number.isFinite(now) && now < max) {
+      bar = `a progress bar at ${Math.round((now / max) * 100)}%`;
+      break;
+    }
+  }
+  return { busyControl, cancel, bar };
+}
+
+/**
+ * The page is WORKING, not hung (#153) — it acknowledges the work it is doing:
+ *  - the control the user pressed is DISABLED and labelled with a progress phrase ("Analyzing...");
+ *  - or it shows an in-progress status (#92's detection) together with an enabled Cancel / Stop
+ *    control or a determinate progress bar.
+ * A bare "Loading…" with nothing else is not enough — a stuck page looks exactly like that. Returns a
+ * description for the transcript, or null. Callers bound how long "working" is believed.
+ */
+export async function readWorkingStatus(page: Page): Promise<string | null> {
+  const ack = await page.evaluate(workAcknowledgedInPage, IN_PROGRESS_WORDS).catch(() => null);
+  if (ack === null) return null;
+  if (ack.busyControl !== null) return ack.cancel === null ? ack.busyControl : `${ack.busyControl} and ${ack.cancel}`;
+  const extra = ack.cancel ?? ack.bar;
+  if (extra === null) return null;
+  const status = await readInProgressStatus(page);
+  return status === null ? null : `${status} with ${extra}`;
 }

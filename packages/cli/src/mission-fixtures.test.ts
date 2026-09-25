@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { authHeaders } from "./fixture-auth.js";
+import { authHeaders, localStorageValue } from "./fixture-auth.js";
 import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, regressionFixtures } from "./fixture-cli.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 import {
@@ -202,6 +202,62 @@ describe("MissionFixtures — lifecycle", () => {
     expect(calls.at(-1)).toMatchObject({ method: "DELETE" });
   });
 
+  it("#166: a login step puts ${secretField.VAR} in its JSON body only; its secret token authenticates the next step", async () => {
+    // The in-memory-token SPA: log in with the --secret-field password, capture the token as a
+    // secret output, reset state through the API with it.
+    const raw = {
+      setup: [
+        { name: "login", method: "POST", url: "/Login", json: { email: "qa@example.test", password: "${secretField.APP_PASSWORD}" }, outputs: { token: "$.data" }, secretOutputs: ["token"] },
+        { name: "reset", method: "POST", url: "/api/v1/tool/profile", headers: { Authorization: "Bearer ${setup.token}" }, body: "reset=${secretField.APP_PASSWORD}" },
+      ],
+    };
+    const calls: Call[] = [];
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec(raw, BOUNDS),
+      auth: { secretFields: { APP_PASSWORD: "pw-SECRET-166" } },
+      fetchImpl: fakeFetch(calls, (c) => (c.url.endsWith("/Login") ? Response.json({ data: "tok-SECRET-166" }) : new Response(null, { status: 204 }))),
+    });
+    await fx.setup();
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({ email: "qa@example.test", password: "pw-SECRET-166" });
+    expect(calls[1]?.headers.Authorization).toBe("Bearer tok-SECRET-166");
+    expect(calls[1]?.body).toBe("reset=pw-SECRET-166");
+    // Never in the recorded log, the result record or what a replay persists.
+    for (const out of [fx.record(), fx.persisted()]) expect(JSON.stringify(out)).not.toMatch(/SECRET-166/);
+    expect(JSON.stringify(fx.persisted())).toContain("${secretField.APP_PASSWORD}");
+
+    // A failing step's detail is redacted too.
+    const failing = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ setup: [{ method: "POST", url: "/Login", json: { p: "${secretField.APP_PASSWORD}" } }] }, BOUNDS),
+      auth: { secretFields: { APP_PASSWORD: "pw-SECRET-166" } },
+      fetchImpl: (async () => {
+        throw new Error("socket hang up sending pw-SECRET-166");
+      }) as unknown as typeof fetch,
+    });
+    const err = await failing.setup().catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/fixture setup failed/);
+    expect((err as Error).message).not.toContain("pw-SECRET-166");
+    expect(JSON.stringify(failing.record())).not.toContain("pw-SECRET-166");
+  });
+
+  it("#166: an unknown ${secretField.VAR} is refused at validation; a secret never goes in a URL or a public credential header", () => {
+    const spec = parseFixtureSpec({ setup: [{ method: "POST", url: "/Login", json: { password: "${secretField.NOPE}" } }] }, BOUNDS);
+    expect(() => new MissionFixtures({ ...BOUNDS, spec, auth: { secretFields: { APP_PASSWORD: "x" } } })).toThrow(
+      /references \$\{secretField\.NOPE\}, but the run has no --secret-field bound to env:NOPE/,
+    );
+    expect(() => buildMissionFixtures({}, { ...BOUNDS, spec })).toThrow(FixtureSpecError);
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/x?p=${secretField.APP_PASSWORD}" }] }, BOUNDS)).toThrow(/allowed only in json, body or headers/);
+    expect(() =>
+      parseFixtureSpec(
+        { setup: [{ method: "POST", url: "/Login", outputs: { token: "$.data" } }, { method: "GET", url: "/me", headers: { Authorization: "Bearer ${setup.token}" } }] },
+        BOUNDS,
+      ),
+    ).toThrow(/carries a credential — list it in secretOutputs/);
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/me", headers: { "X-Api-Key": "${secretField.API_KEY}" } }] }, BOUNDS)).not.toThrow();
+    expect(() => parseFixtureSpec({ setup: [{ method: "GET", url: "/me", headers: { Authorization: "Bearer abc${secretField.K}" } }] }, BOUNDS)).toThrow(/no literal credentials/);
+  });
+
   it("auth from a missing source fails setup rather than running unauthenticated", async () => {
     const fx = new MissionFixtures({
       ...BOUNDS,
@@ -290,6 +346,29 @@ describe("authHeaders", () => {
       expect(authHeaders({ from: "cookies" }, `${ORIGIN}/a`, { storageStatePath: state })).toEqual({ cookie: "sid=c1" });
       expect(authHeaders({ from: "secretField", name: "API_KEY", scheme: "" }, `${ORIGIN}/a`, { secretFields: { API_KEY: "k1" } })).toEqual({ authorization: "k1" });
       expect(() => authHeaders({ from: "localStorage", key: "missing" }, `${ORIGIN}/a`, { storageStatePath: state })).toThrow(/no localStorage "missing"/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("localStorageValue (#173)", () => {
+  it("reads a storageState file's localStorage[key] for an origin, straight from the file — no browser needed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jev-auth-ls-"));
+    try {
+      const state = join(dir, "b.json");
+      await writeFile(
+        state,
+        JSON.stringify({
+          cookies: [],
+          origins: [{ origin: ORIGIN, localStorage: [{ name: "simuli_token", value: "SECRET-MEMBER-JWT" }] }],
+        }),
+      );
+      expect(localStorageValue(state, ORIGIN, "simuli_token")).toBe("SECRET-MEMBER-JWT");
+      // No entry for that key, that origin, or an unreadable file: null, never a throw (the caller
+      // fails the probe closed the same way an unavailable token from any other source does).
+      expect(localStorageValue(state, ORIGIN, "missing-key")).toBeNull();
+      expect(localStorageValue(state, "http://elsewhere.test", "simuli_token")).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

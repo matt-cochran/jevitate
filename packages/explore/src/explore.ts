@@ -78,10 +78,12 @@ import {
   isEmptyStatus,
   readInProgressStatus,
   readPageStatus,
+  readWorkingStatus,
   statusDelta,
   type PageStatus,
 } from "./status.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
+import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
@@ -107,6 +109,15 @@ export const MAX_REPEAT_TYPE_SIGNALS = 3;
  * indicator, no awaited reply) before the run stops as stuck, naming what the page shows (#79).
  */
 export const MAX_QUIET_WAITS = 3;
+/**
+ * Consecutive scrolls that MOVED the page (with no new page state) that count as progress (#172):
+ * scrolling to read a long page is progress until the end is reached; past this bound (e.g. a
+ * scroll up/down loop) a moved scroll counts as an unchanged step again.
+ */
+export const MAX_MOVING_SCROLLS = 12;
+/** The one "last chance" turn the model gets before a no-progress stop (#172). */
+export const LAST_CHANCE_NOTE =
+  "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
 
 
 
@@ -211,6 +222,14 @@ export interface ExploreConfig {
   /** The shared safety policy (#116) and write classifier (#110) configuration. */
   readonly safety?: SafetyConfig;
   /**
+   * A READ-ONLY run (#158: a find-out goal that does not ask for a change): code refuses clicks on
+   * controls that start a write flow / submit a form, `send` and `upload`, and aborts the write
+   * requests (#110's classifier) a model-chosen action fires (act → settle); the app's own background
+   * writes (token refresh, heartbeat) pass and are listed `background`. Every refusal is recorded (origin
+   * `engine`) and told to the model. Set by the goal mission; never a model decision.
+   */
+  readonly readOnly?: boolean;
+  /**
    * Mission spend budget (#150) PRE-ACTION hook: called with the resolved control right before it
    * would be acted on (after the safety-policy risk classification, for every op). A refusal stops
    * the run with `stop: "budget"` before the action fires — code decides, the model never sees it as
@@ -226,6 +245,13 @@ export interface ExploreConfig {
    * run cleanly with `stop: "budget"`, before the next decision.
    */
   readonly onSettled?: (snap: Snapshot) => Promise<{ readonly stop: true; readonly reason: string } | { readonly stop: false }>;
+  /**
+   * #174: independent code's "the success condition is already met" (e.g. `--success-when held`
+   * checks that held), asked after each settled snapshot. A non-null note ends the run `done`,
+   * verified by the success condition, BEFORE the next decision — the run never keeps acting
+   * (or writing) past a met goal. Its result is code's verdict, never the model's.
+   */
+  readonly successMetNow?: () => Promise<string | null>;
 }
 
 export interface ExploreRun {
@@ -350,7 +376,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
   const secretContext = secretFieldContext(cfg.secretFields);
   const missionContext =
-    secretContext === null ? cfg.missionContext : cfg.missionContext ? `${cfg.missionContext}; ${secretContext}` : secretContext;
+    [cfg.missionContext, secretContext, cfg.readOnly === true ? READ_ONLY_NOTE : null]
+      .filter((c): c is string => c !== undefined && c !== null && c !== "")
+      .join("; ") || undefined;
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
@@ -368,6 +396,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let stop: StopReason = "exhausted";
   let failure: MissionFailure | undefined;
   let lastActedOp: string | null = null;
+  /** #172: did the last scroll move the page, and how many moved scrolls in a row on one state. */
+  let lastScrollMoved = false;
+  let movingScrolls = 0;
+  let movingScrollsSignature: string | null = null;
+  /** #172: the no-progress last-chance turn was given (it is given once per run). */
+  let lastChanceGiven = false;
+  /** #172: this decision is the last-chance turn. */
+  let lastChanceTurn = false;
   let fixtureAttached = false;
   let hang: ExploreRun["hang"];
   let outcome: RunOutcome | null = null;
@@ -434,6 +470,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let blockedInterceptors: readonly string[] = [];
   /** The page signature blocked interceptors were recorded against — cleared once it changes. */
   let blockedSinceSignature: string | null = null;
+  /**
+   * Controls the shared safety policy (#116) has refused this run (#168): once refused, a control is
+   * withheld from the model's candidates for the rest of the run — same as the interceptor-blocked
+   * set above — so a re-decide never re-chooses the same refused control.
+   */
+  const refusedKeys = new Set<string>();
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -491,6 +533,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       recordIndex: number;
       /** Did ANY page state never seen before appear since this action? (then it made progress) */
       sawNewState: boolean;
+      /** A LINK click: the route it was clicked on (null for any other action) — #153. */
+      linkFromRoute?: string | null;
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
@@ -516,20 +560,31 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
   /** The writes the run's actions fire (#116: the result's `sideEffects`). */
   const effectLog = new SideEffectLog({ isWrite, now });
+  /** A find-out goal's read-only guard (#158), or null when the run may write. */
+  const readOnly =
+    cfg.readOnly === true
+      ? new ReadOnlyGuard(isWrite, cfg.safety?.allowWriteRequests === undefined ? {} : { allowWrites: cfg.safety.allowWriteRequests })
+      : null;
   const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
   let jobWaitedMs = 0;
+  /**
+   * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
+   * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
+   */
+  let hangWorkWaitedMs = 0;
   const noteMutation = (
     label: string,
     descriptor: unknown,
     before: string,
     at: number,
     input?: { readonly field: string; readonly value: string },
+    linkFromRoute: string | null = null,
   ): void => {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
-    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false };
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
   };
@@ -565,6 +620,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     }
     if (firstNavFailed) throw new FirstNavigationFailedSentinel();
     recorder.navigate(cfg.startUrl, now());
+    // #158 — from here on, a read-only run's write requests never leave the browser.
+    if (readOnly !== null) {
+      await readOnly.arm(page);
+      effectLog.markBackground();
+      history.push(READ_ONLY_NOTE);
+    }
 
     for (;;) {
       if (!tracker.mayDecide()) {
@@ -578,6 +639,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
       sideEffects.settle();
+      // #158 — the action's window closes once the page settled: later writes are the app's own.
+      if (readOnly?.settled() === true) effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
       const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
       {
@@ -595,6 +658,35 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
       );
       track.lastRecordedTarget = null;
+
+      // Long-running legitimate work is not a hang (#153): a page that shows an in-progress status
+      // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
+      // determinate progress bar) is WORKING. Code waits it out, bounded by the job-wait budget;
+      // past the budget the hang stands. A main thread that does not answer is never "working".
+      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < jobWaitMs) {
+        const working = await readWorkingStatus(page);
+        if (working !== null) {
+          const w = await waitOutJob(page, Math.min(jobWaitMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS));
+          // The perception's own wait counts too: the budget bounds the whole time spent believing it.
+          hangWorkWaitedMs += w.waitedMs + perception.settle.waitedMs;
+          const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          history.push(note);
+          transcript.record({
+            op: "wait",
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "hang-check",
+            actOk: true,
+            reason: note,
+            snapshot: snap,
+            timing: perception.timing,
+          });
+          continue;
+        }
+      }
 
       // A hang is its own first-class stop (owner ruling 7) — detected by perception's rule.
       if (perception.hang !== null) {
@@ -651,6 +743,27 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
       }
 
+      // #174 — the success condition is already met (independent code): stop now, never act past it.
+      if (cfg.successMetNow !== undefined) {
+        const met = await cfg.successMetNow().catch(() => null);
+        if (met !== null) {
+          transcript.record({
+            op: "done",
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "success-held",
+            actOk: true,
+            reason: `goal already met — stopped before the next action: ${met}`,
+            snapshot: snap,
+            timing: perception.timing,
+          });
+          outcome = { status: "completed", verifiedBy: "success-condition" };
+          stop = "done";
+          break;
+        }
+      }
+
       if (!perception.rendered) {
         transcript.record({
           op: "wait",
@@ -679,8 +792,17 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         statusAfter = null;
       }
 
+      // #172 — a scroll that MOVED the page is progress (the model is reading a long page), even
+      // though the control set — the signature — is the same; bounded, so a scroll loop still stops.
+      const scrolledMoved = (lastActedOp === "scroll_down" || lastActedOp === "scroll_up") && lastScrollMoved;
+      if (!scrolledMoved || snap.signature !== movingScrollsSignature) movingScrolls = 0;
+      movingScrollsSignature = snap.signature;
+      if (scrolledMoved) movingScrolls += 1;
+      const scrollProgress = scrolledMoved && movingScrolls <= MAX_MOVING_SCROLLS;
+      if (scrollProgress) noProgress.progress(snap.signature);
+      lastChanceTurn = false;
       // #2 — no-progress: the last executed op left the page unchanged N times.
-      if (lastActedOp !== null && noProgress.note(lastActedOp, snap.signature)) {
+      if (lastActedOp !== null && !scrollProgress && noProgress.note(lastActedOp, snap.signature)) {
         // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
         // sent it BACK to a state it had already been in (it changed, then reverted — an action
         // that silently undid itself, like an import that never starts), and it stays there for
@@ -694,6 +816,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           !m.sawNewState &&
           snap.signature !== m.before &&
           m.seenBefore.has(snap.signature) &&
+          // A link that navigated to ANOTHER route already visited is ordinary navigation, not an
+          // in-place action that silently undid itself (#153): the stall rule is for in-place actions.
+          !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&
           !EXPECTED_RETURN.test(m.label) &&
           !ignoreNoProgress(m.label) &&
           !ignoreNoProgress(hangRoute(snap.url))
@@ -736,9 +861,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             break;
           }
         }
-        stop = "no-progress";
-        break;
+        if (!lastChanceGiven) {
+          // #172 — one last-chance turn before the stop: the model has seen the page; it acts,
+          // reports, or says done/blocked. For a find-out goal an idle choice becomes a report.
+          lastChanceGiven = true;
+          lastChanceTurn = true;
+          history.push(LAST_CHANCE_NOTE);
+        } else {
+          stop = "no-progress";
+          break;
+        }
       }
+      // Progress was made: a later stuck episode gets its own last chance.
+      if (noProgress.streak === 0) lastChanceGiven = false;
       seen.add(snap.signature);
 
       // #90 — an interceptor proven by a real click failure stays blocked only while the page it was
@@ -757,6 +892,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         if (covered.size > 0) modelControls = snap.controls.filter((c) => !covered.has(c.index));
       }
+      // #168 — a control the safety policy already refused this run is withheld from now on (never
+      // re-offered, so the model cannot re-choose it and burn another action on the same refusal).
+      if (refusedKeys.size > 0) modelControls = modelControls.filter((c) => !refusedKeys.has(keyOf(c)));
 
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
@@ -777,6 +915,29 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
       observed.add(snap.url, await readPageText(page));
+
+      // #158 — the write requests the read-only guard aborted since the last decision: recorded
+      // (jevitate's own refusal) and told to the model.
+      {
+        const blocked = readOnly?.drain() ?? [];
+        if (blocked.length > 0) {
+          const what = [...new Set(blocked.map((b) => `${b.method} ${b.path}`))].join(", ");
+          const note = `blocked write request(s) ${redactText(what, secrets)}: this find-out goal is read-only — find the answer without changing anything`;
+          history.push(note);
+          transcript.record({
+            op: null,
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "read-only",
+            actOk: false,
+            reason: note,
+            origin: "engine",
+            snapshot: snap,
+            timing: perception.timing,
+          });
+        }
+      }
 
       let decision: Awaited<ReturnType<typeof decide>>;
       try {
@@ -814,6 +975,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         break;
       }
       tracker.countDecision();
+      if (
+        lastChanceTurn &&
+        cfg.readOnly === true &&
+        (decision.op === "scroll_down" || decision.op === "scroll_up" || decision.op === "wait" || decision.op === "blocked")
+      ) {
+        // #172 — a find-out goal that has seen the whole page and still only idles (or gives up)
+        // ends with a report ATTEMPT, grounded by code like any report, never a bare `blocked`.
+        history.push(`last chance: "${decision.op}" became a report attempt — the answer must be on the pages already seen`);
+        decision = { ...decision, op: "report", control: null, targetMissing: false };
+      }
 
       const record = (
         actOk: boolean,
@@ -1073,6 +1244,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
           changed = r.moved === true;
+          lastScrollMoved = r.ok && changed;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
           record(r.ok, r.ok ? note : r.reason);
         }
@@ -1131,6 +1303,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         const at = now();
         effectLog.mark(transcript.nextStep, "reload");
+        readOnly?.beginAction();
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
           recorder.navigate(page.url(), at);
@@ -1157,11 +1330,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         stop = "exhausted";
         break;
       }
+      // #158 — a read-only (find-out) goal: code refuses a control that would start a write flow,
+      // submit a form, send a message or upload. Refused before any interaction, recorded, told.
+      if (readOnly !== null) {
+        const refusal = readOnly.refuses(decision.op, control);
+        if (refusal !== null) {
+          history.push(refusal);
+          record(false, refusal, { origin: "engine" });
+          lastActedOp = decision.op;
+          continue;
+        }
+      }
       // The shared safety policy (#116): a session-ending, destructive, paid or --deny'd control is
       // never clicked unless the goal itself asks for it (or --allow-destructive). Refused, recorded.
       if (decision.op === "click") {
         const unsafe = safety.refuses(control);
         if (unsafe !== null) {
+          refusedKeys.add(keyOf(control));
           history.push(unsafe.reason);
           record(false, unsafe.reason, { origin: "engine" });
           lastActedOp = decision.op;
@@ -1171,6 +1356,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const at = now();
       const risk = safety.riskOf(control);
       effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
+      readOnly?.beginAction();
 
       // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
       // would cross what remains of the budget is refused BEFORE it fires — code decides, never the
@@ -1548,7 +1734,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let message: string | undefined;
         if (r.ok) {
           recorder.click(control.descriptor, at);
-          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at);
+          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null);
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
           // What was typed has now been submitted (a form's button): an add-another flow's next
@@ -1632,6 +1818,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
   }
 
+  await readOnly?.disarm();
   const finished = recorder.tryFinish({ intent: cfg.goal });
   const cause = blockingCause();
   const finalOutcome: RunOutcome =

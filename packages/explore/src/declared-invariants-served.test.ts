@@ -179,6 +179,96 @@ describe("declared invariants around an action (#86)", () => {
   );
 
   it(
+    "#151: settle re-polls a violation, but an UNKNOWN result is reported at once — never the whole withinMs window",
+    async () => {
+      const s = await openSession();
+      try {
+        // A legitimately-absent observable (like a header chip on a page it isn't on): unknown from
+        // the first read, and stays unknown — this must never poll out a multi-second window.
+        const unknownSpec = validateInvariantSpec(
+          {
+            observe: { chip: { dom: { selector: "#not-on-this-page", number: true } } },
+            invariants: [{ id: "u", require: "delta(chip) <= 0", settle: { withinMs: 20_000, pollMs: 1_000 } }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const unknownMonitor = new InvariantMonitor(unknownSpec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        const start = Date.now();
+        const r = await clickImport(s.actor, unknownMonitor, s.page);
+        const elapsedMs = Date.now() - start;
+        expect(r).toEqual({ violations: [], unknown: ["u"], held: [] });
+        expect(unknownMonitor.report()).toEqual([{ id: "u", checked: 1, held: 0, violated: 0, unknown: 1 }]);
+        // Was waiting out the full 20s `withinMs` before the fix; a real click+read is well under 5s.
+        expect(elapsedMs).toBeLessThan(5_000);
+
+        // A DECIDED violation still polls across the window (settle keeps working for its real job).
+        const violatedSpec = validateInvariantSpec(
+          {
+            observe: { balance: { dom: { selector: "[data-testid=credit-balance]", number: true } } },
+            invariants: [{ id: "no-drop", require: "delta(balance) >= 0", settle: { withinMs: 5_000, pollMs: 1_000 } }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        let fakeNow = 0;
+        let sleepCalls = 0;
+        const violatedMonitor = new InvariantMonitor(violatedSpec, {
+          allowlist: [origin],
+          baseUrl: `${origin}/app`,
+          now: () => fakeNow,
+          sleep: async (_page, ms) => {
+            sleepCalls += 1;
+            fakeNow += ms;
+          },
+        });
+        const v = await clickImport(s.actor, violatedMonitor, s.page);
+        expect(v.violations).toHaveLength(1);
+        expect(v.violations[0]?.settledForMs).toBe(5_000);
+        expect(sleepCalls).toBe(5); // pollMs(1000) × 5 to close a 5000ms window — it really did re-poll
+      } finally {
+        await s.close();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "#156: number picks which one — {index} reads a range's bound (negative counts from the end); \"all\" is list-valued",
+    async () => {
+      const s = await openSession();
+      try {
+        await s.page.goto(`${origin}/app`);
+        await s.page.evaluate(() => {
+          const p = document.createElement("p");
+          p.setAttribute("data-testid", "estimate-range");
+          p.textContent = "≈ 30–90 credits"; // "≈ 30–90 credits" — a Unicode en-dash range
+          document.body.appendChild(p);
+        });
+        const spec = validateInvariantSpec(
+          {
+            observe: {
+              low: { dom: { selector: "[data-testid=estimate-range]", number: true } },
+              high: { dom: { selector: "[data-testid=estimate-range]", number: { index: 1 } } },
+              last: { dom: { selector: "[data-testid=estimate-range]", number: { index: -1 } } },
+              spread: { dom: { selector: "[data-testid=estimate-range]", number: "all" } },
+            },
+            invariants: [{ id: "noop", require: "low <= high" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app` },
+        );
+        const monitor = new InvariantMonitor(spec, { allowlist: [origin], baseUrl: `${origin}/app` });
+        expect(await monitor.readObservable(s.page, "low")).toMatchObject({ value: 30, unreadable: false });
+        expect(await monitor.readObservable(s.page, "high")).toMatchObject({ value: 90, unreadable: false });
+        expect(await monitor.readObservable(s.page, "last")).toMatchObject({ value: 90, unreadable: false });
+        // A list is never a valid scalar here (same as a `[*]` network/probe read) — #147/#148/#150.
+        expect(await monitor.readObservable(s.page, "spread")).toMatchObject({ unreadable: true });
+      } finally {
+        await s.close();
+      }
+    },
+    30_000,
+  );
+
+  it(
     "probes are GET-only with the session's own cookie, never off the allowlist, and their bodies never reach a finding",
     async () => {
       const s = await openSession();
@@ -310,6 +400,93 @@ describe("declared invariants around an action (#86)", () => {
         expect(probes.length).toBeGreaterThan(0);
         for (const p of probes) expect(p.headers.authorization).toBe("SECRET-COOKIE-TOKEN-xyz");
       } finally {
+        await s.close();
+      }
+    },
+    120_000,
+  );
+});
+
+describe("#173: a cross-actor probe's authFrom.localStorage reads the observer's storageState, no navigation needed", () => {
+  it(
+    "a probe-only observer (its page never navigates) still authenticates — from ObserverSessions.localStorage, not page.evaluate",
+    async () => {
+      const s = await openSession();
+      const observerSession = await port.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+      try {
+        await s.page.goto(`${origin}/app`);
+        // The observer's page is opened (lazily, as a real ObserverSessions would) but NEVER navigated —
+        // exactly the #173 repro: an observer used only for `probe`s never opens a page of its own.
+        const startUrl = observerSession.page.url();
+        const spec = validateInvariantSpec(
+          {
+            capture: { seed: { dom: { selector: "[data-testid=token]" } } },
+            observe: { secure: { probe: { as: "b", get: "/api/secure", json: "$.secure", authFrom: { localStorage: "tok" } } } },
+            invariants: [{ id: "secure-ok", when: { after: "capture.seed" }, require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app`, observers: ["b"] },
+        );
+        const monitor = new InvariantMonitor(spec, {
+          allowlist: [origin],
+          baseUrl: `${origin}/app`,
+          primaryActor: "a",
+          observers: {
+            page: async () => observerSession.page,
+            localStorage: async (actor, key, probeOrigin) => (actor === "b" && key === "tok" && probeOrigin === origin ? "SECRET-LS-TOKEN-abc" : null),
+            close: async () => undefined,
+          },
+        });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r.held).toEqual(["secure-ok"]);
+        expect(r.violations).toEqual([]);
+
+        // Never navigated: the fix reads the token from the storageState reader, not the live page.
+        expect(observerSession.page.url()).toBe(startUrl);
+
+        const probes = requests.filter((q) => q.path === "/api/secure");
+        expect(probes.length).toBeGreaterThan(0);
+        for (const p of probes) expect(p.headers.authorization).toBe("Bearer SECRET-LS-TOKEN-abc");
+        // secret-canary: the token never shows up in the result.
+        expect(JSON.stringify(r)).not.toContain("SECRET-LS-TOKEN-abc");
+      } finally {
+        await observerSession.close();
+        await s.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "without a storageState reader, the un-navigated observer's page.evaluate fallback fails closed, explained as never having loaded the origin",
+    async () => {
+      const s = await openSession();
+      const observerSession = await port.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+      try {
+        await s.page.goto(`${origin}/app`);
+        const spec = validateInvariantSpec(
+          {
+            capture: { seed: { dom: { selector: "[data-testid=token]" } } },
+            observe: { secure: { probe: { as: "b", get: "/api/secure", json: "$.secure", authFrom: { localStorage: "tok" } } } },
+            invariants: [{ id: "secure-ok", when: { after: "capture.seed" }, require: "secure == true" }],
+          },
+          { allowlist: [origin], baseUrl: `${origin}/app`, observers: ["b"] },
+        );
+        // No `localStorage` reader on this ObserverSessions — the old (page.evaluate) path.
+        const monitor = new InvariantMonitor(spec, {
+          allowlist: [origin],
+          baseUrl: `${origin}/app`,
+          primaryActor: "a",
+          observers: { page: async () => observerSession.page, close: async () => undefined },
+        });
+        await monitor.before(s.actor);
+        const r = await monitor.after(s.actor, { op: "click", control: null, url: s.page.url() });
+        expect(r.violations).toEqual([]);
+        expect(r.unknown).toEqual(["secure-ok"]);
+        const probes = requests.filter((q) => q.path === "/api/secure");
+        expect(probes).toEqual([]);
+      } finally {
+        await observerSession.close();
         await s.close();
       }
     },

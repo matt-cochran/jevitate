@@ -789,6 +789,20 @@ test("init --dry-run --skip-keys --json plans MCP registration without writing a
   expect(existsSync(join(cwd, ".mcp.json"))).toBe(false);
 });
 
+// === #154 — --hang-replays is validated before any browser opens ===
+
+test.each(["-1", "abc", "1.5", ""])("explore --hang-replays %j is refused before any browser opens", async (n) => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--hang-replays", n, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("--hang-replays must be a non-negative integer");
+});
+
 // === viewport/device emulation (#149) — CLI validation refuses before any browser opens ===
 
 test("explore --device 'Nokia 9000' is refused before any browser opens, listing close matches", async () => {

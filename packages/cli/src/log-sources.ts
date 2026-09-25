@@ -223,6 +223,16 @@ function openProcessSource(spec: LogSourceSpec, command: string, args: readonly 
   child.on("error", (e) => {
     handle.error = `${spec.raw}: ${e.message}`;
   });
+  // Startup health check (#169): `docker logs -f <container>` on a container that isn't running (or
+  // doesn't exist) exits almost immediately with a non-zero code — its stderr ("Error: No such
+  // container: …") would otherwise just look like an ordinary, if odd, log line and count toward
+  // `linesRead`, hiding the failure. An early non-zero exit is decisive regardless of what was piped
+  // through in the meantime: this source was never actually tailing the backend.
+  child.on("exit", (code, signal) => {
+    if (code !== null && code !== 0 && handle.error === undefined) {
+      handle.error = `${spec.raw}: exited with code ${code}${signal === null ? "" : ` (signal ${signal})`} — the source may not be running`;
+    }
+  });
   child.unref();
   return handle;
 }

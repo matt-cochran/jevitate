@@ -25,6 +25,17 @@ security bug, and how to report one.
 - Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Generate, Send
   invite) controls are refused by default. `--deny <pattern>` adds your own, and
   `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for.
+  The paid classifier reads only short, verb-led button and link labels: a chat question card or
+  a radio/checkbox answer that merely contains "pay", "trial" or "upgrade" is not refused unless
+  its label names a charge. A refused control is not offered to the model again in that run.
+- A find-out goal (no `--success`) is read-only unless the goal asks for a change: write-flow
+  controls are refused and the write requests an action fires are blocked. `--allow-writes`
+  lifts it and `--allow-write <glob>` exempts a request path
+  ([find-out goals](./success-checks.md#find-out-goals-no---success)).
+- A hang's fresh-context replays never re-send a paid or destructive write. A replay path that
+  clicks such a control (or matches `--deny`) is not replayed, and the hang (or `verify-fix`) is
+  `inconclusive`. `--allow-destructive` does not lift this; `--hang-replay-writes` (or
+  `safety.hangReplayWrites` in `~/.jevitate/targets.json`) does.
 - Every write request a run fires is listed in the result (`sideEffects`). A repeat guard refuses
   re-firing the same write, and `--read-rpc` marks POST-based read RPCs so they are not mistaken
   for writes.

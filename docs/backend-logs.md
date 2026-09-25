@@ -28,8 +28,18 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
 
 **Parsing.** A line's level and timestamp are read from common formats, in order: JSON
 (`level`/`severity` + `time`/`timestamp`/`ts`/`@timestamp`), logfmt (`level=error msg="…" time=…`),
-then a bracketed/bare level with an optional leading ISO timestamp. A line that matches none of
-these keeps its arrival order and an `unknown` level rather than being dropped.
+then a bracketed/bare level with an optional leading ISO timestamp. .NET is read too: the default
+console formatter's `fail: Category[id]` header with its indented continuation lines (grouped into
+one entry per source), the JSON console formatter's `Timestamp`/`LogLevel`/`Category`/`Message`
+keys, and Serilog's `[HH:mm:ss ERR] SourceContext message` console theme. A JSON message nested in
+`fields.message`/`fields.msg` (Rust `tracing`) or `@message` is extracted instead of the raw object.
+A line that matches none of these keeps its arrival order and an `unknown` level rather than being
+dropped.
+
+**Ignoring noise.** `--log-ignore <regex|substring>` (repeatable; `/regex/flags` or a plain
+substring, over the raw line) drops known-noise lines, such as a background job's expected error,
+from both correlation and the `--log-defect` oracle. They still count in the source's `linesRead`
+(proof it was tailed) and are reported separately as `serverLogs.ignoredLines`.
 
 **Correlation.** Each step's window runs from the previous step's settle time to this step's own
 settle time — the wall-clock epoch a mission's incremental transcript-flush listener already
@@ -39,20 +49,27 @@ work that settles after the browser gave up is still caught: the run's own await
 happens AFTER the mission function has returned, so a log source never blocks a mission's own
 budget or progress. Only `warn`/`error` lines (or any line a `--log-defect` matcher below hits,
 whatever its level) are attached as evidence, redacted with the run's own `--secret` list, to the
-step's transcript entry (`serverLogs`) and to any defect or `blocked` reason on it.
+step's transcript entry (`serverLogs`) and to any defect or `blocked` reason on it. A `blocked`,
+`exhausted` or `inconclusive` reason also names the last step's correlated server error (or
+warning), e.g. `field "Email" is invalid; server: error Api.Controllers.Signup "duplicate key…"`.
+Only the last step is consulted, so a stale earlier error is never blamed for the current blocker.
 
 **Optional oracle.** `--log-defect <level|/regex/>` (repeatable) makes a matching line a defect kind
 `server-log`: `error`/`warn`/`info`/`debug` matches as `level >= this`; `/pattern/flags` is compiled
 once via `new RegExp` (never `eval`ed, bounded to 500 chars) and matched against the RAW line.
-Its fingerprint is the normalized message (ids, numbers, uuids and timestamps stripped) plus the
-correlated step's route (`"(run)"` for a line outside every step window). `verify-fix` re-checks a
+Its fingerprint is the normalized message (ids, numbers, uuids and timestamps stripped) and the
+logger's category, plus the correlated step's templated route (ids in the URL are folded, so two
+occurrences on `/orders/17` and `/orders/42` are one defect) (`"(run)"` for a line outside every step window). `verify-fix` re-checks a
 `server-log` defect by replaying its recorded steps in a fresh session AND re-tailing the SAME log
 source(s) for the same drain window — never by looking for it among DOM/console/network signals,
 which a backend log line is none of. A `cmd:` source needs `--allow-log-cmd` on `verify-fix` too.
 
 **Result and outcome.** `serverLogs` on the result carries counts by level, the top normalized
 messages, each source's `opened`/`linesRead`/`truncated`/`error`, and `oracleOk` — false when
-`--log-defect` was given but every source failed to open or delivered not one line. A found
+`--log-defect` was given and any declared source failed to open or delivered not one line (a
+`docker:`/`cmd:` source that exits non-zero before its first line counts as failed, not quiet). A
+source that is legitimately quiet is declared with `--log-quiet-ok <spec>` (repeatable, the exact
+`--log-source` spec); its zero lines then do not make the oracle unhealthy. A found
 `server-log` defect counts as `defects-found` (exit 1), same as a declared-invariant defect. An
 unreadable oracle (`oracleOk: false`) turns an otherwise-`clean` run `inconclusive` (exit 2) rather
 than a false clean — its absence of defects proves nothing when the source that would have caught
@@ -60,7 +77,7 @@ them was never demonstrably read. (A usability run keeps its own advisory rule i
 
 **MCP / the mission queue.** A `MissionRequest`/`queue_exploration`/`verify_fix` argument may never
 name a path or a command (`packages/missions/src/schema.ts`). An operator declares `logSources` /
-`logDefect` / `allowLogCmd` per origin in `~/.jevitate/targets.json` instead:
+`logDefect` / `allowLogCmd` / `logQuietOk` / `logIgnore` per origin in `~/.jevitate/targets.json` instead:
 
 ```json
 { "https://app.example.test": {

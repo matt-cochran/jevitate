@@ -148,6 +148,42 @@ describe("invariant spec schema (#86)", () => {
     );
   });
 
+  it("#176: when.op refuses an unknown op name — a natural-but-unsupported guess like \"navigate\"/\"scroll\" never silently no-ops", () => {
+    // The exact Preveti round-2/round-3 repro: "navigate" isn't in the op vocabulary at all, and
+    // "scroll" isn't (only scroll_up/scroll_down are) — used to validate fine and then never fire.
+    expect(
+      refusal({ observe: { balance: valid.observe.balance }, invariants: [{ id: "a", when: { op: ["navigate", "wait", "scroll"] }, require: "delta(balance) == 0" }] }).join(),
+    ).toContain('invariants[0].when.op[0]: unknown op "navigate" (expected one of click, type, send, select, upload, scroll_up, scroll_down, wait, reload)');
+    expect(
+      refusal({
+        observe: { balance: valid.observe.balance },
+        invariants: [{ id: "a", when: { op: ["click", "scroll"] }, require: "delta(balance) == 0" }],
+      }).join(),
+    ).toContain('unknown op "scroll"');
+    // The real vocabulary (README/#124, packages/explore/src/actions.ts OPS minus the loop-control
+    // pseudo-ops) is accepted.
+    expect(
+      validateInvariantSpec(
+        {
+          observe: { balance: valid.observe.balance },
+          invariants: [
+            { id: "a", when: { op: ["click", "type", "send", "select", "upload", "scroll_up", "scroll_down", "wait", "reload"] }, require: "delta(balance) == 0" },
+          ],
+        },
+        ALLOW,
+      ).invariants[0]?.id,
+    ).toBe("a");
+  });
+
+  it("#176: capture.*.after.op is validated the same way", () => {
+    expect(
+      refusal({
+        capture: { seed: { url: { after: { op: ["navigate"] }, route: "/x" } } },
+        invariants: [{ id: "a", when: { after: "capture.seed" }, require: "true" }],
+      }).join(),
+    ).toMatch(/capture\.seed\.url\.after\.op\[0\]: unknown op "navigate"/);
+  });
+
   it("merges files, refusing a redefined observable or a repeated id", () => {
     const a = validateInvariantSpec({ observe: { b: valid.observe.balance }, invariants: [{ id: "a", require: "b > 0" }] }, ALLOW);
     const b = validateInvariantSpec({ observe: { b: valid.observe.balance }, invariants: [{ id: "b", require: "b >= 0" }] }, ALLOW);

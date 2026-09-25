@@ -9,8 +9,8 @@ import {
   envAliasesFor,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
-  openRouterProviderSettings,
   GEN_TASKS,
+  UsageTracker,
   type CredentialKey,
   type Feature,
   type SecureKeyIO,
@@ -18,12 +18,13 @@ import {
   type GenTaskKind,
   type CatalogModel,
   type ModelConstraints,
-  type OpenRouterCall,
 } from "@jevitate/ai-core";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
 import { resolveDataDir } from "./data-dir.js";
 import { loadLocalCredentials } from "./credentials-file.js";
+import { realOpenRouterCall } from "./openrouter-call.js";
+import { resolveUsagePricing } from "./usage-config.js";
 
 /**
  * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
@@ -130,26 +131,6 @@ export function realSecureIO(): SecureKeyIO {
   };
 }
 
-/** Lazily imports `ai` + `@openrouter/ai-sdk-provider` so the CLI builds and
- *  runs `--json`/fake paths without either package resolvable. The key goes
- *  ONLY to the provider's `apiKey` (which it sends as the `Authorization`
- *  header), never into `body`/`prompt`. */
-async function realOpenRouterCall(): Promise<OpenRouterCall> {
-  const { generateObject } = await import("ai");
-  const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
-  return async ({ model, schema, body, authHeader, temperature }) => {
-    const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
-    const start = Date.now();
-    const { object } = await generateObject({
-      model: openrouter(model),
-      schema,
-      prompt: JSON.stringify(body),
-      ...(temperature === undefined ? {} : { temperature }),
-    });
-    return { object, latencyMs: Date.now() - start };
-  };
-}
-
 function buildStore(ai: AiCliDeps | undefined) {
   return envCredentialStore(ai?.env ?? process.env, ai?.localConfig ?? loadLocalCredentials());
 }
@@ -234,6 +215,8 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
       const store = buildStore(deps.ai);
       try {
         let gateway: GenerationPort;
+        // #163: a live call's usage and cost ride on the result (the fake/injected paths make none).
+        let usage: UsageTracker | undefined;
         if (deps.ai?.gateway) {
           gateway = deps.ai.gateway;
         } else if (real) {
@@ -242,7 +225,7 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
             store,
             catalog: deps.ai?.catalog ?? DEFAULT_CATALOG,
             constraints: deps.ai?.constraints ?? DEFAULT_CONSTRAINTS,
-            call: await realOpenRouterCall(),
+            call: await realOpenRouterCall((usage = new UsageTracker(resolveUsagePricing(deps.ai?.env ?? process.env)))),
           });
         } else if (fake) {
           gateway = new FakeGenerationGateway();
@@ -263,7 +246,8 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
           );
           return;
         }
-        const result = await gateway.generate(task as GenTaskKind, parsedInput as never);
+        const generated = await gateway.generate(task as GenTaskKind, parsedInput as never);
+        const result = usage === undefined ? generated : { ...generated, usage: usage.snapshot() };
         const envelope = ok(result);
         if (json) {
           emitJsonLine(program, envelope);

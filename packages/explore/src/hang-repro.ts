@@ -1,6 +1,6 @@
 import type { Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
-import { perceive, type PerceiveOptions } from "./perceive.js";
+import { RENDER_WAIT_MS, perceive, type PerceiveOptions } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { observeAfterStep } from "./record.js";
 import { hangFingerprint, type HangKind, type HangSignal } from "./hang.js";
@@ -9,6 +9,7 @@ import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
 import type { MissionOutcome } from "@jevitate/domain";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
+import { SafetyPolicy, controlRisk, type SafetyConfig } from "./safety.js";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
@@ -23,9 +24,10 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
  *
  * Every attempt's evidence is kept; the finding is never dropped and never reported clean.
  *
- * `ui-no-progress` has two sub-kinds, told apart by `HangSignal.element` (#108):
+ * `ui-no-progress` has two sub-kinds, told apart by `busyIndicatorOf` — `HangSignal.element`, or
+ * for a signal persisted before `element` existed, the indicator its detail names (#108/#164):
  *
- *  - a BUSY-INDICATOR hang (`element` set — a spinner/progressbar that never cleared): "the same
+ *  - a BUSY-INDICATOR hang (an indicator is named — a spinner/progressbar that never cleared): "the same
  *    hang" means THAT indicator (by its normalized identity) is visible again after the replay. A
  *    settled page with a stable signature is not evidence either way — it is what a genuinely
  *    fixed page looks like, so it can never alone read as reproduced;
@@ -35,6 +37,66 @@ import { hostProbe, type HostProbe } from "./host-pressure.js";
  */
 
 export const DEFAULT_HANG_REPLAYS = 2;
+
+/**
+ * A recorded step a hang replay WITHHOLDS (#153): replaying it would re-send a paid or destructive
+ * write (a paid simulation, a charge, an email) on every fresh-context attempt. Decided by
+ * independent code — the #116 safety categories (paid / destructive) and the operator's `--deny`
+ * patterns over the recorded control — never by a model. A click on such a control is treated as
+ * the write it names: a replay cannot prove it would not fire one.
+ */
+export interface WithheldWrite {
+  /** 1-based position of the step in the Recording (flat, across pages). */
+  readonly step: number;
+  /** The recorded control's name. */
+  readonly control: string;
+  readonly risk: "paid" | "destructive" | "denied";
+}
+
+/** The inconclusive reason for a replay that was withheld. */
+export function withheldReason(w: WithheldWrite): string {
+  return `inconclusive: replay would repeat a paid/destructive write (step ${w.step}: "${w.control}", ${w.risk}); pass --hang-replay-writes to allow it`;
+}
+
+/**
+ * The first step, up to and INCLUDING `upTo` (flat index), whose replay would re-send a paid or
+ * destructive write — or null. Always null when the operator opted in (`safety.hangReplayWrites`).
+ * `allowDestructive` / a goal that asked for the action lift the ORIGINAL run's refusal, never the
+ * replay's: the run already sent that write once.
+ */
+export function replayWouldRepeatWrite(recording: Recording, upTo: number, safety: SafetyConfig | undefined): WithheldWrite | null {
+  if (safety?.hangReplayWrites === true) return null;
+  const deny = new SafetyPolicy({ ...(safety?.deny === undefined ? {} : { deny: safety.deny }), allowDestructive: true });
+  let i = 0;
+  for (const page of recording.pages) {
+    for (const recorded of page.steps) {
+      if (i > upTo) return null;
+      const step = recorded.step;
+      if (step.kind === "click") {
+        const t = step.target;
+        const name = (t.name ?? t.text ?? t.label ?? step.label ?? "").replace(/\s+/g, " ").trim();
+        if (name !== "") {
+          const r = controlRisk(name, t.role);
+          if (r !== null && (r.risk === "paid" || r.risk === "destructive")) return { step: i + 1, control: name, risk: r.risk };
+          if (deny.refuses({ name, role: t.role ?? "", descriptor: t }) !== null) return { step: i + 1, control: name, risk: "denied" };
+        }
+      }
+      i += 1;
+    }
+  }
+  return null;
+}
+/**
+ * How long a replayed step may wait for its recorded target to render before it is
+ * `replay-target-not-found` (#164): the SAME bounded render wait the explore loop gives a page
+ * (`renderWaitMs`, default `RENDER_WAIT_MS`) — a control on a lazily loaded route that renders
+ * seconds after load is waited for, never declared missing on first look; never unbounded. An
+ * explicit `targetTimeoutMs` wins.
+ */
+export function replayTargetWaitMs(o: { readonly targetTimeoutMs?: number | undefined; readonly renderWaitMs?: number | undefined }): number {
+  return o.targetTimeoutMs ?? o.renderWaitMs ?? RENDER_WAIT_MS;
+}
+
 /** How long a replayed page must stay stuck to count as the same no-progress hang (ms). */
 export const DEFAULT_STALL_MS = 8_000;
 
@@ -50,6 +112,70 @@ export interface HangAttempt {
    */
   readonly ran: boolean;
   readonly detail: string;
+  /** Set when the attempt was not run: its replay would repeat a paid/destructive write (#153). */
+  readonly withheld?: WithheldWrite;
+  /** Which rule decided an attempt that ran (#164). */
+  readonly rule?: HangRule;
+  /** Busy-indicator rule only: how many busy indicators were visible on the replayed page (#164). */
+  readonly busyIndicators?: number;
+}
+
+export type HangRule = "busy-indicator" | "stalled-state" | "same-kind";
+
+/**
+ * The busy indicator a `ui-no-progress` hang was attributed to, or null for a stalled-state hang
+ * (#164): `HangSignal.element`, else — for a hang persisted before `element` existed — the
+ * indicator named in its detail ("a busy indicator (X) never went away …"). Pure.
+ */
+export function busyIndicatorOf(hang: Pick<HangSignal, "kind" | "detail" | "element">): string | null {
+  if (hang.kind !== "ui-no-progress") return null;
+  if (hang.element !== undefined && hang.element !== "") return hang.element;
+  const m = /^a busy indicator \((.+)\) never went away within \d+ms$/.exec(hang.detail.trim());
+  return m?.[1] ?? null;
+}
+
+/** The pre-#87 description form `<css selector> <tag>` (e.g. `[role="progressbar"]:not([aria-valuenow]) <div>`). */
+function legacySelectorForm(indicator: string): { selector: string; tag: string } | null {
+  const m = /^(\[.+\]\S*) <([a-z][a-z0-9-]*)>$/.exec(indicator);
+  return m === null || m[1] === undefined || m[2] === undefined ? null : { selector: m[1], tag: m[2] };
+}
+
+/** Visible elements matching a recorded (legacy) indicator selector and tag; -1 when it cannot be evaluated. */
+async function countVisible(page: VerifySession["page"], selector: string, tag: string): Promise<number> {
+  return page
+    .evaluate(
+      ([sel, t]) => {
+        try {
+          return Array.from(document.querySelectorAll(sel)).filter((el) => {
+            if (el.tagName.toLowerCase() !== t) return false;
+            const r = (el as HTMLElement).getBoundingClientRect();
+            const s = window.getComputedStyle(el as HTMLElement);
+            return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+          }).length;
+        } catch {
+          return -1;
+        }
+      },
+      [selector, tag] as const,
+    )
+    .catch(() => -1);
+}
+
+/** How many busy indicators (the `visibleBusyIndicator` selectors) are visible now; -1 when unreadable. */
+async function countVisibleBusy(page: VerifySession["page"]): Promise<number> {
+  return page
+    .evaluate(() => {
+      const seen = new Set<Element>();
+      for (const sel of ['[aria-busy="true"]', '[role="progressbar"]:not([aria-valuenow])', '[class*="spinner" i]', '[class*="animate-spin" i]']) {
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const s = window.getComputedStyle(el as HTMLElement);
+          if (r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0") seen.add(el);
+        }
+      }
+      return seen.size;
+    })
+    .catch(() => -1);
 }
 
 export type ReproductionStatus = "reproduced" | "intermittent" | "inconclusive";
@@ -61,6 +187,8 @@ export interface HangReproduction {
   readonly reproduced: number;
   readonly status: ReproductionStatus;
   readonly runs: HangAttempt[];
+  /** Set when no replay ran because it would have repeated a paid/destructive write (#153). */
+  readonly withheld?: WithheldWrite;
 }
 
 /** The status rule (pure): any reproduction confirms; a run that ran clean is intermittent; else inconclusive. */
@@ -90,10 +218,17 @@ export interface ReproduceHangParams {
   readonly perceive?: PerceiveOptions;
   /** For a stalled-state `ui-no-progress`: how long the state must stay stuck. */
   readonly stallMs?: number;
+  /** How long a replayed step may wait for its target (ms). Default: `replayTargetWaitMs` (the render wait). */
+  readonly targetTimeoutMs?: number;
   /** Bound on the replay itself (a hung page can block a step). Default 60s. */
   readonly replayBoundMs?: number;
   /** Sleep seam for the stall window (default: a real timer). */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * The target's safety policy (#116/#153): replays never re-send a paid/destructive write unless
+   * `hangReplayWrites` opts in.
+   */
+  readonly safety?: SafetyConfig;
 }
 
 function firstLine(e: unknown): string {
@@ -104,6 +239,11 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
 
 /** One attempt: fresh session → replay → re-detect. Never throws. */
 export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangAttempt> {
+  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety);
+  if (withheld !== null) {
+    // Never replayed, so no evidence either way: not reproduced, not "fixed" — inconclusive.
+    return { reproduced: false, kind: null, replay: "failed", ran: false, detail: withheldReason(withheld), withheld };
+  }
   let session: VerifySession;
   try {
     session = await p.openSession();
@@ -116,7 +256,9 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Replay up to the step that led to the hang, then OBSERVE (that step's own postcondition is not
     // the verdict — the hang rule applied afterwards is).
-    const replayP = new RecordingInterpreter().runToCheckpoint(
+    const replayP = new RecordingInterpreter({
+      targetTimeoutMs: replayTargetWaitMs({ targetTimeoutMs: p.targetTimeoutMs, renderWaitMs: p.perceive?.renderWaitMs }),
+    }).runToCheckpoint(
       session.actor,
       observeAfterStep(p.recording, p.recordingStepIndex),
       p.recordingStepIndex,
@@ -141,21 +283,30 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
 
     const seen = await perceive(session.page, p.perceive ?? {});
     const kind = seen.hang?.kind ?? null;
-    if (p.hang.kind === "ui-no-progress" && p.hang.element !== undefined) {
-      // A busy-indicator hang (#108): reproduction requires THAT indicator to be visible again.
-      // A stable, settled page signature alone proves nothing — it is exactly what a fixed page
-      // looks like, so the same-signature rule below must never decide this sub-kind.
-      const wantElement = messageClass(p.hang.element);
-      const backAgain = kind === "ui-no-progress" && seen.hang?.element !== undefined && messageClass(seen.hang.element) === wantElement;
+    const indicator = busyIndicatorOf(p.hang);
+    if (indicator !== null) {
+      // A busy-indicator hang (#108/#164): reproduction requires THAT indicator to be visible and
+      // stuck again. A stable, settled page signature alone proves nothing — it is exactly what a
+      // fixed page looks like, so the stalled-state rule below must never decide this sub-kind
+      // (including a hang recorded before `element` existed, identified from its detail).
+      const legacy = legacySelectorForm(indicator);
+      const matching = legacy === null ? null : await countVisible(session.page, legacy.selector, legacy.tag);
+      const backAgain =
+        kind === "ui-no-progress" &&
+        seen.hang?.element !== undefined &&
+        (messageClass(seen.hang.element) === messageClass(indicator) || (matching !== null && matching > 0));
+      const busyIndicators = await countVisibleBusy(session.page);
       return {
         reproduced: backAgain,
         kind: backAgain ? "ui-no-progress" : kind,
         replay,
         ran: true,
+        rule: "busy-indicator",
+        busyIndicators,
         detail: backAgain
-          ? `busy-indicator rule: the indicator (${seen.hang?.element ?? p.hang.element}) is back — ${seen.hang?.detail ?? p.hang.detail}`
+          ? `busy-indicator rule: the indicator (${seen.hang?.element ?? indicator}) is back — ${seen.hang?.detail ?? p.hang.detail}`
           : kind === null
-            ? `busy-indicator rule: the indicator (${p.hang.element}) is gone and the page settled — fixed`
+            ? `busy-indicator rule: the indicator (${indicator}) is gone and the page settled (${busyIndicators} busy indicator(s) visible) — fixed`
             : kind === "ui-no-progress"
               ? `busy-indicator rule: a different busy indicator (${seen.hang?.element ?? "unknown"}), not the one that hung`
               : `busy-indicator rule: no busy indicator, a different hang (${kind}) instead`,
@@ -166,7 +317,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       // stay there.
       const stalled = p.hang.lastState.signature;
       if (seen.snapshot.signature !== stalled) {
-        return { reproduced: false, kind, replay, ran: true, detail: "stalled-state rule: replay reached a different page state (progress was made)" };
+        return { reproduced: false, kind, replay, ran: true, rule: "stalled-state", detail: "stalled-state rule: replay reached a different page state (progress was made)" };
       }
       await (p.sleep ?? realSleep)(p.stallMs ?? DEFAULT_STALL_MS);
       const again = await perceive(session.page, p.perceive ?? {});
@@ -176,6 +327,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
         kind: stuck ? "ui-no-progress" : null,
         replay,
         ran: true,
+        rule: "stalled-state",
         detail: stuck
           ? "stalled-state rule: the replay landed on the same stalled state and stayed there"
           : "stalled-state rule: the page moved on after the stall window",
@@ -187,6 +339,7 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
       kind,
       replay,
       ran: true,
+      rule: "same-kind",
       detail: reproduced ? (seen.hang?.detail ?? p.hang.detail) : kind === null ? "same-kind rule: the page settled — no hang" : `same-kind rule: a different hang (${kind})`,
     };
   } catch (e) {
@@ -198,7 +351,13 @@ export async function replayAndDetectHang(p: ReproduceHangParams): Promise<HangA
 
 export async function reproduceHang(p: ReproduceHangParams): Promise<HangReproduction> {
   const attempts = p.attempts ?? DEFAULT_HANG_REPLAYS;
-  if (!Number.isInteger(attempts) || attempts < 1) throw new Error(`reproduceHang: attempts must be >= 1, got ${attempts}`);
+  if (!Number.isInteger(attempts) || attempts < 0) throw new Error(`reproduceHang: attempts must be a non-negative integer, got ${attempts}`);
+  // #154: 0 replays is the operator's "don't replay" (a replay could repeat a paid write): the hang
+  // stays UNCONFIRMED — inconclusive, never a crash and never a non-reproduction.
+  if (attempts === 0) return NOT_REPLAYED;
+  // #153: a replay that would re-send a paid/destructive write is not run at all (by default).
+  const withheld = replayWouldRepeatWrite(p.recording, p.recordingStepIndex, p.safety);
+  if (withheld !== null) return { attempts, ran: 0, reproduced: 0, status: "inconclusive", runs: [], withheld };
   const runs: HangAttempt[] = [];
   for (let i = 0; i < attempts; i++) runs.push(await replayAndDetectHang(p));
   return {
@@ -283,6 +442,8 @@ export async function recordCoverageHang(p: {
   readonly openSession?: () => Promise<VerifySession>;
   readonly attempts?: number;
   readonly perceive?: PerceiveOptions;
+  /** The target's safety policy: replays never re-send a paid/destructive write by default (#153). */
+  readonly safety?: SafetyConfig;
   /** Samples the host's resource pressure for the evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
 }): Promise<void> {
@@ -312,6 +473,7 @@ export async function recordCoverageHang(p: {
           openSession: p.openSession,
           ...(p.attempts === undefined ? {} : { attempts: p.attempts }),
           ...(p.perceive === undefined ? {} : { perceive: p.perceive }),
+          ...(p.safety === undefined ? {} : { safety: p.safety }),
         });
   const finding = hangFinding(hang, p.steps, index, reproduction);
   p.found.set(fingerprint, { ...finding, repro: { ...finding.repro, recording: p.recording } });

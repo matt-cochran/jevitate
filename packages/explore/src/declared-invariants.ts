@@ -152,6 +152,14 @@ export interface InvariantReport {
 export interface ObserverSessions {
   /** The observer's page; throws when its session cannot be opened. */
   page(actor: string): Promise<Page>;
+  /**
+   * #173 — an observer's storageState `localStorage[key]` for `origin`, read straight from its
+   * storageState FILE: no navigation, no live page needed (cheaper, and the token is never logged).
+   * Preferred over the observer's live page for `authFrom.localStorage`, whose page a probe-only
+   * observer never opens (it is opened lazily and a bare probe never navigates it). Optional: when
+   * absent, the live page is read instead (works only once that page has loaded the origin).
+   */
+  localStorage?(actor: string, key: string, origin: string): Promise<string | null>;
   close(): Promise<void>;
 }
 
@@ -286,12 +294,34 @@ async function connectCodeOf(response: Response): Promise<string | null> {
   }
 }
 
-/** The first number in a text (`"≈ 1,240 credits"` → 1240, `"-5"` → -5); null when there is none. */
+/** A Unicode minus (U+2212) or a dash (U+2012–U+2015), normalized to ASCII `-` when read as a sign. */
+const MINUS_LIKE_RE = /[−‒–—―]/g;
+/**
+ * A number token: an optional leading sign (ASCII `-` or a Unicode minus/dash) followed by digits
+ * (with `,` thousands separators) and an optional decimal. The sign is consumed only when it is
+ * `(?<!\d)` — NOT glued to a preceding digit — and `(?=\d)` — glued to the FOLLOWING digit, no space.
+ * That keeps a range's dash a separator, never a sign: `"30–90"` (dash touches the `0` before it) and
+ * `"3 – 7"` (a space before the `7`) both read as two plain numbers, while `"−40"` (dash at the very
+ * start, glued to the `4`) reads as one negative number (#156).
+ */
+const NUMBER_TOKEN_RE = /(?:(?<!\d)[−‒–—―-](?=\d))?\d[\d,]*(?:\.\d+)?/g;
+
+/**
+ * Every number in a text, left to right (`"≈ 30–90 credits"` → `[30, 90]`; `"−40 credits"` → `[-40]`;
+ * `"1,234.5"` → `[1234.5]`) — #156's parser behind `DomObservable.number`.
+ */
+export function parseNumbers(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(NUMBER_TOKEN_RE)) {
+    const n = Number(m[0].replace(MINUS_LIKE_RE, "-").replace(/,/g, ""));
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
+
+/** The first number in a text (`number: true`); null when there is none. */
 export function parseFirstNumber(text: string): number | null {
-  const m = /-?\d[\d,]*(\.\d+)?/.exec(text);
-  if (m === null) return null;
-  const n = Number(m[0].replace(/,/g, ""));
-  return Number.isFinite(n) ? n : null;
+  return parseNumbers(text)[0] ?? null;
 }
 
 function pageOf(actor: Actor): Page {
@@ -514,7 +544,9 @@ export class InvariantMonitor {
       this.#tally.set(c.decl.id, tally);
       tally.checked += 1;
       const verdict = await this.#evaluate(c, page, actor, action, before, after, pageUrl);
-      if (c.decl.settle !== undefined && verdict !== "held") polled = true;
+      // #151: settle only ever polls on a decided violation (below), so "unknown" never went
+      // through the loop — the before-snapshot next action rearms from is still fresh for it.
+      if (c.decl.settle !== undefined && verdict !== "held" && verdict !== "unknown") polled = true;
       if (verdict === "held") {
         tally.held += 1;
         held.push(c.decl.id);
@@ -644,7 +676,8 @@ export class InvariantMonitor {
       const o = this.#spec.observe?.[name];
       if (o === undefined) continue; // a capture
       const onObserver = "probe" in o && o.probe.as !== undefined;
-      const read = await this.#read(onObserver ? observerPage : primary, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+      const observerName = onObserver && "probe" in o ? (o.probe.as ?? null) : null;
+      const read = await this.#read(onObserver ? observerPage : primary, name, o, observerName).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
       values.set(name, read.value);
       if (read.evidence !== undefined) evidence.set(name, onObserver ? `${read.evidence} (as ${c.observer ?? ""})` : read.evidence);
       if (onObserver && observerUrl === null && "probe" in o) {
@@ -853,14 +886,17 @@ export class InvariantMonitor {
     });
     let result = evaluateInvariantExpression(ast, env(after));
     let settledForMs: number | undefined;
-    if (result !== true && decl.settle !== undefined) {
+    // #151: re-poll ONLY a decided violation (result === false) — never an UNKNOWN. An observable
+    // that is legitimately absent (`optional: true`) must not stall every action for the whole
+    // `withinMs` window; UNKNOWN is reported at once (fail-closed: still never a pass).
+    if (result === false && decl.settle !== undefined) {
       // Eventual consistency: re-check until it holds or the window closes. Only the observables this
       // invariant reads are re-read.
       const now = this.#opts.now ?? Date.now;
       const start = now();
       const poll = decl.settle.pollMs ?? DEFAULT_SETTLE_POLL_MS;
       const sleep = this.#opts.sleep ?? ((p: Page, ms: number) => p.waitForTimeout(ms));
-      while (result !== true && now() - start < decl.settle.withinMs) {
+      while (result === false && now() - start < decl.settle.withinMs) {
         await sleep(page, Math.min(poll, Math.max(0, decl.settle.withinMs - (now() - start))));
         after = await this.#snapshot(page, new Set(c.afterNames));
         result = evaluateInvariantExpression(ast, env(after));
@@ -903,15 +939,26 @@ export class InvariantMonitor {
 
   /**
    * Resolves a probe's `authFrom` (#135) into an `Authorization` header, reading the token from the
-   * run's own live session — never from a new credential path. `localStorage` is read via
-   * `page.evaluate` (in the page's own JS context); `cookie` from the browser context's cookie jar;
-   * `secret` from the CLI-resolved `authTokens` map (an `env:VAR` ref this module never resolves
-   * itself). The token is pushed into the redaction set the instant it is read — before it is ever
-   * used in a request — so it can never appear in evidence, an error, or the value the probe returns.
+   * run's own live session — never from a new credential path. `cookie` reads the browser context's
+   * cookie jar; `secret` reads the CLI-resolved `authTokens` map (an `env:VAR` ref this module never
+   * resolves itself).
+   *
+   * `localStorage` (#173): for an OBSERVER (`observer !== null`), it is read straight from that
+   * observer's storageState FILE via `ObserverSessions.localStorage` — cheaper, and it never needs
+   * the observer's page to have navigated (a probe-only observer, the common "the member CAN read
+   * it" cross-actor check, never opens one). Falls back to the live page's own `page.evaluate` when
+   * no such reader is wired (the primary actor's own page, always already loaded) or an
+   * `ObserverSessions` implementation doesn't offer it — in which case an unread observer token is
+   * explained as the page never having loaded that origin, not a bare "unavailable".
+   *
+   * The token is pushed into the redaction set the instant it is read — before it is ever used in a
+   * request — so it can never appear in evidence, an error, or the value the probe returns.
    */
   async #authHeaders(
     page: Page,
     authFrom: ProbeAuthFrom | undefined,
+    observer: string | null,
+    origin: string,
   ): Promise<{ headers?: Record<string, string>; note: string } | { error: string }> {
     if (authFrom === undefined) return { note: "" };
     const scheme = authFrom.scheme ?? "Bearer";
@@ -921,7 +968,13 @@ export class InvariantMonitor {
     if (authFrom.localStorage !== undefined) {
       const key = authFrom.localStorage;
       source = `localStorage:${key}`;
-      token = await page.evaluate((k) => window.localStorage.getItem(k), key).catch(() => null);
+      const fromStorageState = observer === null ? undefined : this.#opts.observers?.localStorage;
+      if (fromStorageState !== undefined) {
+        token = await fromStorageState(observer as string, key, origin).catch(() => null);
+      } else {
+        token = await page.evaluate((k) => window.localStorage.getItem(k), key).catch(() => null);
+        if (token === null && observer !== null) source = `${source}: observer never loaded ${origin}`;
+      }
     } else if (authFrom.cookie !== undefined) {
       const name = authFrom.cookie;
       source = `cookie:${name}`;
@@ -972,7 +1025,7 @@ export class InvariantMonitor {
     return { value, evidence: `${channel}(${read.style}) ${reduce} over ${values.length} element(s) = ${value}` };
   }
 
-  async #read(page: Page, name: string, o: ObservableSpec): Promise<{ value: EvalValue; evidence?: string }> {
+  async #read(page: Page, name: string, o: ObservableSpec, observer: string | null = null): Promise<{ value: EvalValue; evidence?: string }> {
     if ("dom" in o) {
       const d = o.dom;
       const missing: EvalValue = d.optional === true ? null : UNKNOWN;
@@ -984,9 +1037,14 @@ export class InvariantMonitor {
       const first = locator.first();
       const raw = d.read === "value" ? await first.inputValue({ timeout: DOM_TIMEOUT_MS }) : await first.innerText({ timeout: DOM_TIMEOUT_MS });
       const text = raw.trim();
-      if (d.number === true) {
-        const n = parseFirstNumber(text);
-        return { value: n === null ? missing : n };
+      if (d.number !== undefined && d.number !== false) {
+        const nums = parseNumbers(text);
+        // #156: "all" is a LIST observable (#147/#148) — a scalar consumer (like #150's
+        // `BudgetMonitor`) already treats a list as unreadable, same as a `[*]` network/probe read.
+        if (d.number === "all") return nums.length === 0 ? { value: missing } : { value: nums };
+        const idx = d.number === true ? 0 : d.number.index;
+        const n = nums.at(idx);
+        return { value: n === undefined ? missing : n };
       }
       return { value: this.#clip(text) };
     }
@@ -1011,7 +1069,7 @@ export class InvariantMonitor {
     // #135: authenticate from the run's own session — never a new credential path. A declared
     // `authFrom` whose token cannot be read (a missing localStorage key/cookie/env var) fails closed:
     // the probe is refused rather than silently sent unauthenticated (which would misreport state).
-    const auth = await this.#authHeaders(page, probe.authFrom);
+    const auth = await this.#authHeaders(page, probe.authFrom, observer, url.origin);
     if ("error" in auth) return { value: UNKNOWN, evidence: `probe refused: ${auth.error}` };
     const method = probe.head !== undefined ? "HEAD" : "GET";
     const res = await page.context().request.fetch(url.href, {

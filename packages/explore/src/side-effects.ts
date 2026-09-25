@@ -275,6 +275,12 @@ export interface SideEffect {
   };
   /** Set when the control is a paid / destructive / session-ending one (see `SafetyPolicy`). */
   readonly risk?: Exclude<ControlRisk, "denied">;
+  /**
+   * The app's own write, fired after the last action's window closed (a token refresh, heartbeat,
+   * telemetry) — not caused by an action (#158: a read-only run lets these through). `control` is
+   * the action it followed.
+   */
+  readonly background?: true;
 }
 
 /** Most side effects a result lists (the rest are counted, never silently dropped). */
@@ -285,6 +291,7 @@ interface Mark {
   readonly step: number;
   readonly control: string;
   readonly risk: Exclude<ControlRisk, "denied"> | null;
+  readonly background?: true;
 }
 
 /**
@@ -314,6 +321,15 @@ export class SideEffectLog {
     this.#marks.push({ at: this.#now(), step, control: control.replace(/\s+/g, " ").trim().slice(0, 120), risk });
   }
 
+  /**
+   * The last action's window closed: writes from now until the next `mark` are the app's own
+   * (`background`), still attributed to the step they followed.
+   */
+  markBackground(): void {
+    const last = this.#marks[this.#marks.length - 1];
+    this.#marks.push({ at: this.#now(), step: last?.step ?? 0, control: last?.control ?? "(page load)", risk: null, background: true });
+  }
+
   #owner(startedAt: number | undefined): Mark | undefined {
     if (startedAt === undefined) return this.#marks[this.#marks.length - 1];
     let owner: Mark | undefined;
@@ -331,6 +347,7 @@ export class SideEffectLog {
         control: m.control,
         request: { method: method.toUpperCase(), endpoint: path, status },
         ...(m.risk === null ? {} : { risk: m.risk }),
+        ...(m.background === true ? { background: true as const } : {}),
       });
     };
     for (const { monitor, capture } of this.#sources) {

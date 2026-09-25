@@ -25,6 +25,10 @@ import { resolveDataDir } from "./data-dir.js";
  *
  * `fixtures` — a mission fixtures file (#140/#144) for goal runs on this origin when `--fixtures`
  * is absent; a relative path resolves against the targets file's directory.
+ *
+ * `storageState` / `secretFields` (#175) — the operator's auth for missions drained from the queue
+ * (`jevitate mission run`) and `verify_fix` over MCP: a storageState path (relative to this file)
+ * and env-sourced `--secret-field` specs. Never an MCP argument.
  */
 
 export interface TargetConfig {
@@ -45,7 +49,33 @@ export interface TargetConfig {
   readonly logDefect?: readonly string[];
   /** Opt-in for a `cmd:` source in `logSources` (mirrors `--allow-log-cmd`). Default `false`. */
   readonly allowLogCmd?: boolean;
+  /**
+   * #175: the session queued missions on this origin start from (a Playwright storageState JSON,
+   * absolute) — `jevitate mission run` and `verify_fix` over MCP apply it. Operator-declared only:
+   * a `queue_exploration`/MCP argument can never name one, and its contents are never logged or
+   * returned (the browser reads the file).
+   */
+  readonly storageState?: string;
+  /**
+   * #175: write the rotated session back after each queued mission (#82/#159 semantics: live
+   * capture, snapshot fallback, never a logged-out state, mode 0600) — `true` = back to
+   * `storageState`, or a path (absolute). For apps with rotating refresh tokens.
+   */
+  readonly saveStorageState?: true | string;
+  /**
+   * #175: `--secret-field` specs (`label=Password=env:APP_PASSWORD`) for queued goal missions on
+   * this origin — the value is read from the environment at run time, never written here. Also
+   * what the target's `fixtures` may authenticate with (`${secretField.APP_PASSWORD}`, #166).
+   */
+  readonly secretFields?: readonly string[];
+  /** Raw `logSources` entries declared legitimately quiet (mirrors `--log-quiet-ok`, #169). */
+  readonly logQuietOk?: readonly string[];
+  /** Raw `--log-ignore` specs (a `/regex/` or a plain substring), evaluated the same way as the CLI
+   *  flag (#169 item 3). */
+  readonly logIgnore?: readonly string[];
 }
+
+const SECRET_FIELD_SPEC = /^(label|testId|type|id|name)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class TargetConfigError extends Error {
   readonly code = "E_TARGET_CONFIG" as const;
@@ -70,13 +100,44 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logSources?: string[];
     logDefect?: string[];
     allowLogCmd?: boolean;
+    storageState?: string;
+    saveStorageState?: true | string;
+    secretFields?: string[];
+    logQuietOk?: string[];
+    logIgnore?: string[];
   } = {};
+  if (o.storageState !== undefined) {
+    if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
+    out.storageState = resolvePath(baseDir, o.storageState);
+  }
+  if (o.saveStorageState !== undefined) {
+    if (o.saveStorageState === true) {
+      if (out.storageState === undefined) throw new TargetConfigError(`${where}.saveStorageState: true writes back to storageState, which is not set`);
+      out.saveStorageState = true;
+    } else if (typeof o.saveStorageState === "string" && o.saveStorageState !== "") {
+      out.saveStorageState = resolvePath(baseDir, o.saveStorageState);
+    } else {
+      throw new TargetConfigError(`${where}.saveStorageState must be true or a file path`);
+    }
+  }
+  if (o.secretFields !== undefined) {
+    const specs = strings(o.secretFields, `${where}.secretFields`);
+    // The spec is never echoed: a value pasted in place of `env:<VAR>` must not reach a log.
+    specs.forEach((s, i) => {
+      if (!SECRET_FIELD_SPEC.test(s)) {
+        throw new TargetConfigError(`${where}.secretFields[${i}] must be '<label|testId|type|id|name>=<value>=env:<VAR>' — the secret itself comes from the environment`);
+      }
+    });
+    out.secretFields = specs;
+  }
   if (o.fixtures !== undefined) {
     if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
     out.fixtures = resolvePath(baseDir, o.fixtures);
   }
   if (o.logSources !== undefined) out.logSources = strings(o.logSources, `${where}.logSources`);
   if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
+  if (o.logQuietOk !== undefined) out.logQuietOk = strings(o.logQuietOk, `${where}.logQuietOk`);
+  if (o.logIgnore !== undefined) out.logIgnore = strings(o.logIgnore, `${where}.logIgnore`);
   if (o.allowLogCmd !== undefined) {
     if (typeof o.allowLogCmd !== "boolean") throw new TargetConfigError(`${where}.allowLogCmd must be a boolean`);
     out.allowLogCmd = o.allowLogCmd;
@@ -110,9 +171,18 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     if (f.allowDestructive !== undefined && typeof f.allowDestructive !== "boolean") {
       throw new TargetConfigError(`${where}.safety.allowDestructive must be a boolean`);
     }
+    if (f.allowWrites !== undefined && typeof f.allowWrites !== "boolean" && !Array.isArray(f.allowWrites)) {
+      throw new TargetConfigError(`${where}.safety.allowWrites must be a boolean or an array of path globs`);
+    }
+    if (f.hangReplayWrites !== undefined && typeof f.hangReplayWrites !== "boolean") {
+      throw new TargetConfigError(`${where}.safety.hangReplayWrites must be a boolean`);
+    }
     out.safety = {
       ...(f.deny === undefined ? {} : { deny: strings(f.deny, `${where}.safety.deny`) }),
       ...(f.allowDestructive === undefined ? {} : { allowDestructive: f.allowDestructive as boolean }),
+      ...(typeof f.allowWrites === "boolean" ? { allowWrites: f.allowWrites } : {}),
+      ...(Array.isArray(f.allowWrites) ? { allowWriteRequests: strings(f.allowWrites, `${where}.safety.allowWrites`) } : {}),
+      ...(f.hangReplayWrites === undefined ? {} : { hangReplayWrites: f.hangReplayWrites as boolean }),
       ...(f.readRequests === undefined ? {} : { readRequests: strings(f.readRequests, `${where}.safety.readRequests`) }),
     };
   }
@@ -151,8 +221,14 @@ export interface TargetFlags {
   readonly deny?: readonly string[];
   /** `--allow-destructive` (true wins over the file). */
   readonly allowDestructive?: boolean;
+  /** `--allow-writes` (true wins over the file, #158). */
+  readonly allowWrites?: boolean;
+  /** `--allow-write` path globs (added to the file's `safety.allowWrites` globs, #158). */
+  readonly allowWrite?: readonly string[];
   /** `--read-rpc` patterns (added to the file's `safety.readRequests`). */
   readonly readRpc?: readonly string[];
+  /** `--hang-replay-writes` (#153; true wins over the file). */
+  readonly hangReplayWrites?: boolean;
 }
 
 /** The config for one origin: the file's entry, with flag patterns ADDED and flag numbers winning. */
@@ -169,10 +245,16 @@ export function resolveTargetConfig(
   const deny = [...(base.safety?.deny ?? []), ...(flags.deny ?? [])];
   const readRequests = [...(base.safety?.readRequests ?? []), ...(flags.readRpc ?? [])];
   const allowDestructive = flags.allowDestructive === true || base.safety?.allowDestructive === true;
+  const allowWrites = flags.allowWrites === true || base.safety?.allowWrites === true;
+  const allowWriteRequests = [...(base.safety?.allowWriteRequests ?? []), ...(flags.allowWrite ?? [])];
+  const hangReplayWrites = flags.hangReplayWrites === true || base.safety?.hangReplayWrites === true;
   const safety: SafetyConfig = {
     ...(deny.length === 0 ? {} : { deny }),
     ...(readRequests.length === 0 ? {} : { readRequests }),
     ...(allowDestructive ? { allowDestructive } : {}),
+    ...(allowWrites ? { allowWrites } : {}),
+    ...(allowWriteRequests.length === 0 ? {} : { allowWriteRequests }),
+    ...(hangReplayWrites ? { hangReplayWrites } : {}),
   };
   return {
     ...(Object.keys(safety).length === 0 ? {} : { safety }),
@@ -186,5 +268,11 @@ export function resolveTargetConfig(
     ...(base.logSources === undefined ? {} : { logSources: base.logSources }),
     ...(base.logDefect === undefined ? {} : { logDefect: base.logDefect }),
     ...(base.allowLogCmd === undefined ? {} : { allowLogCmd: base.allowLogCmd }),
+    // #175: pass-through, like logSources — the operator's own session for queued missions.
+    ...(base.storageState === undefined ? {} : { storageState: base.storageState }),
+    ...(base.saveStorageState === undefined ? {} : { saveStorageState: base.saveStorageState }),
+    ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
+    ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
+    ...(base.logIgnore === undefined ? {} : { logIgnore: base.logIgnore }),
   };
 }

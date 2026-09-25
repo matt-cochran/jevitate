@@ -1,9 +1,13 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { UsageTracker } from "@jevitate/ai-core";
 import { InvariantSpecError } from "@jevitate/recording";
+import { loadTargetsFile } from "./target-config.js";
 import {
+  MissionRequestSchema,
+  MissionTargetSchema,
   FsMissionQueueStore,
   FsMissionTargetStore,
   MissionTargetRegistry,
@@ -192,6 +196,92 @@ describe("mission queue runner (#117)", () => {
         /browser must not open/,
       );
       expect(counts()).toEqual({ gatewayCalls: 0, browserOpens: 1 });
+    });
+  });
+
+  describe("operator-declared auth from targets.json (#175)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-queue-auth-"));
+    const state = join(dir, "state.json");
+    writeFileSync(state, JSON.stringify({ cookies: [], origins: [{ origin: "https://app.example.com", localStorage: [{ name: "jwt", value: "tok-SECRET-175" }] }] }));
+
+    /** Opens nothing: records what the browser WOULD have been opened with, then stops the run. */
+    function capturing(targets: Record<string, Record<string, unknown>>, env: Record<string, string> = {}) {
+      const opened: Array<Record<string, unknown>> = [];
+      const execute = realQueuedMissionExecutor({
+        outDir: join(dir, "out"),
+        gateways: async () => ({ judge: {}, gen: {}, usage: new UsageTracker() }) as never,
+        browserPortFactory: () => ({
+          open: async (o: Record<string, unknown>) => {
+            opened.push(o);
+            throw new Error("browser stops here");
+          },
+        }) as never,
+        targets: targets as never,
+        env,
+      });
+      return { execute, opened };
+    }
+
+    it("every strategy starts from the target's storageState; a missing file fails before any browser", async () => {
+      for (const m of [mission({ strategy: "feature", feature: "billing" }), mission({ strategy: "coverage" }), mission({ strategy: "adversarial" }), mission({ goal: "find the plan" })]) {
+        const { execute, opened } = capturing({ "https://app.example.com": { storageState: state } });
+        await expect(execute({ mission: m, target, allowlist })).rejects.toThrow();
+        expect(opened[0]?.storageState).toBe(state);
+      }
+      const missing = capturing({ "https://app.example.com": { storageState: join(dir, "gone.json") } });
+      await expect(missing.execute({ mission: mission({ goal: "g" }), target, allowlist })).rejects.toThrow(/targets\.json entry for https:\/\/app\.example\.com: storageState not found/);
+      expect(missing.opened).toEqual([]);
+    });
+
+    it("a goal mission types env-sourced secret fields and runs the target's fixtures with ${secretField.VAR}; an unset variable is refused by name", async () => {
+      const fixtures = join(dir, "fixtures.json");
+      writeFileSync(fixtures, JSON.stringify({ setup: [{ method: "POST", url: "https://api.example.com/Login", json: { password: "${secretField.APP_PW}" } }] }));
+      const cfg = { "https://app.example.com": { storageState: state, secretFields: ["label=Password=env:APP_PW"], fixtures } };
+      const sent: string[] = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: string, init: { body?: string }) => {
+        sent.push(`${url} ${init.body ?? ""}`);
+        return new Response(null, { status: 204 });
+      }) as unknown as typeof fetch;
+      try {
+        const { execute, opened } = capturing(cfg, { APP_PW: "pw-SECRET-175" });
+        const err = await execute({ mission: mission({ goal: "find the plan" }), target, allowlist }).catch((e: unknown) => e as Error);
+        expect(sent).toEqual(['https://api.example.com/Login {"password":"pw-SECRET-175"}']);
+        expect(opened[0]?.storageState).toBe(state);
+        expect(String(err)).not.toMatch(/SECRET-175/);
+        const unset = capturing(cfg, {});
+        await expect(unset.execute({ mission: mission({ goal: "g" }), target, allowlist })).rejects.toThrow(/APP_PW is not set/);
+        expect(unset.opened).toEqual([]);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
+
+    it("the MCP request can never name a storage state or a secret (the schema is strict)", () => {
+      const base = { target: "spa", strategy: "coverage" };
+      expect(MissionRequestSchema.safeParse(base).success).toBe(true);
+      expect(MissionRequestSchema.safeParse({ ...base, storageState: state }).success).toBe(false);
+      expect(MissionRequestSchema.safeParse({ ...base, secretFields: ["label=Password=env:APP_PW"] }).success).toBe(false);
+    });
+
+    it("targets.json validates the new keys and resolves storageState against its own directory", () => {
+      const file = join(dir, "targets.json");
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { storageState: "state.json", secretFields: ["label=Password=env:APP_PW"] } }));
+      expect(loadTargetsFile(file)["https://app.example.com"]).toMatchObject({ storageState: state, secretFields: ["label=Password=env:APP_PW"] });
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { secretFields: ["label=Password=hunter2"] } }));
+      expect(() => loadTargetsFile(file)).toThrow(/secretFields\[0\] must be/);
+      expect(() => loadTargetsFile(file)).not.toThrow(/hunter2/);
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { storageState: "state.json", saveStorageState: true } }));
+      expect(loadTargetsFile(file)["https://app.example.com"]).toMatchObject({ saveStorageState: true });
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { saveStorageState: "rotated.json" } }));
+      expect(loadTargetsFile(file)["https://app.example.com"]).toMatchObject({ saveStorageState: join(dir, "rotated.json") });
+      writeFileSync(file, JSON.stringify({ "https://app.example.com": { saveStorageState: true } }));
+      expect(() => loadTargetsFile(file)).toThrow(/which is not set/);
+      // The record schema: operator-only, absolute paths, same save-back rule.
+      const record = { ...target, storageState: state };
+      expect(MissionTargetSchema.safeParse({ ...record, saveStorageState: true }).success).toBe(true);
+      expect(MissionTargetSchema.safeParse({ ...target, saveStorageState: true }).success).toBe(false);
+      expect(MissionTargetSchema.safeParse({ ...target, storageState: "relative.json" }).success).toBe(false);
     });
   });
 });

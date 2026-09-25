@@ -44,6 +44,22 @@ function hasEnabledControl(selector: string): boolean {
 /** Default quiet window (ms): no requests in flight and no DOM mutations for this long ⇒ settled. */
 export const SETTLE_QUIET_MS = 500;
 
+/**
+ * Longest delay (ms) of a timer a user action's handler schedules that settling still waits for
+ * (#152): a delayed effect of the action itself. Longer timers are the app's business, not the
+ * action's immediate effect.
+ */
+export const DEFERRED_EFFECT_MAX_MS = 5_000;
+
+/**
+ * Response content types that are STREAMS (#153): once such a response has STARTED (headers
+ * received), the request is a long-lived connection the server keeps writing to — SSE, gRPC-web and
+ * Connect server streams, NDJSON / JSON-seq feeds, multipart replace — not pending work. A request
+ * that never got a response at all is still pending (and can still be a hang).
+ */
+export const STREAMING_CONTENT =
+  /^\s*(?:text\/event-stream|application\/grpc-web(?:-text)?(?:\+[\w.-]+)?|application\/connect\+[\w.-]+|application\/(?:x-)?ndjson|application\/jsonl|application\/json-seq|application\/stream\+json|multipart\/x-mixed-replace)\b/i;
+
 /** Resource types that are open-ended streams, never counted as pending work. */
 const STREAM_TYPES = new Set(["eventsource", "websocket"]);
 
@@ -118,6 +134,33 @@ const INSTRUMENT = `(() => {
     } catch (e) { /* no document yet */ }
   };
   start();
+  // Deferred effects of a USER action (#152): a timer a trusted input event's handler schedules
+  // (a delayed state update, a debounced refetch) is part of that action's effect. Its due time is
+  // kept until it fires or is cleared, so settling waits for it (bounded by the settle ceiling and
+  // by ${DEFERRED_EFFECT_MAX_MS}ms per timer). Timers scheduled outside an input event (pollers,
+  // clocks) are never tracked, so they cannot hold "settled" hostage.
+  state.deferred = new Map();
+  try {
+    const USER_EVENTS = new Set(["click", "dblclick", "mousedown", "mouseup", "pointerdown", "pointerup", "keydown", "keyup", "keypress", "input", "change", "submit", "touchstart", "touchend"]);
+    const origSet = window.setTimeout;
+    const origClear = window.clearTimeout;
+    window.setTimeout = function (fn, ms, ...args) {
+      const ev = window.event;
+      const delay = Number(ms) || 0;
+      const tracked = ev !== undefined && ev !== null && ev.isTrusted && USER_EVENTS.has(ev.type) && delay > 0 && delay <= ${DEFERRED_EFFECT_MAX_MS};
+      let id;
+      const wrapped = typeof fn === "function" && tracked
+        ? function (...a) { state.deferred.delete(id); return fn.apply(this, a); }
+        : fn;
+      id = origSet.call(window, wrapped, ms, ...args);
+      if (tracked) state.deferred.set(id, Date.now() + delay);
+      return id;
+    };
+    window.clearTimeout = function (id) {
+      state.deferred.delete(id);
+      return origClear.call(window, id);
+    };
+  } catch (e) { /* timers not patchable: deferred effects are then only seen by the quiet window */ }
   try {
     new PerformanceObserver((list) => {
       const entries = list.getEntries();
@@ -297,7 +340,7 @@ export class PageMonitor {
       // SSE over fetch/XHR never "finishes": it is a long-lived connection, not pending work.
       const type = res.headers()["content-type"] ?? "";
       if (type !== "") this.#contentTypes.set(res.request(), type);
-      if (type.includes("text/event-stream")) {
+      if (STREAMING_CONTENT.test(type)) {
         this.#background.set(res.request(), "stream");
         this.#touch(); // wake a settle wait that was counting it as pending
       }
@@ -430,7 +473,7 @@ export class PageMonitor {
    * The latest DOM mutation time, or null when the page could not answer within `boundMs` (a busy
    * main thread) — which counts as NOT quiet.
    */
-  async #lastMutation(boundMs: number): Promise<number | null> {
+  async #lastMutation(boundMs: number): Promise<{ lastMutation: number; deferredUntil: number } | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), Math.max(1, boundMs));
@@ -439,8 +482,11 @@ export class PageMonitor {
       return await Promise.race([
         this.#page
           .evaluate(() => {
-            const m = (window as unknown as { __jevitateMonitor?: { lastMutation: number } }).__jevitateMonitor;
-            return m === undefined ? Date.now() : m.lastMutation;
+            const m = (window as unknown as { __jevitateMonitor?: { lastMutation: number; deferred?: Map<unknown, number> } }).__jevitateMonitor;
+            if (m === undefined) return { lastMutation: Date.now(), deferredUntil: 0 };
+            let deferredUntil = 0;
+            for (const due of m.deferred?.values() ?? []) deferredUntil = Math.max(deferredUntil, due);
+            return { lastMutation: m.lastMutation, deferredUntil };
           })
           .catch(() => null),
         bound,
@@ -495,14 +541,23 @@ export class PageMonitor {
         continue;
       }
       if (this.#page.isClosed()) return this.#result(false, start);
-      const lastDom = await this.#lastMutation(Math.min(remaining(), 2_000));
-      if (lastDom === null) {
+      const dom = await this.#lastMutation(Math.min(remaining(), 2_000));
+      if (dom === null) {
         // The page did not answer (a busy main thread): not quiet. Give it a moment, within the ceiling.
         await this.#sleepOrActivity(Math.min(quietMs, remaining()));
         continue;
       }
       const t = this.#now();
-      const quietFor = Math.min(t - this.#lastNetworkActivity, t - lastDom);
+      // A timer the action's own handler scheduled is still due (#152): its effect has not landed.
+      if (dom.deferredUntil > t) {
+        await this.#sleepOrActivity(Math.min(dom.deferredUntil - t, remaining()));
+        continue;
+      }
+      // The quiet window is measured from AFTER the action (#152): a page that was already quiet
+      // before it must still stay quiet for `quietMs` once the action was dispatched, or an effect
+      // landing a few hundred ms later would be snapshotted into the NEXT action.
+      const actionAt = this.#actionAt ?? Number.NEGATIVE_INFINITY;
+      const quietFor = t - Math.max(this.#lastNetworkActivity, dom.lastMutation, actionAt);
       if (quietFor >= quietMs && this.pending().length === 0) return this.#result(true, start);
       await this.#sleepOrActivity(Math.min(quietMs - Math.max(0, quietFor), remaining()));
     }

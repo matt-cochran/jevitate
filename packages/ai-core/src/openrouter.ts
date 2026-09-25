@@ -17,6 +17,8 @@ export interface OpenRouterCall {
     signal?: AbortSignal;
     /** Sampling temperature when the task pins one (e.g. 0 for ux.specifics consistency). */
     temperature?: number;
+    /** The generation task (#163 usage accounting labels each call with it). Never prompt content. */
+    task?: string;
   }): Promise<{ object: unknown; latencyMs: number }>;
 }
 
@@ -44,7 +46,7 @@ export class OpenRouterGenerationGateway implements GenerationPort {
     if (!key) throw new Error("unreachable: requireKeys passed but key unreadable");
     const temperature = taskTemperature(kind);
     const { object, latencyMs } = await this.cfg.call({
-      model, schema: task.output, body, authHeader: `Bearer ${key}`,
+      model, schema: task.output, body, authHeader: `Bearer ${key}`, task: kind,
       ...(temperature === undefined ? {} : { temperature }),
     });
 

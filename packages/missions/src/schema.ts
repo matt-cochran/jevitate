@@ -24,7 +24,26 @@ export interface MissionTarget {
   baseUrl: string;
   promoted: boolean;
   createdAtIso: string;
+  /**
+   * #175: the session queued missions on this target start from — an absolute Playwright
+   * storageState path, set by the OPERATOR (`mission target add|update --storage-state`). Never a
+   * `MissionRequest` field, never returned by an MCP tool; wins over `~/.jevitate/targets.json`.
+   */
+  storageState?: string;
+  /** #175: write the rotated session back after each queued mission — `true` = to `storageState`, or a path. */
+  saveStorageState?: true | string;
+  /** #175: env-sourced `--secret-field` specs (`label=Password=env:APP_PASSWORD`) — never a value. */
+  secretFields?: string[];
 }
+
+/** A `--secret-field` spec that names an environment variable, never carries the secret itself. */
+export const SECRET_FIELD_SPEC_RE = /^(label|testId|type|id|name)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
+}
+
+const AbsolutePathSchema = z.string().min(1).refine(isAbsolutePath, "must be an absolute path");
 
 /** True when `value` is exactly an http(s) origin (`scheme://host[:port]`) — no path, query, credentials. */
 export function isHttpOrigin(value: string): boolean {
@@ -54,8 +73,17 @@ export const MissionTargetSchema: z.ZodType<MissionTarget> = z
     baseUrl: z.string(),
     promoted: z.boolean(),
     createdAtIso: z.string(),
+    storageState: AbsolutePathSchema.optional(),
+    saveStorageState: z.union([z.literal(true), AbsolutePathSchema]).optional(),
+    secretFields: z
+      .array(z.string().regex(SECRET_FIELD_SPEC_RE, "must be '<label|testId|type|id|name>=<value>=env:<VAR>' — the secret itself comes from the environment"))
+      .optional(),
   })
   .strict()
+  .refine((t) => t.saveStorageState !== true || t.storageState !== undefined, {
+    message: "saveStorageState: true writes back to storageState, which is not set",
+    path: ["saveStorageState"],
+  })
   .refine(
     (t) => {
       try {

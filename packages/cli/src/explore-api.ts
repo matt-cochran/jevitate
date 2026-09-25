@@ -62,6 +62,7 @@ import {
   draftForDefect,
   draftForHang,
   hangOutcome,
+  isLoginLikeUrl,
   summarizeTimings,
   type DraftContext,
   type HangFinding,
@@ -76,15 +77,18 @@ import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
+import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 import {
   applyServerLogOutcome,
   openServerLogRuntime,
   type ServerLogDefect,
+  type ServerLogEvidence,
   type ServerLogRuntimeResult,
   type ServerLogsSummary,
+  type TranscriptEntryWithLogs,
 } from "./log-correlation.js";
 import type { LogSourceSpec } from "./log-sources.js";
-import type { LogDefectMatcher } from "./log-lines.js";
+import type { LogDefectMatcher, LogIgnoreMatcher } from "./log-lines.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
 
@@ -98,6 +102,12 @@ export interface ServerLogOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly allowLogCmd?: boolean;
   readonly drainMs?: number;
+  /** Raw `--log-source` specs (`--log-quiet-ok`, #169) allowed to deliver zero lines without making
+   *  `serverLogs.oracleOk` false — for a source the operator KNOWS is legitimately quiet. */
+  readonly quietOk?: readonly string[];
+  /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
+   *  correlation and the defect oracle. */
+  readonly logIgnore?: readonly LogIgnoreMatcher[];
 }
 
 export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
@@ -169,6 +179,16 @@ export interface RunExplorationOptions {
    * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
    * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
    * written with mode 0600, and its contents are never logged.
+   *
+   * #159: written on EVERY exit path, not only a clean one — a crash (thrown mid-mission, still
+   * reaches `persistStorageState` in this function's `finally`) and a kill signal (SIGTERM/SIGINT,
+   * via the kill switch's own synchronous write of the mission's `StorageStateSnapshotter`, see
+   * `storage-state-snapshot.ts`) both still get a write. Neither ever overwrites a good file with a
+   * session that is already lost/logged-out (a page that looks login-like at the moment of capture):
+   * the mission falls back to the last snapshot taken while the session still looked authenticated,
+   * and writes nothing at all if it never captured one. There is currently no flag to force a write
+   * over that guard — an operator who wants the raw end-state regardless can inspect the Recording's
+   * `finalUrl` and re-run with a fresh `--storage-state` login.
    */
   readonly saveStorageState?: string;
   /** ISO clock for the recording filename. Default `Date.now()`. */
@@ -278,20 +298,53 @@ function freshSessionOpener(
   };
 }
 
+/** `session.page.url()`, or `undefined` when reading it throws (a closed/crashed page/context). */
+export function currentUrlSafe(session: { page: { url(): string } }): string | undefined {
+  try {
+    return session.page.url();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Writes the browser context's live storageState (cookies + origin storage) to `file` when the
- * caller asked for one (CLI `--save-storage-state`, #82) — so a rotating refresh token stays usable
- * across runs instead of the `--storage-state` file it started from going stale on first use. The
- * file holds live session credentials: written with mode 0600 (owner read/write only), and its
- * contents are never logged. A no-op when `file` is undefined.
+ * Writes the browser context's storageState (cookies + origin storage) to `file` when the caller
+ * asked for one (CLI `--save-storage-state`, #82) — so a rotating refresh token stays usable across
+ * runs instead of the `--storage-state` file it started from going stale on first use. Called from
+ * every mission's `finally`, so a thrown error still reaches it (#159) — the context is still open at
+ * that point, whatever failed inside the mission itself. A no-op when `file` is undefined.
+ *
+ * #159 — never persists a lost/logged-out session over a good file: when the CURRENT page looks
+ * login-like (`isLoginLikeUrl`, the #82 signal), a live capture is skipped in favor of `snapshotter`'s
+ * last known-good in-memory snapshot (refreshed after each settled step — see
+ * `storage-state-snapshot.ts` — and itself never updated from a login-like page, so it always holds
+ * the most recent GOOD state). The same fallback covers a live capture that simply fails (a
+ * crashed/closed context after the page url could still be read). If neither a safe live capture nor
+ * a snapshot is available, nothing is written — any existing file at `file` is left untouched. There
+ * is no flag today for an operator to force the write anyway; see `saveStorageState`'s own doc.
+ *
+ * The file holds live session credentials: written with mode 0600 (owner read/write only), and its
+ * contents are never logged either way.
  */
-async function persistStorageState(
-  session: { saveStorageState(file: string): Promise<void> },
+export async function persistStorageState(
+  session: { page: { url(): string }; saveStorageState(file: string): Promise<void> },
   file: string | undefined,
+  snapshotter?: StorageStateSnapshotter,
 ): Promise<void> {
   if (file === undefined) return;
-  await session.saveStorageState(file);
-  await chmod(file, 0o600);
+  const url = currentUrlSafe(session);
+  if (url === undefined || !isLoginLikeUrl(url)) {
+    try {
+      await session.saveStorageState(file);
+      await chmod(file, 0o600);
+      return;
+    } catch {
+      // A crashed/closed context, or a mid-write failure — fall back to the last known-good snapshot.
+    }
+  }
+  const fallback = snapshotter?.snapshot();
+  if (fallback === undefined) return;
+  await writeFile(file, fallback, { encoding: "utf8", mode: 0o600 });
 }
 
 function browserVersionOf(page: { context(): { browser(): { version(): string } | null } }): string | undefined {
@@ -317,6 +370,8 @@ export interface RunExplorationResult {
   readonly assertionPassed: boolean;
   /** Each success check's verdict and what the oracle saw. */
   readonly checks: SuccessCheckResult[];
+  /** Warnings about the verdict (#174: a `--success-when held` check that already held on the start page). */
+  readonly checkWarnings?: string[];
   readonly stop: StopReason;
   readonly finalUrl: string;
   readonly decisions: number;
@@ -389,7 +444,53 @@ function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, r
     const n = run?.defects.length ?? 0;
     return `${n} server-log defect${n === 1 ? "" : "s"} found (--log-defect)`;
   }
-  return "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
+  // #169: the summary already knows WHICH source(s) made the oracle unhealthy and why (failed to
+  // open vs. declared but silent) — this default only covers the (should-be-unreachable) case of no
+  // summary at all.
+  return (
+    run?.summary.oracleReason ??
+    "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing"
+  );
+}
+
+/** Outcomes whose `reason` describes a UI-side blocker worth pairing with a correlated server cause. */
+const BLOCKED_LIKE_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["blocked", "exhausted", "inconclusive"]);
+const SERVER_CAUSE_MAX_CHARS = 160;
+
+/**
+ * The most informative correlated server-log line attached to the LAST transcript step (#165's
+ * "Also" — the step the run ended on is the one whose UI blocker `mission.reason` already
+ * describes): an `error` line wins over a `warn` one; ties keep the first (arrival order). `undefined`
+ * when `--log-source` was not given, or nothing warn/error-level attached to that step.
+ */
+function lastStepServerCause(transcript: readonly TranscriptEntryWithLogs[] | undefined): string | undefined {
+  const logs = transcript?.[transcript.length - 1]?.serverLogs;
+  if (logs === undefined || logs.length === 0) return undefined;
+  let line: ServerLogEvidence | undefined;
+  for (const l of logs) {
+    if (l.level !== "error" && l.level !== "warn") continue;
+    if (line === undefined || (line.level !== "error" && l.level === "error")) line = l;
+  }
+  if (line === undefined) return undefined;
+  const body = line.message.length > SERVER_CAUSE_MAX_CHARS ? `${line.message.slice(0, SERVER_CAUSE_MAX_CHARS)}…` : line.message;
+  return `${line.level}${line.target === undefined ? "" : ` ${line.target}`} ${quote(body)}`;
+}
+
+function quote(s: string): string {
+  return `"${s}"`;
+}
+
+/**
+ * Pairs an already-computed UI-side `reason` with the correlated server cause on the step the run
+ * ended on (#165 "Also"): `"<UI reason>; server: <level> \"<message>\""`. A no-op when there is no
+ * `reason` to pair with, the outcome isn't one of blocked/exhausted/inconclusive (a `defects-found`
+ * or an oracle-unhealthy `inconclusive` already gets its own `serverLogOutcomeReason`), or no
+ * server-log evidence attached to that step — including when `--log-source` was never given.
+ */
+export function withServerCause(reason: string | undefined, outcome: GoalBasedOutcome, transcript: readonly TranscriptEntryWithLogs[] | undefined): string | undefined {
+  if (reason === undefined || !BLOCKED_LIKE_OUTCOMES.has(outcome)) return reason;
+  const cause = lastStepServerCause(transcript);
+  return cause === undefined ? reason : `${reason}; server: ${cause}`;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -438,21 +539,37 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #159: refreshed after each settled step below; the kill switch writes whatever this holds
+  // synchronously on SIGTERM/SIGINT (it cannot await a live capture — see kill-signal.ts).
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
+    ...(opts.saveStorageState === undefined
+      ? {}
+      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
   });
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #159: every settled step also refreshes the in-memory storageState snapshot (cheap no-op when
+  // `--save-storage-state` was not given — `snapshotter.noteSettledStep` checks `enabled` itself).
+  const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
+    snapshotter.noteSettledStep(currentUrlSafe(session));
+  };
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
@@ -466,7 +583,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
           ? freshSessionOpener(portFactory, launch, opts.allowlist)
           : fixtureReplayOpener(freshSessionOpener(portFactory, launch, opts.allowlist), fx, missionFixture.record.outputs),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
-      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
+      onTranscriptEntry,
       onRecording: journal.onRecording,
       actor,
       judge: opts.judge,
@@ -534,6 +651,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
+      ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
@@ -567,16 +685,17 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
           }),
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(goalOutcome === mission.outcome
-        ? mission.reason === undefined
-          ? {}
-          : { reason: mission.reason }
+        ? (() => {
+            const reason = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
+            return reason === undefined ? {} : { reason };
+          })()
         : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
-    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result);
+    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result, runUsage);
     return result;
   } finally {
     disarmKillSwitch();
@@ -584,7 +703,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
     await observers?.close().catch(() => undefined);
-    await persistStorageState(session, opts.saveStorageState);
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
 }
@@ -682,7 +801,14 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
   });
 
   if (result.outcome === "authored") {
-    await new FsJourneyStore(opts.journeysDir).put(result.journey);
+    // #170: a Journey authored behind a login (--storage-state) declares it, so a run without a
+    // storage state fails fast as a configuration error instead of a gating step-1 assertion.
+    const journey =
+      opts.storageState !== undefined && result.journey.metadata.requiresAuth !== true
+        ? { ...result.journey, metadata: { ...result.journey.metadata, requiresAuth: true } }
+        : result.journey;
+    await new FsJourneyStore(opts.journeysDir).put(journey);
+    return journey === result.journey ? result : { ...result, journey };
   }
   return result;
 }
@@ -757,7 +883,9 @@ export interface RunCoverageMissionOptions {
    * Writes the browser context's storageState (cookies + origin storage) here when the run ends
    * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
    * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
-   * written with mode 0600, and its contents are never logged.
+   * written with mode 0600, and its contents are never logged. See
+   * `RunExplorationOptions.saveStorageState`'s own doc for the full behaviour (#159: written on
+   * every exit path including a crash/kill signal, never over a lost/logged-out session).
    */
   readonly saveStorageState?: string;
   readonly nowIso?: () => string;
@@ -849,19 +977,32 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
   // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #159: see runExploration's own doc comment on the equivalent lines.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
+    ...(opts.saveStorageState === undefined
+      ? {}
+      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
   });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
+    snapshotter.noteSettledStep(currentUrlSafe(session));
+  };
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -876,7 +1017,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       seedUrl: opts.url,
       allowlist: opts.allowlist,
       bounds: opts.bounds,
-      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
+      onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
@@ -957,14 +1098,14 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
-    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
+    return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed, runUsage) };
   } finally {
     disarmKillSwitch();
     await serverLog?.abort();
-    await persistStorageState(session, opts.saveStorageState);
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
 }
@@ -1021,7 +1162,9 @@ export interface RunAdversarialCliMissionOptions {
    * Writes the browser context's storageState (cookies + origin storage) here when the run ends
    * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
    * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
-   * written with mode 0600, and its contents are never logged.
+   * written with mode 0600, and its contents are never logged. See
+   * `RunExplorationOptions.saveStorageState`'s own doc for the full behaviour (#159: written on
+   * every exit path including a crash/kill signal, never over a lost/logged-out session).
    */
   readonly saveStorageState?: string;
   /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
@@ -1115,19 +1258,32 @@ export async function runAdversarialCliMission(
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #159: see runExploration's own doc comment on the equivalent lines.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.usage === undefined ? {} : { usage: opts.usage }),
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
+    ...(opts.saveStorageState === undefined
+      ? {}
+      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
   });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: opts.secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
+    snapshotter.noteSettledStep(currentUrlSafe(session));
+  };
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
@@ -1150,7 +1306,7 @@ export async function runAdversarialCliMission(
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
-      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
+      onTranscriptEntry,
       onRecording: journal.onRecording,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
@@ -1208,14 +1364,14 @@ export async function runAdversarialCliMission(
       },
       engine,
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
-      ...(opts.usage === undefined ? {} : { usage: opts.usage.snapshot() }),
+      ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
     };
-    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result) };
+    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) };
   } finally {
     disarmKillSwitch();
     await serverLog?.abort();
-    await persistStorageState(session, opts.saveStorageState);
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
 }
@@ -1256,7 +1412,9 @@ export interface RunFeatureCliMissionOptions {
    * Writes the browser context's storageState (cookies + origin storage) here when the run ends
    * (CLI `--save-storage-state`) — so a rotating refresh token stays usable across runs instead of
    * invalidating `--storage-state`'s file on first use. The file holds live session credentials:
-   * written with mode 0600, and its contents are never logged.
+   * written with mode 0600, and its contents are never logged. See
+   * `RunExplorationOptions.saveStorageState`'s own doc for the full behaviour (#159: written on
+   * every exit path including a crash/kill signal, never over a lost/logged-out session).
    */
   readonly saveStorageState?: string;
   /** App-declared invariants (`--invariants`, #86), already validated against the allowlist. */
@@ -1325,18 +1483,29 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
+  // #159: see runExploration's own doc comment on the equivalent lines.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
+    ...(opts.saveStorageState === undefined
+      ? {}
+      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
   });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
+    snapshotter.noteSettledStep(currentUrlSafe(session));
+  };
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -1347,7 +1516,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       allowlist: opts.allowlist,
       scope,
       bounds: opts.bounds,
-      onTranscriptEntry: serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry,
+      onTranscriptEntry,
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
@@ -1421,7 +1590,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   } finally {
     disarmKillSwitch();
     await serverLog?.abort();
-    await persistStorageState(session, opts.saveStorageState);
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
 }
@@ -1452,6 +1621,8 @@ export interface ExploreCliDeps {
   judge?: JudgmentPort;
   /** Injected generation gateway (tests). */
   gen?: GenerationPort;
+  /** Injected usage tracker (tests): injected gateways that record into it report known costs (#163). */
+  usage?: UsageTracker;
   browserPortFactory?: () => BrowserPort;
   env?: Record<string, string | undefined>;
   localConfig?: Partial<Record<CredentialKey, string>>;

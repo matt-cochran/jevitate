@@ -42,3 +42,19 @@ export function seedRedirectReason(seedUrl: string, landedUrl: string): SeedRedi
     : `seed ${seedPath} redirected to ${landedPath}`;
   return { reason, loginLike };
 }
+
+/**
+ * True when `url`'s path looks like a login/sign-in/sign-up page (#159) — reuses the exact pattern
+ * `seedRedirectReason` uses to name the #82 symptom. Used by the `--save-storage-state` snapshotter
+ * (`packages/cli/src/storage-state-snapshot.ts`) to decide whether the CURRENT page is a safe moment
+ * to refresh the in-memory "last known-good" storageState snapshot: a run that has (even temporarily)
+ * bounced to a login-like page is not one whose session is worth persisting over a previous good one.
+ * Malformed URLs are treated as "not login-like" (fail open), consistent with `seedRedirectReason`.
+ */
+export function isLoginLikeUrl(url: string): boolean {
+  try {
+    return LOGIN_LIKE_PATH.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}

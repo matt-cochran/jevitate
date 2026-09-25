@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -14,7 +14,7 @@ import { buildProgram } from "./program.js";
 import { buildMcpTools } from "./mcp-api.js";
 import { currentEngineInfo } from "./engine.js";
 import { writeMissionResult } from "./mission-journal.js";
-import type { QueuedMissionExecutor, QueuedMissionSpec } from "./mission-queue-runner.js";
+import { realQueuedMissionExecutor, type QueuedMissionExecutor, type QueuedMissionSpec } from "./mission-queue-runner.js";
 
 /**
  * Browser-free, fast CLI tests for `jevitate mission target`. Kept separate
@@ -370,4 +370,80 @@ test("mission run refuses --once together with --watch", async () => {
   } finally {
     process.exitCode = savedExitCode;
   }
+});
+
+test("#175: mission target add|update set operator auth (--storage-state/--save-storage-state/--secret-field); the record wins over targets.json", async () => {
+  const dir = await newTargetsDir();
+  const recordState = join(dir, "record-state.json");
+  const updatedState = join(dir, "updated-state.json");
+  const fileState = join(dir, "targets-json-state.json");
+  for (const f of [recordState, updatedState, fileState]) await writeFile(f, JSON.stringify({ cookies: [], origins: [] }));
+  const run = async (args: string[]) => {
+    const { program, lines } = newProgram();
+    await program.parseAsync([...args, "--dir", dir, "--json"], { from: "user" });
+    return JSON.parse(lines.join("")) as { ok: boolean; data?: Record<string, unknown>; error?: { code: string; message: string } };
+  };
+
+  const added = await run([
+    "mission", "target", "add", "acme",
+    "--name", "Acme", "--authorized-origin", "https://staging.acme.test", "--base-url", "https://staging.acme.test/app",
+    "--storage-state", recordState, "--save-storage-state", "--secret-field", "label=Password=env:ACME_PW",
+  ]);
+  expect(added).toMatchObject({ ok: true, data: { storageState: recordState, saveStorageState: true, secretFields: ["label=Password=env:ACME_PW"], promoted: false } });
+  const missing = await run([
+    "mission", "target", "add", "bad", "--name", "B", "--authorized-origin", "https://b.test", "--base-url", "https://b.test/",
+    "--storage-state", join(dir, "nope.json"),
+  ]);
+  expect(missing).toMatchObject({ ok: false, error: { code: "E_MISSION_TARGET_ADD" } });
+  const literal = await run([
+    "mission", "target", "add", "leak", "--name", "L", "--authorized-origin", "https://l.test", "--base-url", "https://l.test/",
+    "--secret-field", "label=Password=hunter2",
+  ]);
+  expect(literal).toMatchObject({ ok: false });
+  expect(JSON.stringify(literal)).not.toContain("hunter2");
+
+  expect(await run(["mission", "target", "promote", "acme"])).toMatchObject({ ok: true });
+  const updated = await run(["mission", "target", "update", "acme", "--storage-state", updatedState]);
+  expect(updated).toMatchObject({ ok: true, data: { storageState: updatedState, saveStorageState: true, promoted: true } });
+  expect(await run(["mission", "target", "update", "ghost", "--storage-state", updatedState])).toMatchObject({
+    ok: false,
+    error: { code: "E_UNKNOWN_MISSION_TARGET" },
+  });
+
+  // Precedence at drain time: the target record first, then targets.json.
+  const registry = new MissionTargetRegistry(new FsMissionTargetStore(dir));
+  const opened: Array<Record<string, unknown>> = [];
+  const execute = realQueuedMissionExecutor({
+    outDir: join(dir, "out"),
+    gateways: async () => {
+      throw new Error("unused");
+    },
+    browserPortFactory: () =>
+      ({
+        open: async (o: Record<string, unknown>) => {
+          opened.push(o);
+          throw new Error("stop");
+        },
+      }) as never,
+    targets: { "https://staging.acme.test": { storageState: fileState } },
+    env: { ACME_PW: "x" },
+  });
+  const feature = {
+    id: "549db40a-cd30-4706-b7f5-01ddea8f6d1f",
+    target: "acme",
+    strategy: "feature",
+    feature: "billing",
+    budget: { maxActions: 1, maxDecisions: 2, maxCandidates: 5 },
+    status: "running",
+    enqueuedAtIso: "2026-09-25T00:00:00Z",
+  } as never;
+  const allowlist = ["https://staging.acme.test"];
+  await expect(execute({ mission: feature, target: await registry.resolve("acme"), allowlist })).rejects.toThrow(/stop/);
+  expect(opened.at(-1)).toMatchObject({ storageState: updatedState });
+
+  expect(await run(["mission", "target", "update", "acme", "--clear-auth"])).toMatchObject({ ok: true });
+  const cleared = await registry.resolve("acme");
+  expect(cleared.storageState).toBeUndefined();
+  await expect(execute({ mission: feature, target: cleared, allowlist })).rejects.toThrow(/stop/);
+  expect(opened.at(-1)).toMatchObject({ storageState: fileState });
 });

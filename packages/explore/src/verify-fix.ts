@@ -5,7 +5,8 @@ import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interp
 import { perceive, type PerceiveOptions } from "./perceive.js";
 import { observeAfterStep } from "./record.js";
 import type { HangSignal } from "./hang.js";
-import { replayAndDetectHang } from "./hang-repro.js";
+import { replayAndDetectHang, replayTargetWaitMs, type HangRule } from "./hang-repro.js";
+import type { SafetyConfig } from "./safety.js";
 import { monitorFor } from "./page-monitor.js";
 import { PageSignalCollector } from "./adversarial/defect-oracle.js";
 import { signalFingerprint } from "./adversarial/defect-fingerprint.js";
@@ -77,7 +78,15 @@ export interface VerifyFixParams {
   readonly perceive?: PerceiveOptions;
   /** Stall window for a stalled-state `ui-no-progress` hang (ms). */
   readonly stallMs?: number;
-  /** How long a recorded target may take to appear on replay (ms). Default: the interpreter's. */
+  /**
+   * The target's safety policy (#153): a hang replay never re-sends a paid/destructive write unless
+   * `hangReplayWrites` opts in — the verdict is then `inconclusive`, never `fixed`.
+   */
+  readonly safety?: SafetyConfig;
+  /**
+   * How long a recorded target may take to appear on replay (ms). Default (#164): the render wait —
+   * `perceive.renderWaitMs`, else `settleCeilingMs`, else `RENDER_WAIT_MS` (`replayTargetWaitMs`).
+   */
   readonly targetTimeoutMs?: number;
   /** Fresh-context replays for a non-hang defect signal (#74). Default `DEFAULT_VERIFY_REPLAYS`. */
   readonly replays?: number;
@@ -128,7 +137,7 @@ export interface VerifyFixResult {
         readonly reason?: ReplayTargetFailure;
       };
   readonly reason: string;
-  /** Every fresh-context attempt for a non-hang defect signal (#74): absent for `hang`/`invariant`. */
+  /** Every fresh-context attempt (#74; a hang's single replay too, #164): absent for `invariant`. */
   readonly attempts?: ReplayAttemptEvidence[];
 }
 
@@ -137,6 +146,10 @@ export interface ReplayAttemptEvidence {
   readonly ran: boolean;
   readonly fired: boolean;
   readonly detail: string;
+  /** A hang replay: which rule decided (#164). */
+  readonly rule?: HangRule;
+  /** A busy-indicator hang replay: busy indicators visible on the replayed page (#164). */
+  readonly busyIndicators?: number;
 }
 
 /**
@@ -154,6 +167,11 @@ export function verifyReplayVerdict(runs: readonly Pick<ReplayAttemptEvidence, "
 }
 
 export const DEFAULT_VERIFY_REPLAYS = 3;
+
+/** A replayed step's bounded target wait (#164): explicit, else the render wait this verify uses. */
+function targetWaitOf(params: VerifyFixParams): number {
+  return replayTargetWaitMs({ targetTimeoutMs: params.targetTimeoutMs, renderWaitMs: params.perceive?.renderWaitMs ?? params.settleCeilingMs });
+}
 
 function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
@@ -178,17 +196,33 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
       openSession: params.openSession,
       ...(params.perceive === undefined ? {} : { perceive: params.perceive }),
       ...(params.stallMs === undefined ? {} : { stallMs: params.stallMs }),
+      ...(params.safety === undefined ? {} : { safety: params.safety }),
+      targetTimeoutMs: targetWaitOf(params),
     });
     const replay: VerifyFixResult["replay"] =
       attempt.replay === "failed" ? { outcome: "failed", at: -1, error: attempt.detail } : { outcome: "completed" };
+    // #164: the hang's one replay is recorded as evidence too — which rule decided, and what it saw.
+    const attempts: ReplayAttemptEvidence[] = [
+      {
+        ran: attempt.ran,
+        fired: attempt.reproduced,
+        detail: attempt.detail,
+        ...(attempt.rule === undefined ? {} : { rule: attempt.rule }),
+        ...(attempt.busyIndicators === undefined ? {} : { busyIndicators: attempt.busyIndicators }),
+      },
+    ];
     if (attempt.reproduced) {
-      return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}` };
+      return { ...base, verdict: "still-reproduces", observedFingerprints: [params.fingerprint], replay, reason: `the hang reproduced: ${attempt.detail}`, attempts };
+    }
+    if (attempt.withheld !== undefined) {
+      // #153: not replayed — the path re-sends a paid/destructive write. Never "fixed".
+      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay: { outcome: "failed", at: -1, error: "not replayed" }, reason: attempt.detail };
     }
     if (!attempt.ran) {
       // The attempt never ran (no session, or the replay failed before the step): no evidence.
-      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay, reason: `${attempt.detail}; absence of the hang proves nothing` };
+      return { ...base, verdict: "inconclusive", observedFingerprints: [], replay, reason: `${attempt.detail}; absence of the hang proves nothing`, attempts };
     }
-    return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})` };
+    return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})`, attempts };
   }
   const declared = params.defectKind === "invariant" ? params.invariant : undefined;
   if (params.defectKind === "invariant" && (declared === undefined || !declared.spec.invariants.some((i) => i.id === declared.id))) {
@@ -282,7 +316,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     await monitorFor(session.page).instrument();
     const index = params.recordingStepIndex;
     const upTo = truncateAt(observeAfterStep(params.recording, index), index);
-    const interpreter = new RecordingInterpreter(params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs });
+    const interpreter = new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params) });
     const settle = (): Promise<unknown> =>
       perceive(session.page, { ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }) }).catch(() => undefined);
     const failedAt = (r: Awaited<ReturnType<RecordingInterpreter["run"]>>): SingleReplayAttempt | null => {
@@ -377,9 +411,7 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
     await monitorFor(session.page).instrument();
     // The defect's step is replayed to OBSERVE what the app does next — its own postcondition is not
     // the verdict (a fixed app may legitimately behave differently after it); the signal check is.
-    const result = await new RecordingInterpreter(
-      params.targetTimeoutMs === undefined ? {} : { targetTimeoutMs: params.targetTimeoutMs },
-    ).runToCheckpoint(
+    const result = await new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params) }).runToCheckpoint(
       session.actor,
       observeAfterStep(params.recording, params.recordingStepIndex),
       params.recordingStepIndex,

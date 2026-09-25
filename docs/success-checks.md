@@ -50,6 +50,15 @@ In these specs:
   `reloadThen` performs is not counted.
 - The goal loop can also choose a `reload` step itself.
 
+**When the checks must hold (`--success-when`).** By default (`final`) every check is read
+on the final page. `--success-when held` also accepts the checks holding all together at any
+settled step, for a state that does not last (a one-time secret, a toast). A held check
+counts only once it went from not holding to holding: one that already held on the start
+page and never changed fails as vacuous, with a warning in the result (`checkWarnings`).
+Once every check has held, code ends the run as done before the next action, so it never
+keeps acting or writing past a met goal. `reloadThen` checks are always read on the final
+page.
+
 The result lists each check with what the oracle saw, so a failing run names the
 check that caught it:
 
@@ -87,7 +96,26 @@ text the run actually observed on a page — before accepting it. An ungrounded 
 is rejected and the model keeps looking; the run is `succeeded` only once a report is
 accepted, and the accepted answer (with its grounding evidence) is returned as
 `answer`. Never Jev's self-report: the same independent-grounding rule the page/network
-checks get.
+checks get. A figure counts as a stated figure only when it stands free (`$25`, `25%`,
+`1,234`, `5GB`, `24h`); digits inside a word (`2FA`, `v2`, `S3`) do not, figures the goal
+itself states need no page, and a rejection quotes the offending token.
+
+**Read-only by default.** A find-out goal that does not itself ask for a change runs under a
+read-only guard. Code refuses controls that start a write flow (checkout, upgrade, create,
+save, confirm, submit, send, upload) and blocks the write requests a model-chosen action
+fires; each refusal is recorded and told to the model. The app's own background writes
+outside an action (token refresh, heartbeats, telemetry) pass and are listed in
+`sideEffects` with `background: true`, and auth-refresh paths (`**/refresh*`, `**/token*`,
+`**/oauth/**`, `**/auth/**/refresh*`) are never blocked. `--allow-write <glob>` (repeatable)
+exempts more request paths, and `--allow-writes` lifts the guard. In
+`~/.jevitate/targets.json`, `safety.allowWrites` is `true` (lift it) or an array of path globs
+(exempt them). The paid/destructive policy in
+[Safety](./safety.md) still applies either way.
+
+**Scrolling is progress.** A scroll that moved the page counts as progress, so a find-out
+goal whose answer is further down the page is not stopped as "no progress". Before a
+no-progress stop, the model gets one last turn; on a find-out goal, giving up on that turn
+becomes a report attempt, still grounded by code.
 
 ```bash
 jevitate explore --url https://app.example.test/contacts \

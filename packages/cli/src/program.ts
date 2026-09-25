@@ -32,10 +32,12 @@ import {
   OpenRouterGenerationGateway,
   RetryingGenerationPort,
   RetryingJudgmentPort,
-  openRouterProviderSettings,
   JevJudgmentGateway,
   realJevClientCall,
   UsageTracker,
+  FAKE_CALL_USAGE,
+  formatUsageLine,
+  usageCountsFrom,
   type JudgmentPort,
   type GenerationPort,
   type Answer,
@@ -43,7 +45,6 @@ import {
   type Question,
   type CatalogModel,
   type ModelConstraints,
-  type OpenRouterCall,
   type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
@@ -71,7 +72,11 @@ import {
   listMissionTargets,
   promoteMissionTarget,
   missionTargetContext,
+  missionTargetAuth,
+  updateMissionTargetAuth,
+  withMissionTargetAuthFlags,
   UnknownMissionTargetError,
+  type MissionTargetAuthFlags,
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
 import { FsMissionQueueStore } from "@jevitate/missions";
@@ -84,7 +89,8 @@ import {
 } from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
-import { resolveJevUnitPrice } from "./usage-config.js";
+import { resolveUsagePricing } from "./usage-config.js";
+import { realOpenRouterCall } from "./openrouter-call.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -142,7 +148,7 @@ import {
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
-import { parseLogDefectSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
 import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
@@ -506,7 +512,26 @@ function parsePlannedScript(raw: string): PlannedStep[] {
 function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
   const writeOut = program.configureOutput().writeOut;
   writeOut?.(`${JSON.stringify(envelope)}\n`);
+  if (envelope.ok) emitUsageLine(program, envelope.data);
   process.exitCode = envelope.ok ? 0 : 1;
+}
+
+/** A non-`--json` result: printed as bare JSON on stdout, with the cost summary line on stderr. */
+function writeRawResult(program: Command, result: unknown): void {
+  program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+  emitUsageLine(program, result);
+}
+
+/**
+ * The human cost summary (#163) — on STDERR, so stdout stays exactly the JSON a caller parses:
+ * `usage: cost $0.0312 (jev $0.0203 + generation $0.0109) · 398 judgments, …`, flagged
+ * `(partial: …)` when some call could not be priced. Nothing when the result carries no usage.
+ */
+function emitUsageLine(program: Command, data: unknown): void {
+  if (data === null || typeof data !== "object") return;
+  const usage = usageCountsFrom((data as { usage?: unknown }).usage);
+  if (usage === undefined || usage.judgments + usage.generations === 0) return;
+  program.configureOutput().writeErr?.(`usage: ${formatUsageLine(usage)}\n`);
 }
 
 /**
@@ -1054,11 +1079,13 @@ export function buildProgram(deps: CliDeps): Command {
       // with no healer. fail-closed needs no gateway (identical to today).
       let selfHealer;
       let policy = safeRunPolicy();
+      // #163: a self-healing run makes model calls — their usage (and full cost) lands on its result.
+      let healUsage: UsageTracker | undefined;
       if (selfHealMode !== "fail-closed") {
         let judge: JudgmentPort;
         let gen: GenerationPort;
         try {
-          ({ judge, gen } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false }));
+          ({ judge, gen, usage: healUsage } = await buildExploreGateways(deps, { real: real ?? false, fakeAi: fakeAi ?? false }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
             emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -1095,7 +1122,7 @@ export function buildProgram(deps: CliDeps): Command {
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
-        }).then((r) => withEngine(r));
+        }).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1103,7 +1130,7 @@ export function buildProgram(deps: CliDeps): Command {
           // "quarantined" is a non-zero exit.
           if (result.outcome === "quarantined") process.exitCode = 1;
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          writeRawResult(program, result);
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
@@ -1431,7 +1458,7 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, envelope);
           if (result.outcome === "quarantined") process.exitCode = 1;
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          writeRawResult(program, result);
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
@@ -1649,7 +1676,10 @@ export function buildProgram(deps: CliDeps): Command {
       "--save-storage-state <file>",
       "write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. " +
         "Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, " +
-        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run.",
+        "so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. " +
+        "Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but " +
+        "never over a good file with a session that already looks lost/logged-out; the last known-good state is used " +
+        "instead, or nothing is written if none was ever captured.",
     )
     .option("--max-actions <n>", "hard cap on executed actions")
     .option("--max-decisions <n>", "hard cap on model decisions")
@@ -1688,6 +1718,18 @@ export function buildProgram(deps: CliDeps): Command {
       "let missions click session-ending, destructive and paid controls (a --deny pattern still holds). A goal run already may click one its goal asks for",
     )
     .option(
+      "--allow-writes",
+      "let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow " +
+        "(checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change",
+    )
+    .option(
+      "--allow-write <glob>",
+      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments), beyond the built-in auth-refresh ones " +
+        "(**/refresh*, **/token*, **/oauth/**, **/auth/**/refresh*). The app's background writes outside an action always pass",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--read-rpc <glob>",
       "a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). " +
         "gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes",
@@ -1702,7 +1744,11 @@ export function buildProgram(deps: CliDeps): Command {
       "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
     )
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
-    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2)")
+    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)")
+    .option(
+      "--hang-replay-writes",
+      "let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed)",
+    )
     .option(
       "--settle-ignore <pattern>",
       "a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)",
@@ -1751,6 +1797,18 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--log-defect <level|/regex/>",
       "backend log lines matching this (repeatable) become a server-log defect: a level (error|warn|info|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--log-quiet-ok <spec>",
+      "declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--log-ignore <regex|substring>",
+      "excludes known-noise backend log lines (repeatable, /regex/flags/ over the raw line or a plain substring) from BOTH correlation and the --log-defect oracle (#169 item 3) — e.g. a periodic background job's own expected error. Counted separately as serverLogs.ignoredLines; never makes --log-quiet-ok unnecessary, since an ignored line still proves the source is being tailed",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1814,6 +1872,8 @@ export function buildProgram(deps: CliDeps): Command {
         logSource: string[];
         allowLogCmd?: boolean;
         logDefect: string[];
+        logQuietOk: string[];
+        logIgnore: string[];
         serverLogDrainMs?: string;
         actor: string[];
         repeat?: string;
@@ -1857,6 +1917,9 @@ export function buildProgram(deps: CliDeps): Command {
         jobWaitMs?: string;
         deny: string[];
         allowDestructive?: boolean;
+        allowWrites?: boolean;
+        allowWrite: string[];
+        hangReplayWrites?: boolean;
         readRpc: string[];
         real?: boolean;
         fakeAi?: boolean;
@@ -1904,6 +1967,12 @@ export function buildProgram(deps: CliDeps): Command {
       }
       if (conversation.jobWaitMs !== undefined && !(Number.isInteger(conversation.jobWaitMs) && conversation.jobWaitMs > 0)) {
         emitJson(program, fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
+        return;
+      }
+      // #154: refused BEFORE any browser opens. 0 is valid: "don't replay" — a hang is then
+      // reported unconfirmed (inconclusive), never replayed and never a crash.
+      if (o.hangReplays !== undefined && !/^\d+$/.test(o.hangReplays.trim())) {
+        emitJson(program, fail("E_EXPLORE_ARGS", `--hang-replays must be a non-negative integer (0 = don't replay; the hang is reported unconfirmed), got "${o.hangReplays}"`));
         return;
       }
       try {
@@ -1955,6 +2024,9 @@ export function buildProgram(deps: CliDeps): Command {
             deny: o.deny,
             readRpc: o.readRpc,
             ...(o.allowDestructive === true ? { allowDestructive: true } : {}),
+            ...(o.allowWrites === true ? { allowWrites: true } : {}),
+            allowWrite: o.allowWrite,
+            ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
             ...(o.longPollMs === undefined ? {} : { longPollMs: Number(o.longPollMs) }),
           });
         } catch (err) {
@@ -2047,10 +2119,13 @@ export function buildProgram(deps: CliDeps): Command {
         try {
           const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
           const logDefect = parseLogDefectSpecs(o.logDefect);
+          const logIgnore = parseLogIgnoreSpecs(o.logIgnore);
           serverLog = {
             sources,
             logDefect,
             allowLogCmd: o.allowLogCmd ?? false,
+            quietOk: o.logQuietOk,
+            logIgnore,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {
@@ -2156,7 +2231,7 @@ export function buildProgram(deps: CliDeps): Command {
           if (o.json) {
             emitJson(program, envelope);
           } else {
-            program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+            writeRawResult(program, result);
           }
           // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see mission-exit.ts).
           process.exitCode = result.exitCode;
@@ -2305,6 +2380,7 @@ export function buildProgram(deps: CliDeps): Command {
             ...(emulation === undefined ? {} : { emulation }),
             overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
+            ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withServerLog,
             ...withInvariants,
           });
@@ -2487,7 +2563,7 @@ export function buildProgram(deps: CliDeps): Command {
         if (o.json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          writeRawResult(program, result);
         }
         // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
         process.exitCode = result.exitCode;
@@ -2537,6 +2613,10 @@ export function buildProgram(deps: CliDeps): Command {
       false,
     )
     .option(
+      "--hang-replay-writes",
+      "let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed)",
+    )
+    .option(
       "--secret <value>",
       "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
       (v, prev: string[]) => [...prev, v],
@@ -2553,6 +2633,7 @@ export function buildProgram(deps: CliDeps): Command {
           allowEmulationOverride?: boolean;
           invariants: string[];
           allowLogCmd?: boolean;
+          hangReplayWrites?: boolean;
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
@@ -2575,6 +2656,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
           ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
+          ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
           fixtureFlags: o,
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
@@ -2668,8 +2750,9 @@ export function buildProgram(deps: CliDeps): Command {
 
       let judge: JudgmentPort;
       let gen: GenerationPort;
+      let authorUsage: UsageTracker;
       try {
-        ({ judge, gen } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
+        ({ judge, gen, usage: authorUsage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
           emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
@@ -2695,13 +2778,13 @@ export function buildProgram(deps: CliDeps): Command {
           browserPortFactory: deps.explore?.browserPortFactory,
           browser: browserLaunchFromFlags(o),
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
-        });
+        }).then((r) => ({ ...r, usage: authorUsage.snapshot() }));
         const envelope = ok(result);
         if (o.json) {
           emitJson(program, envelope);
           if (result.outcome !== "authored") process.exitCode = 1;
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          writeRawResult(program, result);
           process.exitCode = result.outcome === "authored" ? 0 : 1;
         }
       } catch (err) {
@@ -2878,7 +2961,7 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+          writeRawResult(program, result);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -2964,7 +3047,7 @@ export function buildProgram(deps: CliDeps): Command {
   const mission = program.command("mission");
   const missionTarget = mission.command("target");
 
-  missionTarget
+  const missionTargetAdd = missionTarget
     .command("add <id>")
     .description("register an exploration mission target (UNPROMOTED — not usable by queue_exploration until promoted)")
     .option("--name <name>", "human-readable target name")
@@ -2976,19 +3059,22 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--base-url <url>", "the base URL a mission starts navigation from")
-    .option("--description <text>", "optional human-readable description")
+    .option("--description <text>", "optional human-readable description");
+  withMissionTargetAuthFlags(missionTargetAdd)
     .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { name, authorizedOrigin, apiOrigin, baseUrl, description, dir, json } = this.opts<{
-        name?: string;
-        authorizedOrigin?: string;
-        apiOrigin: string[];
-        baseUrl?: string;
-        description?: string;
-        dir?: string;
-        json?: boolean;
-      }>();
+      const { name, authorizedOrigin, apiOrigin, baseUrl, description, dir, json, ...authFlags } = this.opts<
+        {
+          name?: string;
+          authorizedOrigin?: string;
+          apiOrigin: string[];
+          baseUrl?: string;
+          description?: string;
+          dir?: string;
+          json?: boolean;
+        } & MissionTargetAuthFlags
+      >();
       // Validate in-action + fail envelope (not commander's hard-exiting
       // `.requiredOption`), matching this CLI's convention.
       if (!name || !authorizedOrigin || !baseUrl) {
@@ -2997,7 +3083,16 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
-        const target = await addMissionTarget(ctx, { id, name, authorizedOrigin, apiOrigins: apiOrigin, baseUrl, description });
+        const auth = missionTargetAuth(authFlags);
+        const target = await addMissionTarget(ctx, {
+          id,
+          name,
+          authorizedOrigin,
+          apiOrigins: apiOrigin,
+          baseUrl,
+          ...(description === undefined ? {} : { description }),
+          ...(auth === undefined ? {} : { auth }),
+        });
         const envelope = ok(target);
         if (json) {
           emitJson(program, envelope);
@@ -3009,6 +3104,39 @@ export function buildProgram(deps: CliDeps): Command {
         }
       } catch (err) {
         emitJson(program, fail("E_MISSION_TARGET_ADD", String(err instanceof Error ? err.message : err)));
+      }
+    });
+
+  withMissionTargetAuthFlags(
+    missionTarget
+      .command("update <id>")
+      .description("set a registered target's operator-declared auth for queued missions (#175); keeps its promotion state")
+      .option("--clear-auth", "drop the target's storage state, save-back and secret fields first"),
+  )
+    .option("--dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json, clearAuth, ...authFlags } = this.opts<{ dir?: string; json?: boolean; clearAuth?: boolean } & MissionTargetAuthFlags>();
+      const auth = missionTargetAuth(authFlags);
+      if (auth === undefined && clearAuth !== true) {
+        emitJson(program, fail("E_MISSION_TARGET_ARGS", "nothing to update: pass --storage-state, --save-storage-state, --secret-field or --clear-auth"));
+        return;
+      }
+      try {
+        const ctx = missionTargetContext(resolveMissionTargetsDir(deps, dir));
+        const target = await updateMissionTargetAuth(ctx, id, { ...(auth ?? {}), ...(clearAuth === true ? { clear: true } : {}) });
+        if (json) {
+          emitJson(program, ok(target));
+        } else {
+          program.configureOutput().writeOut?.(`updated mission target '${target.id}'\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        if (err instanceof UnknownMissionTargetError) {
+          emitJson(program, fail("E_UNKNOWN_MISSION_TARGET", err.message));
+          return;
+        }
+        emitJson(program, fail("E_MISSION_TARGET_UPDATE", String(err instanceof Error ? err.message : err)));
       }
     });
 
@@ -3404,8 +3532,8 @@ async function buildExploreGateways(
   // #100: ONE tracker per invocation, handed to whichever gateways are built below — real (counted
   // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
   // without a key). Injected gateways (tests) get an empty tracker: they have no real seam to count.
-  // #136: a configured Jev unit price (env beats config; undefined = jevUsd stays unpriced, as before).
-  const usage = new UsageTracker(resolveJevUnitPrice(deps.explore?.env ?? process.env));
+  // #136/#163: configured prices (env/config) override the built-in, versioned price tables.
+  const usage = deps.explore?.usage ?? new UsageTracker(resolveUsagePricing(deps.explore?.env ?? process.env));
   if (deps.explore?.judge && deps.explore?.gen) {
     return { judge: deps.explore.judge, gen: deps.explore.gen, usage };
   }
@@ -3460,41 +3588,9 @@ export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
           }
         }
       }
-      usage?.recordJudgment({ inputTokens: 0, outputTokens: 0 });
+      usage?.recordJudgment(FAKE_CALL_USAGE);
       return out;
     },
-  };
-}
-
-/**
- * Real OpenRouter seam (lazy import) — mirrors ai-cli.ts; the key reaches the provider as `apiKey`.
- * `usage` (#100) is an optional sink: when supplied, every call (including a retry — this is the
- * innermost seam `RetryingGenerationPort` re-invokes on each attempt) reports one generation with
- * the provider's own token counts, plus `usd` ONLY when OpenRouter's usage-accounting reports a
- * cost (never estimated). Usage accounting must never itself break a generation call, so a missing
- * or malformed `providerMetadata` counts as 0 tokens / no cost rather than throwing.
- */
-async function realOpenRouterCall(usage?: UsageSink): Promise<OpenRouterCall> {
-  const { generateObject } = await import("ai");
-  const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
-  return async ({ model, schema, body, authHeader, temperature }) => {
-    const openrouter = createOpenRouter(openRouterProviderSettings(authHeader));
-    const start = Date.now();
-    const { object, usage: tokenUsage, providerMetadata } = await generateObject({
-      model: openrouter(model),
-      schema,
-      prompt: JSON.stringify(body),
-      // Asks OpenRouter to include usage accounting (incl. `cost`) in providerMetadata.openrouter.usage.
-      providerOptions: { openrouter: { usage: { include: true } } },
-      ...(temperature === undefined ? {} : { temperature }),
-    });
-    const openrouterUsage = (providerMetadata as { openrouter?: { usage?: { cost?: number } } } | undefined)?.openrouter?.usage;
-    usage?.recordGeneration({
-      inputTokens: tokenUsage.inputTokens ?? 0,
-      outputTokens: tokenUsage.outputTokens ?? 0,
-      ...(typeof openrouterUsage?.cost === "number" ? { usd: openrouterUsage.cost } : {}),
-    });
-    return { object, latencyMs: Date.now() - start };
   };
 }
 

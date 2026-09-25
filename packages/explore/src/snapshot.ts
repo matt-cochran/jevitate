@@ -85,6 +85,16 @@ export interface Control {
    * is also offered `edit_text`: an edit INSIDE its text (at a quoted anchor), not a full retype.
    */
   readonly richText?: boolean;
+  /**
+   * True when the element's own box is clipped to near-nothing or pulled far off-screen by a
+   * large NEGATIVE offset — the classic sr-only "skip to content" clipping idiom (#75, #161).
+   * Mirrors `act.ts`'s `isClippedOrPulledOffscreen` (the gate's own click-time check), computed
+   * once here so a PLANNING-time candidate list (the adversarial strategies, which never go
+   * through the coverage frontier's blacklist) can exclude it from the start, instead of only
+   * finding out after `act()`'s gate refuses it. Deliberately narrow: ordinary below-the-fold
+   * content (a positive offset, reachable by scrolling) never matches.
+   */
+  readonly clippedOffscreen?: boolean;
 }
 
 export interface Snapshot {
@@ -161,6 +171,8 @@ interface ControlFacts {
   readonly landmark: "navigation" | "banner" | "contentinfo" | null;
   /** A rich-text (`contenteditable`, not input/textarea) element. See `Control.richText`. */
   readonly richText: boolean;
+  /** See `Control.clippedOffscreen` (#75, #161). */
+  readonly clippedOffscreen: boolean;
 }
 
 /**
@@ -186,6 +198,11 @@ function readControlFacts(node: Node): ControlFacts {
     style.display !== "none" &&
     rect.width > 0 &&
     rect.height > 0;
+  // The sr-only "skip link" clipping idiom (#75, #161) — mirrors `act.ts`'s
+  // `isClippedOrPulledOffscreen` exactly (kept in sync by hand: BROWSER CODE here cannot import
+  // it). A `visible` control per the check above (non-zero box, not display:none) can still be
+  // clipped to near-nothing or pulled off-screen by a large negative offset.
+  const clippedOffscreen = (rect.width <= 1 && rect.height <= 1) || rect.left <= -1_000 || rect.top <= -1_000;
 
   const roleAttr = norm(el.getAttribute("role")).split(" ")[0] ?? "";
   const roleByTag: Record<string, string> = {
@@ -348,6 +365,7 @@ function readControlFacts(node: Node): ControlFacts {
     step,
     landmark,
     richText,
+    clippedOffscreen,
   };
 }
 
@@ -462,6 +480,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         step: facts.step,
         landmark: facts.landmark,
         ...(facts.richText ? { richText: true } : {}),
+        ...(facts.clippedOffscreen ? { clippedOffscreen: true } : {}),
       });
       keptFacts.push(facts);
     } catch {

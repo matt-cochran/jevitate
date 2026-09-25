@@ -18,6 +18,7 @@ import { targetCandidates, type TargetOp } from "../actions.js";
 import { act } from "../act.js";
 import { toPath } from "../record.js";
 import { stateFingerprint, actionKey, type FrontierOp } from "../feature/fingerprint.js";
+import { controlIdentity } from "../coverage/fingerprint.js";
 import { Frontier } from "../feature/frontier.js";
 import { chromeClassifier } from "../coverage/chrome.js";
 import { StallWatchdog, StalledError } from "../stall-watchdog.js";
@@ -517,6 +518,11 @@ async function runFeatureFrontier(
       chrome.observe(pathnameOf(snap.url), snap.controls);
       const navigatedToPath = toPath(beforeUrl) !== toPath(snap.url) ? toPath(snap.url) : null;
       const newFingerprint = stateFingerprint(snap);
+      // #160: a not-yet-exercised control is preferred over one already acted on (#75's own
+      // preference, never previously wired into this mission), and a toggle exercised once in
+      // each direction is dropped for the rest of the run instead of oscillating forever.
+      frontier.markExercised(controlIdentity(item.control));
+      frontier.noteTransition(item.fromFingerprint, item.control, newFingerprint);
       const branch = extendRecording(item.pathPrefix, item.op, item.control.descriptor, fillText, navigatedToPath);
       transitionsExercised += 1;
       extended.add(item.fromFingerprint);
@@ -568,6 +574,7 @@ async function runFeatureFrontier(
           recording: { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) },
           steps: [],
           found: hangs,
+          ...(params.safety === undefined ? {} : { safety: params.safety }),
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
           // Re-detected with the SAME perception bounds the mission used.

@@ -1,12 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeSync } from "node:fs";
-import type { UsageCounts } from "@jevitate/ai-core";
+import type { UsageCounts, UsageLedger } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { closeSharedBrowserPool } from "@jevitate/playwright";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { ok } from "./envelope.js";
 import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { transcriptPathFor } from "./transcript-file.js";
+import { writeKillSnapshot } from "./storage-state-snapshot.js";
 
 /**
  * Crash-safe termination (#94). `jevitate explore`/`explore --strategy usability` runs are commonly
@@ -56,12 +57,23 @@ export interface KillableMission {
    */
   readonly transcript?: () => readonly TranscriptEntry[] | undefined;
   /** The run's usage tracker: the tokens already spent are part of the killed run's result (#120). */
-  readonly usage?: { snapshot(): UsageCounts };
+  readonly usage?: { snapshot(): UsageCounts; calls?(): ReturnType<UsageLedger["calls"]> };
   /**
    * Whatever partial report the mission has so far (e.g. a usability run's observed screens and
    * screenshots). Read synchronously on the signal; absent/throwing means no partial report.
    */
   readonly partialReport?: () => Record<string, unknown> | undefined;
+  /**
+   * `--save-storage-state` (#159): where to write the storageState JSON on a kill, and the mission's
+   * own `StorageStateSnapshotter.snapshot` — the last one captured while the session still looked
+   * authenticated (see `storage-state-snapshot.ts`). Read synchronously on the signal, like every
+   * other field here; `snapshot()` returning `undefined` (no safe capture yet) means nothing is
+   * written — an armed mission with no `--save-storage-state` omits this field entirely.
+   */
+  readonly storageState?: {
+    readonly path: string;
+    readonly snapshot: () => string | undefined;
+  };
 }
 
 /**
@@ -78,13 +90,19 @@ type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
 export interface KillSwitchDeps {
   readonly exit: (code: number) => void;
   readonly closeBrowsers: () => Promise<void>;
-  readonly writeResult: (recordingPath: string, missionOutcome: string, exitCode: number, result: unknown) => string;
+  readonly writeResult: (recordingPath: string, missionOutcome: string, exitCode: number, result: unknown, usage?: UsageLedger) => string;
   readonly readTranscript: (transcriptPath: string) => { steps: number; transcript: readonly TranscriptEntry[] };
   readonly onSignal: (signal: KillSignal, handler: () => void) => void;
   /** This build's identity, stamped on the killed run's result like every other result (#112). */
   readonly engine?: () => EngineInfo;
   /** SYNCHRONOUS stdout write — the process exits in the same turn, so nothing may be buffered. */
   readonly writeStdout?: (text: string) => void;
+  /**
+   * `--save-storage-state` on a kill (#159): writes `json` to `path` SYNCHRONOUSLY, mode 0600.
+   * Defaults to `writeKillSnapshot` (a real `writeFileSync`); tests inject a fake here the same way
+   * they fake `writeResult`, instead of touching the real filesystem.
+   */
+  readonly writeStorageStateSnapshot?: (path: string, json: string) => void;
 }
 
 /** Reads whatever the journal has already flushed; a run killed before its first step is 0 steps. */
@@ -110,6 +128,7 @@ const realDeps: KillSwitchDeps = {
   writeStdout: (text) => {
     writeSync(1, text);
   },
+  writeStorageStateSnapshot: writeKillSnapshot,
 };
 
 type KilledListener = (killed: { resultPath: string; exitCode: number }) => void;
@@ -190,10 +209,24 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     let resultPath: string | undefined;
     try {
       partial = partialResult(mission, signal, code, deps);
-      resultPath = deps.writeResult(mission.recordingPath, "inconclusive", code, partial);
+      // #163: a killed run's per-call usage sidecar too (the calls it made before the signal).
+      const u = mission.usage;
+      const ledger: UsageLedger | undefined = u?.calls === undefined ? undefined : { snapshot: () => u.snapshot(), calls: () => u.calls?.() ?? [] };
+      resultPath = deps.writeResult(mission.recordingPath, "inconclusive", code, partial, ledger);
     } catch {
       // Best-effort: a failed flush must never keep the process from honoring the signal — nor keep
       // the OTHER armed missions from being flushed.
+    }
+    // #159: `--save-storage-state` on a killed run — synchronous by construction (no `await`
+    // possible here, see this function's own doc comment): writes whatever the mission's
+    // `StorageStateSnapshotter` already holds (the last snapshot taken while the session still
+    // looked authenticated). Nothing is written when the mission has no `--save-storage-state`, or
+    // no safe snapshot was captured yet (e.g. killed before the first settled step).
+    try {
+      const snap = mission.storageState?.snapshot();
+      if (snap !== undefined) (deps.writeStorageStateSnapshot ?? writeKillSnapshot)(mission.storageState!.path, snap);
+    } catch {
+      // Best-effort, like the flush above.
     }
     // Whoever ran THIS mission (e.g. its queue-drain item, #117) records where its result went —
     // synchronously; process-wide listeners hear about every mission.

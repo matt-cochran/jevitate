@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadJevUnitPriceUsd, resolveJevUnitPrice, UsageConfigError } from "./usage-config.js";
+import { loadJevUnitPriceUsd, loadModelPrices, resolveJevUnitPrice, resolveUsagePricing, UsageConfigError } from "./usage-config.js";
 
 function withConfig(contents: unknown, fn: (path: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "jev-usage-config-"));
@@ -62,6 +62,27 @@ describe("resolveJevUnitPrice (#136) — env beats config; neither = unpriced", 
   it("an empty env value falls through to config, not an error", () => {
     withConfig({ usage: { jevUnitPriceUsd: 0.006 } }, (path) => {
       expect(resolveJevUnitPrice({ JEVITATE_JEV_UNIT_PRICE_USD: "" }, path)?.unitPriceUsd).toBe(0.006);
+    });
+  });
+});
+
+describe("usage.modelPrices / resolveUsagePricing (#163)", () => {
+  it("reads per-model token prices with a labelled source; absent is 'not configured'", () => {
+    withConfig({ usage: { modelPrices: { "acme/x": { inputUsdPerMtok: 1, outputUsdPerMtok: 2 } } } }, (path) => {
+      expect(loadModelPrices(path)).toEqual({ prices: { "acme/x": { inputUsdPerMtok: 1, outputUsdPerMtok: 2 } }, source: `config:${path} usage.modelPrices` });
+      expect(resolveUsagePricing({}, path)).toEqual({ modelPrices: loadModelPrices(path) });
+    });
+    withConfig({ usage: {} }, (path) => expect(resolveUsagePricing({}, path)).toEqual({}));
+  });
+
+  it("fails closed on a malformed model price", () => {
+    withConfig({ usage: { modelPrices: [] } }, (path) => expect(() => loadModelPrices(path)).toThrow(UsageConfigError));
+    withConfig({ usage: { modelPrices: { m: { inputUsdPerMtok: 1 } } } }, (path) => expect(() => loadModelPrices(path)).toThrow(/outputUsdPerMtok must be a non-negative number/));
+  });
+
+  it("the env unit price still wins for Jev", () => {
+    withConfig({ usage: { jevUnitPriceUsd: 0.5 } }, (path) => {
+      expect(resolveUsagePricing({ JEVITATE_JEV_UNIT_PRICE_USD: "0.01" }, path).jevUnitPrice).toEqual({ unitPriceUsd: 0.01, source: "env:JEVITATE_JEV_UNIT_PRICE_USD" });
     });
   });
 });
