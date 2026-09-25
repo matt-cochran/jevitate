@@ -68,6 +68,11 @@ export interface TargetConfig {
    * what the target's `fixtures` may authenticate with (`${secretField.APP_PASSWORD}`, #166).
    */
   readonly secretFields?: readonly string[];
+  /** Raw `logSources` entries declared legitimately quiet (mirrors `--log-quiet-ok`, #169). */
+  readonly logQuietOk?: readonly string[];
+  /** Raw `--log-ignore` specs (a `/regex/` or a plain substring), evaluated the same way as the CLI
+   *  flag (#169 item 3). */
+  readonly logIgnore?: readonly string[];
 }
 
 const SECRET_FIELD_SPEC = /^(label|testId|type|id|name)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
@@ -98,6 +103,8 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     storageState?: string;
     saveStorageState?: true | string;
     secretFields?: string[];
+    logQuietOk?: string[];
+    logIgnore?: string[];
   } = {};
   if (o.storageState !== undefined) {
     if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
@@ -129,6 +136,8 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   }
   if (o.logSources !== undefined) out.logSources = strings(o.logSources, `${where}.logSources`);
   if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
+  if (o.logQuietOk !== undefined) out.logQuietOk = strings(o.logQuietOk, `${where}.logQuietOk`);
+  if (o.logIgnore !== undefined) out.logIgnore = strings(o.logIgnore, `${where}.logIgnore`);
   if (o.allowLogCmd !== undefined) {
     if (typeof o.allowLogCmd !== "boolean") throw new TargetConfigError(`${where}.allowLogCmd must be a boolean`);
     out.allowLogCmd = o.allowLogCmd;
@@ -263,5 +272,7 @@ export function resolveTargetConfig(
     ...(base.storageState === undefined ? {} : { storageState: base.storageState }),
     ...(base.saveStorageState === undefined ? {} : { saveStorageState: base.saveStorageState }),
     ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
+    ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
+    ...(base.logIgnore === undefined ? {} : { logIgnore: base.logIgnore }),
   };
 }

@@ -82,11 +82,13 @@ import {
   applyServerLogOutcome,
   openServerLogRuntime,
   type ServerLogDefect,
+  type ServerLogEvidence,
   type ServerLogRuntimeResult,
   type ServerLogsSummary,
+  type TranscriptEntryWithLogs,
 } from "./log-correlation.js";
 import type { LogSourceSpec } from "./log-sources.js";
-import type { LogDefectMatcher } from "./log-lines.js";
+import type { LogDefectMatcher, LogIgnoreMatcher } from "./log-lines.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
 
@@ -100,6 +102,12 @@ export interface ServerLogOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly allowLogCmd?: boolean;
   readonly drainMs?: number;
+  /** Raw `--log-source` specs (`--log-quiet-ok`, #169) allowed to deliver zero lines without making
+   *  `serverLogs.oracleOk` false — for a source the operator KNOWS is legitimately quiet. */
+  readonly quietOk?: readonly string[];
+  /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
+   *  correlation and the defect oracle. */
+  readonly logIgnore?: readonly LogIgnoreMatcher[];
 }
 
 export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
@@ -436,7 +444,53 @@ function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, r
     const n = run?.defects.length ?? 0;
     return `${n} server-log defect${n === 1 ? "" : "s"} found (--log-defect)`;
   }
-  return "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
+  // #169: the summary already knows WHICH source(s) made the oracle unhealthy and why (failed to
+  // open vs. declared but silent) — this default only covers the (should-be-unreachable) case of no
+  // summary at all.
+  return (
+    run?.summary.oracleReason ??
+    "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing"
+  );
+}
+
+/** Outcomes whose `reason` describes a UI-side blocker worth pairing with a correlated server cause. */
+const BLOCKED_LIKE_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["blocked", "exhausted", "inconclusive"]);
+const SERVER_CAUSE_MAX_CHARS = 160;
+
+/**
+ * The most informative correlated server-log line attached to the LAST transcript step (#165's
+ * "Also" — the step the run ended on is the one whose UI blocker `mission.reason` already
+ * describes): an `error` line wins over a `warn` one; ties keep the first (arrival order). `undefined`
+ * when `--log-source` was not given, or nothing warn/error-level attached to that step.
+ */
+function lastStepServerCause(transcript: readonly TranscriptEntryWithLogs[] | undefined): string | undefined {
+  const logs = transcript?.[transcript.length - 1]?.serverLogs;
+  if (logs === undefined || logs.length === 0) return undefined;
+  let line: ServerLogEvidence | undefined;
+  for (const l of logs) {
+    if (l.level !== "error" && l.level !== "warn") continue;
+    if (line === undefined || (line.level !== "error" && l.level === "error")) line = l;
+  }
+  if (line === undefined) return undefined;
+  const body = line.message.length > SERVER_CAUSE_MAX_CHARS ? `${line.message.slice(0, SERVER_CAUSE_MAX_CHARS)}…` : line.message;
+  return `${line.level}${line.target === undefined ? "" : ` ${line.target}`} ${quote(body)}`;
+}
+
+function quote(s: string): string {
+  return `"${s}"`;
+}
+
+/**
+ * Pairs an already-computed UI-side `reason` with the correlated server cause on the step the run
+ * ended on (#165 "Also"): `"<UI reason>; server: <level> \"<message>\""`. A no-op when there is no
+ * `reason` to pair with, the outcome isn't one of blocked/exhausted/inconclusive (a `defects-found`
+ * or an oracle-unhealthy `inconclusive` already gets its own `serverLogOutcomeReason`), or no
+ * server-log evidence attached to that step — including when `--log-source` was never given.
+ */
+export function withServerCause(reason: string | undefined, outcome: GoalBasedOutcome, transcript: readonly TranscriptEntryWithLogs[] | undefined): string | undefined {
+  if (reason === undefined || !BLOCKED_LIKE_OUTCOMES.has(outcome)) return reason;
+  const cause = lastStepServerCause(transcript);
+  return cause === undefined ? reason : `${reason}; server: ${cause}`;
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -504,6 +558,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
@@ -629,9 +685,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
           }),
       ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
       ...(goalOutcome === mission.outcome
-        ? mission.reason === undefined
-          ? {}
-          : { reason: mission.reason }
+        ? (() => {
+            const reason = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
+            return reason === undefined ? {} : { reason };
+          })()
         : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
@@ -936,6 +993,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
@@ -1215,6 +1274,8 @@ export async function runAdversarialCliMission(
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: opts.secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
@@ -1435,6 +1496,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
+    logIgnore: opts.serverLog?.logIgnore ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
