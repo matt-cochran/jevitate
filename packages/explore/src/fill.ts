@@ -105,6 +105,9 @@ export function checkFieldValue(value: string, field: FieldShape, fieldLabel: st
   if (label !== "" && new RegExp(`^${escapeRe(label).replace(/ /g, "\\s+")}\\s*[:=]`, "i").test(v)) {
     return `echoes the field's label ("${label}:")`;
   }
+  if (label !== "" && isOwnLabel(v, label) && !(goal !== undefined && quotedSegments(goal).some((q) => sameValue(q, v)))) {
+    return `is the field's own label ("${label}"), not a value for it — type the text the goal gives, or invent one of the field's kind`;
+  }
   const type = singleLine ? (field.inputType ?? "").toLowerCase() : "";
   if (type === "email" && !/^[^\s@,;]+@[^\s@,;]+$/.test(v)) return "not an email address";
   if (type === "url" && !/^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(v)) return "not an absolute URL";
@@ -119,6 +122,22 @@ export function checkFieldValue(value: string, field: FieldShape, fieldLabel: st
   return null;
 }
 
+/** An imperative a field's label or placeholder opens with ("Edit block text", "Enter your name"). */
+const LABEL_VERB = /^(?:edit|enter|type|add|write|input|change|update|set|provide|fill(?:\s+in)?)\s+(?:(?:your|the|a|an)\s+)?/i;
+
+/**
+ * The value IS the field's own label (#185): equal to it, or to it minus its opening imperative
+ * ("Edit block text" / "block text" for the label "Edit block text"). Typing it destroys the content.
+ */
+function isOwnLabel(value: string, label: string): boolean {
+  const n = (s: string): string => s.replace(/[\s\u00a0]+/g, " ").replace(/[.:…]+$/, "").trim().toLowerCase();
+  const v = n(value);
+  const l = n(label);
+  if (v === "" || l === "") return false;
+  const lb = l.replace(LABEL_VERB, "");
+  return v === l || (lb !== "" && lb !== l && (v === lb || v.replace(LABEL_VERB, "") === lb));
+}
+
 /** Longest value (in words) accepted for a single-line name / search field. */
 export const SHORT_FIELD_MAX_WORDS = 10;
 
@@ -129,9 +148,22 @@ export const GOAL_ECHO_RUN_CHARS = 40;
 
 const words = (s: string): string[] => s.toLowerCase().match(/[\p{L}\p{N}$]+(?:['’][\p{L}]+)?/gu) ?? [];
 
-/** Segments the goal puts in quotes: a value the goal quotes is a stated value, never an echo. */
+/**
+ * Segments the goal puts in quotes, or states `exactly: <text>` (#185): a value the goal states
+ * verbatim is a stated value, never an echo.
+ */
 function quotedSegments(goal: string): string[] {
-  return [...goal.matchAll(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu)].map((m) => m[1] ?? "");
+  return [...[...goal.matchAll(/["“'‘\u0060]([^"”'’\u0060\n]{1,200})["”'’\u0060]/gu)].map((m) => m[1] ?? ""), ...exactLiterals(goal)];
+}
+
+/**
+ * The literals a goal gives with `exactly` (#185) — `replace its text with exactly: <text>.`,
+ * `set it to exactly "<text>"` — up to the sentence's end; label-free, so the caller decides the field.
+ */
+export function exactLiterals(goal: string): string[] {
+  const quoted = String.raw`["“'‘\u0060]([^"”'’\u0060\n]{1,500})["”'’\u0060]`;
+  const re = new RegExp(String.raw`\bexactly\s*[:=]?\s*(?:${quoted}|(?!["“'‘\u0060])(\S.{0,499}?)(?=\.(?:\s|$)|[\n;]|\s*$))`, "giu");
+  return [...goal.matchAll(re)].map((m) => (m[1] ?? m[2] ?? "").trim()).filter((v) => v !== "");
 }
 
 /**
@@ -290,6 +322,12 @@ export function valuesStatedInGoal(goal: string, fieldLabel: string, field: Fiel
         add(m[1] ?? m[2]);
       }
     }
+  }
+  // `replace its text with exactly: <text>` / `exactly "<text>"` (#185): a label-free literal, for a
+  // free-text field (a textarea or rich text, never a typed input) — only when the goal gives one.
+  if (found.size === 0 && field.tag !== "input" && field.tag !== "select") {
+    const exact = exactLiterals(goal);
+    if (exact.length === 1) add(exact[0]);
   }
   if (found.size === 0 && field.tag === "input") {
     const type = (field.inputType ?? "").toLowerCase();

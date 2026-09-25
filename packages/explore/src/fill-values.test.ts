@@ -150,3 +150,47 @@ describe("chat.reply — answer the question; the stuck brief (#122)", () => {
     expect(CHAT_REPLY_INSTRUCTIONS.length).toBeLessThanOrEqual(1000);
   });
 });
+
+describe("fill — never the field's own label; `exactly:` literals typed verbatim (#185)", () => {
+  const M05_GOAL =
+    'Switch the editor task to "Edit". In the FIRST block, replace its text with exactly: Dogfood3 edit marker kept after reload. Then click that block\'s "Save block" button and wait for it to finish saving.';
+
+  it.each([
+    ["the label itself", "Edit block text", TEXTAREA, "Edit block text"],
+    ["the label minus its imperative", "Edit block text", TEXTAREA, "block text"],
+    ["a placeholder-style label", "Enter your name", TEXT, "Enter your name"],
+    ["the label with a trailing ellipsis", "Write a note…", TEXTAREA, "write a note"],
+  ])("rejects %s", (_what, label, field, value) => {
+    expect(checkFieldValue(value, field, label, "Update the note")).toMatch(/field's own label/);
+  });
+
+  it("accepts a value the goal quotes even when it equals the label", () => {
+    expect(checkFieldValue("Block text", TEXTAREA, "Block text", 'Type "Block text" into the box')).toBeNull();
+  });
+
+  it("the `exactly:` literal is not a goal echo, and the pre-pass types it without the model", async () => {
+    expect(echoesGoal("Dogfood3 edit marker kept after reload", M05_GOAL)).toBeNull();
+    const { gen, inputs } = valueGen("Edit block text");
+    const helper = new FillHelper(gen);
+    const r = await helper.valueFor({ fieldLabel: "Edit block text", goal: M05_GOAL, visibleContext: "", field: TEXTAREA });
+    expect(r).toEqual({ text: "Dogfood3 edit marker kept after reload", source: "goal" });
+    expect(inputs).toHaveLength(0);
+  });
+
+  it("a model value that is the field's label is rejected, never typed", async () => {
+    const { gen } = valueGen("Edit block text");
+    const r = await new FillHelper(gen).valueFor({ fieldLabel: "Edit block text", goal: "Rewrite the first block", visibleContext: "", field: TEXTAREA });
+    expect(r.text).toBeNull();
+    expect(r.rejected).toMatch(/field's own label/);
+  });
+
+  it("the `exactly:` literal never fills a typed input (the caller cannot tell which field it is for)", async () => {
+    const { gen, inputs } = valueGen("Dana Ruiz");
+    await new FillHelper(gen).valueFor({ fieldLabel: "Participant name", goal: M05_GOAL, visibleContext: "", field: TEXT });
+    expect(inputs).toHaveLength(1);
+  });
+
+  it("the prompt forbids typing the label", () => {
+    expect(FORM_VALUE_INSTRUCTIONS).toMatch(/NEVER the field's own label/);
+  });
+});
