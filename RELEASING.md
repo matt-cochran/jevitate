@@ -2,42 +2,56 @@
 
 Jevitate publishes two public packages to npm:
 
-- **`@jevitate/cli`** — the CLI (all internal `@jevitate/*` packages are bundled in; native deps stay external).
-- **`jevitate`** — a thin bare-name alias so `npm install -g jevitate` works; it depends on `@jevitate/cli`.
+- **`@jevitate/cli`**: the CLI. All internal `@jevitate/*` packages are bundled in; native deps stay external.
+- **`jevitate`**: a thin bare-name alias so `npm install -g jevitate` works. It depends on `@jevitate/cli`.
 
 All other `packages/*` are `private` and never published.
 
-## First release — manual (no token)
+## How a release happens (0.2.0 onward)
 
-The first publish is done by hand. npm prompts for your 2FA one-time password interactively, so no long-lived automation token is stored (nothing to expire or leak).
+Releases go through [changesets](https://github.com/changesets/changesets) and
+`.github/workflows/release.yml`, which runs on every push to `main` and publishes with npm OIDC
+Trusted Publishing (no stored token, with provenance).
 
-Prerequisites:
+1. **Changesets land with the work.** Each user-facing PR adds a `.changeset/*.md` bumping
+   `@jevitate/cli` and `jevitate` (`pnpm changeset`) and a line in `CHANGELOG.md`.
+2. **Promote to `main`** through the usual `dev → staging → main` PRs (squash merge).
+3. **The release workflow opens a "chore: version packages" PR** on `main`. It runs
+   `pnpm version-packages` (`changeset version`), which bumps both `package.json` versions and
+   consumes the changesets. Changesets also writes a per-package `CHANGELOG.md`; the curated root
+   `CHANGELOG.md` is the one to read. Before merging, move its `## [x.y.z] – unreleased` heading to
+   the release date.
+4. **Merge the version PR.** The next workflow run builds, bundles and runs `changeset publish`,
+   which publishes only the bumped versions (`@jevitate/cli` and its alias `jevitate`). A push to
+   `main` with no new version is a no-op.
+5. **Tags and GitHub release.** `changeset publish` tags each published package
+   (`@jevitate/cli@x.y.z`, `jevitate@x.y.z`). `changesets/action` pushes those tags and, by default
+   (`createGithubReleases`), creates one GitHub release per package from the changeset text.
+   Replace the `@jevitate/cli@x.y.z` release body with the curated notes from the root
+   `CHANGELOG.md` (titled `Jevitate vX.Y.Z`), or turn `createGithubReleases` off and publish a
+   `vX.Y.Z` release yourself.
+6. **Verify:** `npm view @jevitate/cli version`, then `npm install -g @jevitate/cli@x.y.z &&
+   jevitate --version`, and one no-key run (`jevitate explore --strategy adversarial --url
+   <a local app> --fake-ai`).
 
-- `npm login` as a publisher in the `@jevitate` org who also owns the `jevitate` name.
-- A clean, up-to-date `main`.
-- Your authenticator app.
+You can also run the workflow by hand (**Actions → Release → Run workflow**).
 
-```bash
-bash scripts/release.sh
-```
+### Trusted Publishing prerequisite
 
-It builds, bundles `@jevitate/cli`, then publishes `@jevitate/cli` first and `jevitate` second (order matters — the alias resolves its `workspace:*` dependency to the just-published version), prompting for your OTP at each step. Verify:
+On npmjs.com, **each** package (`@jevitate/cli` and `jevitate`) needs a Trusted Publisher under
+**Settings → Trusted Publishers**, pointing at repo `matt-cochran/jevitate` and workflow
+`release.yml`. Delete any leftover `NPM_TOKEN` repository secret: OIDC makes it unnecessary.
+Without the Trusted Publisher, the publish step fails on auth.
 
-```bash
-npm install -g @jevitate/cli && jevitate --version
-```
+## First release (historical: 0.1.0)
 
-## Subsequent releases — OIDC Trusted Publishing (recommended)
-
-Once both packages exist on npm, releases run via npm **OIDC Trusted Publishing** — GitHub Actions authenticates to npm over OIDC, so there is **no token to store, rotate, or expire**, and every release is published with provenance.
-
-`.github/workflows/release.yml` is already configured for this (`id-token: write`, `NPM_CONFIG_PROVENANCE`, no `NPM_TOKEN`, npm upgraded to an OIDC-capable version, publish on push to `main`). The only remaining step is on npm's side:
-
-1. On npmjs.com, for **each** package (`@jevitate/cli` and `jevitate`) → the package's **Settings → Trusted Publishers** → add a GitHub Actions publisher pointing at repo `matt-cochran/jevitate` and workflow `release.yml`.
-2. Delete any leftover `NPM_TOKEN` repository secret — OIDC makes it unnecessary.
-
-After that, a push to `main` publishes automatically. You can also trigger a run manually (**Actions → Release → Run workflow**) to test the OIDC path. Until the Trusted Publisher is configured, the publish step will fail (auth) — expected.
+The first publish was done by hand, because a Trusted Publisher can only be configured for a
+package that already exists. `bash scripts/release.sh` builds, bundles and publishes
+`@jevitate/cli` and then `jevitate`, prompting for your npm 2FA one-time password at each step.
+You only need it again if the automated path is unavailable.
 
 ## Versioning
 
-Changesets is configured (internal packages are in the `ignore` list). To cut a version bump, add a changeset (`pnpm changeset`), which updates `@jevitate/cli` + `jevitate`; then release.
+Changesets is configured with the internal packages in its `ignore` list. Pre-1.0, a minor bump
+(0.x.0) may include behaviour changes, and every one is listed under "Behaviour changes" and
+"Upgrade notes" in `CHANGELOG.md`.

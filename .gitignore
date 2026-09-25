@@ -18,3 +18,7 @@ data/
 # Internal AI planning/spec artifacts — not part of the public product repo.
 /docs/superpowers/
 /Browser_Automation_CONOPS_and_Functional_Specification.md
+
+# Output of the local demo (docs/demo.md).
+/demo-runs/
+/demo-regressions/
