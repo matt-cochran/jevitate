@@ -11,6 +11,8 @@ import {
   loadFixtureFile,
   parseFixtureSpec,
   referencedNames,
+  substituteSetupRefs,
+  type FixtureBindings,
   type FixtureRecord,
   type FixtureSpec,
   type ShellHooks,
@@ -114,8 +116,52 @@ export function checkUrlRefOrigin(url: string): void {
   try {
     if (new URL(url.replace(SETUP_REF, "0")).origin !== new URL(url.replace(SETUP_REF, "x.evil.test")).origin) throw new Error("origin");
   } catch {
-    throw new UnboundSetupRefError("--url: a ${setup.*} reference may fill the path or query, never the origin");
+    throw new UnboundSetupRefError(
+      "--url: a ${setup.*} reference may fill the path or query, never the origin — put it after a `/` (e.g. `http://host:8093/${setup.path}` with a path value that has no leading `/`, or `http://host:8093/projects/${setup.id}`)",
+    );
   }
+}
+
+/** Every string inside an invariants spec (#187), with the JSON path it sits at. */
+function specStrings(v: unknown, path: string, out: [string, string][]): [string, string][] {
+  if (typeof v === "string") out.push([path, v]);
+  else if (Array.isArray(v)) v.forEach((x, i) => specStrings(x, `${path}[${i}]`, out));
+  else if (v !== null && typeof v === "object") for (const [k, x] of Object.entries(v)) specStrings(x, path === "" ? k : `${path}.${k}`, out);
+  return out;
+}
+
+/** The `${setup.*}`-bearing strings of an invariants spec, keyed `--invariants <path>`, for {@link checkSetupRefs}. */
+export function invariantSetupTexts(spec: unknown): Record<string, string> {
+  return Object.fromEntries(specStrings(spec, "", []).filter(([, s]) => s.includes("${setup.")).map(([p, s]) => [`--invariants ${p}`, s]));
+}
+
+/**
+ * `${setup.x}` in an invariants spec (#187) — probe paths, `deniedAs.open`, capture routes — bound
+ * once setup ran. Origin-fixed like a fixture step: a bound value that moves a string off the origin
+ * it resolved to with the reference unfilled (`//evil.test/…`) is refused, never probed.
+ */
+export function substituteSpecSetupRefs<T>(spec: T, b: FixtureBindings, baseUrl: string): T {
+  const walk = (v: unknown, path: string): unknown => {
+    if (typeof v === "string") {
+      if (!v.includes("${setup.")) return v;
+      const where = `--invariants ${path}`;
+      const out = substituteSetupRefs(v, b, { where });
+      let before: string | null = null;
+      let after: string | null = null;
+      try {
+        before = new URL(v.replace(SETUP_REF, "0"), baseUrl).origin;
+        after = new URL(out, baseUrl).origin;
+      } catch {
+        // not a URL — nothing to keep on an origin
+      }
+      if (before !== after) throw new UnboundSetupRefError(`${where}: a \${setup.*} value may fill the path or query, never the origin`);
+      return out;
+    }
+    if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}[${i}]`));
+    if (v !== null && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, path === "" ? k : `${path}.${k}`)]));
+    return v;
+  };
+  return walk(spec, "") as T;
 }
 
 /** The typed result a run ends with when its fixture could not be set up: `inconclusive`, a configuration error. */
