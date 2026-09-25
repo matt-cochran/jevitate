@@ -985,6 +985,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         hang: h.signal,
         openSession: freshSessionOpener(portFactory, launch, opts.allowlist),
         ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
+        writtenBy: run.sideEffects.map((e) => e.control), // #181
         perceive: {
           ...(opts.target?.settle === undefined ? {} : { settleConfig: opts.target.settle }),
           ...(opts.target?.hangs === undefined ? {} : { hangConfig: opts.target.hangs }),

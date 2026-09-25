@@ -442,7 +442,7 @@ describe("adversarial — a form behind a modal trigger, and a password-gated fo
     async () => {
       const result = await huntProfile(["double-submit"], {
         seedUrl: `${origin}/app/stuck-submit`,
-        bounds: { maxDecisions: 4 },
+        bounds: { maxDecisions: 10 },
       });
       expect(result.outcome).not.toBe("crashed");
       const clicks = result.transcript.filter((e) => e.op === "click");
@@ -451,6 +451,8 @@ describe("adversarial — a form behind a modal trigger, and a password-gated fo
         (e) => e.strategy === "double-submit" && e.op === null && e.reason?.includes("disabled"),
       );
       expect(noOps.length).toBeGreaterThan(0);
+      // #188: one no-op per disabled streak, not one per episode (was 7 in one run).
+      expect(noOps.length).toBe(1);
     },
     180_000,
   );

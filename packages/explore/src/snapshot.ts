@@ -58,6 +58,12 @@ export interface Control {
    * never be paired with an unrelated "Send feedback" in a different section).
    */
   readonly container?: string | null;
+  /**
+   * The nearest named dialog / alertdialog / region the control sits in, as the model reads it —
+   * `alertdialog "Confirm analysis"` (#182). Tells same-named controls apart ("Analyze" the trigger
+   * vs "Analyze" the confirm); never part of the signature or the descriptor.
+   */
+  readonly scope?: string | null;
   /** True for a control that submits its form (a submit button / `<input type=submit|image>`). */
   readonly submits?: boolean;
   /** A link's resolved destination (`a[href]`), so a mission can tell where it leads without clicking. */
@@ -153,6 +159,8 @@ interface ControlFacts {
   readonly form: string | null;
   /** The nearest form-like container's key, computed only when `form` is null. See `Control.container`. */
   readonly container: string | null;
+  /** The nearest named dialog/region, as the model reads it. See `Control.scope`. */
+  readonly scope: string | null;
   /** Whether activating the control submits its form. */
   readonly submits: boolean;
   /** A link's resolved `href`, or null. */
@@ -311,6 +319,20 @@ function readControlFacts(node: Node): ControlFacts {
       }
     }
   }
+  // #182: the nearest dialog / region, named — what tells a trigger from its same-named confirm.
+  let scope: string | null = null;
+  const scopeEl = el.closest('dialog, [role="dialog"], [role="alertdialog"], [role="region"], section[aria-label], section[aria-labelledby], form[aria-label]');
+  if (scopeEl !== null) {
+    const kind = norm(scopeEl.getAttribute("role")).toLowerCase() || (scopeEl.tagName.toLowerCase() === "section" ? "region" : scopeEl.tagName.toLowerCase());
+    const labelledBy = norm(scopeEl.getAttribute("aria-labelledby"))
+      .split(" ")
+      .filter((id) => id !== "")
+      .map((id) => norm(document.getElementById(id)?.textContent ?? ""))
+      .join(" ");
+    const heading = norm(scopeEl.querySelector("h1, h2, h3, h4")?.textContent ?? "");
+    const label = (norm(scopeEl.getAttribute("aria-label")) || labelledBy || heading).slice(0, 60);
+    scope = label === "" ? kind : `${kind} "${label}"`;
+  }
   const buttonType = tag === "button" ? (el.getAttribute("type") ?? "submit").toLowerCase() : null;
   const submits =
     owner !== null && (buttonType === "submit" || inputType === "submit" || inputType === "image");
@@ -356,6 +378,7 @@ function readControlFacts(node: Node): ControlFacts {
     selected,
     form,
     container,
+    scope,
     submits,
     href,
     ariaHasPopup,
@@ -469,6 +492,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         summary: summarize(facts),
         form: facts.form,
         container: facts.container,
+        scope: facts.scope,
         submits: facts.submits,
         // Only the path matters (scope checks); sensitive query values are masked like every URL.
         href: facts.href === null ? null : redactUrl(facts.href),

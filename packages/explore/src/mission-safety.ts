@@ -42,6 +42,17 @@ export class MissionSafety {
     return { ...v, first };
   }
 
+  /**
+   * A frontier candidate the policy refuses is never enqueued (#186): it would only cost a reset
+   * and a step to be refused later. True when withheld; `onFirst` records the refusal, once per control.
+   */
+  withholds(op: string, control: Pick<Control, "name" | "role" | "descriptor">, onFirst: (reason: string) => void): boolean {
+    const unsafe = this.gate(op, control);
+    if (unsafe === null) return false;
+    if (unsafe.first) onFirst(unsafe.reason);
+    return true;
+  }
+
   /** An action is about to be dispatched (its writes are attributed to `step`). */
   mark(step: number, op: string, control: Pick<Control, "name" | "summary" | "role"> | null): void {
     const label = control === null ? op : control.name || control.summary;

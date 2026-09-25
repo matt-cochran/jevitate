@@ -31,6 +31,10 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - A find-out answer's grounding counts only free-standing figures, so `2FA` or `v2` no longer read as stated numbers ([#157](https://github.com/matt-cochran/jevitate/issues/157)).
 - A scroll that moved the page now counts as progress, and a run gets one last turn before a no-progress stop, so a find-out goal no longer stops `blocked` with the answer further down the page ([#172](https://github.com/matt-cochran/jevitate/issues/172)).
 - `type` can now edit inside `contenteditable` regions (placing the caret, selecting a range) instead of always replacing the whole element's content, and new `--success`/invariant assertion kinds (`style`, `inViewport`, `box`, `overlaps`, `attr`, `flashed`) read computed style, viewport visibility and transient visual state for editors, heat maps and minimaps ([#148](https://github.com/matt-cochran/jevitate/issues/148)).
+- "two-factor", "second factor" or "2-step" in a goal no longer switch on add-another mode (which rejected a retyped email and invented new ones); a reload undoes the last submit's used values ([#184](https://github.com/matt-cochran/jevitate/issues/184)).
+- A field's own label or placeholder ("Edit block text") is never typed as its value, and a literal given with `exactly:` is typed verbatim ([#185](https://github.com/matt-cochran/jevitate/issues/185)).
+- Same-named controls (a trigger and its confirm, "Analyze" / "Analyze") are offered with their named dialog and position, so a confirm dialog can be confirmed ([#182](https://github.com/matt-cochran/jevitate/issues/182)).
+- In an add-another flow, returning to a state already gone through (the second item's one-time dialog) reminds the model which steps followed it ([#188](https://github.com/matt-cochran/jevitate/issues/188)).
 
 ### Authenticated apps and secrets
 
@@ -54,6 +58,7 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - The paid-control classifier reads only short, verb-led button and link labels, so a chat question card or an option answer that merely mentions "pay" or "upgrade" is no longer refused, and a refused control is not offered again ([#168](https://github.com/matt-cochran/jevitate/issues/168)).
 - A submit blocked by the browser's own form validation is recorded as "blocked by validation" instead of counted as submitted, so a run whose only submits were blocked is `inconclusive`, not `clean` ([#155](https://github.com/matt-cochran/jevitate/issues/155)).
 - Adversarial strategies no longer target a visually hidden skip link ([#161](https://github.com/matt-cochran/jevitate/issues/161)).
+- Adversarial runs record a submit that stays disabled once per disabled streak instead of once per episode, and never re-plan a form whose submit the run blacklisted ([#188](https://github.com/matt-cochran/jevitate/issues/188)).
 
 ### Coverage, exploratory and feature missions
 
@@ -61,6 +66,9 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - `--feature` missions now require actually exercising the named capability to report `clean`; touching nothing but header chrome now reports `inconclusive` with an `insufficient-coverage` failure instead of a false `clean` ([#78](https://github.com/matt-cochran/jevitate/issues/78), [#106](https://github.com/matt-cochran/jevitate/pull/106)).
 - Frontier/coverage missions no longer idle for 10+ minutes after an out-of-scope departure (e.g. clicking "Sign out" or "Home"), and "exploratory" and "coverage" strategies are no longer conflated with each other's budget ([#114](https://github.com/matt-cochran/jevitate/issues/114), [#115](https://github.com/matt-cochran/jevitate/issues/115)).
 - Coverage and `--feature` missions exercise a toggle pair (Collapse/Expand, Show/Hide) once in each direction instead of oscillating on it ([#160](https://github.com/matt-cochran/jevitate/issues/160)).
+- A control refused by the safety policy or `--deny` never enters the feature/coverage frontier: it is refused once at enqueue time, before any reset, and never costs an action ([#186](https://github.com/matt-cochran/jevitate/issues/186)).
+- A reset whose seed loaded but whose path replay is slow or fails drops that one frontier item as stale instead of ending the run `scope-unreachable` ([#183](https://github.com/matt-cochran/jevitate/issues/183)).
+- Feature missions report `usage` (zero calls, `priceSource: ["no model call"]`) instead of omitting it ([#188](https://github.com/matt-cochran/jevitate/issues/188)).
 
 ### Invariants, oracles and signals
 
@@ -98,6 +106,7 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - `jevitate diff <runA> <runB>` (or `--baseline`) classifies findings as new, resolved, still-present or flaky between two runs on the same target, matched by stable keys (rubric/signal, route template, control); `jevitate baseline tag` names a baseline, and `check --changed-routes` runs only the Journeys and goals a change touches ([#138](https://github.com/matt-cochran/jevitate/issues/138)).
 - `diff` and `report --baseline` compare a finding only across runs that could have observed it (same mode, target and mission settings, and the finding's route reached), so realistic run sets no longer come out mostly flaky; `report --dir` also reads subdirectories ([#171](https://github.com/matt-cochran/jevitate/issues/171)).
 - `jevitate report --target <t> [--since <run>]` produces one consolidated, deduped defect list (markdown and JSON) across every mode (goal, adversarial, usability, invariants, verify-fix) for a target and build, each with occurrence counts, evidence references and its verify-fix reproduction command ([#139](https://github.com/matt-cochran/jevitate/issues/139)).
+- `regression run` envelopes carry `engine`, and route templating folds dotted hex ids (`ws.1697a048…`) into `:id` ([#188](https://github.com/matt-cochran/jevitate/issues/188)).
 
 ### Multi-run, personas and actors
 
@@ -124,6 +133,9 @@ and build identity, usage/cost accounting, mission fixtures and the kill switch 
 - Live Jev judgment is now wired to the real `@typesafe-ai/sdk` v0.6 API for `--real` runs, `jevitate` now reads the credentials file `init`/`ai setup` actually write, `--browser-executable`/`--browser-channel`/`--browser-arg` let a run launch a different Chromium binary/channel or extra switches, and browser contexts now come from a shared, admission-controlled browser pool instead of one throwaway profile dir per run ([#57](https://github.com/matt-cochran/jevitate/pull/57), [#59](https://github.com/matt-cochran/jevitate/pull/59), [#60](https://github.com/matt-cochran/jevitate/pull/60), [#61](https://github.com/matt-cochran/jevitate/pull/61)).
 - `--viewport <W>x<H>` and `--device "<name>"` (mutually exclusive) emulate a mobile or custom viewport on `explore` (every strategy, including usability), `journey run`, `load run`, `source run`, `verify-fix`, `regression capture`/`regression run` and MCP `queue_exploration`; the emulation used is recorded on the Recording so a defect found at 375px is replayed at the same size, not silently "verified fixed" at desktop width. A built-in horizontal-overflow hard signal (pure DOM geometry, never a model judgment), attributed to the offending element, runs by default whenever the emulated viewport is narrower than 1024px (or always via `--check-overflow`), as a defect in coverage/exploratory/adversarial runs and a signal finding in usability ([#149](https://github.com/matt-cochran/jevitate/issues/149)).
 - A `budget` key in the same `--invariants` file can cap cumulative spend against an app-declared observable (e.g. a credits balance); crossing it stops the mission cleanly via `stop: "budget"` (folded into the `inconclusive` outcome, never `clean` and never `crashed`), with an optional pre-action guard that refuses an action whose estimated cost would cross what remains of the budget. Applies to every mission type, including adversarial and the usability review (which reads only the budget part of the file) ([#150](https://github.com/matt-cochran/jevitate/issues/150)).
+- The goal and coverage `--json` envelopes and `result.json` carry the `budget` trajectory, a hang included ([#180](https://github.com/matt-cochran/jevitate/issues/180)).
+- `--paid <pattern>` (and `safety.paid` in targets.json) declares an app's own paid controls: the budget guard sees them, hang replays never repeat them, and a goal that asks for one may still click it. A hang replay is also withheld when the run's own `sideEffects` show the step sending a write ([#181](https://github.com/matt-cochran/jevitate/issues/181)).
+- `${setup.x}` binds into `--invariants` (probe paths, capture routes, `deniedAs.open`), origin-fixed; the `--url` origin refusal names the fix ([#187](https://github.com/matt-cochran/jevitate/issues/187)).
 
 ### Documentation and examples
 

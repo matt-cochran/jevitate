@@ -333,7 +333,10 @@ function ensureCheckboxes(form: FormModel, settle: boolean): MisuseStep[] {
 
 function planForm(strategy: Exclude<FormMisuseStrategy, "exercise-controls">, ctx: EpisodeContext): MisuseEpisode | null {
   const inScope = ctx.inScope ?? (() => true);
-  const forms = detectForms(ctx.snapshot.controls, inScope);
+  // A form whose submit the run blacklisted (not actionable, or still disabled every time it was
+  // planned — #188) is never planned again: its episode could only be a no-op.
+  const blacklisted = ctx.blacklisted ?? EMPTY_IDENTITIES;
+  const forms = detectForms(ctx.snapshot.controls, inScope).filter((f) => !blacklisted.has(controlIdentity(f.submit)));
   const form = pickForm(forms, ctx.exercised, ctx.round);
   if (form === undefined) return null;
   const field = pickField(form, ctx.exercised, ctx.round);

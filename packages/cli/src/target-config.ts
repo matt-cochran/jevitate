@@ -11,7 +11,7 @@ import { resolveDataDir } from "./data-dir.js";
  *     "settle": { "ignoreRequests": ["/api/notifications/poll*", "/hub/*"], "longPollMs": 5000 },
  *     "hangs": { "ignoreNoProgress": ["click Refresh*", "/dashboard"] },
  *     "timing": { "apiPrefixes": ["/api/", "/graphql"] },
- *     "safety": { "deny": ["/^Archive/"], "allowDestructive": false, "readRequests": ["Estimate*", "/api/search*"] } } }
+ *     "safety": { "deny": ["/^Archive/"], "paid": ["/^Analyze/"], "allowDestructive": false, "readRequests": ["Estimate*", "/api/search*"] } } }
  * ```
  *
  * `settle.ignoreRequests` — requests the target marks as background (never in-flight work);
@@ -179,6 +179,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     }
     out.safety = {
       ...(f.deny === undefined ? {} : { deny: strings(f.deny, `${where}.safety.deny`) }),
+      ...(f.paid === undefined ? {} : { paid: strings(f.paid, `${where}.safety.paid`) }),
       ...(f.allowDestructive === undefined ? {} : { allowDestructive: f.allowDestructive as boolean }),
       ...(typeof f.allowWrites === "boolean" ? { allowWrites: f.allowWrites } : {}),
       ...(Array.isArray(f.allowWrites) ? { allowWriteRequests: strings(f.allowWrites, `${where}.safety.allowWrites`) } : {}),
@@ -219,6 +220,8 @@ export interface TargetFlags {
   readonly apiPrefixes?: readonly string[];
   /** `--deny` patterns (added to the file's). */
   readonly deny?: readonly string[];
+  /** `--paid` patterns (added to the file's `safety.paid`, #181). */
+  readonly paid?: readonly string[];
   /** `--allow-destructive` (true wins over the file). */
   readonly allowDestructive?: boolean;
   /** `--allow-writes` (true wins over the file, #158). */
@@ -243,6 +246,7 @@ export function resolveTargetConfig(
   const ignoreNoProgress = [...(base.hangs?.ignoreNoProgress ?? []), ...(flags.ignoreNoProgress ?? [])];
   const apiPrefixes = [...(base.timing?.apiPrefixes ?? []), ...(flags.apiPrefixes ?? [])];
   const deny = [...(base.safety?.deny ?? []), ...(flags.deny ?? [])];
+  const paid = [...(base.safety?.paid ?? []), ...(flags.paid ?? [])];
   const readRequests = [...(base.safety?.readRequests ?? []), ...(flags.readRpc ?? [])];
   const allowDestructive = flags.allowDestructive === true || base.safety?.allowDestructive === true;
   const allowWrites = flags.allowWrites === true || base.safety?.allowWrites === true;
@@ -250,6 +254,7 @@ export function resolveTargetConfig(
   const hangReplayWrites = flags.hangReplayWrites === true || base.safety?.hangReplayWrites === true;
   const safety: SafetyConfig = {
     ...(deny.length === 0 ? {} : { deny }),
+    ...(paid.length === 0 ? {} : { paid }),
     ...(readRequests.length === 0 ? {} : { readRequests }),
     ...(allowDestructive ? { allowDestructive } : {}),
     ...(allowWrites ? { allowWrites } : {}),

@@ -83,6 +83,8 @@ export interface VerifyFixParams {
    * `hangReplayWrites` opts in — the verdict is then `inconclusive`, never `fixed`.
    */
   readonly safety?: SafetyConfig;
+  /** Controls the mission's recorded side effects show firing a write (#181): a hang replay through one is withheld. */
+  readonly writtenBy?: readonly string[];
   /**
    * How long a recorded target may take to appear on replay (ms). Default (#164): the render wait —
    * `perceive.renderWaitMs`, else `settleCeilingMs`, else `RENDER_WAIT_MS` (`replayTargetWaitMs`).
@@ -197,6 +199,7 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
       ...(params.perceive === undefined ? {} : { perceive: params.perceive }),
       ...(params.stallMs === undefined ? {} : { stallMs: params.stallMs }),
       ...(params.safety === undefined ? {} : { safety: params.safety }),
+      ...(params.writtenBy === undefined ? {} : { writtenBy: params.writtenBy }),
       targetTimeoutMs: targetWaitOf(params),
     });
     const replay: VerifyFixResult["replay"] =

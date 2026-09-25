@@ -250,9 +250,11 @@ function enqueueFrom(
   fingerprint: string,
   pathPrefix: Recording,
   controls: readonly Control[],
+  withheld: (control: Control) => boolean,
 ): void {
-  // A disabled control can never be acted on — never enqueue it.
+  // A disabled control can never be acted on — never enqueue it; nor one the safety policy refuses (#186).
   for (const { control } of targetCandidates(controls, { ops: FRONTIER_OPS, enabledOnly: true })) {
+    if (withheld(control)) continue;
     frontier.push({ key: actionKey(fingerprint, control, "click"), fromFingerprint: fingerprint, pathPrefix, control, op: "click" });
   }
 }
@@ -556,6 +558,22 @@ async function runInductionFrontier(
       }
     }
 
+    // A candidate the safety policy refuses is withheld at enqueue time (#186), its refusal recorded once.
+    const withheld = (control: Control, on: Snapshot): boolean =>
+      safety.withholds("click", control, (reason) =>
+        transcript.record({
+          op: null,
+          control,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "safety-policy",
+          origin: "engine",
+          actOk: false,
+          reason,
+          snapshot: on,
+        }),
+      );
+
     const frontier = new Frontier({
       order: params.strategy === "exploratory" ? "novelty" : "breadth",
       classify: chromeClassifier({ chrome, inScope }),
@@ -565,7 +583,7 @@ async function runInductionFrontier(
 
     const seedRecording: Recording = { version: "1", site, pages: [] };
     statePaths.set(currentFingerprint, seedRecording);
-    enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls);
+    enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls, (c) => withheld(c, snap));
     // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
     await guard(checkOverflow(currentFingerprint, snap.url, withSeed(seedRecording, params.seedUrl)));
 
@@ -853,7 +871,7 @@ async function runInductionFrontier(
       if (!visited.has(newFingerprint)) {
         visited.add(newFingerprint);
         statePaths.set(newFingerprint, branch);
-        enqueueFrom(frontier, newFingerprint, branch, snap.controls);
+        enqueueFrom(frontier, newFingerprint, branch, snap.controls, (c) => withheld(c, snap));
       }
       currentFingerprint = newFingerprint;
     }

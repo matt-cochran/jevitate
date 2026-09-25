@@ -279,6 +279,17 @@ function emulationMatchesRecorded(explicit: EmulationSpec, recorded: RecordingEm
   return explicit.viewport.width === recorded.viewport.width && explicit.viewport.height === recorded.viewport.height;
 }
 
+/** The controls a persisted mission's side effects show firing a write (#181), for hang-replay withholding. */
+function recordedWriters(raw: unknown): string[] {
+  const r = raw as { readonly sideEffects?: unknown; readonly result?: { readonly sideEffects?: unknown } } | null;
+  const list: unknown = r?.sideEffects ?? r?.result?.sideEffects;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((e: unknown) => {
+    const control = (e as { readonly control?: unknown } | null)?.control;
+    return typeof control === "string" ? [control] : [];
+  });
+}
+
 function describeEmulation(e: RecordingEmulation): string {
   return e.device !== undefined ? `--device "${e.device}"` : `--viewport ${e.viewport.width}x${e.viewport.height}`;
 }
@@ -434,6 +445,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         ...(finding.hang === undefined ? {} : { hang: finding.hang }),
         // #153: never re-send a paid/destructive write unless the operator opted in.
         safety: { ...(target.safety ?? {}), ...(opts.hangReplayWrites === true ? { hangReplayWrites: true } : {}) },
+        writtenBy: recordedWriters(raw),
         ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
         ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
         ...(opts.replays === undefined ? {} : { replays: opts.replays }),

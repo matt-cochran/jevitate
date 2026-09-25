@@ -60,7 +60,8 @@ steps that led to the hang are then replayed in fresh browser contexts
 (`--hang-replays`, default 2; `0` skips the replays and reports the hang unconfirmed,
 `inconclusive`). Each replayed step waits for its target for the same bounded render
 wait the run itself uses, so a lazily rendered control is not mistaken for a missing one.
-A replay never re-sends a paid or destructive write unless you pass `--hang-replay-writes`
+A replay never re-sends a paid or destructive write, or a write the run itself recorded
+(`sideEffects`), unless you pass `--hang-replay-writes`
 ([safety](./safety.md)). If any replay hangs again, it is a confirmed
 `hang`. If none did but at least one replay ran all the way, it is
 `intermittent`. If no replay could run at all (the fresh session could not

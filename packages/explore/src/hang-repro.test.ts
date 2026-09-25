@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Recording } from "@jevitate/recording";
-import { hangOutcome, recordCoverageHang, replayWouldRepeatWrite, reproduceHang, reproductionStatus, type HangAttempt, type HangFinding } from "./hang-repro.js";
+import { hangOutcome, recordCoverageHang, replayWouldRepeatWrite, reproduceHang, reproductionStatus, withheldReason, type HangAttempt, type HangFinding } from "./hang-repro.js";
 import type { HangSignal } from "./hang.js";
 import type { VerifySession } from "./verify-fix.js";
 
@@ -106,6 +106,26 @@ describe("#153 — replayWouldRepeatWrite", () => {
   it("--allow-destructive lifts the run's refusal, never the replay's; --deny patterns count", () => {
     expect(replayWouldRepeatWrite(rec(["Buy now"]), 0, { allowDestructive: true })).toMatchObject({ risk: "paid" });
     expect(replayWouldRepeatWrite(rec(["Archive"]), 0, { deny: ["/^Archive/"] })).toMatchObject({ risk: "denied", control: "Archive" });
+  });
+});
+
+describe("#181 — the app's own paid controls and recorded writes are never replayed", () => {
+  const rec = (names: string[]): Recording => ({
+    version: "1.0.0",
+    site: "x",
+    pages: [{ url: "http://x.test/", steps: names.map((name) => ({ step: { kind: "click", target: { role: "button", name }, expect: { kind: "urlIncludes", text: "" } } })) }],
+  }) as unknown as Recording;
+
+  it("a step the run's side effects show sending a write is withheld, whatever its name", () => {
+    const w = replayWouldRepeatWrite(rec(["Open", "Analyze now"]), 1, undefined, ["Analyze  now"]);
+    expect(w).toEqual({ step: 2, control: "Analyze now", risk: "write" });
+    expect(withheldReason(w!)).toMatch(/would repeat a write the run recorded \(step 2: "Analyze now" sent it\); pass --hang-replay-writes/);
+    expect(replayWouldRepeatWrite(rec(["Analyze now"]), 0, undefined, [])).toBeNull();
+    expect(replayWouldRepeatWrite(rec(["Analyze now"]), 0, { hangReplayWrites: true }, ["Analyze now"])).toBeNull();
+  });
+
+  it("a --paid pattern makes the app's control paid for the replay", () => {
+    expect(replayWouldRepeatWrite(rec(["Draft the page"]), 0, { paid: ["/^(Analyze|Draft|Improve)\\b/i"] })).toMatchObject({ risk: "paid", control: "Draft the page" });
   });
 });
 

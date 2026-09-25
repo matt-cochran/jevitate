@@ -23,7 +23,8 @@ import type { Assertion, Step, TargetDescriptor } from "./schema.js";
  * `candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890` or `item-42`: the WHOLE
  * segment templates (#127) — a literal prefix is never kept, so
  * `/decisions/candidate-<uuid>` and `/decisions/demo-bet-1` both become
- * `/decisions/:id` (one route), whatever shape the id suffix happens to be.
+ * `/decisions/:id` (one route), whatever shape the id suffix happens to be. So is a short word
+ * joined by `.`/`_`/`:` to a long hex id (#188): `/workbench/ws.1697a048f9bc…` → `/workbench/:id`.
  *
  * Pure string transform: no I/O, no randomness.
  */
@@ -53,6 +54,9 @@ const PREFIXED_UUID = /^(.+-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 /** A literal prefix followed by `-` and an all-digits or long hex/dash id suffix — e.g. `demo-bet-1`
  *  (#127); the WHOLE segment templates, same as `PREFIXED_UUID`. */
 const PREFIXED_ID_SUFFIX = /^(.+-)([0-9]+|[0-9a-f-]{8,})$/i;
+/** A short word prefix joined by `.` / `_` / `:` to a long hex id — e.g. `ws.1697a048f9bc…` (#188).
+ *  Only a long hex suffix (8+) counts, so a file name (`index.html`, `v1.2`) never templates. */
+const DOTTED_HEX_ID = /^[a-z][a-z0-9]{0,15}[._:][0-9a-f]{8,}$/i;
 
 function isIdLikeSegment(segment: string): boolean {
   if (segment.length === 0) return false;
@@ -61,6 +65,7 @@ function isIdLikeSegment(segment: string): boolean {
   if (segment.length >= 8 && LONG_HEX_OR_DASH.test(segment)) return true;
   if (PREFIXED_UUID.test(segment)) return true;
   if (PREFIXED_ID_SUFFIX.test(segment)) return true;
+  if (DOTTED_HEX_ID.test(segment)) return true;
   return false;
 }
 

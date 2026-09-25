@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { authHeaders, localStorageValue } from "./fixture-auth.js";
-import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, regressionFixtures } from "./fixture-cli.js";
+import { buildMissionFixtures, checkSetupRefs, checkUrlRefOrigin, invariantSetupTexts, regressionFixtures, substituteSpecSetupRefs } from "./fixture-cli.js";
+import { loadInvariantFiles } from "./invariants-file.js";
 import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 import {
   FixtureSetupError,
@@ -75,6 +76,57 @@ describe("parseFixtureSpec — validation (fail closed, before any request)", ()
     expect(() => parseFixtureSpec({ setup: [{ method: "TRACE", url: "/x" }] }, BOUNDS)).toThrow(/method/);
     expect(() => parseFixtureSpec({}, BOUNDS)).toThrow(/at least one/);
     expect(() => parseFixtureSpec({ setup: [create], restore: [remove], teardown: [remove] }, BOUNDS)).toThrow(/not both/);
+  });
+});
+
+describe("${setup.x} in --invariants (#187)", () => {
+  const spec = {
+    observe: { other: { probe: { as: "intruder", get: "/v1/products/${setup.projectId}" } } },
+    capture: { piece: { url: { after: { control: { name: "/Save/i" } }, route: "/projects/${setup.projectId}/*" } } },
+    invariants: [
+      { id: "not-readable", require: "other == 404 || other == 403" },
+      { id: "not-openable", when: { after: "capture.piece" }, deniedAs: { actor: "intruder", open: "/projects/${setup.projectId}/workbench" } },
+    ],
+  };
+  const b = { values: { projectId: "p-42" }, secretNames: new Set<string>() };
+
+  it("every ${setup.*}-bearing string is checked before the run, keyed by its JSON path", () => {
+    expect(Object.keys(invariantSetupTexts(spec))).toEqual([
+      "--invariants observe.other.probe.get",
+      "--invariants capture.piece.url.route",
+      "--invariants invariants[1].deniedAs.open",
+    ]);
+    expect(invariantSetupTexts(undefined)).toEqual({});
+  });
+
+  it("probe paths, capture routes and deniedAs.open are bound once setup ran", () => {
+    const out = substituteSpecSetupRefs(spec, b, `${ORIGIN}/app`);
+    expect(out.observe.other.probe.get).toBe("/v1/products/p-42");
+    expect(out.capture.piece.url.route).toBe("/projects/p-42/*");
+    expect(out.invariants[1]?.deniedAs?.open).toBe("/projects/p-42/workbench");
+    expect(spec.observe.other.probe.get).toBe("/v1/products/${setup.projectId}");
+  });
+
+  it("a bound value never moves a probe off its origin; an unbound one is refused", () => {
+    const evil = { values: { projectId: "/evil.test/x" }, secretNames: new Set<string>() };
+    const s = { observe: { o: { probe: { get: "/${setup.projectId}" } } } };
+    expect(() => substituteSpecSetupRefs(s, evil, `${ORIGIN}/app`)).toThrow(/never the origin/);
+    expect(() => substituteSpecSetupRefs(s, { values: {}, secretNames: new Set<string>() }, `${ORIGIN}/app`)).toThrow(UnboundSetupRefError);
+  });
+
+  it("the invariants loader accepts a ${setup.*} probe path (validated before the browser)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inv-setup-"));
+    try {
+      const file = join(dir, "inv.json");
+      await writeFile(file, JSON.stringify({ observe: { n: { probe: { get: "/v1/products/${setup.projectId}" } } }, invariants: [{ id: "a", require: "n == 404" }] }));
+      expect(loadInvariantFiles([file], BOUNDS)?.observe?.n).toBeDefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the --url refusal names the fix", () => {
+    expect(() => checkUrlRefOrigin("http://127.0.0.1:4321${setup.pieceUrl}")).toThrow(/put it after a `\/`/);
   });
 });
 

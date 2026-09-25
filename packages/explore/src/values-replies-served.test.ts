@@ -47,6 +47,30 @@ const PARTICIPANTS_HTML = `<!doctype html><html><body>
 </script>
 </body></html>`;
 
+/** #188: an API-keys page — each create shows the same one-time panel (ack checkbox + Done). */
+const keys: string[] = [];
+const KEYS_HTML = `<!doctype html><html><body>
+<h1>API keys</h1>
+<button id="new" type="button">Create new key</button>
+<form id="create" hidden><label for="kn">Name</label> <input id="kn" required /><button type="submit">Create key</button></form>
+<div id="once" hidden><p>Copy this key now.</p>
+  <label><input id="ack" type="checkbox" /> I've saved this key somewhere safe.</label>
+  <button id="done" type="button" disabled>Done</button></div>
+<ul id="list"></ul>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $("new").addEventListener("click", () => { $("create").hidden = false; $("new").hidden = true; });
+  $("create").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await fetch("/keys", { method: "POST", body: $("kn").value });
+    $("create").hidden = true; $("once").hidden = false; $("ack").checked = false; $("done").disabled = true;
+    e.target.reset();
+  });
+  $("ack").addEventListener("change", () => { $("done").disabled = !$("ack").checked; });
+  $("done").addEventListener("click", () => { $("once").hidden = true; $("new").hidden = false; });
+</script>
+</body></html>`;
+
 /** Login first; "Sign up" (a mode toggle OUTSIDE the form) re-renders a signup form (#111). */
 const SIGNUP_HTML = `<!doctype html><html><body>
 <h1>Welcome</h1>
@@ -125,6 +149,13 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && path === "/keys") {
+      void body(req).then((b) => {
+        keys.push(b);
+        res.writeHead(201).end();
+      });
+      return;
+    }
     if (req.method === "POST" && path === "/signup") {
       void body(req).then((b) => {
         const { email, password } = JSON.parse(b) as { email: string; password: string };
@@ -135,7 +166,7 @@ beforeAll(async () => {
       return;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(path === "/signup" ? SIGNUP_HTML : path === "/chat" ? CHAT_HTML : PARTICIPANTS_HTML);
+    res.end(path === "/signup" ? SIGNUP_HTML : path === "/chat" ? CHAT_HTML : path === "/keys" ? KEYS_HTML : PARTICIPANTS_HTML);
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -260,6 +291,39 @@ describe("add-another flow: the second item is the next one, not the first again
       expect(nameAsks[1]?.input.alreadyUsed).toEqual(["Dana Ruiz"]);
       // Emails come from the goal's item list, in order, without the model.
       expect(inputs.filter((i) => i.kind === "form.value" && i.input.fieldLabel === "Email")).toHaveLength(0);
+    },
+    120_000,
+  );
+});
+
+describe("add-another: back on the first item's one-time panel, the model is told what came next (#188)", () => {
+  it(
+    "after the second create, the history names the acknowledgement steps the same state led to",
+    async () => {
+      keys.length = 0;
+      const goal = "Create two API keys, first 'd3-alpha' then 'd3-beta'. After each is shown once, acknowledge you saved it and close the dialog.";
+      const names = ["d3-alpha", "d3-beta"];
+      const { gen } = scriptedGen({ form: () => names.shift() ?? "d3-beta" });
+      const judge = new PickingJudge([
+        /click button "Create new key"/,
+        /type into textbox "Name"/,
+        /click button "Create key"/,
+        /click checkbox "I've saved/,
+        /click button "Done"/,
+        /click button "Create new key"/,
+        /type into textbox "Name"/,
+        /click button "Create key"/,
+        /click checkbox "I've saved/,
+        /click button "Done"/,
+        /^done$/,
+      ]);
+      const r = await run(judge, gen, "/keys", goal, { maxDecisions: 14, successCheck: async () => keys.length >= 2 });
+      expect(keys).toEqual(["d3-alpha", "d3-beta"]);
+      // The decision after the second "Create key" (the 9th) sees the reminder; the first visit never does.
+      const hint = /same state as earlier, where you went on with: click "I've saved this key somewhere safe\."/;
+      expect(judge.states[8]?.history.some((h) => hint.test(h))).toBe(true);
+      expect(judge.states.slice(0, 8).some((s) => s.history.some((h) => hint.test(h)))).toBe(false);
+      expect(r.stop).toBe("done");
     },
     120_000,
   );

@@ -191,6 +191,30 @@ export function targetCandidates(
     if (opts.ops !== undefined && !opts.ops.has(op)) continue;
     out.push({ id: candidateId(op, control), op, control, description: describeAction(op, control.summary) });
   }
+  return disambiguate(out);
+}
+
+/**
+ * Same-named candidates read identically ("click button "Analyze"" twice — a trigger and its
+ * confirm, #182), so a model always picks the first. Each duplicate description gains the named
+ * dialog/region it sits in (`in alertdialog "Confirm analysis"`, or `outside any dialog` when a
+ * sibling has one) and its position (`1 of 2`). A unique description is left as is.
+ */
+export function disambiguate<T extends { readonly description: string; readonly control: Pick<Control, "scope"> }>(candidates: T[]): T[] {
+  const groups = new Map<string, number[]>();
+  candidates.forEach((c, i) => groups.set(c.description, [...(groups.get(c.description) ?? []), i]));
+  const out = [...candidates];
+  for (const idx of groups.values()) {
+    if (idx.length < 2) continue;
+    const scoped = idx.some((i) => (candidates[i]?.control.scope ?? null) !== null);
+    idx.forEach((i, k) => {
+      const c = candidates[i];
+      if (c === undefined) return;
+      const scope = c.control.scope ?? null;
+      const where = !scoped ? "" : scope === null ? " outside any dialog" : ` in ${scope}`;
+      out[i] = { ...c, description: `${c.description}${where} (${k + 1} of ${idx.length})` };
+    });
+  }
   return out;
 }
 

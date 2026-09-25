@@ -4,7 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { validateInvariantSpec, type InvariantSpec } from "@jevitate/recording";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runUsabilityMission, UsabilityInvariantsUnsupportedError } from "./ux-api.js";
+import { runExploration } from "./explore-api.js";
 
 /**
  * #150 — a mission spend budget over a declared observable, wired into the usability review (which
@@ -160,4 +164,34 @@ describe("mission spend budget (#150) — usability review", () => {
       }),
     ).rejects.toBeInstanceOf(UsabilityInvariantsUnsupportedError);
   });
+});
+
+describe("#180 — the goal envelope and result.json carry the budget trajectory", () => {
+  it(
+    "a crossed budget reports { observe, limit, baseline, final, delta, perAction } in the envelope and the persisted result",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "budget-envelope-"));
+      try {
+        const result = await runExploration({
+          url: `${origin}/app`,
+          goal: "Click Generate five times",
+          successChecks: [{ kind: "page", assertion: { kind: "textIncludes", target: { css: "body" }, text: "never shown" } }],
+          allowlist: [origin],
+          judge: scriptedJudge(),
+          gen: new FakeGenerationGateway(),
+          bounds: { maxDecisions: 10, maxActions: 10 },
+          invariants: CREDITS_SPEC(),
+          outDir,
+        });
+        expect(result.stop).toBe("budget");
+        expect(result.budget?.[0]).toMatchObject({ observe: "credits", limit: -100, baseline: 1000, final: 900, delta: -100 });
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as { result?: { budget?: unknown[] }; budget?: unknown[] };
+        const saved = persisted.budget ?? persisted.result?.budget;
+        expect(saved?.[0]).toMatchObject({ observe: "credits", delta: -100 });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
 });

@@ -44,6 +44,17 @@ describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
     expect(() => loadTargetsFile(p)).toThrow(TargetConfigError);
   });
 
+  it("#181: safety.paid is read from the file and --paid patterns are added to it", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const p = join(dir, "targets.json");
+    await writeFile(p, JSON.stringify({ "http://a.test": { safety: { paid: ["/^Analyze/"] } } }));
+    const file = loadTargetsFile(p);
+    expect(resolveTargetConfig(file, "http://a.test", { paid: ["Draft"] }).safety?.paid).toEqual(["/^Analyze/", "Draft"]);
+    expect(resolveTargetConfig(file, "http://b.test").safety?.paid).toBeUndefined();
+    await writeFile(p, JSON.stringify({ "http://a.test": { safety: { paid: "Analyze" } } }));
+    expect(() => loadTargetsFile(p)).toThrow(TargetConfigError);
+  });
+
   it("a missing file is no config; a malformed one fails closed", async () => {
     dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
     expect(loadTargetsFile(join(dir, "none.json"))).toEqual({});

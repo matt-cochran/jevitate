@@ -466,6 +466,8 @@ describe("runFeatureCliMission — ranked, honest --out (ticket #78)", () => {
         expect(buyClick?.actOk).toBe(true);
 
         expect(result.resultPath).toBe(join(outDir, "feature-2026-09-23T00-00-00-000Z.result.json"));
+        // #188: a model-free mission states its (zero) usage, never omits it.
+        expect(result.usage).toEqual({ judgments: 0, generations: 0, inputTokens: 0, outputTokens: 0, totalUsd: 0, priced: "full", priceSource: ["no model call"] });
         const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
         expect(persisted).toMatchObject({ missionOutcome: "clean", exitCode: 0 });
       } finally {

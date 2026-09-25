@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { snapshot } from "./index.js";
+import { snapshot, targetCandidates } from "./index.js";
 import { withSession, LOGIN_FIXTURE_HTML, INBOX_FIXTURE_HTML } from "./testkit.js";
 
 describe("snapshot — perceive: indexed controls + durable descriptors + freshness", () => {
@@ -105,4 +105,28 @@ describe("snapshot — perceive: indexed controls + durable descriptors + freshn
     },
     120_000,
   );
+
+  it(
+    "#182: same-named controls are told apart in the offered actions by their named dialog and position",
+    async () => {
+      await withSession("explore-snapshot-scope-", async (session) => {
+        await session.page.setContent(`<input aria-label="Source URL" value="https://example.com">
+<button id="a">Analyze</button>
+<div role="alertdialog" aria-label="Confirm analysis"><p>This analysis uses credits.</p>
+<button>Analyze</button><button>Cancel</button></div>`);
+        const snap = await snapshot(session.page);
+        const analyze = snap.controls.filter((c) => c.name === "Analyze");
+        expect(analyze.map((c) => c.scope)).toEqual([null, 'alertdialog "Confirm analysis"']);
+        const offered = targetCandidates(snap.controls).filter((c) => c.control.name === "Analyze").map((c) => c.description);
+        expect(offered).toEqual([
+          'click button "Analyze" outside any dialog (1 of 2)',
+          'click button "Analyze" in alertdialog "Confirm analysis" (2 of 2)',
+        ]);
+        // A unique control's description is untouched.
+        expect(targetCandidates(snap.controls).find((c) => c.control.name === "Cancel")?.description).toBe('click button "Cancel"');
+      });
+    },
+    120_000,
+  );
 });
+
