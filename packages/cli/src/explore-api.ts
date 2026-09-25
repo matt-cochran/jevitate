@@ -100,6 +100,9 @@ export interface ServerLogOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly allowLogCmd?: boolean;
   readonly drainMs?: number;
+  /** Raw `--log-source` specs (`--log-quiet-ok`, #169) allowed to deliver zero lines without making
+   *  `serverLogs.oracleOk` false — for a source the operator KNOWS is legitimately quiet. */
+  readonly quietOk?: readonly string[];
 }
 
 export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
@@ -434,7 +437,13 @@ function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, r
     const n = run?.defects.length ?? 0;
     return `${n} server-log defect${n === 1 ? "" : "s"} found (--log-defect)`;
   }
-  return "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
+  // #169: the summary already knows WHICH source(s) made the oracle unhealthy and why (failed to
+  // open vs. declared but silent) — this default only covers the (should-be-unreachable) case of no
+  // summary at all.
+  return (
+    run?.summary.oracleReason ??
+    "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing"
+  );
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
@@ -502,6 +511,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
@@ -926,6 +936,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
@@ -1205,6 +1216,7 @@ export async function runAdversarialCliMission(
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: opts.secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
@@ -1425,6 +1437,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
+    quietOk: opts.serverLog?.quietOk ?? [],
     ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,

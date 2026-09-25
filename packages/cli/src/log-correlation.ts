@@ -8,6 +8,7 @@ import {
   type LogSourceSpec,
 } from "./log-sources.js";
 import {
+  DotnetEntryGrouper,
   matchesLogDefect,
   normalizeLogMessage,
   parseLogDefectSpec,
@@ -52,12 +53,17 @@ export interface ServerLogSourceStatus {
   readonly linesRead: number;
   readonly truncated: boolean;
   readonly error?: string;
+  /** True when this source was declared `--log-quiet-ok` (#169): zero lines from it is expected,
+   *  not a sign the oracle never actually watched the backend. */
+  readonly quietOk?: boolean;
 }
 
 export interface ServerLogTopMessage {
   readonly level: LogLevel;
   /** Normalized message class (ids/numbers/uuids/timestamps stripped). */
   readonly message: string;
+  /** The logger's own target/category, when known (#169) — kept distinct in this summary too. */
+  readonly target?: string;
   readonly count: number;
 }
 
@@ -68,11 +74,15 @@ export interface ServerLogsSummary {
   readonly attachedLines: number;
   readonly unattributedLines: number;
   /**
-   * False when `--log-defect` was given but every declared source failed to open, or opened and
-   * delivered not one line — an absence of `server-log` defects then proves nothing about the
-   * backend; it must never be read as "held"/clean (#142).
+   * False when `--log-defect` was given but at least one declared source is unhealthy: it never
+   * opened/errored, OR it opened and delivered not one line while NOT declared `--log-quiet-ok`
+   * (#169) — an absence of `server-log` defects then proves nothing about the backend; it must never
+   * be read as "held"/clean (#142).
    */
   readonly oracleOk: boolean;
+  /** Why `oracleOk` is false — which source(s), and whether they failed to open or were silently
+   *  quiet. Unset when `oracleOk` is true. */
+  readonly oracleReason?: string;
 }
 
 export interface ServerLogDefect {
@@ -120,6 +130,9 @@ export interface ServerLogRuntimeOptions {
   readonly logDefect: readonly LogDefectMatcher[];
   readonly drainMs?: number;
   readonly secrets: readonly string[];
+  /** Raw `--log-source` specs (matched against a source's own `spec.raw`) that are allowed to
+   *  deliver zero lines without making `oracleOk` false (#169's `--log-quiet-ok`). */
+  readonly quietOk?: readonly string[];
   /** The journal's own listener — still called for every entry (the crash-safe flush is unchanged). */
   readonly onTranscriptEntry?: (entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void;
 }
@@ -135,12 +148,14 @@ export function openServerLogRuntime(opts: ServerLogRuntimeOptions): ServerLogRu
 
 export class ServerLogRuntime {
   readonly #handles: LogSourceHandle[];
+  readonly #groupers: DotnetEntryGrouper[] = [];
   readonly #lines: LogLine[] = [];
   readonly #stepEpoch = new Map<number, number>();
   readonly #missionStartEpochMs = Date.now();
   readonly #secrets: readonly string[];
   readonly #matchers: readonly LogDefectMatcher[];
   readonly #drainMs: number;
+  readonly #quietOk: ReadonlySet<string>;
   readonly #inner: ((entry: TranscriptEntry, all: readonly TranscriptEntry[]) => void) | undefined;
   readonly #maxTotalLines = 20_000;
   #finished = false;
@@ -152,19 +167,36 @@ export class ServerLogRuntime {
     this.#secrets = opts.secrets;
     this.#matchers = opts.logDefect;
     this.#drainMs = opts.drainMs ?? DEFAULT_SERVER_LOG_DRAIN_MS;
+    this.#quietOk = new Set(opts.quietOk ?? []);
     this.#inner = opts.onTranscriptEntry;
     // One `openLogSources` call per spec: each source's `onLine` must stamp ITS OWN spec onto every
-    // `LogLine` (a shared callback across sources could not tell them apart).
-    this.#handles = opts.sources.map(
-      (spec) =>
-        openLogSources([spec], {
-          onLine: (raw, arrivalEpochMs) => {
-            if (this.#lines.length >= this.#maxTotalLines) return;
-            this.#lines.push(parseLogLine(raw, arrivalEpochMs, spec.raw));
-          },
-        })[0] as LogSourceHandle,
-    );
+    // `LogLine` (a shared callback across sources could not tell them apart). Each source also gets
+    // its OWN `DotnetEntryGrouper` (#165) — a multi-line .NET entry must never straddle two sources.
+    this.#handles = opts.sources.map((spec, i) => {
+      this.#groupers[i] = new DotnetEntryGrouper();
+      return openLogSources([spec], {
+        onLine: (raw, arrivalEpochMs) => {
+          const grouper = this.#groupers[i] as DotnetEntryGrouper;
+          for (const entry of grouper.feed(raw, arrivalEpochMs)) this.#pushLine(entry.raw, entry.epochMs, spec.raw);
+        },
+      })[0] as LogSourceHandle;
+    });
     process.on("exit", this.#exitHook);
+  }
+
+  #pushLine(raw: string, epochMs: number, sourceRaw: string): void {
+    if (this.#lines.length >= this.#maxTotalLines) return;
+    this.#lines.push(parseLogLine(raw, epochMs, sourceRaw));
+  }
+
+  /** Flushes any still-pending `DotnetEntryGrouper` entry per source — the last entry in a .NET log
+   *  has no following header to trigger its own flush otherwise. */
+  #flushGroupers(): void {
+    this.#groupers.forEach((grouper, i) => {
+      const entry = grouper.flush();
+      const spec = this.#handles[i]?.spec.raw;
+      if (entry !== undefined && spec !== undefined) this.#pushLine(entry.raw, entry.epochMs, spec);
+    });
   }
 
   /** Wraps the journal's own `TranscriptListener`: unchanged persistence, plus this step's epoch. */
@@ -180,6 +212,7 @@ export class ServerLogRuntime {
     if (this.#finished) return { transcript, summary: this.#summary([]), defects: [] };
     this.#finished = true;
     await sleep(this.#drainMs);
+    this.#flushGroupers();
     await closeLogSources(this.#handles);
     process.off("exit", this.#exitHook);
     return this.#correlate(transcript);
@@ -249,7 +282,7 @@ export class ServerLogRuntime {
       const matched = this.#matchers.find((m) => matchesLogDefect(line, m));
       if (matched === undefined) return;
       const normalizedMessage = normalizeLogMessage(line.message);
-      const fp = serverLogFingerprint(route, normalizedMessage);
+      const fp = serverLogFingerprint(route, normalizedMessage, line.target);
       const existing = grouped.get(fp);
       if (existing !== undefined) {
         existing.count += 1;
@@ -261,7 +294,7 @@ export class ServerLogRuntime {
           fingerprint: fp,
           related: [fp],
           kind: "server-log",
-          title: `Server log ${line.level} on ${route === UNATTRIBUTED_ROUTE ? "(unattributed)" : route}: ${normalizedMessage.slice(0, 80)}`,
+          title: `Server log ${line.level} on ${route === UNATTRIBUTED_ROUTE ? "(unattributed)" : route}${line.target === undefined ? "" : ` (${line.target})`}: ${normalizedMessage.slice(0, 80)}`,
           route,
           level: line.level,
           message: redactText(line.message, this.#secrets),
@@ -290,12 +323,12 @@ export class ServerLogRuntime {
     const byLevel: Record<string, number> = {};
     for (const line of this.#lines) byLevel[line.level] = (byLevel[line.level] ?? 0) + 1;
 
-    const counts = new Map<string, { level: LogLevel; message: string; count: number }>();
+    const counts = new Map<string, { level: LogLevel; message: string; target?: string; count: number }>();
     for (const line of this.#lines) {
       const message = normalizeLogMessage(line.message);
-      const key = `${line.level}|${message}`;
+      const key = `${line.level}|${line.target ?? ""}|${message}`;
       const e = counts.get(key);
-      if (e === undefined) counts.set(key, { level: line.level, message, count: 1 });
+      if (e === undefined) counts.set(key, { level: line.level, message, ...(line.target === undefined ? {} : { target: line.target }), count: 1 });
       else e.count += 1;
     }
     const topMessages = [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 10);
@@ -306,11 +339,31 @@ export class ServerLogRuntime {
       linesRead: h.linesRead,
       truncated: h.truncated,
       ...(h.error === undefined ? {} : { error: h.error }),
+      ...(this.#quietOk.has(h.spec.raw) ? { quietOk: true } : {}),
     }));
-    // An unreadable source, or one that read 0 lines, cannot let this oracle count as "held": a
-    // `server-log` defect's absence proves nothing unless at least one source demonstrably saw
-    // SOMETHING (proof it was actually being tailed).
-    const oracleOk = this.#matchers.length === 0 || sources.some((s) => s.linesRead > 0);
+
+    // Per-source health (#169): a source is unhealthy when it never opened/errored, OR it opened and
+    // delivered not one line while NOT declared `--log-quiet-ok` — a source the operator KNOWS runs
+    // quiet. Every declared source must be healthy for the oracle to count as "held": one dead/silent
+    // source among several is still a hole in the evidence, not proof of anything.
+    const unhealthy = sources.filter((s) => {
+      if (!s.opened || s.error !== undefined) return true;
+      return s.linesRead === 0 && s.quietOk !== true;
+    });
+    const oracleOk = this.#matchers.length === 0 || unhealthy.length === 0;
+    const failedSpecs = unhealthy.filter((s) => !s.opened || s.error !== undefined).map((s) => s.spec);
+    const quietSpecs = unhealthy.filter((s) => s.opened && s.error === undefined).map((s) => s.spec);
+    let oracleReason: string | undefined;
+    if (oracleOk) {
+      oracleReason = undefined;
+    } else if (quietSpecs.length === 0) {
+      oracleReason =
+        "the --log-defect oracle could not run: every declared --log-source failed to open or read a line — an absence of server-log defects proves nothing";
+    } else if (failedSpecs.length === 0) {
+      oracleReason = "log source produced no lines";
+    } else {
+      oracleReason = `the --log-defect oracle could not run: ${failedSpecs.join(", ")} failed to open or read a line; ${quietSpecs.join(", ")} produced no lines`;
+    }
 
     return {
       sources,
@@ -319,6 +372,7 @@ export class ServerLogRuntime {
       attachedLines,
       unattributedLines: unattributed.length,
       oracleOk,
+      ...(oracleReason === undefined ? {} : { oracleReason }),
     };
   }
 }

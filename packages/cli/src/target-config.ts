@@ -45,6 +45,8 @@ export interface TargetConfig {
   readonly logDefect?: readonly string[];
   /** Opt-in for a `cmd:` source in `logSources` (mirrors `--allow-log-cmd`). Default `false`. */
   readonly allowLogCmd?: boolean;
+  /** Raw `logSources` entries declared legitimately quiet (mirrors `--log-quiet-ok`, #169). */
+  readonly logQuietOk?: readonly string[];
 }
 
 export class TargetConfigError extends Error {
@@ -70,6 +72,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logSources?: string[];
     logDefect?: string[];
     allowLogCmd?: boolean;
+    logQuietOk?: string[];
   } = {};
   if (o.fixtures !== undefined) {
     if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
@@ -77,6 +80,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   }
   if (o.logSources !== undefined) out.logSources = strings(o.logSources, `${where}.logSources`);
   if (o.logDefect !== undefined) out.logDefect = strings(o.logDefect, `${where}.logDefect`);
+  if (o.logQuietOk !== undefined) out.logQuietOk = strings(o.logQuietOk, `${where}.logQuietOk`);
   if (o.allowLogCmd !== undefined) {
     if (typeof o.allowLogCmd !== "boolean") throw new TargetConfigError(`${where}.allowLogCmd must be a boolean`);
     out.allowLogCmd = o.allowLogCmd;
@@ -207,5 +211,6 @@ export function resolveTargetConfig(
     ...(base.logSources === undefined ? {} : { logSources: base.logSources }),
     ...(base.logDefect === undefined ? {} : { logDefect: base.logDefect }),
     ...(base.allowLogCmd === undefined ? {} : { allowLogCmd: base.allowLogCmd }),
+    ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
   };
 }

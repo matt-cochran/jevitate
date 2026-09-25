@@ -1797,6 +1797,12 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
+      "--log-quiet-ok <spec>",
+      "declares a --log-source spec (exact match, repeatable) as legitimately quiet: zero lines from it does not make the --log-defect oracle unhealthy (#169). Without it, a declared source that opened but delivered not one line makes an otherwise-clean run inconclusive, same as one that failed to open",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
     )
@@ -1856,6 +1862,7 @@ export function buildProgram(deps: CliDeps): Command {
         logSource: string[];
         allowLogCmd?: boolean;
         logDefect: string[];
+        logQuietOk: string[];
         serverLogDrainMs?: string;
         actor: string[];
         repeat?: string;
@@ -2105,6 +2112,7 @@ export function buildProgram(deps: CliDeps): Command {
             sources,
             logDefect,
             allowLogCmd: o.allowLogCmd ?? false,
+            quietOk: o.logQuietOk,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {

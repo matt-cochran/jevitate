@@ -200,6 +200,7 @@ function serverLogFromTargetConfig(targets: Readonly<Record<string, TargetConfig
     sources: parseLogSourceSpecs(config.logSources ?? [], allowLogCmd),
     logDefect: parseLogDefectSpecs(config.logDefect ?? []),
     allowLogCmd,
+    quietOk: config.logQuietOk ?? [],
   };
 }
 
