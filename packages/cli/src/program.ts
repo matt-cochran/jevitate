@@ -3024,7 +3024,7 @@ export function buildProgram(deps: CliDeps): Command {
             return actor;
           },
         });
-        const envelope = ok(report);
+        const envelope = ok(withEngine(report));
         if (json) {
           emitJson(program, envelope);
         } else {

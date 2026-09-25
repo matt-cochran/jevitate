@@ -3,6 +3,14 @@ import type { Step } from "./schema.js";
 import { urlTemplate, stepSignature, strictSignature } from "./signature.js";
 
 describe("urlTemplate", () => {
+  it("templates a word joined by . _ : to a long hex id, never a file name (#188)", () => {
+    expect(urlTemplate("/projects/7/workbench/ws.1697a048f9bc46e39e818af68ff4aaed")).toBe("/projects/:id/workbench/:id");
+    expect(urlTemplate("/w/doc_0123abcd9f")).toBe("/w/:id");
+    expect(urlTemplate("/static/index.html")).toBe("/static/index.html");
+    expect(urlTemplate("/docs/v1.2")).toBe("/docs/v1.2");
+    expect(urlTemplate("/app/settings.billing")).toBe("/app/settings.billing");
+  });
+
   it("normalizes all-digit path segments to :id", () => {
     expect(urlTemplate("/thread/1")).toBe("/thread/:id");
     expect(urlTemplate("/thread/2")).toBe("/thread/:id");
