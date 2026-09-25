@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { withSiteGate } from "./site-gate-cli.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageCounts, type UsageTracker } from "@jevitate/ai-core";
@@ -133,6 +134,8 @@ export interface RunCheckOptions {
   readonly jsonPath?: string;
   /** Default Journeys dir (`~/.jevitate/journeys`) for targets that name none. */
   readonly journeysDir: string;
+  /** The site-policy database (`jevitate site policy set`): Journey items are paced, throttled and budgeted per origin. */
+  readonly sitePolicyDbPath?: string;
   /**
    * Builds the model gateways — called only when an item needs one. Throws when no gateway is
    * selected (fail closed, before anything runs).
@@ -664,16 +667,18 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     const j = item.t.journeys.get(item.journey.id);
     if (j === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
     const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
-    const r = await runners.journey({
+    const sj = item.journey;
+    const r = await withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({
+      ...(siteGate === undefined ? {} : { siteGate }),
       dir: t.journeysDir ?? opts.journeysDir,
-      id: item.journey.id,
-      params: { ...item.journey.params },
+      id: sj.id,
+      params: { ...sj.params },
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
       // #170: the target's session, exactly as `journey run --storage-state` (#118) and its fixtures.
       ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
       ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(item.t, site) }),
-    });
+    }));
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);
     const path = join(ctx.resultsDir, `journey-${artifactStamp(startedAt)}-${ctx.seq()}.result.json`);

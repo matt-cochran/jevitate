@@ -64,8 +64,10 @@ import { CastActor, BrowseTheWeb, BrowseTheWebToken, type Actor } from "@jevitat
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
+import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
+import { sitePolicyKey, withSiteGate } from "./site-gate-cli.js";
 import { runRegressionCapture, runRegressionRun, RegressionNotFoundError } from "./regression-api.js";
 import {
   addMissionTarget,
@@ -704,11 +706,16 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  const site = program.command("site");
-  const sitePolicy = site.command("policy");
+  const site = program
+    .command("site")
+    .description("per-site policies for Journey runs: human-like pacing, throttles, run budgets and quiet hours");
+  const sitePolicy = site
+    .command("policy")
+    .description("read or set a site's policy (the site is the Journey's origin, e.g. https://app.example.com)");
 
   sitePolicy
     .command("get <site>")
+    .description("print the policy for a site (an origin) and account")
     .option("--account <account>", "account id", "primary")
     .option("--db <path>", "sqlite db path")
     .option("--json", "emit a JSON envelope")
@@ -716,7 +723,7 @@ export function buildProgram(deps: CliDeps): Command {
       const { account, db, json } = this.opts<{ account: string; db?: string; json?: boolean }>();
       try {
         const dbPath = resolveDbPath(deps, db);
-        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(siteId, account));
+        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(sitePolicyKey(siteId), account));
         const envelope = ok(policy);
         if (json) {
           emitJson(program, envelope);
@@ -739,6 +746,10 @@ export function buildProgram(deps: CliDeps): Command {
 
   sitePolicy
     .command("set <site>")
+    .description(
+      "set the policy for a site (an origin): Journey runs there are paced, throttled, budgeted and kept out of quiet hours " +
+        "(journey run, source run, check, MCP run_journey); load run applies the pacing only",
+    )
     .requiredOption("--file <path>", "path to a policy JSON file")
     .option("--account <account>", "account id", "primary")
     .option("--db <path>", "sqlite db path")
@@ -760,7 +771,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const dbPath = resolveDbPath(deps, db);
-        await withSitePolicyRepository(dbPath, (repository) => repository.set(siteId, account, policy));
+        await withSitePolicyRepository(dbPath, (repository) => repository.set(sitePolicyKey(siteId), account, policy));
         const envelope = ok({ site: siteId, account, version: policy.version });
         if (json) {
           emitJson(program, envelope);
@@ -777,6 +788,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   site
     .command("simulate <site>")
+    .description("estimate, offline, how long a planned step script takes under a site's pacing policy")
     .requiredOption("--script <path>", "path to a planned-step script JSON file")
     .option("--seed <n>", "deterministic RNG seed", "0")
     .option("--account <account>", "account id", "primary")
@@ -805,7 +817,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
       try {
         const dbPath = resolveDbPath(deps, db);
-        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(siteId, account));
+        const policy = await withSitePolicyRepository(dbPath, (repository) => repository.get(sitePolicyKey(siteId), account));
         const interaction = policy?.interaction ?? {};
         const profile = simulateTiming(interaction, seedNum, plannedScript);
         const envelope = ok(profile);
@@ -1088,7 +1100,7 @@ export function buildProgram(deps: CliDeps): Command {
       // owns `deps` + the credential preflight); a missing/unselected gateway
       // fails CLOSED before any browser launch, rather than silently running
       // with no healer. fail-closed needs no gateway (identical to today).
-      let selfHealer;
+      let selfHealer: SelfHealer | undefined;
       let policy = safeRunPolicy();
       // #163: a self-healing run makes model calls — their usage (and full cost) lands on its result.
       let healUsage: UsageTracker | undefined;
@@ -1114,7 +1126,8 @@ export function buildProgram(deps: CliDeps): Command {
         // browser launch). The default policy stays `safeRunPolicy()`
         // (fail-closed secret mode) — only `selfHeal.mode` is threaded from
         // the flag; a `--secret-mode` override is a later slice's concern.
-        const result = await runJourneyProgrammatically({
+        const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+          ...(siteGate === undefined ? {} : { siteGate }),
           dir: resolveJourneysDir(deps, dir),
           id,
           params: param,
@@ -1134,7 +1147,7 @@ export function buildProgram(deps: CliDeps): Command {
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
-        }).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1146,7 +1159,9 @@ export function buildProgram(deps: CliDeps): Command {
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
-        if (err instanceof UnknownJourneyError) {
+        if (err instanceof SiteGateRefusedError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
@@ -1458,14 +1473,15 @@ export function buildProgram(deps: CliDeps): Command {
           ...resolveSourceApiDeps(deps),
           runJourney: deps.sources?.runJourney ?? realResolvedJourneyRunner,
         };
-        const result = withEngine(await runSourceJourney(apiDeps, {
+        const result = withEngine(await withSiteGate(resolveDbPath(deps), (siteGate) => runSourceJourney(apiDeps, {
+          ...(siteGate === undefined ? {} : { siteGate }),
           sourceName: name,
           journeyId,
           params: param,
           ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...browserOption(this.opts<BrowserLaunchFlags>()),
-        }));
+        })));
         const envelope = ok(result);
         if (json) {
           emitJson(program, envelope);
@@ -1477,7 +1493,9 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a
         // caller can tell WHY the run was refused without string-matching.
-        if (err instanceof UnknownSourceError) {
+        if (err instanceof SiteGateRefusedError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownSourceError) {
           emitJson(program, fail("E_SOURCE_RUN_UNKNOWN", err.message));
         } else if (err instanceof HashMismatchError) {
           emitJson(program, fail("E_SOURCE_RUN_HASH_MISMATCH", err.message));
@@ -1554,7 +1572,8 @@ export function buildProgram(deps: CliDeps): Command {
         return;
       }
       try {
-        const report = await runJourneyLoadTest({
+        const report = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyLoadTest({
+          ...(siteGate === undefined ? {} : { siteGate }),
           dir: resolveJourneysDir(deps, dir),
           id: journeyId,
           params: param,
@@ -1566,7 +1585,7 @@ export function buildProgram(deps: CliDeps): Command {
           ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
-        }).then((r) => withEngine(r));
+        })).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
           emitJson(program, envelope);
@@ -3372,6 +3391,7 @@ export function buildProgram(deps: CliDeps): Command {
           });
         await startMcpServer({
           journeysDir: resolveJourneysDir(deps, dir),
+          sitePolicyDbPath: resolveDbPath(deps),
           missionTargetsDir: resolveMissionTargetsDir(deps),
           missionQueueDir: resolveDataDir(["missions", "queue"]),
           recordingsDir: resolveDataDir(["recordings"]),
@@ -3526,6 +3546,7 @@ export function buildProgram(deps: CliDeps): Command {
     {
       buildGateways: (sel) => buildExploreGateways(deps, sel),
       journeysDir: resolveJourneysDir(deps),
+      sitePolicyDbPath: resolveDbPath(deps),
       ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
       ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
       browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),

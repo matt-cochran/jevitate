@@ -1,4 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SiteGateRefusedError } from "@jevitate/runtime";
+import { withSiteGate } from "./site-gate-cli.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -73,6 +75,11 @@ export interface McpTool {
 export interface McpApiDeps {
   /** Journeys store directory (`~/.jevitate/journeys` in production). */
   journeysDir: string;
+  /**
+   * The site-policy database (`jevitate site policy set`): `run_journey` is paced, throttled,
+   * budgeted and kept out of quiet hours per the Journey's origin. Absent file = no policy.
+   */
+  sitePolicyDbPath?: string;
   /**
    * Test seam. Defaults to the real promoted-only projection over the
    * journeys store (`@jevitate/mcp-facade`'s `findCapabilities`).
@@ -211,13 +218,16 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string) =>
-      runJourneyProgrammatically({
-        dir: deps.journeysDir,
-        id,
-        params,
-        policy: safeRunPolicy(),
-        ...(storageState !== undefined ? { storageState } : {}),
-      }));
+      withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
+        runJourneyProgrammatically({
+          dir: deps.journeysDir,
+          id,
+          params,
+          policy: safeRunPolicy(),
+          ...(storageState !== undefined ? { storageState } : {}),
+          ...(siteGate === undefined ? {} : { siteGate }),
+        }),
+      ));
 
   // queue_exploration: enqueue over the SAME promoted fs store `jevitate
   // mission target` writes. The store is built lazily inside the closure so
@@ -503,7 +513,15 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
             ? (args.params as Record<string, string>)
             : {};
         const storageState = typeof args.storageState === "string" ? args.storageState : undefined;
-        return jsonResult(await runJourney(args.id, params, storageState));
+        try {
+          return jsonResult(await runJourney(args.id, params, storageState));
+        } catch (err) {
+          // A site-policy refusal (throttle, budget, quiet hours) is an answer the agent acts on — when to retry.
+          if (err instanceof SiteGateRefusedError) {
+            return errorResult({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
+          }
+          throw err;
+        }
       },
     },
     queue_exploration: {

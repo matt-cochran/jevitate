@@ -53,11 +53,47 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
   steps are never auto-healed in any mode.
 - A Journey that declares `metadata.requiresAuth: true` refuses to start without
   `--storage-state`, before any browser opens.
-- `load run` replays a promoted Journey with a seeded, human-paced pool of actors, and refuses to
-  start without `--authorized-origin`.
+- `load run` replays a promoted Journey with a seeded pool of actors, human-paced when the site has
+  a [site policy](#site-policies) with pacing, and refuses to start without `--authorized-origin`.
 - Distributed sources share Journeys through git: `jevitate source add <name> <gitUrl>`,
   `source trust <name> <journeyId>` (bound to the Journey's content hash), `source run`, and
   `jevitate journey publish <id> --to <source>`.
 
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
+
+## Site policies
+
+A site policy keeps Journey runs on a site polite and bounded, whoever starts them (you, CI, or an
+agent over MCP). Set one per site (the Journey's origin) and account (default `primary`):
+
+```bash
+jevitate site policy set https://app.example.com --file policy.json
+jevitate site policy get https://app.example.com
+```
+
+```json
+{
+  "version": "2026-09-25",
+  "interaction": { "thinkBeforeActionMs": { "mean": 600, "sd": 150 }, "typing": { "charsPerSecond": 7, "perKeyJitter": 0.3 } },
+  "throttles": {
+    "read":  { "minIntervalSeconds": 5, "hourlyLimit": 120 },
+    "write": { "minIntervalSeconds": 60, "hourlyLimit": 10, "dailyLimit": 50 }
+  },
+  "quietHours": { "timezone": "America/Chicago", "windows": [{ "start": "22:00", "end": "07:00" }] }
+}
+```
+
+- `interaction` paces every click and keystroke like a person: think time, typing speed, reading
+  time.
+- `throttles` apply per class. A Journey with any write step (a click, a fill) is `write`; a Journey
+  that only reads is `read`. `minIntervalSeconds` spaces runs out (a shortfall of up to 5 seconds is
+  waited out); `hourlyLimit` and `dailyLimit` cap how many runs start.
+- `quietHours` are windows, in a timezone, when no run may start. Windows may wrap past midnight.
+
+`journey run`, `source run`, `check` Journey items and MCP `run_journey` apply the whole policy. A
+run that is inside quiet hours, too soon after the last one, or over its budget is refused before
+any browser opens: the CLI fails with `E_SITE_THROTTLED`, and `run_journey` answers
+`{ "error": "throttled", "reason": "quiet_hours" | "min_interval" | "budget", "retryAfter": "<ISO time>" }`.
+`load run` applies only the pacing: a load test is a deliberate burst. `site simulate` estimates,
+offline, how long a planned script takes under the pacing.

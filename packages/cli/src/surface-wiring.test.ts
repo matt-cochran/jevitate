@@ -34,9 +34,13 @@ const APIS = new Set([
   "runRegressionRun",
   "runExploreMultiRun",
   "runCheck",
+  "runJourneyProgrammatically",
+  "runJourneyLoadTest",
+  "runSourceJourney",
 ]);
 /** `check`'s runner table (`runners.goal(…)`): its keys name the API they stand for. */
 const RUNNER_KEYS: Readonly<Record<string, string>> = {
+  journey: "runJourneyProgrammatically",
   goal: "runExploration",
   coverage: "runCoverageMission",
   adversarial: "runAdversarialCliMission",
@@ -48,6 +52,8 @@ const RUNNER_KEYS: Readonly<Record<string, string>> = {
 const SEAM = "test seam (clock / headless / injected ports) — never a user setting";
 const MCP_NARROW = "MCP verify_fix takes only a result id + fingerprint: operator settings come from targets.json, never an MCP argument";
 const QUEUE_NO_ENV_SECRETS = "a queued spec's authFrom.secret is refused at enqueue: a request never chooses which env var is sent";
+const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site policy` default";
+const MCP_JOURNEY = "MCP run_journey takes only id + params + a storageState path (invariant #5)";
 const QUEUE_NARROW = "a queued mission carries only what MissionRequest allows (a closed schema an MCP agent fills)";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
@@ -92,6 +98,24 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     secrets: MCP_NARROW,
     emulation: "replays under the finding's own recorded emulation",
     allowEmulationOverride: MCP_NARROW,
+  },
+
+  // ── Journeys ────────────────────────────────────────────────────────────────────────────────
+  "program.ts runJourneyProgrammatically": { account: SITE_ACCOUNT },
+  "program.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
+  "mcp-api.ts runJourneyProgrammatically": {
+    account: SITE_ACCOUNT,
+    browser: MCP_JOURNEY,
+    browserPortFactory: SEAM,
+    emulation: MCP_JOURNEY,
+    fixtures: MCP_JOURNEY,
+    selfHealer: "MCP runs are fail-closed: a broken step quarantines, never heals",
+  },
+  "check-api.ts runJourneyProgrammatically": {
+    account: SITE_ACCOUNT,
+    emulation: "a suite item has no viewport/device field",
+    policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
+    selfHealer: "check never self-heals: a broken step fails the gate",
   },
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
