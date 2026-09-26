@@ -17,6 +17,7 @@ import type { VerifySession } from "../verify-fix.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantDefectLog,
+  finishDeclaredRun,
   InvariantMonitor,
   type ObserverSessions,
   recordingStepCount,
@@ -334,7 +335,7 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
         await settled().catch(() => undefined);
       }
       // #195: a response to the LAST action that landed after its check is still a never.response hit.
-      for (const v of monitor.flushResponses(page).violations) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });
+      await finishDeclaredRun({ monitor, log, lastRepro: { recordingStepIndex: Math.max(0, steps - 1) } });
       // #147: a resource the LAST action created is still checked from the observers.
       const cross = await monitor.settleCrossActor(cfg.actor).catch(() => null);
       for (const v of cross?.violations ?? []) log.add(v, { recordingStepIndex: Math.max(0, steps - 1) });

@@ -107,7 +107,8 @@ pass: it is counted in the result's `invariants` report.
   happened in (`GET https://app.example.test/api/v1/tool/billing/summary?ws=7 → 403 (step 0:
   page load)`); the violation's `responses` lists them as `{ method, url, status, step }`,
   step 0 being the page load before any action. A response to the last action that lands
-  after its check is still caught when a goal mission ends. Unlike `deniedAs.expect.appResponses`,
+  after its check (still in flight, e.g. slower than the long-poll threshold) is still caught when
+  the run ends — every mission waits up to 5 s for such a request. Unlike `deniedAs.expect.appResponses`,
   no observer actor is needed.
 - `always`: an assertion that must hold after every action.
 

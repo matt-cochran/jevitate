@@ -6,6 +6,10 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { validateInvariantSpec, type InvariantSpec } from "@jevitate/recording";
 import { runGoalBasedMission } from "./missions/goal-based.js";
+import { runFeatureMission } from "./missions/feature.js";
+import { runInductionMission } from "./missions/induction.js";
+import { runAdversarialMission } from "./missions/adversarial.js";
+import { FakeJudgmentGateway } from "@jevitate/ai-core";
 import { ScriptedJudge } from "./testkit.js";
 
 /**
@@ -15,6 +19,9 @@ import { ScriptedJudge } from "./testkit.js";
  */
 
 let billingStatus = 403;
+const LATE_RESPONSE_MS = 2_500;
+/** Settled once a request is pending this long (a long-poll), so the late 403 misses the action's check. */
+const LONG_POLL_MS = 500;
 let server: Server;
 let other: Server;
 let origin: string;
@@ -34,6 +41,19 @@ const APP = (): string => `<!doctype html><html><body><main>
     };
   </script></main></body></html>`;
 
+/**
+ * #195 — the ONLY 403 answers the LAST action, and lands after that action's settled check: the
+ * server holds it past the long-poll threshold, so the page counts as settled while it is in flight.
+ */
+const LATE = `<!doctype html><html><body><main>
+  <h1>Billing</h1><p id="out">idle</p>
+  <button type="button" id="usage">Usage</button>
+  <script>
+    document.getElementById("usage").onclick = () => {
+      fetch("/api/v1/tool/billing/late").then((r) => { document.getElementById("out").textContent = "usage " + r.status; });
+    };
+  </script></main></body></html>`;
+
 async function listen(s: Server): Promise<string> {
   await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve));
   const addr = s.address();
@@ -46,6 +66,14 @@ beforeAll(async () => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     if (path === "/app") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(APP().replace("__OTHER__", otherOrigin));
+      return;
+    }
+    if (path === "/late") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(LATE);
+      return;
+    }
+    if (path === "/api/v1/tool/billing/late") {
+      setTimeout(() => res.writeHead(403, { "content-type": "application/json" }).end("{}"), LATE_RESPONSE_MS);
       return;
     }
     if (path.startsWith("/api/v1/tool/billing/")) {
@@ -164,5 +192,93 @@ describe("never.response on the mission's own traffic (#195)", () => {
       expect(report?.held).toBeGreaterThan(0);
     },
     60_000,
+  );
+});
+
+describe("never.response: a 403 to the LAST action is never lost at run end (#195)", () => {
+  const LATE_SPEC = (): InvariantSpec =>
+    validateInvariantSpec(
+      { invariants: [{ id: "no-late-403", never: { response: { url: "/api/v1/tool/billing/**", status: "403" } } }] },
+      { allowlist: [origin], baseUrl: `${origin}/late` },
+    );
+  const open = async () => {
+    const session = await port.open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+    return { session, actor: CastActor.named("viewer").whoCan(new BrowseTheWeb(session, [origin])) };
+  };
+  const expectLate = (defects: ReadonlyArray<{ invariant: { id: string; evidence: string[] } }> | undefined): void => {
+    const d = (defects ?? []).find((x) => x.invariant.id === "no-late-403");
+    expect(d?.invariant.evidence).toEqual([expect.stringMatching(new RegExp(`^GET ${origin}/api/v1/tool/billing/late → 403 \\(step \\d+: click "Usage"\\)$`))]);
+  };
+
+  it(
+    "feature mission",
+    async () => {
+      const { session, actor } = await open();
+      try {
+        const r = await runFeatureMission({
+          page: session.page,
+          actor,
+          seedUrl: `${origin}/late`,
+          allowlist: [origin],
+          scope: { name: "usage", originAllowlist: [origin], routeGlobs: ["/late**"] },
+          bounds: { maxActions: 1 },
+          invariants: LATE_SPEC(),
+          settle: { longPollMs: LONG_POLL_MS },
+        });
+        expectLate(r.invariantDefects);
+      } finally {
+        await session.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "coverage (induction) mission",
+    async () => {
+      const { session, actor } = await open();
+      try {
+        const r = await runInductionMission({
+          page: session.page,
+          actor,
+          judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0.1 } }),
+          seedUrl: `${origin}/late`,
+          allowlist: [origin],
+          bounds: { maxActions: 1 },
+          invariants: LATE_SPEC(),
+          settle: { longPollMs: LONG_POLL_MS },
+        });
+        expectLate(r.invariantDefects);
+      } finally {
+        await session.close();
+      }
+    },
+    120_000,
+  );
+
+  it(
+    "adversarial mission",
+    async () => {
+      const { session, actor } = await open();
+      try {
+        const r = await runAdversarialMission({
+          page: session.page,
+          actor,
+          judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } }),
+          generation: new FakeGenerationGateway({ "triage.narrative": { summary: "403", likelyCause: "role" } }),
+          seedUrl: `${origin}/late`,
+          allowlist: [origin],
+          bounds: { maxDecisions: 1 },
+          strategies: ["exercise-controls"],
+          invariants: LATE_SPEC(),
+          settle: { longPollMs: LONG_POLL_MS },
+        });
+        const d = r.defects.find((x) => x.kind === "invariant");
+        expect(d?.invariant?.evidence).toEqual([expect.stringMatching(new RegExp(`^GET ${origin}/api/v1/tool/billing/late → 403 `))]);
+      } finally {
+        await session.close();
+      }
+    },
+    120_000,
   );
 });

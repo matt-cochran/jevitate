@@ -1,4 +1,4 @@
-import type { Locator, Page, Response } from "playwright";
+import type { Locator, Page, Request, Response } from "playwright";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import {
   DEFAULT_IN_VIEWPORT_MIN,
@@ -258,6 +258,9 @@ const OBSERVER_IDLE_MS = 5_000;
 const MAX_APP_EVIDENCE = 5;
 /** #195: matching responses kept per `never.response` invariant between two checks (the rest are counted). */
 const MAX_RESPONSE_HITS = 20;
+/** #195: at run end, how long to wait for an in-flight request a `never.response` glob names. */
+const FLUSH_WAIT_MS = 5_000;
+const FLUSH_POLL_MS = 50;
 /** An observer bounced here lost its session: "undecided", never "denied" (#147, cf. #82). */
 const LOGIN_PATH_RE = /(^|\/)(log-?in|sign-?in|signin|auth|sso)(\/|$)/i;
 /** gRPC status codes → the Connect code names (#73/#110: gRPC-web reports errors in a header). */
@@ -396,6 +399,9 @@ export class InvariantMonitor {
   /** #195: real actions checked so far (a response's step) and how the current one reads in evidence. */
   #actions = 0;
   #stepLabel = "page load";
+  /** #195: in-flight requests a `never.response` names (awaited, bounded, at run end), and the last checked page. */
+  readonly #responseInFlight = new Set<Request>();
+  #lastPage: Page | null = null;
 
   constructor(spec: InvariantSpec, opts: InvariantMonitorOptions) {
     this.#spec = spec;
@@ -488,6 +494,16 @@ export class InvariantMonitor {
     // #195: `never.response` watches the mission's OWN traffic — this (primary) page's responses, from
     // an authorized origin only. Only method, URL and status are kept: never a body.
     if (this.#responseNevers.length > 0) {
+      const named = (request: Request): boolean =>
+        isAuthorizedExploreTarget(request.url(), this.#opts.allowlist) &&
+        this.#responseNevers.some(
+          (n) => matchesUrlGlob(n.spec.url, request.url()) && (n.spec.method === undefined || n.spec.method.toUpperCase() === request.method().toUpperCase()),
+        );
+      page.on("request", (request: Request) => {
+        if (named(request)) this.#responseInFlight.add(request);
+      });
+      page.on("requestfinished", (request: Request) => this.#responseInFlight.delete(request));
+      page.on("requestfailed", (request: Request) => this.#responseInFlight.delete(request));
       page.on("response", (response: Response) => {
         const url = response.url();
         if (!isAuthorizedExploreTarget(url, this.#opts.allowlist)) return;
@@ -585,6 +601,7 @@ export class InvariantMonitor {
     const unknown: string[] = [];
     const held: string[] = [];
     const pageUrl = safeUrl(page);
+    this.#lastPage = page;
     // #195: the responses a `never.response` drains now happened during this action (or the page load).
     if (action !== null && action.op !== null) {
       this.#actions += 1;
@@ -987,13 +1004,19 @@ export class InvariantMonitor {
 
   /**
    * #195 — checks every `never.response` invariant against the responses that arrived since its last
-   * check (attributed to the last step). Call once when the run ends, so a response to the LAST
-   * action — one that landed after that action's check — is never lost. Never throws.
+   * check (attributed to the last step). Call once when the run ends (`finishDeclaredRun`), so a
+   * response to the LAST action — one still in flight at that action's check (a long-poll-slow
+   * reply) — is never lost: requests a glob names are awaited first, for at most `FLUSH_WAIT_MS`.
+   * Never throws.
    */
-  flushResponses(page: Page): AfterResult {
+  async flushResponses(): Promise<AfterResult> {
     const violations: InvariantViolation[] = [];
     const held: string[] = [];
-    const pageUrl = safeUrl(page);
+    const deadline = Date.now() + FLUSH_WAIT_MS;
+    while (this.#responseInFlight.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, FLUSH_POLL_MS));
+    }
+    const pageUrl = this.#lastPage === null ? "" : safeUrl(this.#lastPage);
     for (const n of this.#responseNevers) {
       if ((this.#responseHits.get(n.id)?.total ?? 0) === 0) continue;
       const decl = this.#invariants.find((c) => c.decl.id === n.id)?.decl;
@@ -1284,6 +1307,25 @@ export class InvariantDefectLog {
   defects(): InvariantDefect[] {
     return [...this.#defects.values()].map(({ d, occurrences }) => ({ ...d, occurrences }));
   }
+}
+
+/**
+ * #195 — a mission's declared invariants: the monitor, its defect log, and the repro of the LAST
+ * checked action (what an end-of-run finding reproduces). Shared by every frontier mission.
+ */
+export interface DeclaredRun {
+  readonly monitor: InvariantMonitor;
+  readonly log: InvariantDefectLog;
+  lastRepro: InvariantDefect["repro"] | null;
+}
+
+/**
+ * #195 — the one end-of-run path for a mission's declared invariants: flushes `never.response` hits
+ * that landed after the last action's check into the log, attributed to that action. Never throws.
+ */
+export async function finishDeclaredRun(d: Pick<DeclaredRun, "monitor" | "log" | "lastRepro">): Promise<void> {
+  const r = await d.monitor.flushResponses().catch(() => null);
+  for (const v of r?.violations ?? []) d.log.add(v, d.lastRepro ?? { recordingStepIndex: 0 });
 }
 
 /** Flat step count of a Recording (the next step's index). */
