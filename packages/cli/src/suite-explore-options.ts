@@ -111,6 +111,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   after: { shape: "string", appliesTo: ["goal"] },
   allowShellHooks: { shape: "boolean", appliesTo: ["goal"] },
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
+  // #202: a success check satisfied before the run's first action is a warning, not a failure
+  allowVacuousChecks: { shape: "boolean", appliesTo: ["goal"] },
 } as const satisfies Record<string, SuiteExploreOption>;
 
 export type SuiteExploreOptionName = keyof typeof SUITE_EXPLORE_OPTIONS;

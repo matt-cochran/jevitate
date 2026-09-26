@@ -125,6 +125,10 @@ function assertConforms(result: unknown, strategy: string): ReturnType<typeof Mi
   const core = MissionResultSchema.parse(json);
   expect(core.schemaVersion).toBe(MISSION_RESULT_SCHEMA_VERSION);
   expect(core.strategy).toBe(strategy);
+  // #203: every strategy's result carries the host's health and its environment-degraded findings.
+  expect(core.hostHealth, `${strategy}: hostHealth`).toMatchObject({ cores: expect.any(Number), steps: expect.any(Number) });
+  expect(core.hostHealth!.samples).toBeGreaterThanOrEqual(2);
+  expect(core.environmentDegraded).toEqual([]);
   const file: unknown = JSON.parse(readFileSync(core.resultPath, "utf8"));
   const persisted = PersistedMissionResultSchema.safeParse(file);
   expect(persisted.success, `${strategy} (persisted): ${persisted.success ? "" : JSON.stringify(persisted.error.issues, null, 2)}`).toBe(true);

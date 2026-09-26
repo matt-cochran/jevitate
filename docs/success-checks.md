@@ -46,8 +46,11 @@ In these specs:
   A method of `*` matches any method. **The glob must start with `/`** (it matches the
   request's path, not a full URL) — `requestMade:POST */Foo` is rejected with
   `path glob must start with "/" (got "*/Foo")`, not the generic shape error.
-- Network checks look only at the requests the run itself made. The reload that
-  `reloadThen` performs is not counted.
+- Network checks look only at the requests the run itself made: those sent **after the run's
+  first action** (a click, a type, a select… or a `reload` the run chose). A request the page load, a poll or
+  anything before that first action sent is not counted (there is no `since:<step>` qualifier;
+  a poll that keeps firing after the first action still counts). The reload that `reloadThen`
+  performs is not counted.
 - The goal loop can also choose a `reload` step itself.
 
 **When the checks must hold (`--success-when`).** By default (`final`) every check is read
@@ -58,6 +61,24 @@ page and never changed fails as vacuous, with a warning in the result (`checkWar
 Once every check has held, code ends the run as done before the next action, so it never
 keeps acting or writing past a met goal. `reloadThen` checks are always read on the final
 page.
+
+**Vacuous checks (`--allow-vacuous-checks`).** A check that was already satisfied before the
+run did anything cannot verify the goal, so by default it **fails**, and the result names it
+(`checkWarnings`), e.g. `check 'visible:testId=list' held at step 0, before any action — it
+cannot verify the goal`. A run that proved nothing is never clean. This covers:
+
+- a page or `reloadThen` check that already held on the seed page and was never seen not
+  holding at a later settled step (a results container that renders empty at once: its
+  content only arrives after the action, but `visible:` holds from the first look);
+- a `requestMade` / `responseStatus` check matched only by requests sent before the run's
+  first action (page load, polling).
+
+Use a check the goal's own work must change instead: `count:<item d>|min=1` for a list that
+should gain an entry, `textIncludes:<d>|<text>` for the content, `reloadThen:…` for
+persistence. `--allow-vacuous-checks` (suite: `"allowVacuousChecks": true` on a goal item or
+target) downgrades a vacuous check to a warning — it then counts as a pass, and network checks
+count every captured request again. Under `--success-when held` this is the same rule as the
+start-page rule above.
 
 The result lists each check with what the oracle saw, so a failing run names the
 check that caught it:

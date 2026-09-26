@@ -11,6 +11,7 @@ import { monitorFor } from "../page-monitor.js";
 import { perceive } from "../perceive.js";
 import { verifyFix, type VerifySession } from "../verify-fix.js";
 import { ScriptedJudge, withSession } from "../testkit.js";
+import { HostHealthSampler } from "../host-health.js";
 
 /**
  * Owner ruling 7 — a hang is a first-class finding, proven by reproducing it in FRESH contexts.
@@ -515,5 +516,90 @@ describe("hang evidence carries the host's resource pressure", () => {
       expect(result.outcome).toBe("inconclusive");
     },
     120_000,
+  );
+});
+
+/**
+ * #203 — a hang met while the host was STARVED is the environment, not the app: with the run's
+ * host-health sampler reporting starvation (a deterministic fake host), the same pages that yield a
+ * hang finding above are marked `environment-degraded` instead — advisory, never a hang finding —
+ * and the run ends `inconclusive` rather than `hang`.
+ */
+describe("a hang on a starved host is environment-degraded, never a hang finding (#203)", () => {
+  const starvedHost = (): HostHealthSampler =>
+    new HostHealthSampler({
+      probe: async () => ({ sample: null, overThreshold: null, loadPerCore: 3.5 }),
+      eventLoopLagMs: () => 0,
+      intervalMs: 0,
+      attribute: true,
+      cores: 4,
+    });
+
+  it(
+    "adversarial: the busy-looping page is recorded as environment-degraded, with no hang finding",
+    async () => {
+      const health = starvedHost();
+      const result = await withSession(
+        "hang-starved-",
+        async (session) => {
+          const actor = CastActor.named("hang").whoCan(new BrowseTheWeb(session, [origin]));
+          return runAdversarialMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+            generation: new FakeGenerationGateway(),
+            seedUrl: `${origin}/busy`,
+            allowlist: [origin],
+            strategies: ["nav-during-pending"],
+            bounds: { maxDecisions: 1 },
+            hostHealth: health,
+            ...FAST,
+          });
+        },
+        origin,
+      );
+      expect(result.hangs).toEqual([]);
+      const degraded = health.findings();
+      expect(degraded).toHaveLength(1);
+      expect(degraded[0]).toMatchObject({ kind: "environment-degraded", finding: "hang", cause: "load 3.50/core > 2", advisory: true });
+      expect(result.outcome).not.toBe("hang");
+    },
+    120_000,
+  );
+
+  it(
+    "goal: the stalled-import ui-no-progress ends the run inconclusive (degraded-environment), not hang",
+    async () => {
+      const health = starvedHost();
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "click", target: "0" }, { op: "scroll_down" }]);
+      const result = await withSession(
+        "hang-stall-starved-",
+        async (session) => {
+          const actor = CastActor.named("stall").whoCan(new BrowseTheWeb(session, [origin]));
+          return runGoalBasedMission({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "import the file",
+            allowlist: [origin],
+            startUrl: `${origin}/import`,
+            successAssertion: { kind: "visible", target: { text: "Imported" } },
+            openFreshSession: freshSession,
+            stallMs: 600,
+            oracleTimeoutMs: 200,
+            hostHealth: health,
+          });
+        },
+        origin,
+      );
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.run.stop).toBe("inconclusive");
+      expect(result.hang).toBeUndefined();
+      expect(result.run.failure?.kind).toBe("degraded-environment");
+      expect(health.findings()).toEqual([
+        expect.objectContaining({ kind: "environment-degraded", finding: "no-progress", advisory: true }),
+      ]);
+    },
+    180_000,
   );
 });

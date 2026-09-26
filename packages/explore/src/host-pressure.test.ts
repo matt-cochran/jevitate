@@ -23,10 +23,17 @@ const ctx: DraftContext = { environment: { os: "linux x64", node: "v22", target:
 
 describe("hostProbe — the admission sample, judged by the admission thresholds", () => {
   it("reports the exceeded threshold, or null within thresholds, or the sampling error", async () => {
-    expect((await hostProbe(signals(PRESSURED))()).overThreshold).toMatch(/^memory pressure full avg10=7\.25% > 5%/);
-    expect(await hostProbe(signals(CALM))()).toEqual({ sample: CALM, overThreshold: null });
-    const broken = await hostProbe({ sample: async () => Promise.reject(new Error("no /proc")) })();
+    const noLoad = () => undefined;
+    expect((await hostProbe(signals(PRESSURED), undefined, undefined, noLoad)()).overThreshold).toMatch(/^memory pressure full avg10=7\.25% > 5%/);
+    expect(await hostProbe(signals(CALM), undefined, undefined, noLoad)()).toEqual({ sample: CALM, overThreshold: null });
+    const broken = await hostProbe({ sample: async () => Promise.reject(new Error("no /proc")) }, undefined, undefined, noLoad)();
     expect(broken).toEqual({ sample: null, overThreshold: null, error: "no /proc" });
+  });
+
+  it("carries the load average per core (#203) when the platform has one — even when the sample failed", async () => {
+    expect(await hostProbe(signals(CALM), undefined, undefined, () => 2.5)()).toEqual({ sample: CALM, overThreshold: null, loadPerCore: 2.5 });
+    const broken = await hostProbe({ sample: async () => Promise.reject(new Error("no /proc")) }, undefined, undefined, () => 1)();
+    expect(broken).toEqual({ sample: null, overThreshold: null, error: "no /proc", loadPerCore: 1 });
   });
 });
 

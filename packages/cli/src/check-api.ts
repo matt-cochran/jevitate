@@ -948,6 +948,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         goal,
         successChecks,
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
+        ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
         allowlist: item.t.allowlist,
         judge,
         gen,

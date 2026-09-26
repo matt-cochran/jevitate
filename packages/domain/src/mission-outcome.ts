@@ -81,7 +81,11 @@ export type MissionFailureKind =
   /** The operator's configuration failed before the app was exercised — e.g. a fixture setup (#140/#144). Never a SUT finding. */
   | "configuration"
   /** No step completed within the mission's stall watchdog: it ended rather than idle (#114). */
-  | "stalled";
+  | "stalled"
+  /** Most steps (or the finding that ended the run) ran on a starved host: it proved nothing (#203). */
+  | "degraded-environment"
+  /** The frontier emptied because its actions timed out, not because its states ran out (#203). */
+  | "insufficient-exploration";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;

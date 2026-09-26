@@ -13,6 +13,7 @@ import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing
 import { hangFingerprint, outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
 import { hostProbe, type HostPressure, type HostProbe } from "../host-pressure.js";
+import type { HostHealthSampler } from "../host-health.js";
 import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
 import { NOT_REPLAYED, hangFinding, hangOutcome, reproduceHang, type HangFinding, type HangReproduction } from "../hang-repro.js";
 import type { VerifySession } from "../verify-fix.js";
@@ -269,6 +270,8 @@ export interface AdversarialMissionParams {
   readonly requestBoundMs?: number;
   /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
+  /** The run's host-health sampler (#203): a hang met while the host was starved is `environment-degraded`, never a finding. */
+  readonly hostHealth?: HostHealthSampler;
   /** The target's timing configuration (API path prefixes). */
   readonly timingConfig?: TimingConfig;
   /** The target's settle configuration (background requests, long-poll threshold). */
@@ -599,9 +602,18 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       });
       return;
     }
+    const judged = params.hostHealth === undefined ? { host: await probeHost(), starved: null } : await params.hostHealth.judge();
+    if (judged.starved !== null) {
+      // #203: met while the host was starved — advisory `environment-degraded`, never a hang finding.
+      params.hostHealth?.markDegraded(
+        { finding: h.kind === "ui-no-progress" ? "no-progress" : "hang", detail: `${h.kind}: ${h.detail}`, step },
+        judged.starved,
+      );
+      return;
+    }
     const heapNow = await sampleHeap(sessions.page, 1_000);
     if (heapNow !== null) h = { ...h, heapBytes: heapNow.usedBytes };
-    h = { ...h, host: await probeHost() };
+    h = { ...h, host: judged.host };
     const recordingStepIndex = Math.max(0, recorder.stepCount - 1);
     const partial = recorder.tryFinish({ intent: "adversarial" });
     const reproduction: HangReproduction =

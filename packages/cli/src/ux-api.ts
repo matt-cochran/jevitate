@@ -80,6 +80,9 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
+import { finishHostHealth, startHostHealth } from "./host-health-run.js";
+import type { HostHealthSampler } from "@jevitate/explore";
+import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
 import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type MissionTarget, type ServerLogOptions } from "./explore-api.js";
@@ -563,6 +566,8 @@ export class UxAnalysisFailedError extends Error {
 // ---------- Live: `explore --strategy usability` ----------
 
 export interface RunUsabilityMissionOptions {
+  /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
+  readonly hostHealth?: HostHealthSampler;
   readonly url: string;
   readonly job: string;
   readonly allowlist: readonly string[];
@@ -661,6 +666,10 @@ export class UsabilityInvariantsUnsupportedError extends Error {
 }
 
 export interface RunUsabilityMissionResult {
+  /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
+  readonly hostHealth: HostHealthSummary;
+  /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
+  readonly environmentDegraded: EnvironmentDegraded[];
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "usability";
@@ -791,7 +800,12 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  const session = await port.open(launch);
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const health = await startHostHealth(opts.hostHealth);
+  const session = await port.open(launch).catch((e: unknown) => {
+    health.stop();
+    throw e;
+  });
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
   // #149: one signal finding per distinct fingerprint (route + element) — a wide table seen across
@@ -830,6 +844,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
+    hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -844,6 +859,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // every settled step also refreshes the in-memory storageState snapshot (a cheap no-op when
   // `--save-storage-state` was not given).
   const journalListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    health.noteStep(entry);
     capture.noteEntry(entry, all);
     journal.onTranscriptEntry(entry, capture.withScreenshots(all));
     snapshotter.noteSettledStep(currentUrlSafe(session));
@@ -880,6 +896,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       onTranscriptEntry: serverLog?.onTranscriptEntry ?? journalListener,
       onRecording: journal.onRecording,
+      hostHealth: health,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       actor,
       judge: opts.judge,
@@ -1035,7 +1052,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     // #150 — a declared mission spend budget crossed (or a paid action was refused before crossing
     // it): a clean, deliberate stop, never `crashed` — but never `clean` either (the run's own work
     // past the stop is unproven), so it maps to `inconclusive` the same as `run.stop === "inconclusive"`.
-    const runOutcome: MissionOutcome =
+    const loopOutcome: MissionOutcome =
       run.stop === "crashed"
         ? "crashed"
         : run.stop === "inconclusive" || run.stop === "budget"
@@ -1043,6 +1060,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
           : run.stop === "hang"
             ? hangOutcome(hang?.reproduction.status ?? "inconclusive")
             : "clean";
+    // #203: most steps on a starved host → `inconclusive` (degraded-environment), never `clean`.
+    const host = await finishHostHealth(health, loopOutcome);
+    const runOutcome: MissionOutcome = host.outcome;
     const base = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "usability" as const,
@@ -1067,7 +1087,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       sideEffects: run.sideEffects,
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
-      ...(run.failure === undefined ? {} : { failure: run.failure }),
+      ...(run.failure === undefined ? (host.failure === undefined ? {} : { failure: host.failure }) : { failure: run.failure }),
       ...(run.crash === undefined ? {} : { crash: run.crash }),
       finalUrl: run.finalUrl,
       decisions: run.decisions,
@@ -1079,6 +1099,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...serverLogResult(serverLogRun),
       defects: advisoryDefects(serverLogRun?.defects),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
+      ...host.fields,
     };
     if (outcome.kind === "failed") {
       // The analysis is the review's product: without it the review is inconclusive (never a
@@ -1108,6 +1129,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   } finally {
     capture.detach();
     disarmKillSwitch();
+    health.stop();
     // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
