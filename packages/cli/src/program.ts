@@ -585,14 +585,16 @@ Outcomes, stop reasons and exit codes:
   Every result carries a canonical missionOutcome (and exitCode):
     clean 0 · defects-found 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
   --strategy goal's own "outcome" has its own exit codes instead:
-    succeeded 0 · exhausted 1 · blocked 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
+    succeeded 0 · failed 1 · exhausted 1 · blocked 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
   --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
     done | blocked | exhausted | no-progress | hang | inconclusive | crashed
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
-    | scope-unreachable | hang | crashed
+    | scope-unreachable | targets-refused | hang | crashed
   --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
-    exhausted | insufficient-exploration | cap | scope-unreachable | stalled | crashed | hang
+    exhausted | insufficient-coverage | cap | scope-unreachable | stalled | crashed | hang
+  A run that proved nothing is inconclusive with failure.kind insufficient-coverage (the same word as
+  the frontier outcome), and failure.message says how to reach clean.
   A starved host (#203): every result carries "hostHealth" (peak load/core, min free memory, peak
   event-loop lag, slowest render). A hang, click timeout or no-progress met while the host was
   starved is listed in "environmentDegraded" (advisory, never a finding); a run most of whose steps

@@ -25,9 +25,9 @@ fields the same way:
 |---|---|---|
 | `schemaVersion` | `1` | Increases whenever any field in this table changes incompatibly. |
 | `strategy` | string | The strategy that produced the result. |
-| `missionOutcome` | string | The verdict. It is one of the [mission outcomes](./outcomes.md), except that a goal run keeps its own `succeeded`, `exhausted` and `blocked`. |
+| `missionOutcome` | string | The verdict. It is one of the [mission outcomes](./outcomes.md), except that a goal run keeps its own `succeeded`, `failed`, `exhausted` and `blocked` (each folds onto `clean` or `defects-found`; see [outcomes](./outcomes.md)). |
 | `exitCode` | number | The process exit code for `missionOutcome`. This is the value to compare across strategies. |
-| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects. Each one has a `fingerprint` (16 hex characters) and a `kind`. A defect the strategy reports without gating on it (a usability run's `server-log` defect) has `advisory: true`. |
+| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects — and a coverage/exploratory run's frontier defects (`horizontal-overflow`, `judgment-flagged-state`), which are also listed with their repro Recording in `coverage.defects`. Each one has a `fingerprint` (16 hex characters) and a `kind`. A defect the strategy reports without gating on it (a usability run's `server-log` defect) has `advisory: true`. |
 | `hangs` | array | Every hang finding, each with its `fingerprint` and reproduction. |
 | `recordingPaths` | string[] | Every Recording the run wrote: one for goal, adversarial and usability runs, one per path for coverage and feature runs. It can be empty when a frontier run found no path. |
 | `transcriptPath` | string | The run's decision transcript. |
@@ -35,7 +35,7 @@ fields the same way:
 | `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
-| `failure` | object | Present only when the run broke. It says why the run ended `crashed` or `inconclusive`. |
+| `failure` | object | Present when the run broke, proved nothing, or (goal) failed a check after the model's `done`. `failure.kind` says why the run ended `crashed` or `inconclusive` (e.g. `insufficient-coverage`, `vacuous-check`, `job-incomplete`, `degraded-environment`) or `failed` (`success-check-failed`), and `failure.message` names the cause. |
 | `hostHealth` | object | The host's health over the run (#203): peak load per core, minimum free memory, peak driver event-loop lag, the slowest render, how many steps ran on a starved host. See [a starved host](./outcomes.md#a-starved-host-hosthealth-environmentdegraded). Additive: older results do not have it. |
 | `environmentDegraded` | array | Hangs, click timeouts and no-progress stops met while the host was starved: advisory (`advisory: true`), never a defect or hang, never failing the run. |
 

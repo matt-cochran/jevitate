@@ -181,7 +181,7 @@ Recording are flushed step by step.
 | `hang` | 3 | the app hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
-Goal runs also report their own `outcome` (`succeeded`, `exhausted`, `blocked`, …). Every value is
+Goal runs also report their own `outcome` (`succeeded`, `failed`, `exhausted`, `blocked`, …). Every value is
 in [docs/outcomes.md](./docs/outcomes.md).
 
 ## Authenticated missions
