@@ -132,7 +132,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | **Missions** | `explore` with a `--goal`, or `--strategy adversarial \| coverage \| exploratory \| usability`, or `--feature <name>` ([exploration](./docs/exploration.md)) |
 | **Success checks** | URL, visibility, text, values, counts, network (`requestMade`, `responseStatus`), persistence (`reloadThen`), computed style and layout. Find-out goals are answered only with grounded claims ([success checks](./docs/success-checks.md)) |
 | **App-declared invariants** | rules over DOM, network and read-only probes, checked around every action ([invariants](./docs/invariants.md)) |
-| **Reproduce and verify** | `verify-fix`, `regression capture`, `regression run` ([verification](./docs/verification.md)) |
+| **Reproduce and verify** | `verify-fix`, `regression capture`, `regression run`, and `ledger add` / `ledger verify` to re-check a finding by fingerprint long after its run ([verification](./docs/verification.md)) |
 | **CI** | `jevitate check --suite` with a budget, JUnit and SARIF; `report` and `diff` for deduped findings and baselines ([CI](./docs/ci.md)) |
 | **Real apps** | storage-state logins, bound secrets and TOTP, fixtures that reset state around every replay, repeat-and-vote, persona and multi-actor runs ([auth](./docs/authentication.md), [fixtures](./docs/fixtures.md), [multi-run](./docs/multi-run.md)) |
 | **Evidence** | hangs (confirmed by replay), page timing, backend log correlation, redacted issue drafts ([exploration](./docs/exploration.md), [operations](./docs/operations.md)) |

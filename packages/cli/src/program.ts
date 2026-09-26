@@ -92,6 +92,8 @@ import {
   type QueuedMissionExecutor,
 } from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { registerLedgerCommands } from "./ledger-cli.js";
+import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { resolveUsagePricing } from "./usage-config.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
@@ -2651,12 +2653,14 @@ export function buildProgram(deps: CliDeps): Command {
       withBrowserLaunchFlags(
         program
           .command("verify-fix")
-          .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
+          .description("replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay"),
       ),
     ),
   )
-    .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
-    .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
+    .argument("[fingerprint]", "the defect/hang fingerprint to verify (same as --fingerprint)")
+    .option("--result <path>", "the mission's <stem>.result.json (written next to its Recording); default: the fingerprint's ledger entry (#195)")
+    .option("--fingerprint <fp>", "the defect/hang fingerprint to verify")
+    .option("--regressions-dir <path>", "regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions)")
     .option("--storage-state <file>", "override the storageState the mission ran with")
     .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
     .option(
@@ -2685,11 +2689,12 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command) {
+    .action(async function (this: Command, positional?: string) {
       const o = this.opts<
         {
-          result: string;
-          fingerprint: string;
+          result?: string;
+          fingerprint?: string;
+          regressionsDir?: string;
           storageState?: string;
           replays?: string;
           allowEmulationOverride?: boolean;
@@ -2703,17 +2708,25 @@ export function buildProgram(deps: CliDeps): Command {
           EmulationFlags
       >();
       let verifyFixEmulation: EmulationSpec | undefined;
+      const fingerprint = o.fingerprint ?? positional;
       try {
         verifyFixEmulation = emulationFromFlags(o);
+        if (fingerprint === undefined) throw new Error("a fingerprint is required: verify-fix <fp> or --fingerprint <fp>");
+        if (o.fingerprint !== undefined && positional !== undefined && o.fingerprint !== positional) {
+          throw new Error(`two different fingerprints given (${positional} and --fingerprint ${o.fingerprint})`);
+        }
       } catch (err) {
         emitJson(program, fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
+        process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
         return;
       }
       try {
+        // #195: without --result, the fingerprint's ledger entry is the repro material (the run's output may be long gone).
+        const resultPath = o.result ?? ledgerEntryFor(fingerprint, o.regressionsDir);
         const report = await runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
-          resultPath: o.result,
-          fingerprint: o.fingerprint,
+          resultPath,
+          fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
@@ -2729,7 +2742,7 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, ok(withEngine(report)));
         process.exitCode = report.exitCode;
       } catch (err) {
-        if (err instanceof VerifyFixInputError || err instanceof TargetConfigError) {
+        if (err instanceof VerifyFixInputError || err instanceof TargetConfigError || err instanceof LedgerError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -2739,6 +2752,17 @@ export function buildProgram(deps: CliDeps): Command {
         process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
       }
     });
+
+  // `ledger add|verify|list` (#195 part 6): the repro material verify-fix needs, kept by fingerprint.
+  registerLedgerCommands(
+    program,
+    {
+      ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
+      ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+      browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
+    },
+    withBrowserLaunchFlags,
+  );
 
   // Additive: `explore author-journey` — Jev-driving authors a promotable
   // Journey (Ticket #6). Drives the goal-based mission, feeds its take(s)
