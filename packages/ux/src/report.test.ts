@@ -197,14 +197,14 @@ describe("buildReport", () => {
     const onRoute = (route: string, confidence: number) => ({ ...grounded(finding("minor-1", "minor", confidence)), route });
 
     it("defaults to DEFAULT_MAX_FINDINGS_PER_ROUTE", () => {
-      expect(buildReport({ kind: "analyzed", findings: [], coverage: fullCoverage }).maxFindingsPerRoute).toBe(DEFAULT_MAX_FINDINGS_PER_ROUTE);
+      expect(buildReport({ kind: "analyzed", findings: [], coverage: fullCoverage }).maxFindingsPerPage).toBe(DEFAULT_MAX_FINDINGS_PER_ROUTE);
     });
 
     it("caps findings per route, highest-confidence first, and counts the rest as suppressed (per-page-cap) — never dropped silently", () => {
       // The motivating case (#198): 7 findings collapsed onto one route/link.
       const seven = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3].map((c) => onRoute("/decisions", c));
       const report = buildReport({ kind: "analyzed", findings: seven, coverage: fullCoverage }, { minConfidence: 0, maxFindingsPerRoute: 3 });
-      expect(report.maxFindingsPerRoute).toBe(3);
+      expect(report.maxFindingsPerPage).toBe(3);
       expect(report.findings).toHaveLength(3);
       expect(report.findings.map((f) => f.confidence)).toEqual([0.9, 0.8, 0.7]);
       expect(report.suppressed.byReason["per-page-cap"]).toBe(4);

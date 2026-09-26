@@ -86,7 +86,11 @@ relative paths resolve against the suite file):
   the storage state (as `journey run --storage-state`) and with the fixtures; goals get the
   `secretFields` (env-sourced `--secret-field` specs, resolved before anything runs) and the
   fixtures, and usability missions get the secret fields. Without `fixtures`, the target's entry
-  in `~/.jevitate/targets.json` applies.
+  in `~/.jevitate/targets.json` applies. A `storageState` file holds live session cookies: write it
+  under `~/.jevitate/` (or generate it at CI runtime, outside the repo checkout) — a repo-relative
+  path such as `auth/admin.json` is not covered by `jevitate init`'s `.gitignore` (that file only
+  protects the repo's own `.jevitate/`) or by anything else jevitate writes, so it is never
+  gitignored automatically. See [authentication](./authentication.md#authenticated-missions).
 - `viewport` (`"375x812"`) or `device` (a Playwright device name, e.g. `"iPhone 13"`): set on a
   target, it is the default for every item; set on a Journey (object form), goal or mission, it
   overrides that default for the item. An unknown device, or both on one entry, is refused before
@@ -159,7 +163,7 @@ boolean, and a number is a JSON number.
 | Pacing | `stallTimeout` (seconds), `hangReplays` | `stallTimeout`: coverage, exploratory, feature; `hangReplays`: goals, adversarial |
 | Scope and coverage | `scope` (`"app"`), `minControlCoverage`, `requireFormSubmit` | `scope`: coverage, exploratory; the others: adversarial |
 | Overflow (#149) | `checkOverflow`, `ignoreOverflow` | coverage, exploratory, adversarial, usability |
-| Usability | `show`, `minConfidence` | usability |
+| Usability | `show`, `minConfidence`, `maxFindingsPerPage` | usability |
 
 - An item that sets an option that does not apply to it is refused, naming the path
   (`$.targets[0].missions[1].fixture: does not apply to a coverage mission item`), just as
@@ -251,13 +255,16 @@ subdirectories. Each defect lists:
 Advisory findings are listed separately. The report only reads results that were already
 redacted: it adds no page data and makes no model call.
 
-**Finding identity.** Findings are matched across modes, runs and builds by a stable key. When
-the finding has an engine fingerprint (a hard-signal defect, a hang, an invariant, a 4xx
-advisory), the key is that fingerprint. The fingerprint already folds in the signal, the templated
-route or endpoint, and the message class. Otherwise (a UX finding, a failed Journey step, a failed
-goal check) the key is the signal, the templated route (`/items/42` → `/items/:id`), the control
-and the request. Two findings whose fingerprint cascades overlap are merged: for example, the same
-broken call surfacing as a 503 in one run and as its page error in another.
+**Finding identity.** Findings are matched across modes, runs and builds by a stable key, always
+shaped `<category>:<12 hex>` (e.g. `defect:9d290847ccea`) — never the raw 16-hex fingerprint
+itself. When the finding has an engine fingerprint (a hard-signal defect, a hang, an invariant, a
+4xx advisory), the key is a hash of that fingerprint (folded with the finding's category), so the
+same fingerprint always yields the same key. The fingerprint already folds in the signal, the
+templated route or endpoint, and the message class. Otherwise (a UX finding, a failed Journey step,
+a failed goal check) the key is a hash of the signal, the templated route (`/items/42` →
+`/items/:id`), the control and the request. Two findings whose fingerprint cascades overlap are
+merged: for example, the same broken call surfacing as a 503 in one run and as its page error in
+another.
 
 **Baselines and diffs.**
 

@@ -367,6 +367,7 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
         control: d?.name ?? d?.label ?? d?.text ?? entry.target,
         // Several actions before one settled snapshot (type, then send): judged together, from the first.
         url: pending?.url ?? entry.url,
+        step: pending?.step ?? entry.step,
       };
     },
     onRecording: (recording) => {

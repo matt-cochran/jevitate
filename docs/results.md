@@ -62,6 +62,12 @@ These fields are still written in 0.2.0 and will be removed in the next minor re
 |---|---|
 | `serverLogDefects` | the entries in `defects` with `kind: "server-log"` |
 | `recordingPath` (goal, adversarial, usability) | `recordingPaths[0]` |
+| `usage.usd` | `usage.totalUsd` |
+| `usage.jevPriceSource` | `usage.priceSource` (also covers generation calls, not just Jev's) |
 
-Before this schema, a coverage, adversarial, feature or usability run listed its `server-log`
+Before this schema, a goal, coverage, adversarial, feature or usability run listed its `server-log`
 defects only in `serverLogDefects`. Readers that only looked at `defects` missed them.
+`serverLogDefects` (like the `server-log` entries it duplicates in `defects`) is present on EVERY
+strategy's result, but only when that run actually checked server logs (`--log-source`/`logSource`)
+AND found a matching defect — it is absent, not "missing", on a run with no log source configured or
+no match. A result with neither is not evidence that a strategy stopped writing it.
