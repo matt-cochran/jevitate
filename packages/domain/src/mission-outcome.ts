@@ -63,6 +63,43 @@ export function combineOutcomes(outcomes: readonly MissionOutcome[]): MissionOut
   return outcomes.reduce<MissionOutcome>((acc, o) => worstOutcome(acc, o), "clean");
 }
 
+/**
+ * A goal run's (`--goal`) own endings besides the shared `MissionOutcome`s, each folded onto the
+ * canonical outcome — and so onto its exit code — HERE, the one place the goal vocabulary maps to
+ * the portable verdict (the CLI's `goalExitCode`, MCP `get_mission_result` and the result schema all
+ * read it):
+ *
+ *  - `succeeded` → `clean` (0): every independent success check held.
+ *  - `failed`    → `defects-found` (1): the model said `done`, but an independent success check did
+ *                  not hold (#209) — the check names what failed (`failure.kind: "success-check-failed"`).
+ *  - `exhausted` → `defects-found` (1): the action/decision budget ran out before the checks held.
+ *  - `blocked`   → `defects-found` (1): the loop stopped without the goal met — the model gave up
+ *                  (no matching control, repeated unverifiable `done`), or no progress was possible.
+ *
+ * A vacuous check (#202) — satisfied before the run's first action — proves nothing either way: a
+ * run whose only failing checks are vacuous is `inconclusive` (`failure.kind: "vacuous-check"`),
+ * never one of these.
+ */
+export const GOAL_ONLY_OUTCOMES = ["succeeded", "exhausted", "blocked", "failed"] as const;
+export type GoalOnlyOutcome = (typeof GOAL_ONLY_OUTCOMES)[number];
+
+export const GOAL_OUTCOME_FOLD: Readonly<Record<GoalOnlyOutcome, MissionOutcome>> = {
+  succeeded: "clean",
+  failed: "defects-found",
+  exhausted: "defects-found",
+  blocked: "defects-found",
+};
+
+/** The canonical outcome of a goal run's own ending (a shared `MissionOutcome` folds onto itself). */
+export function foldGoalOutcome(outcome: GoalOnlyOutcome | MissionOutcome): MissionOutcome {
+  return Object.hasOwn(GOAL_OUTCOME_FOLD, outcome) ? GOAL_OUTCOME_FOLD[outcome as GoalOnlyOutcome] : (outcome as MissionOutcome);
+}
+
+/** The process exit code of any mission ending — a shared `MissionOutcome` or a goal run's own. */
+export function outcomeExitCode(outcome: GoalOnlyOutcome | MissionOutcome): number {
+  return MISSION_EXIT_CODES[foldGoalOutcome(outcome)];
+}
+
 /** True for outcomes that mean the run itself broke (its silence proves nothing). */
 export function isBrokenRun(outcome: MissionOutcome): boolean {
   return outcome === "inconclusive" || outcome === "crashed";
@@ -84,6 +121,12 @@ export type MissionFailureKind =
   | "stalled"
   /** Most steps (or the finding that ended the run) ran on a starved host: it proved nothing (#203). */
   | "degraded-environment"
+  /** Goal (#209): the model said `done`, but an independent success check did not hold. Outcome `failed`. */
+  | "success-check-failed"
+  /** Goal (#209): the only failing checks were vacuous (#202) — satisfied before any action. Outcome `inconclusive`. */
+  | "vacuous-check"
+  /** Usability (#209): the job under review was never completed — the review proves nothing about the rest. */
+  | "job-incomplete"
   /** The frontier emptied because its actions timed out, not because its states ran out (#203). */
   | "insufficient-exploration";
 

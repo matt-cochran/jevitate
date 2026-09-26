@@ -218,6 +218,13 @@ export interface ExploreConfig {
    */
   readonly successCheck?: () => Promise<boolean>;
   /**
+   * #209: what the in-run `successCheck` could NOT judge yet — e.g. a `reloadThen` check left to the
+   * final verdict, or a check that has held since before any action (vacuous so far). When it returns
+   * a string, an accepted `done` is recorded as PROVISIONAL (naming what is still pending), never as
+   * "goal verified": the mission's final, independent verdict decides.
+   */
+  readonly successCheckPending?: () => string | null;
+  /**
    * Idle patience (ms) of a conversational reply wait: how long to keep waiting while the page shows
    * no sign of working on the reply. Default 60s. While it IS working (request in flight, busy
    * indicator, reply still growing) the wait continues up to `replyCeilingMs` (#93).
@@ -311,6 +318,11 @@ export interface ExploreRun {
    * message, a visible alert. Absent when none was seen. Advisory evidence for the run's `reason`.
    */
   readonly blockingCause?: string;
+  /**
+   * #209: the run ended `blocked` because the model kept proposing `done` and code rejected every
+   * proposal (the success condition never held) — the model claimed the goal, it did not give up.
+   */
+  readonly doneRejected?: true;
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   /** Writes past the listed cap (`MAX_SIDE_EFFECTS`), counted — present only when some were. */
@@ -444,6 +456,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let outcome: RunOutcome | null = null;
   /** Why the run ended incomplete, when a specific detector ended it. */
   let incomplete: string | null = null;
+  /** #209: stopped because every `done` the model proposed was rejected. */
+  let endedOnRejectedDone = false;
   const unsent = new UnsubmittedTypeTracker();
   const conversation: { latestReply: string | null; sent: string[] } = { latestReply: null, sent: [] };
   /** Consecutive message generations made while the conversation was stuck (#122). */
@@ -1153,6 +1167,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // A run that typed sign-in credentials also carries what code observed about the sign-in
       // (#188): shown to the judgment as a trusted fact, and weighed by `groundDone`.
       const signIn = auth.signal(snap, isBound);
+      /**
+       * #209: what an accepted verdict may claim. The in-run success condition is only a proposal's
+       * grounding — when part of it is still pending (a `reloadThen` check judged after the run, a
+       * check holding since before any action), the transcript says so instead of "goal verified".
+       */
+      const pendingNote = (o: RunOutcome): string | null =>
+        o.status === "completed" && o.verifiedBy === "success-condition" ? (cfg.successCheckPending?.() ?? null) : null;
+      const acceptedBy = (o: RunOutcome): string => {
+        const pending = pendingNote(o);
+        if (pending !== null) return `the in-run success checks held, but the final verdict is still pending — ${pending}`;
+        return `goal verified by ${o.status === "completed" ? o.verifiedBy : "?"}`;
+      };
       const groundGoal = async (): Promise<{
         verdict: ReturnType<typeof groundDone>;
         judgments: Record<string, { value: boolean; probability: number }> | undefined;
@@ -1214,7 +1240,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (verdict.accept) {
           record(
             true,
-            `goal already met — stopped instead of "${decision.op}": verified by ${verdict.outcome.status === "completed" ? verdict.outcome.verifiedBy : "?"}`,
+            `goal already met — stopped instead of "${decision.op}": ${acceptedBy(verdict.outcome)}`,
             {
               op: "done",
               control: null,
@@ -1237,7 +1263,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (decision.op === "done") {
         const { verdict, judgments } = await groundGoal();
         if (verdict.accept) {
-          record(true, `done accepted: goal verified by ${verdict.outcome.status === "completed" ? verdict.outcome.verifiedBy : "?"}`, {
+          record(true, `done accepted${pendingNote(verdict.outcome) === null ? "" : " provisionally"}: ${acceptedBy(verdict.outcome)}`, {
             ...(judgments === undefined ? {} : { judgments }),
           });
           outcome = verdict.outcome;
@@ -1251,6 +1277,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         });
         if (doneRejections >= MAX_DONE_REJECTIONS) {
           incomplete = `the model proposed done ${doneRejections} times, but ${verdict.reason}`;
+          endedOnRejectedDone = true;
           stop = "blocked";
           break;
         }
@@ -2036,6 +2063,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     outcome: finalOutcome,
     ...(answer !== undefined && finalOutcome.status === "completed" ? { answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
+    ...(endedOnRejectedDone && stop === "blocked" ? { doneRejected: true as const } : {}),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }
       : {}),

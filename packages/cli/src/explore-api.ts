@@ -502,7 +502,7 @@ function serverLogOutcomeReason(newOutcome: GoalBasedOutcome | MissionOutcome, r
 }
 
 /** Outcomes whose `reason` describes a UI-side blocker worth pairing with a correlated server cause. */
-const BLOCKED_LIKE_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["blocked", "exhausted", "inconclusive"]);
+const BLOCKED_LIKE_OUTCOMES: ReadonlySet<GoalBasedOutcome> = new Set(["blocked", "exhausted", "failed", "inconclusive"]);
 const SERVER_CAUSE_MAX_CHARS = 160;
 
 /**
@@ -752,7 +752,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
               ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
             },
           }),
-      ...(mission.run.failure === undefined ? (host.failure === undefined ? {} : { failure: host.failure }) : { failure: mission.run.failure }),
+      // #209: a goal-specific miss (`success-check-failed`, `vacuous-check`) is typed too — after an
+      // engine failure or a starved host, which explain the run before the check does.
+      ...((): { failure?: MissionFailure } => {
+        const f = mission.run.failure ?? host.failure ?? mission.failure;
+        return f === undefined ? {} : { failure: f };
+      })(),
       ...(host.failure !== undefined
         ? { reason: host.failure.message }
         : goalOutcome === mission.outcome

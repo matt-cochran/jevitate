@@ -202,7 +202,8 @@ describe("goal loop — status text, quiet waits, held success, concrete reasons
     "#80: successWhen=held never passes a check that never held",
     async () => {
       const { result } = await run("/secret", [{ op: "done" }], [visible("secret")], { successWhen: "held" });
-      expect(result.outcome).toBe("blocked");
+      // #209: was `blocked` — the model kept saying done while the check never held: `failed`.
+      expect(result.outcome).toBe("failed");
       expect(result.assertionPassed).toBe(false);
     },
     120_000,

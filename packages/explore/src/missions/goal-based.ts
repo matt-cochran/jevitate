@@ -2,6 +2,7 @@ import type { Assertion, Recording } from "@jevitate/recording";
 import { checkAssertion, installFlashRecorder, readAssertionEvidence, readAssertionText } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import type { Page } from "playwright";
+import type { MissionFailure } from "@jevitate/domain";
 import { reloadPage } from "../act.js";
 import { monitorFor, type CapturedRequest, type RequestCapture } from "../page-monitor.js";
 import {
@@ -63,8 +64,13 @@ import { goalAsksForChange } from "../read-only.js";
  * Outcome:
  *  - `succeeded`  — the success assertion holds against the live final page.
  *  - `exhausted`  — the assertion did not hold and the loop hit a budget cap.
+ *  - `failed`     — (#209) the model said `done` (or kept proposing it until code gave up on it),
+ *                   but an independent success check did not hold: `failure.kind:
+ *                   "success-check-failed"`, the failing check named in `reason`/`failure.message`.
  *  - `blocked`    — the assertion did not hold and the loop stopped otherwise
- *                   (model done/blocked, no valid target, no-progress, …).
+ *                   (the model gave up, no valid target, no-progress, …).
+ *  - `inconclusive` (`failure.kind: "vacuous-check"`) — (#209) every failing check was vacuous
+ *                   (#202): satisfied before the run's first action, it proves nothing either way.
  *  - `inconclusive` — the model decision stayed unavailable; the run proves nothing.
  *  - `crashed`    — the engine failed (browser/page crash, unexpected exception).
  *                   Never a pass: the assertion is not trusted on a broken run.
@@ -144,6 +150,7 @@ export type GoalBasedOutcome =
   | "succeeded"
   | "exhausted"
   | "blocked"
+  | "failed"
   | "defects-found"
   | "hang"
   | "intermittent"
@@ -174,6 +181,11 @@ export interface GoalBasedResult {
    * which success check did not hold.
    */
   readonly reason?: string;
+  /**
+   * #209: the typed cause of a goal-specific miss — `success-check-failed` (outcome `failed`) or
+   * `vacuous-check` (outcome `inconclusive`). An engine failure stays on `run.failure`.
+   */
+  readonly failure?: MissionFailure;
   /** Declared-invariant violations (#86), deduped by fingerprint, each with its repro step. */
   readonly invariantDefects?: InvariantDefect[];
   /** Per declared invariant: how often it applied, held, was violated, or could not be read. */
@@ -427,10 +439,14 @@ function declaredInvariants(cfg: GoalBasedMissionConfig, page: Page): DeclaredHo
         withBudget.outcome === "succeeded" ||
         withBudget.outcome === "exhausted" ||
         withBudget.outcome === "blocked" ||
+        withBudget.outcome === "failed" ||
+        // #209: a vacuous check proved nothing, but a violated invariant was observed — it still wins.
+        withBudget.failure?.kind === "vacuous-check" ||
         withBudget.run.stop === "budget";
       const why = invariantDefects.map((d) => d.invariant.reason).join("; ");
+      const { failure: _goalFailure, ...rest } = withBudget;
       return {
-        ...withBudget,
+        ...(hard ? rest : withBudget),
         outcome: hard ? "defects-found" : withBudget.outcome,
         reason: withBudget.reason === undefined ? why : `${why}; ${withBudget.reason}`,
         invariantDefects,
@@ -559,6 +575,18 @@ async function adjudicatedRun(
       // Under `held`, a page check that already held (together, at a settled step) counts.
       ...(hasChecks
         ? {
+            // #209: what the in-run grounding cannot judge yet — so an accepted `done` is recorded as
+            // provisional, never "goal verified", while the final verdict may still fail it.
+            successCheckPending: (): string | null => {
+              const pending: string[] = [];
+              const reloads = checks.filter((c) => c.kind === "reloadThen").map((c) => `'${describeCheck(c)}'`);
+              if (reloads.length > 0) pending.push(`${reloads.join(", ")} is judged after the run (it reloads the page)`);
+              if (!allowVacuous) {
+                const since = stateChecks.filter(([i]) => seedHeld.has(i) && !changedSinceSeed.has(i)).map(([, c]) => `'${describeCheck(c)}'`);
+                if (since.length > 0) pending.push(`${since.join(", ")} has held since before any action (vacuous unless it changes)`);
+              }
+              return pending.length === 0 ? null : pending.join("; ");
+            },
             successCheck: () =>
               evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
                 (rs) =>
@@ -702,7 +730,8 @@ async function adjudicatedRun(
         ? {
             ...r,
             passed: false,
-            detail: `vacuous: already held on the start page before any action and never changed (--success-when held needs it to go from not holding to holding); ${r.detail}`,
+            // #209: the passing detail ("held on the final page") is not appended — it read as a pass.
+            detail: "vacuous: already held on the start page before any action and never changed (--success-when held needs it to go from not holding to holding)",
           }
         : r,
     );
@@ -728,7 +757,8 @@ async function adjudicatedRun(
       results[i] = {
         ...r,
         passed: false,
-        detail: `vacuous: held on the seed page at step 0, before any action, and never stopped holding — it cannot verify the goal (--allow-vacuous-checks downgrades this to a warning); ${r.detail}`,
+        // #209: the passing detail ("held on the final page") is not appended — it read as a pass.
+        detail: "vacuous: held on the seed page at step 0, before any action, and never stopped holding — it cannot verify the goal (--allow-vacuous-checks downgrades this to a warning)",
       };
     }
   }
@@ -740,11 +770,35 @@ async function adjudicatedRun(
     );
   }
   const assertionPassed = results.every((r) => r.passed);
+  // #209 — a truthful ending for a miss. `blocked` means the loop gave up; it is never used for a run
+  // whose model claimed the goal (`done`) and whose independent check then failed — that is `failed`,
+  // naming the check. A run whose ONLY failing checks are vacuous (#202) proved nothing either way:
+  // `inconclusive`, never a verdict about the app.
+  const failing = results.filter((r) => !r.passed);
+  const onlyVacuous = failing.length > 0 && failing.every((r) => r.detail.startsWith("vacuous:"));
+  const modelClaimedDone = run.stop === "done" || run.doneRejected === true;
   const outcome: GoalBasedOutcome = assertionPassed
     ? "succeeded"
-    : run.stop === "exhausted"
-      ? "exhausted"
-      : "blocked";
+    : onlyVacuous
+      ? "inconclusive"
+      : run.stop === "exhausted"
+        ? "exhausted"
+        : modelClaimedDone
+          ? "failed"
+          : "blocked";
+  const named = failing.map((r) => `'${r.check}'`).join(", ");
+  const failure: MissionFailure | undefined =
+    outcome === "inconclusive"
+      ? {
+          kind: "vacuous-check",
+          message: `success check ${named} was satisfied before the run's first action (vacuous) — it cannot verify the goal, so the run proved nothing; use a check that only holds once the goal's work is done, or --allow-vacuous-checks to accept it`,
+        }
+      : outcome === "failed"
+        ? {
+            kind: "success-check-failed",
+            message: `the model said done, but success check ${failing.map((r) => `'${r.check}' ${r.detail}`).join("; ")}`,
+          }
+        : undefined;
 
   // `runOutcome` and `outcome` must never disagree (#113): the in-run `done` grounding (the
   // `successCheck` given to `explore` above) evaluates every check EXCEPT `reloadThen` — a mid-run
@@ -766,6 +820,7 @@ async function adjudicatedRun(
     transcript: run.transcript,
     finalUrl: run.finalUrl,
     ...(outcome === "succeeded" ? {} : { reason: whyNot(run, results) }),
+    ...(failure === undefined ? {} : { failure }),
     ...(intermittentHangs.length === 0 ? {} : { intermittentHangs }),
     ...(warnings.length === 0 ? {} : { warnings }),
   };

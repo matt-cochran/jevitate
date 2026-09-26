@@ -306,7 +306,7 @@ function goalCheckObservations(result: Json, ctx: Ctx): FindingObservation[] {
   const goalName = str(suite?.item);
   const out: FindingObservation[] = [];
   const failedChecks = arr(result.checks).filter((c) => isRecord(c) && c.passed === false);
-  if (failedChecks.length === 0 && (outcome === "exhausted" || outcome === "blocked")) {
+  if (failedChecks.length === 0 && (outcome === "exhausted" || outcome === "blocked" || outcome === "failed")) {
     // The goal was not reached but no check names why (none evaluated): still a failed goal.
     out.push(
       observation(
