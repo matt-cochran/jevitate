@@ -104,14 +104,25 @@ For each app it prints:
 
 Then rolls the same precision/recall up **per app** and across all apps.
 
-### Current state of the real `labels/` corpus (honest as of this writing)
+### Current state of the real `labels/` corpus (measured 2026-09-26, issue #133)
 
-Every app directory in `labels/` currently has exactly ONE rater file — there is no second
-independent human (or model) rater yet, so `grader-eval.mjs hand` will correctly report "only 1
-rater set" and skip the kappa line for each of them. Building the machinery (this harness) does
-NOT by itself produce a second rater's labels — that still needs a human (or a second, independent
-model pass) to actually label the same findings. See issue #97's "Suggested fix" and the "Rules"
-section of the tracking task for why this PR stops at the machinery.
+A second independent human rater (`human-2026-09-26-rater2.json`) labelled 86 of the 93 findings
+blind to the first rater's labels. `example-site` still has one rater (its 7 findings were not
+labelled). Cohen's kappa between the two raters:
+
+| app | n | exact agreement | 4-class κ | show/hide κ |
+|---|---|---|---|---|
+| jevitate-site | 20 | 4/20 | 0.11 | 0.55 |
+| preveti | 42 | 2/42 | 0.03 | 0.26 |
+| preveti-site | 24 | 1/24 | 0.03 | 0.13 |
+| all | 86 | 7/86 | 0.05 | 0.29 |
+
+The raters disagree systematically, not randomly: rater 2 labelled 73/86 `actionable`, while
+rater 1 labelled most of the same findings `generic` (51) or `wrong` (20). The four label
+definitions do not yet pin down "actionable" tightly enough for two humans to agree, so no held-out
+kappa reaches `GRADER_FILTER_KAPPA_GATE` (0.4) and grader filtering stays opt-in for every app
+class. Next step for calibration: tighten the label definitions (what makes a finding specific
+enough to be actionable) and re-label, or adjudicate the disagreements into one reference set.
 
 ## Calibration guardrail (issue #97)
 

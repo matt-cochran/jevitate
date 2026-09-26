@@ -1,0 +1,175 @@
+[
+ {
+  "key": "nielsen-5|/decisions|link \"Raise Pro to $149\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-5|/admin/plan-applications|button \"Approve\"+button \"Reject\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/decisions|link \"Raise Pro to $149\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-5|/settings|button \"Delete workspace…\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/research|button \"Generate customer research\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "actionable",
+  "note": "we need to be aware of the current user journey and make it's path obvious without removing the other options"
+ },
+ {
+  "key": "primary-action|/settings|button \"Finish subscription setup\"+button \"Review this plan\"+button \"Review this plan\"+button \"Review this plan\"+button \"Review this plan\"+button \"Review this plan\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/decisions/new|button \"Refresh estimate\"+link \"← Back to the ledger\"",
+  "label": "actionable",
+  "note": "this should be part of the conversational flow, maybe once we make a selection in the conversation, we can figure out how to hide previous or have them scroll off the screen."
+ },
+ {
+  "key": "nielsen-5|/workspace|button \"Find the right context →\"",
+  "label": "wrong",
+  "note": "It's ok, credit consumption is part of interacting with the app that we don't want to distract from the task at hand."
+ },
+ {
+  "key": "primary-action|/admin/plan-applications|button \"Approve\"+button \"Reject\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-5|/workspace|button \"+New inquiry\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/workspace|button \"+New context\"+button \"+New inquiry\"",
+  "label": "actionable"
+ },
+ {
+  "key": "scent|/research|button \"Generate customer research\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-1|/decisions|link \"Raise Pro to $149\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-1|/workspace|button \"Retry loading workspace\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-3|/workspace|button \"+New inquiry\"+textbox \"Start a new inquiry\"",
+  "label": "actionable"
+ },
+ {
+  "key": "scent|/decisions|link \"Raise Pro to $149\"",
+  "label": "actionable",
+  "note": "it's for more usage, and pro isn't 149 so the price is wrong"
+ },
+ {
+  "key": "progressive-disclosure|/settings|button \"Create key\"+button \"Manage subscription payment method\"+link \"Workspace balance — buy credits in Settings\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-2|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/workspace|checkbox \"Compare vetting options\"+combobox \"Product for this conversationHelp me find the right contextPrevetiExplore a new product\"",
+  "label": "actionable",
+  "note": "the point is to only show relevant actions, but is there a way to show the top 3 and have the rest under progressive disclosure"
+ },
+ {
+  "key": "nielsen-1|/admin/plan-applications|button \"Approve\"",
+  "label": "actionable"
+ },
+ {
+  "key": "scent|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-2|/decisions|link \"Raise Pro to $149\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-4|/decisions|link \"Raise Pro to $149\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-3|/decisions|link \"Raise Pro to $149\"",
+  "label": "wrong"
+ },
+ {
+  "key": "nielsen-3|/admin/plan-applications|button \"Reject\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-2|/research|button \"Generate customer research\"",
+  "label": "actionable"
+ },
+ {
+  "key": "cognitive-load|/decisions/new|combobox \"Dollars at risk · your estimate\"+combobox \"Reversibility\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-2|/workspace|button \"Prevetiv4\"",
+  "label": "actionable"
+ },
+ {
+  "key": "scent|/workspace|button \"+New context\"+button \"+New inquiry\"+textbox \"Semantic search\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-10|/decisions/new|combobox \"Dollars at risk · your estimate\"+combobox \"Reversibility\"+textbox \"Context\"+textbox \"Semantic search\"+textbox \"The bet\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/decisions/new|combobox \"Dollars at risk · your estimate\"+combobox \"Reversibility\"+textbox \"Context\"+textbox \"The bet\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-7|/workspace|combobox \"Product for this conversationHelp me find the right contextPrevetiExplore a new product\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/settings|button \"Create key\"+button \"Manage subscription payment method\"+link \"Workspace balance — buy credits in Settings\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-7|/decisions/demo-bet-1|link \"Double downCommit — take this bet to a locked decision.\"+link \"Frame & simulate this bet →\"+link \"ProbeRun an experiment against the weakest assumption before committing.\"+link \"Return to the framing conversation\"+link \"Wait & watchdefaultselectedRecord a decision to wait; revisit as evidence accrues. (Safe default.)\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-10|/decisions/demo-bet-1|button \"How this was vettedConfidence rung · panel coverage · per-seat spreadOpen ▾\"+button \"The case against itFalsification attempt · independent evidence · the argued nullOpen ▾\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-10|/settings|button \"Manage subscription payment method\"+link \"Workspace balance — buy credits in Settings\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/workspace|checkbox \"Compare vetting options\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-10|/workspace|textbox \"Semantic search\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/workspace|link \"Workspace balance — buy credits in Settings\"",
+  "label": "actionable"
+ }
+]

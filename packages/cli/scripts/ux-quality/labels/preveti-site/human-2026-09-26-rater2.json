@@ -1,0 +1,101 @@
+[
+ {
+  "key": "primary-action|/|link \"Apply for a place\"+link \"Apply for a place\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-5|/startup-program/|checkbox \"My company meets every criterion listed above.\"",
+  "label": "wrong",
+  "note": "we need confirmation action"
+ },
+ {
+  "key": "nielsen-9|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "wrong",
+  "note": "this is a static site, we'll get back via email"
+ },
+ {
+  "key": "nielsen-1|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-3|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/startup-program/|combobox \"Annual recurring revenue\"+combobox \"Most recent round\"+combobox \"Total outside funding raised\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-10|/startup-program/|link \"Check eligibility and apply\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/pricing/|link \"Get started\"+link \"Get started\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/founders/|link \"Apply for a place\"+link \"Apply for a place\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "primary-action|/overview/|link \"Discuss your next bet\"+link \"Pre-vet your next bet\"+link \"Review the case\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-4|/founders/|link \"Apply for a place\"+link \"Apply for a place\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/pricing/|link \"Check eligibility\"+link \"See the Design Partner offer\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/overview/|tab \"01Conversational framing\"+tab \"02Inquiry intelligence\"+tab \"03Evidence you authorize\"+tab \"04Study handoff & recovery\"+tab \"05Billing that stays in the app\"+tab \"06Reproducible verdicts\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/founders/|link \"Design Partner\"+link \"Pricing\"+link \"See the Design Partner offer\"+link \"Terms apply\"",
+  "label": "actionable"
+ },
+ {
+  "key": "cognitive-load|/pricing/|link \"Check eligibility\"+link \"See the Design Partner offer\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "cognitive-load|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "scent|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-7|/startup-program/|combobox \"Annual recurring revenue\"+combobox \"Most recent round\"+combobox \"Total outside funding raised\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/founders/|link \"Design Partner\"+link \"Pricing\"+link \"See the Design Partner offer\"+link \"Terms apply\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/how-to/|link \"Design Partner\"+link \"Finance\"+link \"Journal\"+link \"MC Product Labs\"+link \"Pricing\"+link \"Startup Program\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-8|/pricing/|link \"Check eligibility\"+link \"See the Design Partner offer\"+link \"Startup Program\"",
+  "label": "actionable",
+  "note": "hide through progressive disclosure"
+ },
+ {
+  "key": "nielsen-8|/overview/|link \"Discuss your next bet\"+link \"Pre-vet your next bet\"+link \"Preveti home\"+link \"Review the case\"",
+  "label": "actionable"
+ }
+]

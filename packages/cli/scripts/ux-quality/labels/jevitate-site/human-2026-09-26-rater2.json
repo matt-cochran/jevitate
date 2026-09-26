@@ -1,0 +1,94 @@
+[
+ {
+  "key": "primary-action|/docs/safety/|link \"Get Started\"",
+  "label": "relevant-minor"
+ },
+ {
+  "key": "primary-action|/docs/getting-started/|link \"Get Started\"+link \"Getting Started\"",
+  "label": "relevant-minor",
+  "note": "multiple calls to action should be ok, right?"
+ },
+ {
+  "key": "primary-action|/docs/journeys/|link \"Get Started\"+link \"Getting Started\"+link \"Journeys\"+link \"Overview\"",
+  "label": "actionable"
+ },
+ {
+  "key": "progressive-disclosure|/docs/getting-started/|link \"Discussions\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"How it works\"+link \"Issues\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Next Journeys\"+link \"Overview\"+link \"Overview\"+link \"Previous Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "wrong",
+  "note": "this is a menu, right?"
+ },
+ {
+  "key": "nielsen-4|/docs/|link \"Get Started\"+link \"Getting Started\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-2|/docs/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Getting Started\"+link \"Overview\"+link \"Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "actionable",
+  "note": "copy should be updated to explain the terms in the first paragraph where they are introduced"
+ },
+ {
+  "key": "nielsen-2|/docs/getting-started/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Journeys\"+link \"Overview\"+link \"Overview\"+link \"Previous Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "relevant-minor",
+  "note": "these users should be familiar, but we should explain each term"
+ },
+ {
+  "key": "nielsen-4|/docs/journeys/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next MCP & CLI\"+link \"Overview\"+link \"Overview\"+link \"Previous Getting Started\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-3|/docs/|link \"Get Started\"",
+  "label": "wrong",
+  "note": "we want them to go there and choose to move forward"
+ },
+ {
+  "key": "nielsen-2|/docs/safety/|link \"Get Started\"+link \"Getting Started\"",
+  "label": "actionable",
+  "note": "these shoud go to the actual apps login screen (login/create account)"
+ },
+ {
+  "key": "progressive-disclosure|/docs/journeys/|link \"Get Started\"+link \"Getting Started\"+link \"Journeys\"+link \"Overview\"",
+  "label": "actionable",
+  "note": "should use progressive disclosure"
+ },
+ {
+  "key": "progressive-disclosure|/docs/safety/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Testing Modes\"+link \"Overview\"+link \"Overview\"+link \"Previous MCP & CLI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "wrong",
+  "note": "this is a menu"
+ },
+ {
+  "key": "nielsen-2|/docs/journeys/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next MCP & CLI\"+link \"Overview\"+link \"Overview\"+link \"Previous Getting Started\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-3|/docs/journeys/|link \"Get Started\"+link \"Getting Started\"+link \"Journeys\"+link \"Overview\"",
+  "label": "wrong"
+ },
+ {
+  "key": "nielsen-1|/docs/|link \"Get Started\"",
+  "label": "actionable"
+ },
+ {
+  "key": "cognitive-load|/docs/getting-started/|link \"Discussions\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"How it works\"+link \"Issues\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Next Journeys\"+link \"Overview\"+link \"Overview\"+link \"Previous Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "wrong",
+  "note": "menu"
+ },
+ {
+  "key": "nielsen-10|/docs/safety/|link \"Docs\"+link \"Get Started\"+link \"GitHub\"",
+  "label": "actionable"
+ },
+ {
+  "key": "nielsen-10|/docs/|link \"Docs\"",
+  "label": "actionable",
+  "note": "need search"
+ },
+ {
+  "key": "nielsen-8|/docs/safety/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Testing Modes\"+link \"Overview\"+link \"Overview\"+link \"Previous MCP & CLI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "actionable",
+  "note": "put a immediate instructions for install here"
+ },
+ {
+  "key": "nielsen-7|/docs/safety/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Testing Modes\"+link \"Overview\"+link \"Overview\"+link \"Previous MCP & CLI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "wrong",
+  "note": "menu"
+ }
+]
