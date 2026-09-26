@@ -20,6 +20,7 @@ import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
 import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
+import type { HostHealthSampler, HostJudgment } from "./host-health.js";
 import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
@@ -197,6 +198,13 @@ export interface ExploreConfig {
   readonly hangs?: HangConfig;
   /** Samples the HOST's resource pressure for hang/crash evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
+  /**
+   * The run's host-health sampler (#203). When given, a hang or no-progress stop met while the host
+   * was starved is marked `environment-degraded` on it (advisory, never a hang finding) and the run
+   * ends `inconclusive` (`degraded-environment`) instead of `hang`/`no-progress`. Its fresh sample is
+   * the hang's `host` evidence. Without one, hangs are judged as before.
+   */
+  readonly hostHealth?: HostHealthSampler;
   /** The target's timing configuration (API path prefixes). */
   readonly timingConfig?: TimingConfig;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
@@ -403,6 +411,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const crashWatch = new CrashWatch(page);
   const heap = new HeapLog();
   const probeHost = cfg.hostProbe ?? hostProbe();
+  /** #203: the fresh host sample around a finding, and whether the run's sampler calls it starved. */
+  const judgeHost = async (): Promise<HostJudgment> =>
+    cfg.hostHealth === undefined ? { host: await probeHost(), starved: null } : cfg.hostHealth.judge();
+  /** #203: a finding the starved host explains ends the run `inconclusive`, never as a hang. */
+  const degradedStop = (finding: "hang" | "no-progress", detail: string, starved: string): void => {
+    cfg.hostHealth?.markDegraded({ finding, detail, step: Math.max(0, transcript.entries().length - 1) }, starved);
+    failure = {
+      kind: "degraded-environment",
+      message: `environment-degraded ${finding} (${detail}) while the host was starved: ${starved} — not an app finding`,
+    };
+    stop = "inconclusive";
+  };
   const now = (): number => Date.now();
 
   const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
@@ -756,8 +776,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           snapshot: snap,
           timing: perception.timing,
         });
+        const judged = await judgeHost();
+        if (judged.starved !== null) {
+          degradedStop(perception.hang.kind === "ui-no-progress" ? "no-progress" : "hang", `${perception.hang.kind}: ${perception.hang.detail}`, judged.starved);
+          break;
+        }
         const heapNow = await sampleHeap(page, 1_000);
-        const withHost: HangSignal = { ...perception.hang, host: await probeHost() };
+        const withHost: HangSignal = { ...perception.hang, host: judged.host };
         hang = {
           signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
           recordingStepIndex: Math.max(0, recorder.stepCount - 1),
@@ -906,8 +931,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               snapshot: again.snapshot,
               timing: again.timing,
             });
+            const judged = await judgeHost();
+            if (judged.starved !== null) {
+              degradedStop(stuck.kind === "ui-no-progress" ? "no-progress" : "hang", `${stuck.kind}: ${stuck.detail}`, judged.starved);
+              break;
+            }
             const heapNow = await sampleHeap(page, 1_000);
-            const withHost: HangSignal = { ...stuck, host: await probeHost() };
+            const withHost: HangSignal = { ...stuck, host: judged.host };
             hang = {
               signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
               recordingStepIndex: stuck.kind === "ui-no-progress" ? m.recordIndex : Math.max(0, recorder.stepCount - 1),
@@ -1966,6 +1996,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
+  }
+
+  // #203: a no-progress stop met while the host was starved is the host, not the app.
+  if (stop === "no-progress" && cfg.hostHealth !== undefined) {
+    const judged = await cfg.hostHealth.judge();
+    if (judged.starved !== null) degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
   }
 
   await readOnly?.disarm();

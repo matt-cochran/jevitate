@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeSync } from "node:fs";
 import type { UsageCounts, UsageLedger } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
+import type { HostHealthSummary } from "@jevitate/domain";
 import { closeSharedBrowserPool } from "@jevitate/playwright";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { ok } from "./envelope.js";
@@ -56,6 +57,8 @@ export interface KillableMission {
    * killed run reports every step it took even when the file lags or lives elsewhere (#120).
    */
   readonly transcript?: () => readonly TranscriptEntry[] | undefined;
+  /** The run's host-health summary so far (#203): a killed run's result carries it like every other result. */
+  readonly hostHealth?: () => HostHealthSummary;
   /** The run's usage tracker: the tokens already spent are part of the killed run's result (#120). */
   readonly usage?: { snapshot(): UsageCounts; calls?(): ReturnType<UsageLedger["calls"]> };
   /**
@@ -165,6 +168,7 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
   const engine = safely(deps.engine);
   const usage = safely(() => mission.usage?.snapshot());
   const report = safely(mission.partialReport);
+  const hostHealth = safely(mission.hostHealth);
   return {
     outcome: "inconclusive",
     missionOutcome: "inconclusive",
@@ -180,6 +184,7 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
     ...(engine === undefined ? {} : { engine }),
     ...(usage === undefined ? {} : { usage }),
     ...(report === undefined ? {} : { partialReport: report }),
+    ...(hostHealth === undefined ? {} : { hostHealth }),
   };
 }
 

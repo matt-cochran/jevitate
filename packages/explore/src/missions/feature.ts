@@ -31,6 +31,7 @@ import type { MissionFailure } from "@jevitate/domain";
 import type { SettleConfig } from "../settle-config.js";
 import type { HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "../mission-failure.js";
@@ -237,6 +238,8 @@ export type FeatureMissionParams = {
   openFreshSession?: () => Promise<VerifySession>;
   /** Fresh-context replays that confirm a hang. Default 2. */
   hangReplays?: number;
+  /** The run's host-health sampler (#203): a hang met while the host was starved is `environment-degraded`, never a finding. */
+  readonly hostHealth?: HostHealthSampler;
   /** Incremental-flush seam: every transcript entry, as it is recorded. */
   onTranscriptEntry?: TranscriptListener;
   /** App-declared invariants (#86): evaluated around every frontier action; a violation is a hard defect. */
@@ -595,6 +598,7 @@ async function runFeatureFrontier(
           ...(params.safety === undefined ? {} : { safety: params.safety }),
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+          ...(params.hostHealth === undefined ? {} : { hostHealth: params.hostHealth }),
           // Re-detected with the SAME perception bounds the mission used.
           perceive: {
             ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),

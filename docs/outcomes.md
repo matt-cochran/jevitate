@@ -80,11 +80,43 @@ above, so it needs no separate exit-code mapping):
 | `outcome` | Meaning |
 |---|---|
 | `exhausted` | the state frontier was fully explored |
+| `insufficient-exploration` | the frontier emptied because its actions **timed out** (at least as many timed-out actions as exercised transitions), not because its states ran out — `inconclusive` (a defect found before still wins), `failure.kind: "insufficient-exploration"` |
 | `cap` | the action budget ran out before the frontier was exhausted |
 | `scope-unreachable` | the start URL redirected elsewhere, or the run could not return to it after a departure (e.g. the session was lost after "Sign out") — `inconclusive` |
 | `stalled` | no step completed within `--stall-timeout` seconds (default 120) — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+
+### A starved host (`hostHealth`, `environmentDegraded`)
+
+On a saturated machine (parallel builds, a busy CI runner) a run's hangs, click timeouts and
+no-progress stops can be the host, not the app. Every run samples the host (every 2s, and around
+every such finding): the admission thresholds the browser pool uses (PSI / free memory), the
+1-minute load average per core, the driver's own event-loop lag, and the render trend against the
+run's own baseline. The thresholds (`packages/explore/src/host-health.ts`) are:
+
+| Signal | Starved when |
+|---|---|
+| admission sample | over the browser pool's own thresholds (memory pressure, < 400 MiB available, CPU PSI > 80%) |
+| load average | > 2 runnable tasks per core (every task gets ≤ half a core) |
+| driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) |
+| render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s |
+
+A starved sample explains the 15 s after it. Then:
+
+- a hang, a click timeout or a no-progress stop met while the host was starved is listed in
+  `environmentDegraded` (`finding`, `detail`, `cause`, `step`, `advisory: true`) — never a
+  defect or hang finding. A goal run that ends on one is `inconclusive`
+  (`failure.kind: "degraded-environment"`);
+- a run most of whose steps (> 50%) ran starved is `inconclusive` with
+  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`/`blocked`).
+  A confirmed defect, a `succeeded` goal and a crash keep their outcome.
+
+Every result carries `hostHealth`: `peakLoadPerCore`, `minFreeMemoryBytes`,
+`peakEventLoopLagMs`, `slowestRenderMs` (and the `baselineRenderMs` it is judged against),
+`steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes, and `attribution`.
+`JEVITATE_HOST_STARVATION=off` keeps the sampling and the summary but never attributes a finding to
+the host (`attribution: "off"`) — for a harness that guarantees a quiet host itself.
 
 **Feature mission (`--feature`) — its own `outcome`**, same idea plus its own path cap:
 

@@ -60,13 +60,14 @@ const QUEUE_NARROW = "a queued mission carries only what MissionRequest allows (
 /** `<file> <api>` → option → why that surface does not pass it. */
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
-  "program.ts runExploration": { successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
-  "program.ts runCoverageMission": { nowIso: SEAM },
-  "program.ts runAdversarialCliMission": { headless: SEAM, nowIso: SEAM },
-  "program.ts runFeatureCliMission": { headless: SEAM, nowIso: SEAM },
+  "program.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  "program.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
+  "program.ts runAdversarialCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
+  "program.ts runFeatureCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
   "program.ts runExploreMultiRun": { nowIso: SEAM },
   "program.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
   "program.ts runUsabilityMission": {
+    hostHealth: SEAM,
     env: SEAM,
     configPath: SEAM,
     signals: SEAM,
@@ -129,6 +130,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    hostHealth: SEAM,
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
     allowVacuousChecks: QUEUE_NARROW,
@@ -143,6 +145,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     actors: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runCoverageMission": {
+    hostHealth: SEAM,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
     strategy: "the queue has no exploratory strategy (MISSION_STRATEGIES)",
@@ -150,6 +153,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
+    hostHealth: SEAM,
     headless: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
@@ -161,6 +165,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
+    hostHealth: SEAM,
     headless: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
     nowIso: SEAM,
@@ -169,25 +174,30 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-api.ts runExploration": {
+    hostHealth: SEAM,
     successAssertion: "a suite goal passes success specs as successChecks",
     nowIso: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
   },
   "check-api.ts runCoverageMission": {
+    hostHealth: SEAM,
     nowIso: SEAM,
   },
   "check-api.ts runAdversarialCliMission": {
+    hostHealth: SEAM,
     headless: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
     nowIso: SEAM,
   },
   "check-api.ts runFeatureCliMission": {
+    hostHealth: SEAM,
     headless: SEAM,
     nowIso: SEAM,
   },
   "check-api.ts runUsabilityMission": {
+    hostHealth: SEAM,
     env: SEAM,
     configPath: SEAM,
     signals: SEAM,
