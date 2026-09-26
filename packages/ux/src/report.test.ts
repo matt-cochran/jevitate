@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReport } from "./report.js";
+import { buildReport, DEFAULT_MAX_FINDINGS_PER_ROUTE, MaxFindingsPerRouteError, resolveMaxFindingsPerRoute } from "./report.js";
 import { DEFAULT_MIN_CONFIDENCE } from "./confidence.js";
 import { makeFinding } from "./finding.js";
 import { loadRubric } from "./rubric/schema.js";
@@ -131,7 +131,7 @@ describe("buildReport", () => {
     expect(report.suppressed.items.filter((i) => i.reason === "below-min-confidence").every((i) => i.confidence !== undefined)).toBe(true);
     expect(report.rawOccurrences).toBe(12);
     expect(report.headline).toMatch(
-      /^1 finding\(s\) grounded in observed run behavior, shown with their quality grade \(not filtered by it\), at finding-confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/,
+      /^\[PREVIEW:.*\] 1 finding\(s\) grounded in observed run behavior, shown with their quality grade \(not filtered by it\), at finding-confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/,
     );
     expect(report.coverageSummary).toMatch(/3 suppressed/);
   });
@@ -182,6 +182,70 @@ describe("buildReport", () => {
     expect(report.clean).toBe(false);
     expect(report.coverageComplete).toBe(false);
     expect(report.failed?.reason).toBe("jev down");
+  });
+
+  it("0.2.0 (#133/#198): every report — analyzed or failed — carries preview: true and the preview note in its headline", () => {
+    const analyzed = buildReport({ kind: "analyzed", findings: [], coverage: fullCoverage });
+    expect(analyzed.preview).toBe(true);
+    expect(analyzed.headline).toMatch(/^\[PREVIEW:.*#133.*#198.*\]/);
+    const failed = buildReport({ kind: "failed", reason: "jev down" });
+    expect(failed.preview).toBe(true);
+    expect(failed.headline).toMatch(/^\[PREVIEW:.*#133.*#198.*\]/);
+  });
+
+  describe("#198 interim: per-page (per-route) finding cap", () => {
+    const onRoute = (route: string, confidence: number) => ({ ...grounded(finding("minor-1", "minor", confidence)), route });
+
+    it("defaults to DEFAULT_MAX_FINDINGS_PER_ROUTE", () => {
+      expect(buildReport({ kind: "analyzed", findings: [], coverage: fullCoverage }).maxFindingsPerRoute).toBe(DEFAULT_MAX_FINDINGS_PER_ROUTE);
+    });
+
+    it("caps findings per route, highest-confidence first, and counts the rest as suppressed (per-page-cap) — never dropped silently", () => {
+      // The motivating case (#198): 7 findings collapsed onto one route/link.
+      const seven = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3].map((c) => onRoute("/decisions", c));
+      const report = buildReport({ kind: "analyzed", findings: seven, coverage: fullCoverage }, { minConfidence: 0, maxFindingsPerRoute: 3 });
+      expect(report.maxFindingsPerRoute).toBe(3);
+      expect(report.findings).toHaveLength(3);
+      expect(report.findings.map((f) => f.confidence)).toEqual([0.9, 0.8, 0.7]);
+      expect(report.suppressed.byReason["per-page-cap"]).toBe(4);
+      expect(report.suppressed.total).toBe(4);
+      expect(report.suppressed.items.filter((i) => i.reason === "per-page-cap").every((i) => i.route === "/decisions")).toBe(true);
+    });
+
+    it("the cap applies PER ROUTE — a busy route never suppresses another route's findings", () => {
+      const findings = [
+        ...[0.9, 0.8, 0.7].map((c) => onRoute("/a", c)),
+        ...[0.9, 0.8, 0.7].map((c) => onRoute("/b", c)),
+      ];
+      const report = buildReport({ kind: "analyzed", findings, coverage: fullCoverage }, { minConfidence: 0, maxFindingsPerRoute: 2 });
+      expect(report.findings.filter((f) => f.route === "/a")).toHaveLength(2);
+      expect(report.findings.filter((f) => f.route === "/b")).toHaveLength(2);
+      expect(report.suppressed.byReason["per-page-cap"]).toBe(2);
+    });
+
+    it("an invalid --max-findings-per-page style value is refused, never silently replaced by the default", () => {
+      expect(() => buildReport({ kind: "analyzed", findings: [], coverage: fullCoverage }, { maxFindingsPerRoute: 0 })).not.toThrow();
+      // Validation lives in resolveMaxFindingsPerRoute (the CLI layering entry point); buildReport trusts its input.
+      expect(() => resolveMaxFindingsPerRoute("0", {})).toThrow(MaxFindingsPerRouteError);
+      expect(() => resolveMaxFindingsPerRoute(undefined, { JEVITATE_UX_MAX_FINDINGS_PER_PAGE: "-1" })).toThrow(MaxFindingsPerRouteError);
+    });
+  });
+
+  describe("resolveMaxFindingsPerRoute — flag > env > config > default (same layering as resolveMinConfidence)", () => {
+    it("defaults to DEFAULT_MAX_FINDINGS_PER_ROUTE", () => {
+      expect(resolveMaxFindingsPerRoute(undefined, {})).toBe(DEFAULT_MAX_FINDINGS_PER_ROUTE);
+      expect(DEFAULT_MAX_FINDINGS_PER_ROUTE).toBe(5);
+    });
+    it("flag > env > config", () => {
+      expect(resolveMaxFindingsPerRoute("2", { JEVITATE_UX_MAX_FINDINGS_PER_PAGE: "4" }, 6)).toBe(2);
+      expect(resolveMaxFindingsPerRoute(undefined, { JEVITATE_UX_MAX_FINDINGS_PER_PAGE: "4" }, 6)).toBe(4);
+      expect(resolveMaxFindingsPerRoute(undefined, {}, 6)).toBe(6);
+    });
+    it("invalid values throw", () => {
+      expect(() => resolveMaxFindingsPerRoute("abc", {})).toThrow(MaxFindingsPerRouteError);
+      expect(() => resolveMaxFindingsPerRoute("0", {})).toThrow(MaxFindingsPerRouteError);
+      expect(() => resolveMaxFindingsPerRoute("1.5", {})).toThrow(MaxFindingsPerRouteError);
+    });
   });
 
   describe("calibrationCaveats (issue #97 guardrail)", () => {

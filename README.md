@@ -204,7 +204,10 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 - A hard-signal defect (e.g. an HTTP 500) is re-checked with `verify-fix`, not committed by
   `regression capture`. Declare the broken rule as an invariant to commit it
   ([verification](./docs/verification.md)).
-- Usability findings are advisory, and their quality grader is not yet calibrated across apps.
+- UX quality findings (`jevitate ux`, `explore --strategy usability`) are a 0.2.0 PREVIEW:
+  advisory, the quality grader is not yet calibrated across apps, and finding grouping/dedup is
+  still being redesigned ([#133](https://github.com/matt-cochran/jevitate/issues/133),
+  [#198](https://github.com/matt-cochran/jevitate/issues/198)).
 - Chromium only.
 
 ## Documentation

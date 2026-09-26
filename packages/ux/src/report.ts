@@ -30,11 +30,57 @@ export interface SuppressionSummary {
   readonly items: readonly SuppressedItem[];
 }
 
+/**
+ * Default cap on `findings` PER ROUTE (issue #198 interim fix, 0.2.0). Five is enough room for a
+ * page to carry a few genuinely distinct, independently-actionable problems (a form AND its submit
+ * button AND its error copy, say) while still reading as a short, actionable list rather than a
+ * wall of findings — the motivating case (issue #198) was one link on one route filing 7 findings
+ * at once. `groupFindingsByControl` (analyzer.ts) already collapses same-control noise; this cap is
+ * the backstop for whatever is still left after that. Overridable the same way as `minConfidence`.
+ */
+export const DEFAULT_MAX_FINDINGS_PER_ROUTE = 5;
+
+/** Env var override — see `resolveMaxFindingsPerRoute`. Config-file key: `ux.maxFindingsPerPage`. */
+export const MAX_FINDINGS_PER_ROUTE_ENV = "JEVITATE_UX_MAX_FINDINGS_PER_PAGE";
+
+export class MaxFindingsPerRouteError extends Error {
+  readonly code = "E_UX_MAX_FINDINGS_PER_PAGE" as const;
+  constructor(value: string, source: string) {
+    super(`${source} must be a positive integer, got '${value}'`);
+    this.name = "MaxFindingsPerRouteError";
+  }
+}
+
+/**
+ * Precedence: explicit flag (`--max-findings-per-page`) > `JEVITATE_UX_MAX_FINDINGS_PER_PAGE` >
+ * config `ux.maxFindingsPerPage` (`~/.jevitate/config.json`) > `DEFAULT_MAX_FINDINGS_PER_ROUTE` —
+ * the same layering as `resolveMinConfidence`/`resolveQualityPolicy`. An invalid value throws,
+ * never silently falls back to the default.
+ */
+export function resolveMaxFindingsPerRoute(flag: number | string | undefined, env: Readonly<Record<string, string | undefined>>, configValue?: number): number {
+  const parse = (raw: string, source: string): number => {
+    const n = Number(raw);
+    if (raw.trim().length === 0 || !Number.isInteger(n) || n < 1) throw new MaxFindingsPerRouteError(raw, source);
+    return n;
+  };
+  if (flag !== undefined) return parse(String(flag), "--max-findings-per-page");
+  const fromEnv = env[MAX_FINDINGS_PER_ROUTE_ENV];
+  if (fromEnv !== undefined) return parse(fromEnv, MAX_FINDINGS_PER_ROUTE_ENV);
+  if (configValue !== undefined) return parse(String(configValue), "config ux.maxFindingsPerPage");
+  return DEFAULT_MAX_FINDINGS_PER_ROUTE;
+}
+
 export interface BuildReportOptions {
   /** Findings with confidence below this are suppressed (counted, summarized). Default `DEFAULT_MIN_CONFIDENCE`. */
   readonly minConfidence?: number;
   /** Which quality grades are shown. Default `DEFAULT_QUALITY_POLICY` (every grade, shown on each finding — #133). */
   readonly quality?: QualityPolicy;
+  /**
+   * Cap on `findings` per route (issue #198 interim, 0.2.0), highest-confidence kept first. The
+   * rest are not dropped: counted in `suppressed` with reason `per-page-cap`. Default
+   * `DEFAULT_MAX_FINDINGS_PER_ROUTE`. Applies only to ranked `findings`, not `heuristicAppendix`.
+   */
+  readonly maxFindingsPerRoute?: number;
   /**
    * What this analysis honestly could NOT see (#85), e.g. an offline `jevitate ux` run with no
    * mission result/transcript to source blocked/disabled-target evidence from — the same evidence
@@ -56,6 +102,12 @@ export interface BuildReportOptions {
 export interface UxReport {
   /** One line to lead with: kept findings, then "N suppressed (by rubric item: …)". */
   readonly headline: string;
+  /**
+   * 0.2.0 (#133/#198): UX quality findings are a preview — the independent quality grader is still
+   * being calibrated, and finding grouping/dedup is still being redesigned (#198). Always `true` in
+   * 0.2.0; a machine-readable counterpart to the same note in `headline` and the CLI/docs.
+   */
+  readonly preview: true;
   /** True ONLY at full coverage with zero findings AND zero suppressed candidates. */
   readonly clean: boolean;
   readonly coverageComplete: boolean;
@@ -75,6 +127,8 @@ export interface UxReport {
   readonly coverage: Coverage;
   /** The cutoff applied to `findings`. */
   readonly minConfidence: number;
+  /** The per-route cap applied to `findings` (issue #198 interim) — see `suppressed` reason `per-page-cap`. */
+  readonly maxFindingsPerRoute: number;
   /** The quality grades shown in `findings` (others are suppressed as quality-policy). */
   readonly qualityShown: readonly string[];
   /** #133: did the quality grade hide anything? False by default (every grade shown). */
@@ -144,6 +198,7 @@ function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
     "below-min-confidence": 0,
     "quality-policy": 0,
     "user-authored-content": 0,
+    "per-page-cap": 0,
   };
   const byRubricItem: Record<string, number> = {};
   const byRubricItemRoute: Record<string, number> = {};
@@ -156,9 +211,17 @@ function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
   return { total: items.length, byReason, byRubricItem, byRubricItemRoute, items };
 }
 
+/**
+ * 0.2.0 (#133/#198): a short, factual preview note prefixed to every headline — findings and the
+ * quality grader here are still being calibrated/redesigned, never present them as a finished
+ * verdict. `report.preview` carries the same fact machine-readably.
+ */
+const PREVIEW_NOTE = "[PREVIEW: UX quality findings, grader calibration in progress — #133/#198]";
+
 export function buildReport(outcome: AnalysisOutcome, options: BuildReportOptions = {}): UxReport {
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
   const policy = options.quality ?? DEFAULT_QUALITY_POLICY;
+  const maxFindingsPerRoute = options.maxFindingsPerRoute ?? DEFAULT_MAX_FINDINGS_PER_ROUTE;
   const calibrationCaveats = (options.calibrationCaveats ?? []).filter((c) => c.length > 0);
   // Issue #97 guardrail: never let a report read as if the grader's threshold/labels were
   // calibrated for this target when they were not measured on it. Folded into every headline
@@ -166,7 +229,8 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
   const calibrationSuffix = calibrationCaveats.length > 0 ? ` [CALIBRATION: ${calibrationCaveats.join(" | ")}]` : "";
   if (outcome.kind === "failed") {
     return {
-      headline: `UX analysis failed: ${outcome.reason}${calibrationSuffix}`,
+      headline: `${PREVIEW_NOTE} UX analysis failed: ${outcome.reason}${calibrationSuffix}`,
+      preview: true,
       clean: false,
       coverageComplete: false,
       coverageWarning: `analysis did not complete: ${outcome.reason}`,
@@ -175,6 +239,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
       heuristicAppendix: [],
       coverage: EMPTY_COVERAGE,
       minConfidence,
+      maxFindingsPerRoute,
       qualityShown: [...policy.show],
       qualityFiltered: policyFilters(policy),
       qualityDistribution: {},
@@ -221,8 +286,31 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
       });
     }
   }
-  const ranked = kept.sort(compareRank);
+  const rankedAll = kept.sort(compareRank);
   const heuristicAppendix = appendix.sort(compareRank);
+  // #198 interim per-page cap: `rankedAll` is already ordered highest-confidence-first (within
+  // impact/severity), so taking the first `maxFindingsPerRoute` PER ROUTE in that same order keeps
+  // exactly the top N for each page. The rest are not dropped — counted below as `per-page-cap`.
+  const ranked: UxFinding[] = [];
+  const shownPerRoute = new Map<string, number>();
+  for (const f of rankedAll) {
+    const shown = shownPerRoute.get(f.route) ?? 0;
+    if (shown < maxFindingsPerRoute) {
+      ranked.push(f);
+      shownPerRoute.set(f.route, shown + 1);
+    } else {
+      below.push({
+        rubricItemId: f.rubricItemId,
+        route: f.route,
+        screenId: f.screenId,
+        reason: "per-page-cap",
+        detail: `${f.route} already has ${maxFindingsPerRoute} finding(s) shown (highest-confidence first): ${f.observation.slice(0, 160)}`,
+        confidence: f.confidence,
+        occurrences: f.occurrences,
+        ...(f.quality ? { qualityLabel: f.quality.label } : {}),
+      });
+    }
+  }
   const filtered = policyFilters(policy);
   const suppressed = summarize([...(outcome.suppressed ?? []), ...below]);
   const summary = `${coverageSummary(outcome.coverage)}; ${ranked.length} finding(s) at finding-confidence ≥ ${minConfidence}; ${heuristicAppendix.length} heuristic-only in the appendix; ${suppressed.total} suppressed (${Object.entries(
@@ -243,12 +331,13 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
   // #133: say whether the (uncalibrated) grader filtered anything, or only labelled.
   const graded = filtered ? `graded ${policy.show.join("/")}` : "shown with their quality grade (not filtered by it)";
   const headline =
-    `${ranked.length} finding(s) grounded in observed run behavior, ${graded}, at finding-confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
+    `${PREVIEW_NOTE} ${ranked.length} finding(s) grounded in observed run behavior, ${graded}, at finding-confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
     `; ${heuristicAppendix.length} heuristic-only (no observed friction, info) in the appendix` +
     (suppressed.total > 0 ? `; ${suppressed.total} suppressed (by rubric item: ${byItem})` : "; none suppressed") +
     calibrationSuffix;
   return {
     headline,
+    preview: true,
     // Suppression never reads as "no issues": clean needs zero findings (appendix included) AND zero suppressed.
     clean: complete && ranked.length === 0 && heuristicAppendix.length === 0 && suppressed.total === 0,
     coverageComplete: complete,
@@ -262,6 +351,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     heuristicAppendix,
     coverage: outcome.coverage,
     minConfidence,
+    maxFindingsPerRoute,
     qualityShown: [...policy.show],
     qualityFiltered: filtered,
     qualityDistribution,

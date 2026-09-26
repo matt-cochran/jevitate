@@ -195,6 +195,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "check-api.ts runUsabilityMission": {
     minConfidence: "fixed default in CI",
     show: "usability findings are advisory in check",
+    maxFindingsPerRoute: "fixed default in CI",
     env: SEAM,
     configPath: SEAM,
     secrets: "redaction comes from the target's secret fields",

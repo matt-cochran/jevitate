@@ -82,3 +82,16 @@ export function loadUxShow(path = resolveDataDir(["config.json"])): string[] | u
   }
   return v as string[];
 }
+
+/**
+ * `ux.maxFindingsPerPage` — the per-route finding cap (issue #198 interim, 0.2.0; validated by
+ * `resolveMaxFindingsPerRoute`).
+ */
+export function loadUxMaxFindingsPerPage(path = resolveDataDir(["config.json"])): number | undefined {
+  const v = loadUxSection(path)?.maxFindingsPerPage;
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    throw new UxConfigError(`${path}: ux.maxFindingsPerPage must be a positive integer`);
+  }
+  return v;
+}
