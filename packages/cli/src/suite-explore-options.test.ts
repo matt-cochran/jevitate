@@ -102,6 +102,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
   return {
     show: { kind: "usability", set: "actionable" },
     minConfidence: { kind: "usability", set: 0.5 },
+    maxFindingsPerPage: { kind: "usability", set: 3 },
     scope: { kind: "coverage", set: "app" },
     secret: { kind: "goal", set: ["env:SUITE_SECRET"] },
     totp: { kind: "goal", set: ["label=Code=env:SUITE_TOTP"] },
