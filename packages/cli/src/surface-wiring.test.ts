@@ -235,6 +235,7 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     hang: "→ hangs[]",
     heap: "per-step samples; a crash carries them in crash.heap",
     blockingCause: "folded into the run's reason (withCause)",
+    doneRejected: "folded into the goal outcome: `failed` (a done code rejected), never `blocked` (#209)",
   },
   "InductionRunResult → RunCoverageMissionResult": {
     recordings: "written to disk → recordingPaths",
@@ -246,6 +247,7 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     transcript: "written to disk → transcriptPath",
     heap: "per-step samples; a crash carries them in crash.heap",
     blockingCause: "folded into the run's reason (withCause)",
+    doneRejected: "folded into outcome.reason (the model proposed done N times…) and failure job-incomplete (#209)",
   },
 };
 
