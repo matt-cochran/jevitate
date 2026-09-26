@@ -258,12 +258,19 @@ export interface JourneyEvidence {
   readonly detail: string;
 }
 
-/** #132: a finding collapsed into another on the same friction point, kept as rationale. */
+/**
+ * A finding collapsed into another, kept as rationale — either #132's same-journey-friction-point
+ * collapse, or 0.2.0's same-route-same-control collapse (analyzer.ts's `groupFindingsByControl`,
+ * interim fix for #198). `citation` and `occurrences` let a reader see EVERY rubric item that fired
+ * on the lead finding's control, with its own citation and count, not just the lead's.
+ */
 export interface ContributingFinding {
   readonly rubricItemId: string;
   readonly observation: string;
   readonly confidence: number;
   readonly quality?: UxFinding["quality"];
+  readonly citation?: { readonly source: string; readonly ref: string };
+  readonly occurrences?: number;
 }
 
 /** What `makeFinding` needs to resolve refs — anything carrying a ref set. */
@@ -308,7 +315,9 @@ export type SuppressionReason =
   /** The quality grade (e.g. generic / wrong) is not in the report's quality policy. */
   | "quality-policy"
   /** A vocabulary-sensitive entry's quoted/cited evidence matches a value the run itself typed. */
-  | "user-authored-content";
+  | "user-authored-content"
+  /** 0.2.0 (#198 interim): the page (route) already has `maxFindingsPerRoute` findings shown. */
+  | "per-page-cap";
 
 /** A suppressed candidate — counted and summarized in the report, never silently dropped. */
 export interface SuppressedItem {

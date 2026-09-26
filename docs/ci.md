@@ -95,8 +95,92 @@ relative paths resolve against the suite file):
   Journeys follow the site policy for their origin ([site policies](./journeys.md#site-policies)).
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
-  frontier from `url`.
+  frontier from `url`. To lint the files themselves in an earlier, browser-free CI step, run
+  `jevitate invariants validate invariants/*.json --url <target url>` (exit `1` on any problem;
+  see [invariants](./invariants.md)).
 - `verifyFix`: replays a finding from an earlier result. `still-reproduces` and `intermittent` fail.
+
+### Per-item options: the `explore` option set
+
+A goal or mission item takes the same options as `jevitate explore`, by the flag's camelCase name
+(`--api-prefix` → `apiPrefix`, `--log-source` → `logSource`). Set one on a target and it is the
+default for every goal and mission it applies to; set it on an item and the item's value
+**replaces** the target's (lists are not merged). A repeatable flag is a JSON array, a switch is a
+boolean, and a number is a JSON number.
+
+```json
+{
+  "name": "shop",
+  "url": "https://staging.shop.example/",
+  "storageState": "auth/admin.json",
+  "apiPrefix": ["/api/"],
+  "deny": ["/^Archive/i"],
+  "logSource": ["docker:shop-api"],
+  "logDefect": ["error"],
+  "goals": [
+    {
+      "name": "signup",
+      "goal": "sign up a new workspace",
+      "success": ["urlIncludes:/welcome"],
+      "storageState": null,
+      "secretFields": ["label=Password=env:SIGNUP_PASSWORD"],
+      "fixtures": "fixtures/fresh-tenant.json",
+      "before": "./scripts/seed.sh",
+      "allowShellHooks": true,
+      "fixture": "fixtures/logo.png"
+    },
+    {
+      "name": "share",
+      "goal": "share the report with the viewer",
+      "success": ["textIncludes:role=status|Shared"],
+      "actor": ["owner=auth/admin.json", "viewer=auth/viewer.json"],
+      "secret": ["env:SHOP_API_TOKEN"]
+    }
+  ],
+  "missions": [
+    { "strategy": "adversarial", "paid": ["/^(Analyze|Draft)\\b/"], "hangReplays": 0 },
+    { "strategy": "coverage", "stallTimeout": 300, "scope": "app", "persona": ["admin=auth/admin.json", "viewer=auth/viewer.json"] }
+  ]
+}
+```
+
+| Group | Options | Applies to |
+| --- | --- | --- |
+| Safety | `deny`, `paid`, `allowDestructive`, `allowWrites`, `allowWrite`, `readRpc`, `hangReplayWrites` | every goal and mission |
+| Settle and timing | `settleIgnore`, `longPollMs`, `apiPrefix`, `ignoreNoProgress` | every goal and mission |
+| Backend logs (#142) | `logSource`, `logDefect`, `logQuietOk`, `logIgnore`, `allowLogCmd`, `serverLogDrainMs` | every goal and mission |
+| Sessions | `storageState` (a path, or `null` to start without the target's session), `saveStorageState`, `persona`, `personas` | every goal and mission |
+| Multi-actor (#147) | `actor` (`<name>=<storageState>`; the first is the primary) | goals |
+| Fixtures (#144) | `fixtures`, `before`, `after`, `allowShellHooks`, `hookTimeoutMs` | goals (the target's `fixtures` also wraps Journeys) |
+| Secrets | `secretFields`, `totp` (`<descriptor>=env:<VAR>`), `secret` (`env:<VAR>`) | goals and usability (`secret`: also adversarial) |
+| Upload | `fixture` (the file the upload op attaches) | goals and usability |
+| Conversation | `replyWaitMs`, `replyCeilingMs`, `replyMaxChars`, `jobWaitMs` | goals and usability |
+| Pacing | `stallTimeout` (seconds), `hangReplays` | `stallTimeout`: coverage, exploratory, feature; `hangReplays`: goals, adversarial |
+| Scope and coverage | `scope` (`"app"`), `minControlCoverage`, `requireFormSubmit` | `scope`: coverage, exploratory; the others: adversarial |
+| Overflow (#149) | `checkOverflow`, `ignoreOverflow` | coverage, exploratory, adversarial, usability |
+| Usability | `show`, `minConfidence` | usability |
+
+- An item that sets an option that does not apply to it is refused, naming the path
+  (`$.targets[0].missions[1].fixture: does not apply to a coverage mission item`), just as
+  `explore` refuses the flag. A target default only reaches the items it applies to.
+- **No literal secrets.** `secret` takes `env:<VAR>` references only, and `secretFields`/`totp`
+  take `<descriptor>=env:<VAR>` bindings only. A literal is refused (and never echoed); the
+  variables are read when the check starts, and an unset one is refused before anything runs.
+- `persona`/`personas` run the item once per persona, each from its own storage state, as
+  `<item>@<persona>`. Each run is gated on its own (the check does not diff personas; use
+  `explore --persona` for the RBAC diff). An item with `actor`, `persona` or `personas` cannot also
+  set its own `storageState`.
+- Journey and `verifyFix` items take `storageState` too (a path, or `null`).
+- `saveStorageState` (like `explore --save-storage-state`) is refused when it resolves inside a
+  repo's `.jevitate/`, which never holds sessions or secrets: write it under `~/.jevitate/` or
+  outside the repo.
+- Not per item, with the reason: the browser launch flags (`--browser-*`, one launch for the whole
+  check: pass them to `jevitate check`), `--real`/`--fake-ai` (the suite's `ai`), `--out`/`--json`
+  (the check's own outputs), `--file-issues`/`--issue-repo`/`--jevitate-repo` (a CI gate reports
+  findings in JUnit/SARIF instead of filing them), and `--repeat`/`--min-agreement` (a check gates
+  each item once; use `--baseline` to track flaky findings).
+- Every `explore` option is either accepted or on that exclusion list. A test fails when a new
+  `explore` flag is neither, so the two cannot drift apart.
 
 A GitHub Actions example:
 

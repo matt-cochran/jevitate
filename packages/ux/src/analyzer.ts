@@ -27,6 +27,7 @@ import type { MakeFindingInput } from "./finding.js";
 import type {
   AnalysisOutcome,
   AppContext,
+  ContributingFinding,
   Coverage,
   EvidenceRef,
   FlagRule,
@@ -409,13 +410,11 @@ export class UxAnalyzer {
         return { kind: "failed", reason: `quality grading failed: ${message(cause)}`, screenId, rubricItemId: list[0]?.input.rubricItemId };
       }
     }
-    const findings = [
-      ...drafts.map((d) => {
-        const quality = grades.get(d.key);
-        return makeFinding({ ...d.input, ...(quality ? { quality } : {}) }, request.rubric, { screenId: d.screenId, refs: d.refs });
-      }),
-      ...dedupeObjective(a11yFindings, request.rubric),
-    ];
+    const built = drafts.map((d) => {
+      const quality = grades.get(d.key);
+      return { draft: d, finding: makeFinding({ ...d.input, ...(quality ? { quality } : {}) }, request.rubric, { screenId: d.screenId, refs: d.refs }) };
+    });
+    const findings = [...groupFindingsByControl(built), ...dedupeObjective(a11yFindings, request.rubric)];
     const coverage: Coverage = { totalItems, evaluated, skipped, budgetTruncated, notApplicable };
     return { kind: "analyzed", findings, coverage, suppressed, rawOccurrences };
   }
@@ -488,6 +487,8 @@ interface Draft {
   readonly principle: string;
   readonly screenId: string;
   readonly refs: ReadonlySet<string>;
+  /** Stable control identity (adjudicate.ts's role+name key, sorted; empty for a text-only finding). */
+  readonly controlKeys: readonly string[];
   readonly input: MakeFindingInput;
 }
 
@@ -518,6 +519,7 @@ function dedupeSemantic(occurrences: readonly Occurrence[], judgedOnRoute: Reado
       principle: rep.entry.principle,
       screenId: rep.screenId,
       refs: rep.refs,
+      controlKeys: [...keys].sort(),
       input: {
         rubricItemId: rep.entry.id,
         evidenceRefs: rep.evidenceRefs,
@@ -536,6 +538,44 @@ function dedupeSemantic(occurrences: readonly Occurrence[], judgedOnRoute: Reado
         ...(rep.entry.attentionProvenance ? { predictedAttention: { label: rep.entry.attentionProvenance, note: ATTENTION_NOTE } } : {}),
       },
     });
+  }
+  return out;
+}
+
+function toContribution(f: UxFinding): ContributingFinding {
+  return { rubricItemId: f.rubricItemId, observation: f.observation, confidence: f.confidence, occurrences: f.occurrences, citation: f.citation, ...(f.quality ? { quality: f.quality } : {}) };
+}
+
+/**
+ * 0.2.0 interim fix for #198 (full redesign tracked there): hand-checking showed the grader filing
+ * SEVERAL findings on the SAME control — e.g. one link failing nielsen-1/2/3/5, primary-action and
+ * scent all at once — because dedupe (above) is scoped per rubric item. That is grader noise, not
+ * distinct findings. Groups by route + the STABLE control identity from adjudicate.ts's `controlKey`
+ * (role+name, never a per-screen index, carried on `Draft.controlKeys`): every draft in a group
+ * implicated the exact same control(s) on the exact same route. The highest-confidence draft leads
+ * (its finding — observation/citation/occurrence count — stands for the group); every other rubric
+ * item that fired is kept, in full, as `contributing` rationale, so no citation is dropped. A
+ * text-only finding (no implicated controls, `controlKeys` empty) is unaffected — it keeps today's
+ * per-item keying, unchanged from before this fix.
+ */
+function groupFindingsByControl(items: readonly { draft: Draft; finding: UxFinding }[]): UxFinding[] {
+  const groups = new Map<string, { draft: Draft; finding: UxFinding }[]>();
+  items.forEach((item, i) => {
+    const gkey = item.draft.controlKeys.length > 0 ? `${item.finding.route}|${item.draft.controlKeys.join("+")}` : `solo:${i}`;
+    const list = groups.get(gkey) ?? [];
+    list.push(item);
+    groups.set(gkey, list);
+  });
+  const out: UxFinding[] = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      out.push(list[0]!.finding);
+      continue;
+    }
+    const ranked = [...list].sort((a, b) => b.finding.confidence - a.finding.confidence || a.draft.key.localeCompare(b.draft.key));
+    const lead = ranked[0]!.finding;
+    const rest = ranked.slice(1).map((r) => r.finding);
+    out.push(Object.freeze({ ...lead, contributing: [...(lead.contributing ?? []), ...rest.map(toContribution)] }));
   }
   return out;
 }
