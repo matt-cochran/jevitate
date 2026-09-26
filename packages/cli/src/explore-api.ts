@@ -18,7 +18,7 @@ import {
   type StyleProperty,
   type TargetDescriptor,
 } from "@jevitate/recording";
-import type { HostHealthSampler, InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
+import type { DefectRecord, HostHealthSampler, InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
   runGoalBasedMission,
@@ -997,8 +997,15 @@ export interface RunCoverageMissionOptions {
   readonly overflow?: OverflowFlags;
 }
 
-/** How the frontier ended (`insufficient-exploration`, #203: drained by timed-out actions, never `exhausted`). */
-type CoverageRunOutcome = "exhausted" | "insufficient-exploration" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
+/**
+ * How the frontier ended. `insufficient-coverage` (#209: the ONE name — it was `insufficient-exploration`
+ * in #203): drained by timed-out actions, or emptied having exercised too little (e.g. only global
+ * navigation) to call it `clean`. `exhausted` means fully explored AND enough to be clean.
+ */
+/** #209: a coverage frontier's own defect as listed in the unified `defects` (its Recording stays in `coverage.defects`). */
+export type CoverageFrontierDefect = Omit<DefectRecord, "recording" | "reason"> & { readonly title: string };
+
+type CoverageRunOutcome = "exhausted" | "insufficient-coverage" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
 
 export interface RunCoverageMissionResult {
   /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
@@ -1037,10 +1044,11 @@ export interface RunCoverageMissionResult {
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /**
-   * EVERY defect the run found (#195): declared-invariant defects (#86, each with its own path
-   * Recording) and `server-log` defects (#142). Jev-flagged states stay advisory in `coverage.defects`.
+   * EVERY defect the run found (#195; #209): the frontier's own (`horizontal-overflow`, and a
+   * `judgment-flagged-state` — also in `coverage.defects`, which keeps each one's repro Recording),
+   * declared-invariant defects (#86, each with its own path Recording) and `server-log` defects (#142).
    */
-  readonly defects: Array<InvariantDefect | ServerLogDefect>;
+  readonly defects: Array<CoverageFrontierDefect | InvariantDefect | ServerLogDefect>;
   readonly invariants?: InvariantReport[];
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
@@ -1168,7 +1176,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
           ? "inconclusive"
           : // #203: a frontier drained by timed-out actions, or ended on a page hung only on a starved
             // host (no hang finding left), explored too little to be clean — a found defect still wins.
-            result.outcome === "budget" || result.outcome === "insufficient-exploration" || (result.outcome === "hang" && result.hangs.length === 0)
+            result.outcome === "budget" || result.outcome === "insufficient-coverage" || (result.outcome === "hang" && result.hangs.length === 0)
             ? found > 0
               ? "defects-found"
               : "inconclusive"
@@ -1200,7 +1208,10 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       timing: result.timing,
       strategy: opts.strategy ?? "coverage",
       coverage: stampedCoverage,
-      outcome: result.outcome,
+      // #209: a frontier that emptied having exercised too little to be clean is not `exhausted`
+      // (that reads as "fully covered") — it is `insufficient-coverage`, the same word as its
+      // `failure.kind`, so one ending has one name.
+      outcome: thin && result.outcome === "exhausted" ? ("insufficient-coverage" as const) : result.outcome,
       missionOutcome,
       exitCode,
       ...(failure === undefined ? {} : { failure }),
@@ -1213,7 +1224,16 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
+      // #209: EVERY defect in `defects` (#195) — the frontier's own (a horizontal overflow, a flagged
+      // state; also in `coverage.defects`), then declared-invariant, then server-log ones.
+      defects: unifiedDefects(
+        [
+          // Slim: the repro Recording stays in `coverage.defects` (not copied twice into the result).
+          ...stampedDefects.map(({ recording: _repro, reason, ...d }) => ({ ...d, title: reason })),
+          ...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])),
+        ],
+        serverLogRun?.defects,
+      ),
       resultPath: resultPathFor(journal.recordingPath),
       ...host.fields,
     };
@@ -1719,15 +1739,26 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     // non-chrome proved nothing about the named capability — `inconclusive`,
     // never `clean`, whatever the loop's own stop reason was. Mirrors the
     // adversarial mission's `insufficient-coverage` idiom.
-    const thin = result.outcome !== "crashed" && result.coverage.inScopeActionsExercised === 0;
-    const coverageFailure: MissionFailure | undefined = thin
+    const chromeOnly = result.outcome !== "crashed" && result.coverage.inScopeActionsExercised === 0;
+    // #209: in-scope, non-chrome controls were exercised — but none of them had anything to do with
+    // the named capability (every one at relevance=0 against its words). That proves no more about
+    // it than the chrome-only case: `inconclusive`, never `clean`.
+    const words = result.coverage.featureWords;
+    const irrelevant = !chromeOnly && result.outcome !== "crashed" && words.length > 0 && result.coverage.relevantActionsExercised === 0;
+    const thin = chromeOnly || irrelevant;
+    const coverageFailure: MissionFailure | undefined = chromeOnly
       ? {
           kind: "insufficient-coverage",
           message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${
             opts.routeGlobs.join(", ") || "(none)"
           }] — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
         }
-      : undefined;
+      : irrelevant
+        ? {
+            kind: "insufficient-coverage",
+            message: `no control relevant to "${opts.capability}" was exercised: all ${result.coverage.inScopeActionsExercised} in-scope action(s) were on controls at relevance=0 (none named with ${words.map((w) => `"${w}"`).join(", ")}) — name the feature with the words its controls use, or point --url/--route at the page that has them`,
+          }
+        : undefined;
     // A declared-invariant violation (#86) is a hard defect even on a thin run: it was observed.
     const invariantDefects = result.invariantDefects?.length ?? 0;
     // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it

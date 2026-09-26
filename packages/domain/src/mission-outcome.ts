@@ -113,7 +113,12 @@ export type MissionFailureKind =
   | "page-closed"
   /** The run could not reach (or stay on) the page it was asked to test — e.g. the start URL redirects elsewhere. */
   | "target-unreachable"
-  /** The run found nothing but exercised too little of its target for that to mean `clean`. */
+  /**
+   * The run found nothing but exercised too little of its target for that to mean `clean` — the ONE
+   * name (#209) for a coverage/exploratory frontier drained by timed-out actions (#203), one that only
+   * followed global navigation, a `--feature` run that exercised nothing relevant, and an adversarial
+   * run below its thresholds (its message names why, e.g. targets refused by the safety policy).
+   */
   | "insufficient-coverage"
   /** The operator's configuration failed before the app was exercised — e.g. a fixture setup (#140/#144). Never a SUT finding. */
   | "configuration"
@@ -126,9 +131,7 @@ export type MissionFailureKind =
   /** Goal (#209): the only failing checks were vacuous (#202) — satisfied before any action. Outcome `inconclusive`. */
   | "vacuous-check"
   /** Usability (#209): the job under review was never completed — the review proves nothing about the rest. */
-  | "job-incomplete"
-  /** The frontier emptied because its actions timed out, not because its states ran out (#203). */
-  | "insufficient-exploration";
+  | "job-incomplete";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;
