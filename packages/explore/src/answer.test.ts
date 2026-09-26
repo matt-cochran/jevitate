@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ObservedPages, groundAnswer, pagesContext } from "./answer.js";
+import { ObservedPages, goalAsksForReply, groundAnswer, pagesContext } from "./answer.js";
 
 const pages = [
   { url: "http://app.test/settings", text: "Settings\nPlan: Pro\nDesign Partner pricing: book one interview per month." },
@@ -98,4 +98,20 @@ describe("ObservedPages", () => {
     expect(JSON.stringify(all)).not.toContain("s3cret-token");
     expect(pagesContext(all, 30).length).toBeLessThanOrEqual(30);
   });
+});
+
+describe("goalAsksForReply (#200) — code-side, conservative", () => {
+  it.each([
+    "Ask the assistant how to export my data, wait for its reply, and report the reply.",
+    "Send the chatbot a greeting and report its response.",
+    "Tell the bot your plan and find out what it replies.",
+    "Ask the AI copilot about pricing and report what it responds.",
+    "Report the assistant's answer to 'how do I reset my password?'",
+  ])("a goal about a reply: %s", (g) => expect(goalAsksForReply(g)).toBe(true));
+  it.each([
+    "Find out which plan you are on and how many credits you have left.",
+    "Find out the average API response time shown on the status page.",
+    "Answer the onboarding survey and submit it.",
+    "Reply-to address: find out what it is set to in Settings.",
+  ])("not a goal about a reply: %s", (g) => expect(goalAsksForReply(g)).toBe(false));
 });

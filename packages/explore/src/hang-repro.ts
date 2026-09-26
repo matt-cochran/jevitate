@@ -9,6 +9,7 @@ import type { VerifySession } from "./verify-fix.js";
 import type { TranscriptEntry } from "./transcript.js";
 import type { MissionOutcome } from "@jevitate/domain";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
+import type { HostHealthSampler } from "./host-health.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 
 /**
@@ -467,7 +468,12 @@ export async function recordCoverageHang(p: {
   readonly safety?: SafetyConfig;
   /** Samples the host's resource pressure for the evidence. Default: this platform's signals. */
   readonly hostProbe?: HostProbe;
-}): Promise<void> {
+  /**
+   * The run's host-health sampler (#203): a NEW hang met while the host was starved is marked
+   * `environment-degraded` on it instead — never reproduced, never a hang finding.
+   */
+  readonly hostHealth?: HostHealthSampler;
+}): Promise<"recorded" | "degraded"> {
   const fingerprint = hangFingerprint(p.hang);
   const known = p.found.get(fingerprint);
   const step = p.steps.length;
@@ -480,10 +486,18 @@ export async function recordCoverageHang(p: {
       occurrenceSteps: [...known.occurrenceSteps, step],
       routes: known.routes.includes(p.hang.route) ? known.routes : [...known.routes, p.hang.route],
     });
-    return;
+    return "recorded";
   }
   const index = Math.max(0, p.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1);
-  const hang: HangSignal = { ...p.hang, host: await (p.hostProbe ?? hostProbe())() };
+  const judged = p.hostHealth === undefined ? { host: await (p.hostProbe ?? hostProbe())(), starved: null } : await p.hostHealth.judge();
+  if (judged.starved !== null) {
+    p.hostHealth?.markDegraded(
+      { finding: p.hang.kind === "ui-no-progress" ? "no-progress" : "hang", detail: `${p.hang.kind}: ${p.hang.detail}`, step: Math.max(0, step - 1) },
+      judged.starved,
+    );
+    return "degraded";
+  }
+  const hang: HangSignal = { ...p.hang, host: judged.host };
   const reproduction: HangReproduction =
     p.openSession === undefined
       ? NOT_REPLAYED
@@ -498,4 +512,5 @@ export async function recordCoverageHang(p: {
         });
   const finding = hangFinding(hang, p.steps, index, reproduction);
   p.found.set(fingerprint, { ...finding, repro: { ...finding.repro, recording: p.recording } });
+  return "recorded";
 }

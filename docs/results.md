@@ -36,6 +36,8 @@ fields the same way:
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
 | `failure` | object | Present only when the run broke. It says why the run ended `crashed` or `inconclusive`. |
+| `hostHealth` | object | The host's health over the run (#203): peak load per core, minimum free memory, peak driver event-loop lag, the slowest render, how many steps ran on a starved host. See [a starved host](./outcomes.md#a-starved-host-hosthealth-environmentdegraded). Additive: older results do not have it. |
+| `environmentDegraded` | array | Hangs, click timeouts and no-progress stops met while the host was starved: advisory (`advisory: true`), never a defect or hang, never failing the run. |
 
 `verify-fix`, `ledger add`, `report`, `check` and `--repeat` voting all read defects from `defects`.
 

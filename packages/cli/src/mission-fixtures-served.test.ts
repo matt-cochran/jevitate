@@ -146,6 +146,9 @@ describe("mission fixtures — setup, bound outputs, restore, verify-fix replays
             "--url", `${origin}/items/\${setup.itemId}`,
             "--goal", "confirm item ${setup.itemId} is shown",
             "--success", "textIncludes:css=h1|${setup.itemId}",
+            // #202: a "confirm it is shown" goal holds on the seed page by design — vacuous; this test
+            // is about the fixture lifecycle, so it opts out explicitly.
+            "--allow-vacuous-checks",
             "--allow", origin,
             "--storage-state", state,
             "--fixtures", fixtures,
