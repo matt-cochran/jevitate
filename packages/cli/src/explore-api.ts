@@ -1,5 +1,5 @@
 import { chmod, writeFile } from "node:fs/promises";
-import { logsDirFor } from "./project-dir.js";
+import { assertSessionFileOutsideProject, logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
@@ -330,12 +330,23 @@ export function currentUrlSafe(session: { page: { url(): string } }): string | u
  * The file holds live session credentials: written with mode 0600 (owner read/write only), and its
  * contents are never logged either way.
  */
+/**
+ * #195: refused BEFORE a browser opens — a `saveStorageState` inside a repo's `.jevitate/` (which
+ * never holds sessions or secrets). `persistStorageState` re-checks at the write itself.
+ */
+export function assertSaveStorageStateOutsideProject(file: string | undefined): void {
+  if (file !== undefined) assertSessionFileOutsideProject(file, "saveStorageState");
+}
+
 export async function persistStorageState(
   session: { page: { url(): string }; saveStorageState(file: string): Promise<void> },
   file: string | undefined,
   snapshotter?: StorageStateSnapshotter,
 ): Promise<void> {
   if (file === undefined) return;
+  // #195: the final chokepoint for every caller — nothing is written inside a repo's .jevitate/;
+  // the refusal is thrown (the run reports it), never swallowed.
+  assertSessionFileOutsideProject(file, "saveStorageState");
   const url = currentUrlSafe(session);
   if (url === undefined || !isLoginLikeUrl(url)) {
     try {
@@ -506,6 +517,7 @@ export function withServerCause(reason: string | undefined, outcome: GoalBasedOu
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // Fail fast on a missing fixture BEFORE launching Chromium.
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   // A bound secret (or TOTP seed) is a run secret too: kept out of the issue drafts as well. So is a
@@ -974,6 +986,7 @@ export interface RunCoverageMissionResult {
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  assertSaveStorageStateOutsideProject(opts.saveStorageState);
 
   // #149: refused BEFORE any browser opens.
   const resolvedEmulation = resolveEmulation(opts.emulation);
@@ -1261,6 +1274,7 @@ export async function runAdversarialCliMission(
 ): Promise<AdversarialCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
+  assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // #149: refused BEFORE any browser opens.
   const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
@@ -1495,6 +1509,7 @@ export const NO_MODEL_USAGE: UsageCounts = {
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
+  assertSaveStorageStateOutsideProject(opts.saveStorageState);
   const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
 
   // #149: refused BEFORE any browser opens.

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import type { HangConfig, SafetyConfig, SettleConfig, TimingConfig } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
+import { sessionFileInProjectRefusal } from "./project-dir.js";
 
 /**
  * Per-target (per-origin) configuration — `~/.jevitate/targets.json`:
@@ -119,6 +120,12 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     } else {
       throw new TargetConfigError(`${where}.saveStorageState must be true or a file path`);
     }
+  }
+  // #195: a session file (a write-back target) never lands in a repo's .jevitate/.
+  const writes = out.saveStorageState === true ? out.storageState : out.saveStorageState;
+  if (writes !== undefined) {
+    const refusal = sessionFileInProjectRefusal(writes, `${where}.saveStorageState:`);
+    if (refusal !== undefined) throw new TargetConfigError(refusal);
   }
   if (o.secretFields !== undefined) {
     const specs = strings(o.secretFields, `${where}.secretFields`);

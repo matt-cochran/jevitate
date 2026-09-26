@@ -98,3 +98,22 @@ describe("per-target settle/hang config (~/.jevitate/targets.json)", () => {
     expect(() => loadTargetsFile(bad)).toThrow(TargetConfigError);
   });
 });
+
+describe("targets.json saveStorageState never writes into a repo's .jevitate/ (#195)", () => {
+  it("refuses a write-back path (or the storageState that `true` writes back to) inside .jevitate/, naming the entry", async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-targets-"));
+    const p = join(dir, "targets.json");
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ storageState: "auth.json", saveStorageState: ".jevitate/auth.json" }, /\.saveStorageState: .*\/\.jevitate\/auth\.json is inside the repo's .*\/\.jevitate\//],
+      [{ storageState: ".jevitate/auth.json", saveStorageState: true }, /\.saveStorageState: .*\/\.jevitate\/auth\.json is inside the repo's/],
+    ];
+    for (const [entry, msg] of cases) {
+      await writeFile(p, JSON.stringify({ "http://localhost:3000": entry }));
+      expect(() => loadTargetsFile(p)).toThrow(TargetConfigError);
+      expect(() => loadTargetsFile(p)).toThrow(msg);
+    }
+    // Reading a session from .jevitate/ is not a write; a write-back outside it is fine.
+    await writeFile(p, JSON.stringify({ "http://localhost:3000": { storageState: ".jevitate/auth.json", saveStorageState: "sessions/auth.json" } }));
+    expect(() => loadTargetsFile(p)).not.toThrow();
+  });
+});

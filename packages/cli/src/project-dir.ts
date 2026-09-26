@@ -203,17 +203,24 @@ export class SessionFileInProjectError extends Error {
  * The repo's `.jevitate/` never holds secrets or storage states (they live in `~/.jevitate/` or
  * outside the repo): refuses `file` when it resolves inside a `.jevitate/` directory other than the
  * per-user one. Decided from the path itself (any `.jevitate` ancestor), so it holds wherever the
- * command runs from and whether or not the directory exists yet. `what` names the option.
+ * command runs from and whether or not the directory exists yet. `what` names the option. Returns
+ * the refusal message, or `undefined` when the path is fine. EVERY storage-state writer goes
+ * through this: the entry points (explore flag, suite, targets.json) and the writes themselves
+ * (`persistStorageState`, the kill switch's `writeKillSnapshot`).
  */
-export function assertSessionFileOutsideProject(file: string, what: string, deps: LayoutDeps = {}): void {
+export function sessionFileInProjectRefusal(file: string, what: string, deps: LayoutDeps = {}): string | undefined {
   const abs = resolve((deps.cwd ?? (() => process.cwd()))(), file);
   const home = homeDataRoot(deps);
   for (let dir = dirname(abs); ; dir = dirname(dir)) {
     if (basename(dir) === ".jevitate" && dir !== home) {
-      throw new SessionFileInProjectError(
-        `${what} ${abs} is inside the repo's ${dir}/, which never holds storage states or secrets (it is shared with the app's code); write it under ${home}/ or outside the repo`,
-      );
+      return `${what} ${abs} is inside the repo's ${dir}/, which never holds storage states or secrets (it is shared with the app's code); write it under ${home}/ or outside the repo`;
     }
-    if (dirname(dir) === dir) return;
+    if (dirname(dir) === dir) return undefined;
   }
+}
+
+/** Throws `SessionFileInProjectError` when `sessionFileInProjectRefusal` refuses `file`. */
+export function assertSessionFileOutsideProject(file: string, what: string, deps: LayoutDeps = {}): void {
+  const refusal = sessionFileInProjectRefusal(file, what, deps);
+  if (refusal !== undefined) throw new SessionFileInProjectError(refusal);
 }
