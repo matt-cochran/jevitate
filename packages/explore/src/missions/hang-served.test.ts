@@ -61,6 +61,13 @@ beforeAll(async () => {
           html(`<h1>Hub</h1><a href="/stuck">Stuck report</a><a href="/stuck?again=1">Stuck report again</a><a href="/broken">Broken page</a>`),
         );
         return;
+      case "/btn-hub":
+        // #193: a BUTTON (not a link, so misuse never filters it as leaving the scope) that
+        // navigates to the hanging route, which sits outside the run's scope.
+        res.writeHead(200, { "content-type": "text/html" }).end(
+          html(`<h1>Hub</h1><button type="button" onclick="location.href='/stuck'">Open stuck report</button>`),
+        );
+        return;
       case "/broken":
         res.writeHead(200, { "content-type": "text/html" }).end(
           html(`<h1>Broken</h1><a href="/hub">Hub</a><script>fetch("/api/boom");</script>`),
@@ -338,6 +345,9 @@ describe("coverage exploration KEEPS EXPLORING after a hang", () => {
             judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
             seedUrl: `${origin}/hub`,
             allowlist: [origin],
+            // The hub links to the routes under test: this run is scoped to the whole app (only
+            // in-scope pages are hang-checked — #193).
+            routeGlobs: ["/**"],
             maxDepth: 1,
             openFreshSession: freshSession,
             hangReplays: 1,
@@ -363,6 +373,78 @@ describe("coverage exploration KEEPS EXPLORING after a hang", () => {
   );
 });
 
+describe("#193 — a page reached only by an out-of-scope departure is never hang-checked", () => {
+  it(
+    "coverage: the hanging route outside the scope is a departure with an advisory note — no hang finding, the run goes on",
+    async () => {
+      state.neverRespond = true;
+      const result = await withSession(
+        "hang-out-of-scope-",
+        async (session) => {
+          const actor = CastActor.named("coverage").whoCan(new BrowseTheWeb(session, [origin]));
+          return runInductionMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+            seedUrl: `${origin}/hub`,
+            allowlist: [origin],
+            // Scope: the hub and /broken only — /stuck (the hanging route) is outside it.
+            routeGlobs: ["/broken"],
+            maxDepth: 1,
+            openFreshSession: freshSession,
+            hangReplays: 1,
+            renderWaitMs: FAST.renderWaitMs,
+          });
+        },
+        origin,
+      );
+      expect(result.hangs).toEqual([]);
+      expect(result.outcome).toBe("exhausted");
+      const stuck = result.coverage.scope.departures.filter((d) => d.url.includes("/stuck"));
+      expect(stuck.length).toBeGreaterThan(0);
+      const notes = result.transcript.filter((e) => e.reason?.includes("out-of-scope page not checked (advisory, not a finding)") === true);
+      expect(notes.length).toBeGreaterThan(0);
+      // It went on after the departure: the in-scope broken page was still reached.
+      expect(result.transcript.some((e) => e.target === 'link "Broken page"')).toBe(true);
+    },
+    180_000,
+  );
+
+  it(
+    "adversarial: a departure onto the hanging route is not a hang finding; the hunt goes on in scope",
+    async () => {
+      state.neverRespond = true;
+      const result = await withSession(
+        "hang-out-of-scope-adv-",
+        async (session) => {
+          const actor = CastActor.named("hunter").whoCan(new BrowseTheWeb(session, [origin]));
+          return runAdversarialMission({
+            page: session.page,
+            actor,
+            judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
+            generation: new FakeGenerationGateway(),
+            seedUrl: `${origin}/btn-hub`,
+            allowlist: [origin],
+            strategies: ["exercise-controls"],
+            bounds: { maxDecisions: 3 },
+            openFreshSession: freshSession,
+            hangReplays: 1,
+            ...FAST,
+          });
+        },
+        origin,
+      );
+      expect(result.hangs).toEqual([]);
+      expect(result.stop).not.toBe("hang");
+      expect(result.scope.departures.some((d) => d.url.includes("/stuck"))).toBe(true);
+      expect(
+        result.transcript.some((e) => e.strategy === "scope-reset" && e.reason?.includes("out-of-scope page not checked") === true),
+      ).toBe(true);
+    },
+    180_000,
+  );
+});
+
 describe("#87 — a global hang element is ONE finding across every route it appears on", () => {
   it(
     "a persistent busy indicator shared by the layout, met on 3 routes, is 1 hang finding listing all 3 routes, reproduced once",
@@ -377,6 +459,7 @@ describe("#87 — a global hang element is ONE finding across every route it app
             judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
             seedUrl: `${origin}/lay-hub`,
             allowlist: [origin],
+            routeGlobs: ["/lay-*"],
             maxDepth: 1,
             openFreshSession: freshSession,
             hangReplays: 1,

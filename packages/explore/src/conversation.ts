@@ -451,9 +451,10 @@ export type RunOutcome =
       readonly status: "completed";
       /**
        * What proved it: the mission's success condition, the grounded goal judgment, or (a find-out
-       * goal, #101) a reported answer whose every claim code found on an observed page.
+       * goal, #101) a reported answer whose every claim code found on an observed page, or (a sign-in
+       * goal, #188) the sign-in completion code observed after the run's own sign-in steps.
        */
-      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer";
+      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer" | "sign-in-signals";
     }
   | { readonly status: "incomplete"; readonly reason: string };
 
@@ -485,13 +486,23 @@ export interface DoneEvidence {
    * only when no success condition exists. `null` = the judgment was unavailable.
    */
   readonly goalMetProbability?: number | null;
+  /**
+   * Sign-in completion (#188), present only when the run itself typed sign-in credentials:
+   * `completed` is CODE-observed (./auth-completion.ts — left the sign-in page, no credential field or
+   * sign-in control, signed-in chrome shown); `goalIsSignIn` is the advisory P("the whole goal is to
+   * sign in"), `null` when unavailable. Weighed only without a success condition.
+   */
+  readonly signIn?: { readonly completed: boolean; readonly goalIsSignIn: number | null };
 }
 
 /**
  * Grounds a model-proposed `done` (the model's word is a proposal, never the verdict):
  *  - typed text still unsubmitted → not done (the app never received it);
  *  - an independent success condition decides when present;
- *  - otherwise the advisory goal judgment must clear `GOAL_MET_THRESHOLD`.
+ *  - otherwise the advisory goal judgment must clear `GOAL_MET_THRESHOLD`;
+ *  - or (#188) code observed the run's own sign-in complete AND the advisory scope judgment says the
+ *    whole goal is signing in, at the same threshold: code proves the sign-in, the model only scopes
+ *    the goal — a goal asking for more than signing in still needs the goal judgment.
  */
 export function groundDone(e: DoneEvidence): DoneVerdict {
   if (e.unsubmitted.length > 0) {
@@ -503,9 +514,13 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
       : { accept: false, reason: "the success condition is not met on this page" };
   }
   const p = e.goalMetProbability;
-  if (p === undefined || p === null) return { accept: false, reason: "goal completion could not be judged on this page" };
-  if (p < GOAL_MET_THRESHOLD) {
-    return { accept: false, reason: `the goal is not observably achieved on this page (p=${p.toFixed(2)})` };
+  if (p !== undefined && p !== null && p >= GOAL_MET_THRESHOLD) {
+    return { accept: true, outcome: { status: "completed", verifiedBy: "grounded-judgment" } };
   }
-  return { accept: true, outcome: { status: "completed", verifiedBy: "grounded-judgment" } };
+  const s = e.signIn;
+  if (s !== undefined && s.completed && s.goalIsSignIn !== null && s.goalIsSignIn >= GOAL_MET_THRESHOLD) {
+    return { accept: true, outcome: { status: "completed", verifiedBy: "sign-in-signals" } };
+  }
+  if (p === undefined || p === null) return { accept: false, reason: "goal completion could not be judged on this page" };
+  return { accept: false, reason: `the goal is not observably achieved on this page (p=${p.toFixed(2)})` };
 }

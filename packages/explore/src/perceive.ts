@@ -39,6 +39,8 @@ export const RENDER_WAIT_MS = 15_000;
 
 export interface PerceiveOptions {
   readonly maxCandidates?: number;
+  /** #192: keep a long list's options the goal names past its per-list cap (see `SnapshotOptions`). */
+  readonly mentioned?: (name: string) => boolean;
   /** Ceiling on the render + settle wait (ms). Default `RENDER_WAIT_MS`; 0 disables waiting. */
   readonly renderWaitMs?: number;
   /** Quiet window for "settled" (ms). Default `SETTLE_QUIET_MS` (500). */
@@ -105,7 +107,10 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   if (!Number.isFinite(quietMs) || quietMs < 0) {
     throw new Error(`perceive: quietMs must be a non-negative number, got ${String(quietMs)}`);
   }
-  const snapOpts = opts.maxCandidates === undefined ? {} : { maxCandidates: opts.maxCandidates };
+  const snapOpts = {
+    ...(opts.maxCandidates === undefined ? {} : { maxCandidates: opts.maxCandidates }),
+    ...(opts.mentioned === undefined ? {} : { mentioned: opts.mentioned }),
+  };
   const hangProbeMs = opts.hangProbeMs ?? HANG_PROBE_MS;
   // Half the ceiling by default: a request that started a little AFTER this perception began (the
   // page an action opened) is still recognised as the stuck one when the ceiling passes, instead of

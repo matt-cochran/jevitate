@@ -1,5 +1,6 @@
 import type { JudgmentPort, JudgmentState, Question, ChoiceQuestion } from "@jevitate/ai-core";
-import { assertNoSecretInPayload } from "@jevitate/ai-core";
+import { MAX_CHOICE_OPTIONS, assertNoSecretInPayload } from "@jevitate/ai-core";
+import { boundCandidates } from "./candidate-budget.js";
 import type { Control, Snapshot } from "./snapshot.js";
 import { buildJudgmentState, redactText } from "./redact.js";
 import {
@@ -102,6 +103,11 @@ export interface DecideInput {
    * not controls, so otherwise invisible to the model (#79). Untrusted page text.
    */
   readonly pageStatus?: string;
+  /**
+   * The most options the action question may carry (default `MAX_CHOICE_OPTIONS`, the judgment
+   * API's cap, #192) — lowered on a retry when the API still refuses the count.
+   */
+  readonly maxChoices?: number;
 }
 
 /** The conversation the loop is in: the latest reply (untrusted page text) and what was sent. */
@@ -176,10 +182,18 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
   const sends = new Map(sendCandidates(snapshot.controls).map((c) => [c.control.index, c]));
   // Each rich-text control's `edit_text` (#148) sits right after its own action.
   const edits = new Map(editCandidates(snapshot.controls).map((c) => [c.control.index, c]));
-  const offeredActions = targetCandidates(snapshot.controls, { ops }).flatMap((c) => {
+  const allActions = targetCandidates(snapshot.controls, { ops }).flatMap((c) => {
     const send = c.op === "type" ? sends.get(c.control.index) : undefined;
     const edit = edits.get(c.control.index);
     return [c, ...(send === undefined ? [] : [send]), ...(edit === undefined ? [] : [edit])];
+  });
+  // #192: the judgment API takes at most MAX_CHOICE_OPTIONS options per question. A page with a long
+  // picker open would overflow it and end the run; code keeps the most useful actions instead.
+  const { kept: offeredActions, omitted } = boundCandidates(allActions, {
+    limit: (input.maxChoices ?? MAX_CHOICE_OPTIONS) - TARGET_FREE_ACTIONS.length,
+    goal: input.goal,
+    history: input.history,
+    offered,
   });
   for (const c of offeredActions) {
     candidates.set(c.id, { op: c.op, control: c.control });
@@ -204,7 +218,11 @@ export async function decide(judge: JudgmentPort, input: DecideInput): Promise<D
     instructions:
       "Which single action best advances the goal from the current page? Use the history: do not repeat an " +
       "action that already succeeded, and when a dialog or form step is in progress, complete it. " +
-      CONVERSATION_GUIDE,
+      CONVERSATION_GUIDE +
+      (omitted === 0
+        ? ""
+        : ` ${omitted} more controls on this page are not listed as actions (a long list, e.g. a picker's options): ` +
+          "if the one you need is not listed, type its name into the list's search/filter field, or scroll to it."),
   };
   const questions: Record<string, Question> = {
     action: actionQuestion,
@@ -286,24 +304,59 @@ export async function judgeGoalMet(
     readonly pageStatus?: string;
   },
 ): Promise<number | null> {
+  return (await judgeGoalCompletion(judge, input)).goalMet;
+}
+
+/** The advisory "is the WHOLE goal signing in?" head, asked only after code-observed sign-in steps (#188). */
+export const GOAL_IS_SIGN_IN_QUESTION = "goalIsOnlyToSignIn";
+
+export const GOAL_IS_SIGN_IN_INSTRUCTIONS =
+  "Is the WHOLE goal to sign in / log in / authenticate (including any two-factor or verification-code " +
+  "step), with nothing further to do in the app once signed in? Answer from the goal's wording only. Not " +
+  "only signing in: the goal also asks to create, change, find, send or check something after signing in.";
+
+/**
+ * `judgeGoalMet`, plus (#188) the run's code-observed sign-in facts: shown to the goal judgment as a
+ * trusted line — the page text of a signed-in home page rarely says "you are signed in" — and, in the
+ * same round trip, the advisory scope question `GOAL_IS_SIGN_IN_QUESTION`. Both answers are advisory;
+ * `groundDone` weighs them against what code observed.
+ */
+export async function judgeGoalCompletion(
+  judge: JudgmentPort,
+  input: {
+    readonly goal: string;
+    readonly url: string;
+    readonly pageText: string;
+    readonly history: readonly string[];
+    readonly secrets?: readonly string[];
+    readonly pageStatus?: string;
+    /** Code-observed sign-in facts (./auth-completion.ts), when the run typed sign-in credentials. */
+    readonly signInFacts?: string;
+  },
+): Promise<{ goalMet: number | null; goalIsSignIn: number | null }> {
   const secrets = input.secrets ?? [];
   const state = buildJudgmentState({
     goal: input.goal,
     url: input.url,
     controls: [
       PROMPT_INJECTION_GUARD,
+      ...(input.signInFacts === undefined ? [] : [`SIGN-IN (observed by code, trusted): ${input.signInFacts}`]),
       ...(input.pageStatus === undefined || input.pageStatus === "" ? [] : [`PAGE STATUS (untrusted): ${input.pageStatus}`]),
       `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
     ],
     history: input.history,
     secrets,
   });
-  const answers = await judge.systemOne({
-    state,
-    questions: { [GOAL_MET_QUESTION]: { kind: "noul", instructions: GOAL_MET_INSTRUCTIONS } },
-  });
-  const a = answers[GOAL_MET_QUESTION];
-  if (a?.kind !== "noul" || !Number.isFinite(a.probability)) return null;
+  const questions: Record<string, Question> = { [GOAL_MET_QUESTION]: { kind: "noul", instructions: GOAL_MET_INSTRUCTIONS } };
+  if (input.signInFacts !== undefined) {
+    questions[GOAL_IS_SIGN_IN_QUESTION] = { kind: "noul", instructions: GOAL_IS_SIGN_IN_INSTRUCTIONS };
+  }
+  assertNoSecretInPayload(questions, secrets);
+  const answers = await judge.systemOne({ state, questions });
   // `probability` is P(yes) — the port's noul contract.
-  return a.probability;
+  const p = (name: string): number | null => {
+    const a = answers[name];
+    return a?.kind === "noul" && Number.isFinite(a.probability) ? a.probability : null;
+  };
+  return { goalMet: p(GOAL_MET_QUESTION), goalIsSignIn: input.signInFacts === undefined ? null : p(GOAL_IS_SIGN_IN_QUESTION) };
 }

@@ -104,10 +104,11 @@ describe("explore --repeat (#141)", () => {
         expect(r).toMatchObject({ kind: "multi-run", strategy: "adversarial", repeat: 3, minAgreement: 2, complete: true });
         expect(sessions).toBe(3); // three runs, three fresh contexts
         const cell = r.cells[0]!;
-        // One decision proves little (inconclusive), except where the 500 fired: the agreed outcome is 2 of 3.
-        expect(cell.runs.map((run) => run.outcome)).toEqual(["inconclusive", "defects-found", "inconclusive"]);
-        expect(r.outcome).toBe("inconclusive");
-        expect(r.exitCode).toBe(2);
+        // The one decision exercises the page's only control (#193: a strategy with nothing to do never
+        // idles while controls remain), so each run is clean except where the 500 fired: 2 of 3 agree.
+        expect(cell.runs.map((run) => run.outcome)).toEqual(["clean", "defects-found", "clean"]);
+        expect(r.outcome).toBe("clean");
+        expect(r.exitCode).toBe(0);
         expect(r.findings).toEqual([]);
         const flaky = r.flaky.find((f) => f.title.includes("/api/data"));
         expect(flaky).toMatchObject({ stability: "1/3", seen: 1, of: 3, runs: [2], status: "flaky" });

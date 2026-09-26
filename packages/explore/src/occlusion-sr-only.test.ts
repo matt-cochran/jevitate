@@ -156,6 +156,24 @@ describe("failureLine — a Playwright click failure names what intercepted it (
     expect(failureLine(msg)).toBe('locator.click: Timeout 5000ms exceeded. (<div class="inspector">…</div> intercepts pointer events)');
     expect(failureLine("boom\nmore")).toBe("boom");
   });
+
+  it("#188: a timeout keeps the call log's last actionability state (why Playwright never clicked)", () => {
+    const msg = [
+      "locator.click: Timeout 5000ms exceeded.",
+      "Call log:",
+      "  - waiting for getByTestId('login-verify-2fa')",
+      "    - locator resolved to <button type=\"submit\">Verify</button>",
+      "  - attempting click action",
+      "    2 × waiting for element to be visible, enabled and stable",
+      "      - element is not stable",
+      "    - retrying click action",
+      "    - waiting 20ms",
+    ].join("\n");
+    expect(failureLine(msg)).toBe("locator.click: Timeout 5000ms exceeded. (element is not stable)");
+    expect(failureLine("locator.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for getByText('x')")).toBe(
+      "locator.click: Timeout 5000ms exceeded.",
+    );
+  });
 });
 
 describe("coveredByInterceptors — geometric deprioritisation after a proven click failure (#90)", () => {
