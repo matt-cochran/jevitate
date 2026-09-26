@@ -23,8 +23,10 @@ pass or fail:
   its start URL's path, or its `routes`. Missions, invariant sweeps and verify-fix always run.
 - `--target-build <id>` stamps your build/commit on every result, next to `engine`.
 
-Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored,
-the budget was exceeded, or the suite was refused. Outputs go under `--out` (default
+Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored
+or the budget was exceeded · `64` the suite, its preflight, the targets file or the AI setup was
+refused, so nothing ran (see [exit codes](./outcomes.md#exit-codes)). Gate CI on `1`, and treat `2`
+and `64` as a broken check, not a pass. Outputs go under `--out` (default
 `jevitate-check/`):
 
 | File | What |

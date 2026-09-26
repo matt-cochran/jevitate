@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
+import { exitCodeForEnvelope } from "./exit-codes.js";
 import {
   ReportInputError,
   buildReport,
@@ -28,7 +29,7 @@ export interface ReportCliDeps {
 
 function emit(program: Command, envelope: JsonEnvelope<unknown>, exitCode?: number): void {
   program.configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = exitCode ?? (envelope.ok ? 0 : 1);
+  process.exitCode = exitCode ?? exitCodeForEnvelope(envelope);
 }
 
 function failure(program: Command, err: unknown, code: string): void {

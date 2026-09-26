@@ -115,7 +115,7 @@ test("journey run with an unknown --param fails fast (no browser launch) with E_
     expect(parsed.ok).toBe(false);
     expect(parsed.error.code).toBe("E_INVALID_PARAMS");
     expect(parsed.error.message).toMatch(/unknown/i);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -134,7 +134,7 @@ test("journey run with an unknown journey id fails fast with E_UNKNOWN_JOURNEY a
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -188,7 +188,7 @@ test("journey promote with an unknown id fails fast with E_UNKNOWN_JOURNEY and a
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }

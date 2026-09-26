@@ -7,7 +7,8 @@ parse any run without knowing which strategy produced it.
 
 The same object appears in three places:
 
-- as `data` in `jevitate explore --json` output, or the whole output without `--json`;
+- as `data` in `jevitate explore --json` output, for every strategy (without `--json`, `explore`
+  prints a human summary instead, never JSON: see [output](./outcomes.md#output---json-or-a-human-summary));
 - as `result` in the persisted `<stem>.result.json`, next to `missionOutcome` and `exitCode`;
 - in the MCP `get_mission_result` response.
 

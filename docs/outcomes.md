@@ -2,6 +2,39 @@
 
 Every Jevitate mission ends in a typed, exit-coded outcome. This page is the full reference; the README keeps the short table.
 
+## Exit codes
+
+One table for every `jevitate` command (`packages/cli/src/exit-codes.ts`). Other pages list a
+command's codes only as a reminder; this is the reference.
+
+| Exit | Class | Meaning |
+|---|---|---|
+| `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
+| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`) |
+| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error. It proves nothing. |
+| `3` | hang | the app hung, and the hang reproduced on replay |
+| `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
+| `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_TARGET_CONFIG`, …), an unknown id, missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist |
+| `130` / `143` | killed | SIGINT / SIGTERM; the partial result is still written (see [operations](./operations.md)) |
+
+`64` is `EX_USAGE` from `sysexits.h`. It is deliberately not `5`, so a future outcome code never
+collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,
+`_ASSERTION`, `_SPEC`, `_CONFIG`, `_NOT_FOUND` and `E_UNKNOWN_*` codes are usage errors (64), and any
+other error is `2`.
+
+### Output: `--json` or a human summary
+
+Every command that takes `--json` follows one rule:
+
+- With `--json`, stdout is exactly one line: the `{v, ok, data}` envelope, or `{v, ok: false, error:
+  {code, message}}`. This is the machine contract.
+- Without `--json`, a success prints a short human summary on stdout: the verdict, key counts, each
+  defect or hang with its fingerprint, where the result file is, and a `next:` line (for example
+  `jevitate verify-fix <fp>` or `jevitate report`). A refusal prints `error <CODE>: <message>` on
+  stderr. Neither is JSON; parse `--json` output or the persisted `<stem>.result.json` instead.
+
+The exit code is the same either way.
+
 ## Mission outcomes and exit codes
 
 A mission never answers with a crash: every run ends in a typed outcome, and its
