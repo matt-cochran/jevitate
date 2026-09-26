@@ -1,6 +1,7 @@
 import type { Page, Route, Request } from "playwright";
 import type { WriteClassifier } from "@jevitate/recording";
-import { requestEndpoint, thirdPartyOrigin } from "./authorized-targets.js";
+import { normalizeAllowlist, requestEndpoint } from "./authorized-targets.js";
+import { FirstPartyOrigins } from "./third-party.js";
 import { controlRisk } from "./safety.js";
 import type { Control } from "./snapshot.js";
 
@@ -23,16 +24,17 @@ import type { Control } from "./snapshot.js";
  *    heartbeat, telemetry) pass through and are listed as `background` side effects: blocking a
  *    rotating refresh token would sign the run out mid-mission. Common auth-refresh endpoints
  *    (`DEFAULT_ALLOWED_WRITES`) and operator globs (`--allow-write`) pass even inside a window.
- *  - only FIRST-PARTY writes are the mission's (#194): a write to a third-party origin (outside the
- *    run's `--allow` origins and their sites, decided by `thirdPartyOrigin` from the URL — never by
- *    the model) is never aborted. Dogfood: Stripe.js's fraud-signal beacon `POST https://m.stripe.com/6`
- *    was blocked three times as an "app write", and blocking an embedded SDK's own telemetry breaks
- *    the widget without protecting the app. Why passing them stays safe: jevitate's authority is
- *    the app under test (guardrail #1); a third-party write the MODEL could cause through a control
- *    (a pay / checkout / subscribe button) is refused BEFORE the click by `refuses()`, whatever
- *    origin its request goes to; and a first-party write is still aborted exactly as before. Every
- *    third-party write is still recorded — listed in `sideEffects` with its full URL (origin + path)
- *    and `thirdParty: true` — never silently dropped.
+ *  - only FIRST-PARTY writes are the mission's (#194). A write is third-party only when code proves it
+ *    from the request (`FirstPartyOrigins`, never the model): its origin is off the `--allow` origins'
+ *    hosts and sites, it carries NO API credentials (`API_CREDENTIAL_HEADERS`), and the page never
+ *    sent a credentialed request to that origin this run. Such a write (Stripe.js's fraud beacon
+ *    `POST https://m.stripe.com/6`, analytics, telemetry) is never aborted — blocking an embedded SDK's
+ *    own telemetry breaks the widget without protecting the app — but is listed in `sideEffects` with
+ *    its full URL and `thirdParty: true`. A credentialed off-site write (an app backend on Supabase,
+ *    Firestore, API Gateway…) is treated exactly like the app's own: blocked in an action window, its
+ *    refusal naming origin + path with a hint (`--allow` it, or `--allow-write "<origin>/<glob>"`).
+ *    Pay / checkout controls are refused BEFORE the click by `refuses()`, whatever origin they call.
+ *    Limit: a credential-free write to an origin never seen with credentials passes (docs/safety.md).
  * `--allow-writes` (or a goal that asks for a change — "create…", "update…") lifts the guard; the
  * #116 safety policy still applies then.
  */
@@ -96,14 +98,19 @@ export interface BlockedWrite {
    * allowed one (#194: a sibling first-party origin such as `api.example.com`).
    */
   readonly path: string;
+  /** Set when the origin is not an `--allow` origin (#194): how to let it through or name it the app's. */
+  readonly hint?: string;
 }
 
 export class ReadOnlyGuard {
   readonly #isWrite: WriteClassifier;
   readonly #blocked: BlockedWrite[] = [];
-  readonly #allowed: readonly RegExp[];
+  /** Exempt globs; `full` = origin-qualified (matched against origin + path, #194). */
+  readonly #allowed: ReadonlyArray<{ readonly re: RegExp; readonly full: boolean }>;
   /** The run's authorized origins (#194); empty = every origin is first-party (fail-closed). */
   readonly #origins: readonly string[];
+  /** Which origins are the app's (#194): shared with the run's side-effect log. */
+  readonly #firstParty: FirstPartyOrigins;
   #page: Page | null = null;
   #armed = false;
   /** A model-chosen action's window is open (from its act until the page settled after it). */
@@ -112,11 +119,17 @@ export class ReadOnlyGuard {
 
   constructor(
     isWrite: WriteClassifier,
-    opts: { readonly allowWrites?: readonly string[]; readonly allowlist?: readonly string[] } = {},
+    opts: {
+      readonly allowWrites?: readonly string[];
+      readonly allowlist?: readonly string[];
+      readonly firstParty?: FirstPartyOrigins;
+    } = {},
   ) {
     this.#isWrite = isWrite;
     this.#origins = opts.allowlist ?? [];
-    this.#allowed = [...DEFAULT_ALLOWED_WRITES, ...(opts.allowWrites ?? [])].filter((g) => g.trim() !== "").map(pathGlob);
+    this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
+    this.#allowed = [...DEFAULT_ALLOWED_WRITES, ...(opts.allowWrites ?? [])].filter((g) => g.trim() !== "")
+      .map((g) => ({ re: pathGlob(g), full: /^https?:\/\//i.test(g.trim()) }));
   }
 
   /** A model-chosen action is about to be dispatched: its writes are blocked until `settled()`. */
@@ -166,16 +179,47 @@ export class ReadOnlyGuard {
       /* keep "/" */
     }
     const write = this.#isWrite({ method: request.method(), path, contentType: request.headers()["content-type"] ?? null });
-    // #194: a third-party write (off the allowed origins' sites) is not the mission's: it passes and
-    // is listed as a `thirdParty` side effect by the run's `SideEffectLog`. First-party writes are
-    // judged exactly as before.
-    const thirdParty = write && thirdPartyOrigin(request.url(), this.#origins) !== null;
-    if (!write || thirdParty || !this.#inAction || this.#allowed.some((g) => g.test(path))) {
+    // #194: a third-party write (off-site, no API credentials, origin never seen credentialed) is not
+    // the mission's: it passes and is listed as a `thirdParty` side effect. Every request is observed
+    // (reads too), so a backend the page authenticates to is first-party from then on.
+    const thirdParty = this.#firstParty.thirdParty(request.url(), request.headers()) !== null;
+    const endpoint = requestEndpoint(request.url(), this.#origins);
+    if (!write || thirdParty || !this.#inAction || this.#exempt(path, request.url())) {
       await route.fallback().catch(() => undefined);
       return;
     }
-    this.#blocked.push({ method: request.method().toUpperCase(), path: requestEndpoint(request.url(), this.#origins) });
+    this.#blocked.push({ method: request.method().toUpperCase(), path: endpoint, ...this.#hint(request.url()) });
     await route.abort("blockedbyclient").catch(() => undefined);
+  }
+
+  /**
+   * `--allow-write` / built-in globs: a glob starting with `http://` or `https://` matches the
+   * request's origin + path (#194: `--allow-write "https://x.supabase.co/rest/v1/**"`); any other
+   * glob matches the path on every origin.
+   */
+  #exempt(path: string, url: string): boolean {
+    let full = path;
+    try {
+      const u = new URL(url);
+      full = `${u.origin}${u.pathname}`;
+    } catch {
+      /* path only */
+    }
+    return this.#allowed.some((g) => g.re.test(g.full ? full : path));
+  }
+
+  /** A blocked write off the `--allow` origins: how to declare it the app's, or let it through. */
+  #hint(url: string): { hint?: string } {
+    let origin: string;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return {};
+    }
+    if (this.#origins.length === 0 || normalizeAllowlist(this.#origins).includes(origin)) return {};
+    return {
+      hint: `${origin} is not an --allow origin but was treated as the app's (same site, API credentials, or an API the page authenticated to) — if it is the app's backend add it to --allow; to let this request through deliberately pass --allow-write "${origin}/<path glob>"`,
+    };
   }
 
   /** The writes blocked since the last call. */

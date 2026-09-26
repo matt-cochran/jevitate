@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
-import { requestEndpoint, thirdPartyOrigin } from "./authorized-targets.js";
+import { requestEndpoint } from "./authorized-targets.js";
+import { FirstPartyOrigins } from "./third-party.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
 import type { ControlRisk } from "./safety.js";
 
@@ -295,8 +296,9 @@ export interface SideEffect {
    */
   readonly background?: true;
   /**
-   * The request went to a THIRD-PARTY origin (#194: outside the run's allowed origins and their
-   * sites, decided by code from the URL — `thirdPartyOrigin`), e.g. Stripe.js's fraud beacon
+   * The request went to a THIRD-PARTY origin (#194, decided by code — `FirstPartyOrigins`: off the
+   * run's allowed origins and their sites, with no API credentials, to an origin the page never
+   * sent a credentialed request to), e.g. Stripe.js's fraud beacon
    * `https://m.stripe.com/6`, analytics, telemetry. Recorded for the record, but not the mission's
    * write: the read-only guard never blocks it. `step`/`control` still say which action it followed.
    */
@@ -326,11 +328,21 @@ export class SideEffectLog {
   readonly #marks: Mark[] = [];
   /** The run's authorized origins (#194); empty = every request is first-party, named by path. */
   readonly #origins: readonly string[];
+  /** Which origins are the app's (#194) — fed every request's headers by the run. */
+  readonly #firstParty: FirstPartyOrigins;
 
-  constructor(opts: { readonly isWrite?: WriteClassifier; readonly now?: () => number; readonly allowlist?: readonly string[] } = {}) {
+  constructor(
+    opts: {
+      readonly isWrite?: WriteClassifier;
+      readonly now?: () => number;
+      readonly allowlist?: readonly string[];
+      readonly firstParty?: FirstPartyOrigins;
+    } = {},
+  ) {
     this.#isWrite = opts.isWrite ?? writeClassifier();
     this.#now = opts.now ?? Date.now;
     this.#origins = opts.allowlist ?? [];
+    this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
   }
 
   /** Starts capturing on a page's monitor (call again after a session reset). */
@@ -364,7 +376,7 @@ export class SideEffectLog {
   entries(): { readonly sideEffects: SideEffect[]; readonly truncated: number } {
     const out: Array<SideEffect & { readonly at: number }> = [];
     const push = (m: Mark, method: string, url: string, status: number | null, at: number): void => {
-      const thirdParty = thirdPartyOrigin(url, this.#origins) !== null;
+      const thirdParty = this.#firstParty.thirdParty(url) !== null;
       out.push({
         at,
         step: m.step,

@@ -37,14 +37,35 @@ security bug, and how to report one.
   controls are refused and the write requests an action fires are blocked. `--allow-writes`
   lifts it and `--allow-write <glob>` exempts a request path
   ([find-out goals](./success-checks.md#find-out-goals-no---success)).
+- **Third-party writes.** The read-only guard blocks only the app's own writes. Code decides from
+  each request, never the model. A write is the app's (first-party) when any of these holds:
+  - its origin is an `--allow` origin, or shares an allowed origin's host (any port) or site
+    (the last two host labels, e.g. `api.example.com` next to `app.example.com`);
+  - it carries API credentials: an `Authorization` header or a common API-key or auth header
+    (`apikey`, `x-api-key`, `x-auth-token`, `x-access-token`, `x-csrf-token`, `x-amz-security-token`,
+    `x-firebase-*`, `x-goog-*`, `x-hasura-*`, `x-supabase-*`, the Parse keys);
+  - the page already sent a credentialed request to that origin during this run. So a backend on
+    another site (Supabase, Firestore, API Gateway, Hasura) stays first-party even for its
+    unauthenticated writes, such as a sign-up or password-reset POST.
+
+  Every other write is third-party, such as Stripe.js's fraud beacon `POST https://m.stripe.com/6`,
+  analytics or telemetry. It is never blocked, and it is listed in `sideEffects` with its full URL
+  and `thirdParty: true`. A blocked write to an origin outside `--allow` names that origin and says
+  how to change the outcome. Add the origin to `--allow` if it is the app's backend. Pass an
+  origin-qualified `--allow-write "https://<origin>/<path glob>"` to let it through on purpose.
+  A glob that starts with `http://` or `https://` matches origin and path; any other glob matches
+  the path on every origin.
+
+  **Limit:** a credential-free write to an origin the page never sent credentials to still passes.
+  An example is a backend on another site that the app calls with cookies only. To block its
+  writes, add its origin to `--allow`. Pay, checkout and other flow controls are still refused
+  before the click, whichever origin their request would go to.
 - A hang's fresh-context replays never re-send a paid or destructive write. A replay path that
   clicks such a control (or matches `--deny` or `--paid`), or a control the run's own `sideEffects`
   show sending a write, is not replayed, and the hang (or `verify-fix`) is `inconclusive`. `--allow-destructive` does not lift this; `--hang-replay-writes` (or
   `safety.hangReplayWrites` in `~/.jevitate/targets.json`) does.
 - Every write request a run fires is listed in the result (`sideEffects`). A request outside
-  the `--allow` origins is listed by its full origin and path. A write to a third-party site
-  (not an allowed origin's host or site) is marked `thirdParty: true`, and the read-only guard
-  never blocks it. A repeat guard refuses
+  the `--allow` origins is listed by its full origin and path. A repeat guard refuses
   re-firing the same write, and `--read-rpc` marks POST-based read RPCs so they are not mistaken
   for writes.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use

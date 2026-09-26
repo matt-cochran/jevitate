@@ -106,16 +106,16 @@ save, confirm, submit, send, upload) and blocks the write requests a model-chose
 fires; each refusal is recorded and told to the model. The app's own background writes
 outside an action (token refresh, heartbeats, telemetry) pass and are listed in
 `sideEffects` with `background: true`, and auth-refresh paths (`**/refresh*`, `**/token*`,
-`**/oauth/**`, `**/auth/**/refresh*`) are never blocked. The guard only blocks writes to the
-app itself: the `--allow` origins, plus other ports and sibling subdomains of their hosts (an
-API at `api.example.com` next to `app.example.com`). A write to any other origin, such as
-Stripe.js's fraud beacon to `https://m.stripe.com/6`, analytics or telemetry, is third-party.
-It is never blocked. It is listed in `sideEffects` with its full URL and `thirdParty: true`.
-Code decides this from the request URL. The model plays no part. A paid or checkout control is
-still refused before it is clicked, whichever origin its request would go to. Side effects and
-refusals always show a request outside the `--allow` origins as origin plus path.
+`**/oauth/**`, `**/auth/**/refresh*`) are never blocked. The guard only blocks the app's own writes: those to the
+`--allow` origins or their sites, those that carry API credentials (an `Authorization` or
+API-key header), and those to an origin the page already sent credentials to. Any other write,
+such as Stripe.js's fraud beacon to `https://m.stripe.com/6`, is third-party. It is never
+blocked and is listed in `sideEffects` with its full URL and `thirdParty: true`. The exact rule
+and its limit are in [Safety](./safety.md). Side effects and refusals always show a request
+outside the `--allow` origins as origin plus path.
 `--allow-write <glob>` (repeatable)
-exempts more request paths, and `--allow-writes` lifts the guard. In
+exempts more request paths (a glob starting with `https://` matches origin and path, e.g.
+`--allow-write "https://abc.supabase.co/rest/v1/**"`), and `--allow-writes` lifts the guard. In
 `~/.jevitate/targets.json`, `safety.allowWrites` is `true` (lift it) or an array of path globs
 (exempt them). The paid/destructive policy in
 [Safety](./safety.md) still applies either way.
