@@ -83,6 +83,9 @@ describe("#126 — a non-reproducing seed hang lets the goal run continue", () =
             allowlist: [origin],
             startUrl: `${origin}/seed`,
             successAssertion: { kind: "visible", target: { text: "Ready" } },
+            // #202: the goal IS the seed load becoming ready (no action), so its check holds on the
+            // seed page by design — vacuous under the default rule; this goal opts out explicitly.
+            allowVacuousChecks: true,
             openFreshSession: freshSession,
             hangReplays: 2,
             renderWaitMs: 800,

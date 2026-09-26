@@ -154,6 +154,7 @@ boolean, and a number is a JSON number.
 | Fixtures (#144) | `fixtures`, `before`, `after`, `allowShellHooks`, `hookTimeoutMs` | goals (the target's `fixtures` also wraps Journeys) |
 | Secrets | `secretFields`, `totp` (`<descriptor>=env:<VAR>`), `secret` (`env:<VAR>`) | goals and usability (`secret`: also adversarial) |
 | Upload | `fixture` (the file the upload op attaches) | goals and usability |
+| Success checks (#202) | `allowVacuousChecks` (a check satisfied before the run's first action is a warning, not a failure — see [success checks](success-checks.md)) | goals |
 | Conversation | `replyWaitMs`, `replyCeilingMs`, `replyMaxChars`, `jobWaitMs` | goals and usability |
 | Pacing | `stallTimeout` (seconds), `hangReplays` | `stallTimeout`: coverage, exploratory, feature; `hangReplays`: goals, adversarial |
 | Scope and coverage | `scope` (`"app"`), `minControlCoverage`, `requireFormSubmit` | `scope`: coverage, exploratory; the others: adversarial |

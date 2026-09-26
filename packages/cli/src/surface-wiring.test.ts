@@ -131,6 +131,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "mission-queue-runner.ts runExploration": {
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
+    allowVacuousChecks: QUEUE_NARROW,
     secrets: "redaction comes from the target's secret fields",
     fixture: QUEUE_NARROW,
     nowIso: SEAM,

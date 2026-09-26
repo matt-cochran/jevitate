@@ -237,6 +237,13 @@ export interface ExploreConfig {
    */
   readonly readOnly?: boolean;
   /**
+   * #202: called as an action (a control op, or a chosen `reload`) is about to be dispatched — at the
+   * same point, on the same wall clock (`Date.now`), as the request→step attribution mark
+   * (`SideEffectLog.mark`). Requests captured with `startedAt >= at` were sent after it. Observation
+   * only: it never gates the loop.
+   */
+  readonly onAction?: (info: Readonly<{ step: number; at: number }>) => void;
+  /**
    * Mission spend budget (#150) PRE-ACTION hook: called with the resolved control right before it
    * would be acted on (after the safety-policy risk classification, for every op). A refusal stops
    * the run with `stop: "budget"` before the action fires — code decides, the model never sees it as
@@ -1385,6 +1392,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         const at = now();
         effectLog.mark(transcript.nextStep, "reload");
+        cfg.onAction?.({ step: transcript.nextStep, at });
         readOnly?.beginAction();
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
@@ -1440,6 +1448,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const at = now();
       const risk = safety.riskOf(control);
       effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
+      cfg.onAction?.({ step: transcript.nextStep, at });
       readOnly?.beginAction();
 
       // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
