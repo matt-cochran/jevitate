@@ -24,6 +24,7 @@ import {
   invariantObserver,
   jsonPathHasEach,
   matchesPattern,
+  matchesResponseStatus,
   parseInvariantExpression,
   parseJsonPath,
   patternRegex,
@@ -41,6 +42,7 @@ import {
   type ExprNode,
   type InvariantSpec,
   type JsonPathSegment,
+  type NeverResponse,
   type ObservableSpec,
   type ProbeAuthFrom,
   type ProbeObservable,
@@ -128,6 +130,21 @@ export interface InvariantViolation {
   readonly settledForMs?: number;
   /** #147: set for a cross-actor violation. */
   readonly crossActor?: CrossActorEvidence;
+  /**
+   * #195: a `never.response` violation's matching requests (redacted URL, never a body), each with
+   * the step it happened in (0: the page load before any action; n: during/after the n-th action).
+   */
+  readonly responses?: readonly NeverResponseHit[];
+}
+
+/** #195: one app response a `never.response` invariant matched, on the mission's own traffic. */
+export interface NeverResponseHit {
+  readonly method: string;
+  /** The full response URL (query included), redacted. */
+  readonly url: string;
+  readonly status: number;
+  /** 0 = the page load before any action; n = the n-th action. */
+  readonly step: number;
 }
 
 /** Per-invariant tally over a run: an invariant that was never decided proved nothing. */
@@ -239,6 +256,8 @@ const PENDING_BODY_WAIT_MS = 2_000;
 const OBSERVER_NAV_TIMEOUT_MS = 15_000;
 const OBSERVER_IDLE_MS = 5_000;
 const MAX_APP_EVIDENCE = 5;
+/** #195: matching responses kept per `never.response` invariant between two checks (the rest are counted). */
+const MAX_RESPONSE_HITS = 20;
 /** An observer bounced here lost its session: "undecided", never "denied" (#147, cf. #82). */
 const LOGIN_PATH_RE = /(^|\/)(log-?in|sign-?in|signin|auth|sso)(\/|$)/i;
 /** gRPC status codes → the Connect code names (#73/#110: gRPC-web reports errors in a header). */
@@ -371,6 +390,12 @@ export class InvariantMonitor {
   readonly #armedUrl = new Set<string>();
   readonly #undecided = new Map<string, string>();
   #before: Snapshot | null = null;
+  /** #195: `never.response` invariants, and the matching responses seen since each was last checked. */
+  readonly #responseNevers: ReadonlyArray<{ readonly id: string; readonly spec: NeverResponse }>;
+  readonly #responseHits = new Map<string, { hits: Array<Omit<NeverResponseHit, "step">>; total: number }>();
+  /** #195: real actions checked so far (a response's step) and how the current one reads in evidence. */
+  #actions = 0;
+  #stepLabel = "page load";
 
   constructor(spec: InvariantSpec, opts: InvariantMonitorOptions) {
     this.#spec = spec;
@@ -396,6 +421,9 @@ export class InvariantMonitor {
       if ("network" in c) this.#captureJsonPaths.set(name, parseJsonPath(c.network.json));
     }
     for (const inv of spec.invariants) this.#tally.set(inv.id, { checked: 0, held: 0, violated: 0, unknown: 0 });
+    this.#responseNevers = spec.invariants.flatMap((inv) =>
+      inv.never !== undefined && "response" in inv.never ? [{ id: inv.id, spec: inv.never.response }] : [],
+    );
   }
 
   /** The spec this monitor evaluates (persisted with a result so verify-fix re-checks the same one). */
@@ -457,6 +485,24 @@ export class InvariantMonitor {
       ...(d.never !== undefined && "assertion" in d.never ? [d.never.assertion] : []),
     ]);
     if (assertions.some((a) => a.kind === "flashed")) void installFlashRecorder(page).catch(() => undefined);
+    // #195: `never.response` watches the mission's OWN traffic — this (primary) page's responses, from
+    // an authorized origin only. Only method, URL and status are kept: never a body.
+    if (this.#responseNevers.length > 0) {
+      page.on("response", (response: Response) => {
+        const url = response.url();
+        if (!isAuthorizedExploreTarget(url, this.#opts.allowlist)) return;
+        const method = response.request().method().toUpperCase();
+        const status = response.status();
+        for (const n of this.#responseNevers) {
+          if (!matchesUrlGlob(n.spec.url, url) || !matchesResponseStatus(n.spec.status, status)) continue;
+          if (n.spec.method !== undefined && n.spec.method.toUpperCase() !== method) continue;
+          const seen = this.#responseHits.get(n.id) ?? { hits: [], total: 0 };
+          this.#responseHits.set(n.id, seen);
+          seen.total += 1;
+          if (seen.hits.length < MAX_RESPONSE_HITS) seen.hits.push({ method, url: this.#redact(redactUrl(url)), status });
+        }
+      });
+    }
     const network = Object.entries(this.#spec.observe ?? {}).filter(
       (e): e is [string, { network: NonNullable<Extract<ObservableSpec, { network: unknown }>["network"]> }] => "network" in e[1],
     );
@@ -539,6 +585,11 @@ export class InvariantMonitor {
     const unknown: string[] = [];
     const held: string[] = [];
     const pageUrl = safeUrl(page);
+    // #195: the responses a `never.response` drains now happened during this action (or the page load).
+    if (action !== null && action.op !== null) {
+      this.#actions += 1;
+      this.#stepLabel = action.control === null ? action.op : `${action.op} ${JSON.stringify(this.#redact(action.control))}`;
+    } else if (this.#actions > 0) this.#stepLabel = "no action";
     for (const c of applicable) {
       const tally = this.#tally.get(c.decl.id) ?? { checked: 0, held: 0, violated: 0, unknown: 0 };
       this.#tally.set(c.decl.id, tally);
@@ -862,6 +913,7 @@ export class InvariantMonitor {
     }
     if (decl.never !== undefined) {
       const never = decl.never;
+      if ("response" in never) return this.#responseVerdict(decl, never.response, action, attributedUrl);
       if ("pageText" in never) {
         const text = await page
           .locator("body")
@@ -914,6 +966,51 @@ export class InvariantMonitor {
       .join("; ");
     const evidence = [...new Set(expressionObservables(ast).flatMap((n) => [before.evidence.get(n), after.evidence.get(n)]).filter((e): e is string => e !== undefined))];
     return make("require", decl.require ?? "", detail, values, evidence, settledForMs);
+  }
+
+  /**
+   * #195 — a `never.response` verdict: drains the matching responses seen since this invariant was
+   * last checked (they happened during the current step). None ⇒ held.
+   */
+  #responseVerdict(decl: DeclaredInvariant, spec: NeverResponse, action: InvariantAction | null, attributedUrl: string): InvariantViolation | "held" {
+    const seen = this.#responseHits.get(decl.id);
+    this.#responseHits.delete(decl.id);
+    if (seen === undefined || seen.total === 0) return "held";
+    const step = this.#actions;
+    const responses = seen.hits.map((h) => ({ ...h, step }));
+    const evidence = responses.map((h) => `${h.method} ${h.url} → ${h.status} (step ${step}: ${this.#stepLabel})`);
+    const expression = `never response ${spec.method === undefined ? "" : `${spec.method.toUpperCase()} `}${spec.url} = ${String(spec.status)}`;
+    const more = seen.total > responses.length ? ` (+${seen.total - responses.length} more)` : "";
+    const v = this.#violation(decl, action, attributedUrl, "never", expression, `${evidence.slice(0, MAX_APP_EVIDENCE).join("; ")}${more}`, {}, evidence);
+    return { ...v, responses };
+  }
+
+  /**
+   * #195 — checks every `never.response` invariant against the responses that arrived since its last
+   * check (attributed to the last step). Call once when the run ends, so a response to the LAST
+   * action — one that landed after that action's check — is never lost. Never throws.
+   */
+  flushResponses(page: Page): AfterResult {
+    const violations: InvariantViolation[] = [];
+    const held: string[] = [];
+    const pageUrl = safeUrl(page);
+    for (const n of this.#responseNevers) {
+      if ((this.#responseHits.get(n.id)?.total ?? 0) === 0) continue;
+      const decl = this.#invariants.find((c) => c.decl.id === n.id)?.decl;
+      if (decl === undefined) continue;
+      const tally = this.#tally.get(n.id) ?? { checked: 0, held: 0, violated: 0, unknown: 0 };
+      this.#tally.set(n.id, tally);
+      tally.checked += 1;
+      const verdict = this.#responseVerdict(decl, n.spec, null, pageUrl);
+      if (verdict === "held") {
+        tally.held += 1;
+        held.push(n.id);
+      } else {
+        tally.violated += 1;
+        violations.push(verdict);
+      }
+    }
+    return { violations, unknown: [], held };
   }
 
   async #snapshot(page: Page, names: ReadonlySet<string>): Promise<Snapshot> {

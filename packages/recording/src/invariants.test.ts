@@ -7,6 +7,7 @@ import {
   invariantAuthSecretRefs,
   invariantGate,
   invariantObserver,
+  matchesResponseStatus,
   mergeInvariantSpecs,
   parseInvariantExpression,
   parseJsonPath,
@@ -411,5 +412,47 @@ describe("multi-actor specs (#147): captures, observers, cross-actor checks", ()
     expect(substituteCaptureRefs("/v1/w/${capture.id}", (n) => v[n])).toBe("/v1/w/a%2Fb%3Fc");
     expect(substituteCaptureRefs("${capture.url}", (n) => v[n])).toBe("http://app.test/w/1");
     expect(substituteCaptureRefs("/v1/${capture.gone}", (n) => v[n])).toBeNull();
+  });
+});
+
+describe("never.response (#195): an app response status on the mission's own traffic", () => {
+  const spec = (response: unknown): unknown => ({ invariants: [{ id: "no-billing-403", never: { response } }] });
+
+  it("accepts an exact status (string or number), a class, and an optional method", () => {
+    for (const response of [
+      { url: "/api/v1/tool/billing/**", status: "403" },
+      { url: "/api/v1/tool/billing/**", status: 403 },
+      { url: "**/billing/*", status: "4xx" },
+      { url: "/api/**", status: "5XX", method: "post" },
+    ]) {
+      expect(validateInvariantSpec(spec(response), ALLOW).invariants[0]?.never).toEqual({ response });
+    }
+  });
+
+  it("refuses a malformed status, a missing url, an unknown key, and a when", () => {
+    expect(refusal(spec({ url: "/api/**", status: "4x" })).join()).toMatch(/invariants\[0\]\.never\.response\.status/);
+    expect(refusal(spec({ url: "/api/**", status: "600" })).join()).toMatch(/never\.response\.status/);
+    expect(refusal(spec({ url: "/api/**", status: 99 })).join()).toMatch(/never\.response\.status/);
+    expect(refusal(spec({ status: "403" })).join()).toMatch(/never\.response\.url/);
+    expect(refusal(spec({ url: "/api/**", status: "403", body: "x" })).join()).toMatch(/never\.response/);
+    expect(refusal(spec({ url: "/api/**", status: "403", method: "GET /x" })).join()).toMatch(/never\.response\.method/);
+    expect(
+      refusal({ invariants: [{ id: "a", never: { response: { url: "/x", status: "403" }, pageText: "x" } }] }).join(),
+    ).toMatch(/exactly one of pageText, assertion or response/);
+    expect(
+      refusal({ invariants: [{ id: "a", when: { op: ["click"] }, never: { response: { url: "/x", status: "403" } } }] }).join(),
+    ).toMatch(/a never invariant is global/);
+    // `responseStatus` (the --success check's name) is not a never key: refused, never ignored.
+    expect(refusal({ invariants: [{ id: "a", never: { responseStatus: "403" } }] }).join()).toMatch(/invariants\[0\]\.never/);
+  });
+
+  it("matches an exact code or a class", () => {
+    expect(matchesResponseStatus("403", 403)).toBe(true);
+    expect(matchesResponseStatus(403, 403)).toBe(true);
+    expect(matchesResponseStatus("403", 404)).toBe(false);
+    expect(matchesResponseStatus("4xx", 404)).toBe(true);
+    expect(matchesResponseStatus("4XX", 403)).toBe(true);
+    expect(matchesResponseStatus("4xx", 500)).toBe(false);
+    expect(matchesResponseStatus("2xx", 204)).toBe(true);
   });
 });
