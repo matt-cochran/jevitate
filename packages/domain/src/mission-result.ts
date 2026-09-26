@@ -16,7 +16,8 @@ import { GOAL_ONLY_OUTCOMES, MISSION_OUTCOMES } from "./mission-outcome.js";
  *  - `defects` — EVERY defect the run found, whatever oracle found it: hard-signal defects,
  *    declared-invariant defects and `server-log` defects alike, each with its `fingerprint` and
  *    `kind`. A defect a strategy reports but never gates on (a usability run's `server-log`
- *    defect) is marked `advisory: true`.
+ *    defect; a coverage/exploratory `judgment-flagged-state`, which only Jev's opinion found — #214)
+ *    is marked `advisory: true`: listed, replayable by `verify-fix`, never setting the outcome.
  *  - `hangs` — every hang finding (0 or more), each with its fingerprint and reproduction.
  *  - `recordingPaths` — every Recording the run wrote (one for a single-path run, one per path for a
  *    frontier run); never a single `recordingPath` for one strategy and a list for another.
@@ -55,11 +56,20 @@ export const ResultDefectSchema = z.looseObject({
   kind: z.string().min(1),
   title: z.string().optional(),
   related: z.array(z.string()).optional(),
-  /** Reported, never gated on (e.g. a usability run's `server-log` defect). */
+  /** Reported, never gated on (a usability run's `server-log` defect, a `judgment-flagged-state` — #214). */
   advisory: z.literal(true).optional(),
   repro: z.looseObject({ recordingStepIndex: z.number().int() }).optional(),
 });
 export type ResultDefect = z.infer<typeof ResultDefectSchema>;
+
+/**
+ * #214: the defects that may gate a run's outcome — every one NOT marked `advisory: true`. An advisory
+ * defect (a Jev judgment alone, or a usability run's server-log defect) is reported, never gated on;
+ * the outcome→exit mapping itself stays in `mission-outcome.ts`.
+ */
+export function gatingDefects<D extends { readonly advisory?: true }>(defects: readonly D[]): D[] {
+  return defects.filter((d) => d.advisory !== true);
+}
 
 export const ResultHangSchema = z.looseObject({ fingerprint, kind: z.literal("hang") });
 

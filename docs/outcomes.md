@@ -45,7 +45,7 @@ clean.
 | Outcome | Exit code | Meaning |
 |---|---|---|
 | `clean` | 0 | the run finished its budget and found nothing (goal mission: the success assertion held) |
-| `defects-found` | 1 | at least one confirmed defect (goal mission: the success assertion did not hold) |
+| `defects-found` | 1 | at least one confirmed defect — one an independent code oracle decided (a hard signal, a declared invariant, an HTTP 5xx, a server-log defect, a horizontal overflow). A defect marked `advisory: true` (a model's judgment alone) never makes a run `defects-found` (goal mission: the success assertion did not hold) |
 | `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash), or it proved nothing: a run that exercised too little of its target to call its silence clean (`failure.kind: "insufficient-coverage"`), a goal whose only failing checks were vacuous (`vacuous-check`), a usability review whose job was never completed (`job-incomplete`) |
 | `hang` | 3 | the app under test hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
@@ -190,6 +190,17 @@ In all three frontier missions (coverage, exploratory, `--feature`), global chro
 inside `<nav>` or a page-level `<header>`/`<footer>`, or repeated unchanged across pages — is
 tried only after the target's own controls, each destination at most once per run. Chrome that
 leaves the target scope never takes more than 20% of the run's actions.
+
+**A state Jev flagged is advisory (#214).** On every new state a frontier run asks Jev whether it
+looks broken. A state it flags is recorded as a `judgment-flagged-state` defect with `advisory: true`:
+it is listed in `defects` and in `coverage.defects` (with the repro Recording, so `verify-fix` can
+replay it), shown as `(advisory)` in the human summary, and read as an advisory finding by `check`
+and `report`. It never sets `missionOutcome` or the exit code: a run whose only finding is a flagged
+state ends `clean` (or `inconclusive`, when it exercised too little), never `defects-found`. The run
+is `defects-found` only when an independent code oracle confirms a defect — the same state's HTTP
+5xx, horizontal overflow, invariant or server-log defect gates as usual. (Before #214, a flagged
+state alone made the run `defects-found`, exit 1.) The adversarial mission's own `looksBroken`
+judgment is recorded in the transcript only and never becomes a finding.
 
 ### A usability review (`--strategy usability`)
 

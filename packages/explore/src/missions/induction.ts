@@ -102,6 +102,12 @@ export interface DefectRecord {
   readonly recording: Recording;
   /** Present for a horizontal-overflow hard signal (#149): the structured finding `reason` summarizes. */
   readonly overflow?: OverflowFinding;
+  /**
+   * #214: `true` on a `judgment-flagged-state` — a model's opinion alone, never an independent oracle's
+   * verdict (guardrail #4). Reported (with its repro Recording, so `verify-fix` can replay it) but it
+   * never sets the mission outcome or exit code on its own. Absent on a hard-signal defect.
+   */
+  readonly advisory?: true;
 }
 
 /** One transition whose result landed outside the mission's target scope (#89) — recorded, never
@@ -919,6 +925,7 @@ async function runInductionFrontier(
           url: snap.url,
           reason: "judgment flagged defect",
           recording: branch,
+          advisory: true,
         });
         currentFingerprint = newFingerprint;
         continue; // recorded, but a flagged state is never expanded

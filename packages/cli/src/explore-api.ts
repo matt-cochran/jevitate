@@ -58,6 +58,7 @@ import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import {
   combineOutcomes,
+  gatingDefects,
   type FilingConfig,
   type IssueDraft,
   type IssueFilerPort,
@@ -1043,7 +1044,10 @@ export interface RunCoverageMissionResult {
   readonly recording: null;
   /** Where the run happened — what `verify-fix` needs to replay a finding. */
   readonly target: MissionTarget;
-  /** The typed verdict: `crashed` for a broken run, else `defects-found` / `clean`. */
+  /**
+   * The typed verdict: `crashed` for a broken run, else `defects-found` / `clean`. An advisory
+   * (`judgment-flagged-state`, #214) defect alone never makes it `defects-found`.
+   */
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
   readonly failure?: MissionFailure;
@@ -1061,7 +1065,8 @@ export interface RunCoverageMissionResult {
   readonly engine: EngineInfo;
   /**
    * EVERY defect the run found (#195; #209): the frontier's own (`horizontal-overflow`, and a
-   * `judgment-flagged-state` — also in `coverage.defects`, which keeps each one's repro Recording),
+   * `judgment-flagged-state` — also in `coverage.defects`, which keeps each one's repro Recording;
+   * #214: marked `advisory: true`, it never sets `missionOutcome`/`exitCode` on its own),
    * declared-invariant defects (#86, each with its own path Recording) and `server-log` defects (#142).
    */
   readonly defects: Array<CoverageFrontierDefect | InvariantDefect | Http5xxDefect | ServerLogDefect>;
@@ -1187,7 +1192,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
     // #208: the shared HTTP 5xx hard signal's defects count like the strategy's own.
     const httpDefects = http5xx.defects(result.transcript);
-    const found = stampedDefects.length + (result.invariantDefects?.length ?? 0) + httpDefects.length;
+    // #214: a `judgment-flagged-state` is advisory (Jev's opinion alone, guardrail #4): listed in
+    // `defects`/`coverage.defects` with its repro, but it never counts toward `defects-found` — only a
+    // defect an independent code oracle decided (overflow, invariant, 5xx, server-log) gates the run.
+    const hardFrontier = gatingDefects(stampedDefects).length;
+    const found = hardFrontier + (result.invariantDefects?.length ?? 0) + httpDefects.length;
     // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
     // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
     // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
