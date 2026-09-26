@@ -9,6 +9,12 @@ fails a run or a build. Every finding is calibrated to an app class (a consumer
 signup and an internal admin tool are held to different bars) and cites a rubric
 item; the platform structurally cannot emit an uncited finding.
 
+PREVIEW (0.2.0): these findings are a preview feature. The independent quality
+grader is not yet calibrated across apps, and how findings are grouped/deduped
+is still being redesigned (issues #133, #198). `report.preview` is `true` and
+`report.headline` says so; tell the human this is a preview, not a finished
+verdict.
+
 ## Two modes — pick by what you have
 
 - OFFLINE, over a saved Recording — `jevitate ux <recording.json> --app-class
@@ -63,6 +69,11 @@ authorized the target.
   app), so it labels findings and does not hide them. Each finding carries its
   grade in `quality`, and `report.qualityFiltered` says whether a filter was
   applied. `--show actionable,relevant-minor` restores the old filter.
+- `--max-findings-per-page <n>` (also `JEVITATE_UX_MAX_FINDINGS_PER_PAGE`, or
+  `ux.maxFindingsPerPage` in the config; default 5): caps findings per route,
+  highest-confidence first (0.2.0, issue #198 interim — a full redesign is
+  tracked there). The rest are counted in `report.suppressed` as
+  `per-page-cap`, never dropped silently.
 - Nothing is dropped silently: every suppressed candidate is counted in
   `report.suppressed`. Change a filter only when the human asks, and say which
   filter you changed.
@@ -103,6 +114,12 @@ authorized the target.
   - `confidence` with its `confidenceBasis`: violation × applicability ×
     grounding × agreement. Quote the observation and recommendation; don't
     paraphrase them into generic heuristic advice.
+  - `contributing` (0.2.0, issue #198 interim): DIFFERENT rubric items that
+    fired on the SAME control on the SAME route are collapsed into one
+    finding — the highest-confidence one leads, the rest are listed here with
+    their own `rubricItemId`, `citation`, `observation` and `occurrences`. Read
+    it as "these principles all flagged the same thing", not as noise to
+    ignore — mention the other principles when it matters.
 - Rank your summary the way the report does: by `impact`, then severity. Lead
   with what blocked the job.
 - `report.suppressed` counts what was not shown: `byReason`, `byRubricItem` and
@@ -112,6 +129,8 @@ authorized the target.
   - `not-confirmed`: the specifics step found no concrete violation.
   - `below-min-confidence`
   - `quality-policy`: a grade outside an explicit `--show` filter.
+  - `per-page-cap` (0.2.0, issue #198 interim): the route already has
+    `--max-findings-per-page` findings shown; this one ranked lower.
   Say how many were suppressed. `clean: true` only happens with zero findings
   AND zero suppressed, so never describe a report with suppressions as "no
   issues".

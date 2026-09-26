@@ -169,7 +169,7 @@ import {
   type MissionTranscriptEntryLike,
 } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
-import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
+import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import {
   runRecording,
@@ -1646,6 +1646,10 @@ export function buildProgram(deps: CliDeps): Command {
       "(--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option(
+      "--max-findings-per-page <n>",
+      "(--strategy usability) cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5",
+    )
+    .option(
       "--success <spec>",
       [
         "independent success check (repeatable; every one must hold). Kinds:",
@@ -1951,6 +1955,7 @@ export function buildProgram(deps: CliDeps): Command {
         goal?: string;
         appClass?: string;
         minConfidence?: string;
+        maxFindingsPerPage?: string;
         show?: string;
         success: string[];
         successWhen?: string;
@@ -2428,6 +2433,7 @@ export function buildProgram(deps: CliDeps): Command {
             usage: uxUsage,
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
             ...(o.show !== undefined ? { show: o.show } : {}),
+            ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
@@ -2451,7 +2457,7 @@ export function buildProgram(deps: CliDeps): Command {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
-          } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
+          } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
             emitJson(program, fail("E_UX_ARGS", err.message));
           } else if (err instanceof UsabilityInvariantsUnsupportedError) {
             emitJson(program, fail("E_EXPLORE_ARGS", err.message));
@@ -3464,6 +3470,10 @@ export function buildProgram(deps: CliDeps): Command {
       "--min-confidence <n>",
       "findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
+    .option(
+      "--max-findings-per-page <n>",
+      "cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5",
+    )
     .option("--persona <p>", "optional persona for calibration")
     .option("--job <text>", "the job the flow pursues (improves relevance)")
     .option("--out <dir>", "directory to write the UX report")
@@ -3482,6 +3492,7 @@ export function buildProgram(deps: CliDeps): Command {
       const o = this.opts<{
         appClass?: string;
         minConfidence?: string;
+        maxFindingsPerPage?: string;
         show?: string;
         persona?: string;
         job?: string;
@@ -3539,6 +3550,7 @@ export function buildProgram(deps: CliDeps): Command {
           usage: uxUsage,
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
+          ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
           outDir: o.out,
           ...sidecars,
         });
@@ -3546,7 +3558,7 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         if (err instanceof UxAnalysisFailedError) {
           emitJson(program, fail("E_UX_ANALYSIS", err.message));
-        } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
+        } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
           emitJson(program, fail("E_UX_ARGS", err.message));
         } else {
           emitJson(program, fail("E_UX_RUN", String(err instanceof Error ? err.message : err)));

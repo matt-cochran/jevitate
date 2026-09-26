@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow, UxConfigError } from "./ux-config.js";
+import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow, UxConfigError } from "./ux-config.js";
 
 function withConfig(contents: unknown, fn: (path: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "jev-ux-config-"));
@@ -36,6 +36,22 @@ describe("loadUxMinConfidence", () => {
 describe("loadUxShow", () => {
   it("reads ux.show as a string array", () => {
     withConfig({ ux: { show: ["actionable", "wrong"] } }, (path) => expect(loadUxShow(path)).toEqual(["actionable", "wrong"]));
+  });
+});
+
+describe("loadUxMaxFindingsPerPage (issue #198 interim per-page cap)", () => {
+  it("a missing file/key is 'not configured'", () => {
+    withConfig(undefined, (path) => expect(loadUxMaxFindingsPerPage(path)).toBeUndefined());
+  });
+
+  it("reads ux.maxFindingsPerPage when present", () => {
+    withConfig({ ux: { maxFindingsPerPage: 3 } }, (path) => expect(loadUxMaxFindingsPerPage(path)).toBe(3));
+  });
+
+  it("a non-positive-integer value fails closed (throws), never silently replaced by the default", () => {
+    withConfig({ ux: { maxFindingsPerPage: 0 } }, (path) => expect(() => loadUxMaxFindingsPerPage(path)).toThrow(UxConfigError));
+    withConfig({ ux: { maxFindingsPerPage: 2.5 } }, (path) => expect(() => loadUxMaxFindingsPerPage(path)).toThrow(UxConfigError));
+    withConfig({ ux: { maxFindingsPerPage: "5" } }, (path) => expect(() => loadUxMaxFindingsPerPage(path)).toThrow(UxConfigError));
   });
 });
 

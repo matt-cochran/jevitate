@@ -57,6 +57,7 @@ import {
   parseUxEvidenceFile,
   persistableScreen,
   resolveMinConfidence,
+  resolveMaxFindingsPerRoute,
   resolveQualityPolicy,
   withSignalFindings,
   makeSignalFinding,
@@ -73,7 +74,7 @@ import {
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
+import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
 import { missionExitCode } from "./mission-exit.js";
@@ -343,6 +344,12 @@ export interface RunUxReviewOptions {
    * `JEVITATE_UX_SHOW` > config `ux.show` > every grade (#133: the uncalibrated grader labels, it does not filter).
    */
   readonly show?: string;
+  /**
+   * Cap on findings per route (issue #198 interim, 0.2.0). Precedence: this (CLI
+   * `--max-findings-per-page`) > `JEVITATE_UX_MAX_FINDINGS_PER_PAGE` > config
+   * `ux.maxFindingsPerPage` > `DEFAULT_MAX_FINDINGS_PER_ROUTE` (5).
+   */
+  readonly maxFindingsPerRoute?: number | string;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Path of the config file holding `ux.minConfidence`. Default `~/.jevitate/config.json`. */
   readonly configPath?: string;
@@ -404,6 +411,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
     loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
+  const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
   const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
   // #134: a live usability run's evidence sidecar gives offline review the SAME screens and run
   // signals the live analysis had; otherwise the Recording (+ transcript) is all there is.
@@ -441,6 +449,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
     minConfidence,
     quality,
+    maxFindingsPerRoute,
     evidenceCaveats,
     calibrationCaveats,
   });
@@ -568,6 +577,8 @@ export interface RunUsabilityMissionOptions {
    * `JEVITATE_UX_SHOW` > config `ux.show` > every grade (#133: the uncalibrated grader labels, it does not filter).
    */
   readonly show?: string;
+  /** Cap on findings per route (see `RunUxReviewOptions.maxFindingsPerRoute`). */
+  readonly maxFindingsPerRoute?: number | string;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Path of the config file holding `ux.minConfidence`. Default `~/.jevitate/config.json`. */
   readonly configPath?: string;
@@ -749,6 +760,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
+  const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -1057,6 +1069,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
       quality,
+      maxFindingsPerRoute,
       calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
