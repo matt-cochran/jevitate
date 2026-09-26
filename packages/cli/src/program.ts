@@ -1797,7 +1797,8 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--allow-write <glob>",
-      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments), beyond the built-in auth-refresh ones " +
+      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments; a glob starting with https:// matches " +
+        "origin + path, e.g. https://abc.supabase.co/rest/v1/**), beyond the built-in auth-refresh ones " +
         "(**/refresh*, **/token*, **/oauth/**, **/auth/**/refresh*). The app's background writes outside an action always pass",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
