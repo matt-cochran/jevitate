@@ -1,8 +1,8 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import { runAdversarialCliMission } from "./explore-api.js";
@@ -73,6 +73,14 @@ describe("verify-fix — CLI surface", () => {
 
         const still = await runVerifyFix({ resultPath: run.resultPath, fingerprint: defect.fingerprint, settleCeilingMs: 3_000 });
         expect(still).toMatchObject({ verdict: "still-reproduces", exitCode: 1, title: "HTTP 500 from /api/data" });
+
+        // #211: the identical result, committed under someone else's file name (never `adversarial-*`),
+        // must give the exact same verdict — verify-fix reads the finding from the file's CONTENT
+        // (fingerprint lookup, `strategy`/`schemaVersion`), never its name.
+        const renamed = join(dirname(run.resultPath), "renamed.result.json");
+        await copyFile(run.resultPath, renamed);
+        const stillRenamed = await runVerifyFix({ resultPath: renamed, fingerprint: defect.fingerprint, settleCeilingMs: 3_000 });
+        expect(stillRenamed).toMatchObject({ verdict: "still-reproduces", exitCode: 1, title: "HTTP 500 from /api/data" });
 
         state.broken = false;
         const fixed = await runVerifyFix({ resultPath: run.resultPath, fingerprint: defect.fingerprint, settleCeilingMs: 3_000 });

@@ -10,6 +10,8 @@ function adversarial(stamp: string, defects: unknown[], extra: Record<string, un
     missionOutcome: defects.length > 0 ? "defects-found" : "clean",
     exitCode: defects.length > 0 ? 1 : 0,
     result: {
+      // #211: strategy comes from content, never the file name — as the real runner writes it.
+      strategy: "adversarial",
       target: { seedUrl: "https://app.example/settings", allowlist: ["https://app.example"] },
       transcriptPath: `/r/adversarial-${stamp}.transcript.json`,
       engine: { version: "0.1.0", commit: "abc1234", builtAt: "2026-09-24T00:00:00Z" },
@@ -185,7 +187,7 @@ describe("consolidate (#139)", () => {
     const ux = runFromMissionResult("/r/usability-2026-09-24T09-30-00-000Z.recording.result.json", {
       missionOutcome: "clean",
       exitCode: 0,
-      result: { target: { seedUrl: "https://app.example/settings", allowlist: [] }, defects: [serverLog(true)], hangs: [], recordingPaths: ["/r/u.recording.json"] },
+      result: { strategy: "usability", target: { seedUrl: "https://app.example/settings", allowlist: [] }, defects: [serverLog(true)], hangs: [], recordingPaths: ["/r/u.recording.json"] },
     });
     expect(ux?.observations[0]).toMatchObject({ severity: "advisory", identity: { category: "advisory", fingerprint: "5e5e5e5e5e5e5e5e" } });
   });

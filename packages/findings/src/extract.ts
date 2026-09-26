@@ -123,18 +123,39 @@ export function runIdOf(path: string): string {
   return b.endsWith(".json") ? b.slice(0, -".json".length) : b;
 }
 
-const PREFIX_MODES: ReadonlyArray<readonly [string, RunMode]> = [
-  ["explore-", "goal"],
-  ["coverage-", "coverage"],
-  ["adversarial-", "adversarial"],
-  ["feature-", "feature"],
-  ["usability-", "usability"],
-  ["journey-", "journey"],
-  ["verify-", "verify-fix"],
-];
+/**
+ * #211 — a result's strategy/mode comes from ITS OWN CONTENT, never its file name: a result
+ * committed or copied under someone else's name (`renamed.result.json`, a baseline tag, …) must be
+ * read identically to the original. The unified schema (#195, `packages/domain/src/mission-result.ts`)
+ * writes `strategy` on every result; map it straight through (`exploratory` shares `coverage`'s
+ * `RunMode`, since it is the same runner). Only a result written before that schema falls back to
+ * `modeFromContent` below — inferred from ITS OWN strategy-specific fields, still never the file name.
+ */
+const STRATEGY_TO_MODE: Readonly<Record<string, RunMode>> = {
+  goal: "goal",
+  coverage: "coverage",
+  exploratory: "coverage",
+  adversarial: "adversarial",
+  feature: "feature",
+  usability: "usability",
+};
 
-function modeFromName(runId: string): RunMode | undefined {
-  return PREFIX_MODES.find(([p]) => runId.startsWith(p))?.[1];
+function modeFromStrategy(strategy: unknown): RunMode | undefined {
+  return typeof strategy === "string" ? STRATEGY_TO_MODE[strategy] : undefined;
+}
+
+/**
+ * A pre-#195 result (no `strategy`/`schemaVersion`): inferred from its own strategy-specific
+ * fields (see `docs/results.md`'s "Strategy-specific fields"), most-specific first — a feature or
+ * adversarial result also carries a `coverage` field, so `coverage` is checked last.
+ */
+function modeFromContent(result: Json): RunMode | undefined {
+  if (isRecord(result.report) || str(result.reportPath) !== undefined) return "usability";
+  if (str(result.capability) !== undefined) return "feature";
+  if (Array.isArray(result.advisories) && isRecord(result.scope)) return "adversarial";
+  if (Array.isArray(result.checks) || str(result.answer) !== undefined || str(result.runOutcome) !== undefined) return "goal";
+  if (isRecord(result.coverage)) return "coverage";
+  return undefined;
 }
 
 function originOf(url: string | undefined): string | undefined {
@@ -497,7 +518,10 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   if (!isRecord(raw) || !isRecord(raw.result) || str(raw.missionOutcome) === undefined) return null;
   const result = raw.result;
   const runId = runIdOf(path);
-  const mode = (str(result.mode) as RunMode | undefined) ?? modeFromName(runId);
+  // #211: content only — `mode` (journey/verify-fix's own synthetic records), then the unified
+  // schema's `strategy`, then (a pre-#195 result) its own strategy-specific fields. Never the file
+  // name: a result renamed or copied elsewhere must read identically to the original.
+  const mode = (str(result.mode) as RunMode | undefined) ?? modeFromStrategy(result.strategy) ?? modeFromContent(result);
   if (mode === undefined) return null;
   const target = isRecord(result.target) ? result.target : undefined;
   const ctx: Ctx = {

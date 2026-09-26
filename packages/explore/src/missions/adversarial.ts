@@ -1484,7 +1484,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           pendingEarlier = pendingEarlier || result.ok;
           continue;
         }
-        const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn });
+        const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
         const soft = verdict === null ? await softJudgment(stepSnap) : {};
         const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
         transcript.record({
