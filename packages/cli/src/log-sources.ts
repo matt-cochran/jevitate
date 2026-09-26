@@ -187,12 +187,19 @@ function killGroup(child: LogChildProcess): void {
 
 function openProcessSource(spec: LogSourceSpec, command: string, args: readonly string[], opts: LogSourceOpenOptions, useShell: boolean): LogSourceHandle {
   let child: LogChildProcess | undefined;
+  // #199: set the moment WE ask the child to stop (mission end) — BEFORE `killGroup` sends the
+  // signal, so the (always-async) `exit` event below, whenever it lands, can tell "we stopped this"
+  // from "it died on its own". A source jevitate stopped itself is a normal end of tailing, not a
+  // failure, no matter what exit code the child reports for its own signal handling (a `docker logs
+  // -f`/`cmd:` child commonly self-exits 143 for SIGTERM rather than dying to the raw signal).
+  let stopRequested = false;
   const handle: LogSourceHandle = {
     spec,
     opened: false,
     linesRead: 0,
     truncated: false,
     close: async () => {
+      stopRequested = true;
       if (child === undefined) return;
       killGroup(child);
       await new Promise<void>((resolve) => {
@@ -207,6 +214,7 @@ function openProcessSource(spec: LogSourceSpec, command: string, args: readonly 
       });
     },
     killSync: () => {
+      stopRequested = true;
       if (child !== undefined) killGroup(child);
     },
   };
@@ -228,7 +236,13 @@ function openProcessSource(spec: LogSourceSpec, command: string, args: readonly 
   // container: …") would otherwise just look like an ordinary, if odd, log line and count toward
   // `linesRead`, hiding the failure. An early non-zero exit is decisive regardless of what was piped
   // through in the meantime: this source was never actually tailing the backend.
+  //
+  // #199: BUT only when the child died on its own. `close()`/`killSync()` set `stopRequested` before
+  // signaling, so an exit that lands after WE asked this source to stop (mission end) is a normal
+  // end of tailing — never a failure, whatever code/signal the child reports for handling its own
+  // termination (SIGTERM commonly comes back as a self-reported exit code like 143, not `signal`).
   child.on("exit", (code, signal) => {
+    if (stopRequested) return;
     if (code !== null && code !== 0 && handle.error === undefined) {
       handle.error = `${spec.raw}: exited with code ${code}${signal === null ? "" : ` (signal ${signal})`} — the source may not be running`;
     }
