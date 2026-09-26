@@ -18,7 +18,8 @@ import {
   type StyleProperty,
   type TargetDescriptor,
 } from "@jevitate/recording";
-import type { InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
+import type { HostHealthSampler, InvariantDefect, InvariantReport, SafetyConfig, SideEffect } from "@jevitate/explore";
+import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
   runGoalBasedMission,
   authorJourney,
@@ -83,6 +84,7 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
+import { finishHostHealth, startHostHealth } from "./host-health-run.js";
 import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 import {
   applyServerLogOutcome,
@@ -136,6 +138,8 @@ export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; def
  */
 
 export interface RunExplorationOptions {
+  /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
+  readonly hostHealth?: HostHealthSampler;
   readonly url: string;
   readonly goal: string;
   /** A success assertion on the final page. With `successChecks`, every one must hold. */
@@ -452,6 +456,10 @@ export interface RunExplorationResult {
   readonly serverLogDefects?: ServerLogDefect[];
   /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
   readonly fixtures?: MissionFixtureResult;
+  /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
+  readonly hostHealth: HostHealthSummary;
+  /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
+  readonly environmentDegraded: EnvironmentDegraded[];
 }
 
 /** Outcomes that already mean the run itself broke or hung — a server-log finding never downgrades
@@ -559,7 +567,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     ...opts.emulation,
     ...(primaryState !== undefined ? { storageState: primaryState } : {}),
   };
-  const session = await port.open(launch);
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const health = await startHostHealth(opts.hostHealth);
+  const session = await port.open(launch).catch((e: unknown) => {
+    health.stop();
+    throw e;
+  });
   // #147: each observer in its OWN fresh context (only its own storageState), opened on first use.
   const observers =
     opts.actors === undefined || opts.actors.observers.length === 0
@@ -581,6 +594,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
+    hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -602,6 +616,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // #159: every settled step also refreshes the in-memory storageState snapshot (cheap no-op when
   // `--save-storage-state` was not given — `snapshotter.noteSettledStep` checks `enabled` itself).
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    health.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
@@ -639,6 +654,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(observers === undefined ? {} : { observers }),
       ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
+      hostHealth: health,
     });
     await observers?.close();
 
@@ -654,7 +670,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);
     // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1); an unreadable
     // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
-    const goalOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
+    const loggedOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
+    // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
+    const host = await finishHostHealth(health, loggedOutcome);
+    const goalOutcome: GoalBasedOutcome = host.outcome;
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
     const engine = currentEngineInfo();
@@ -726,8 +745,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
               ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
             },
           }),
-      ...(mission.run.failure === undefined ? {} : { failure: mission.run.failure }),
-      ...(goalOutcome === mission.outcome
+      ...(mission.run.failure === undefined ? (host.failure === undefined ? {} : { failure: host.failure }) : { failure: mission.run.failure }),
+      ...(host.failure !== undefined
+        ? { reason: host.failure.message }
+        : goalOutcome === mission.outcome
         ? (() => {
             const reason = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
             return reason === undefined ? {} : { reason };
@@ -737,12 +758,14 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
       defects: unifiedDefects(opts.invariants === undefined ? undefined : mission.invariantDefects, serverLogRun?.defects),
+      ...host.fields,
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result, runUsage);
     return result;
   } finally {
     disarmKillSwitch();
+    health.stop();
     // Safety net: if the mission threw before `serverLog.finish()` ran, close sources immediately
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
@@ -905,6 +928,8 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
  * runs FIRST, before any browser is opened.
  */
 export interface RunCoverageMissionOptions {
+  /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
+  readonly hostHealth?: HostHealthSampler;
   readonly url: string;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
@@ -960,13 +985,21 @@ export interface RunCoverageMissionOptions {
   readonly overflow?: OverflowFlags;
 }
 
+/** How the frontier ended (`insufficient-exploration`, #203: drained by timed-out actions, never `exhausted`). */
+type CoverageRunOutcome = "exhausted" | "insufficient-exploration" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
+
 export interface RunCoverageMissionResult {
+  /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
+  readonly hostHealth: HostHealthSummary;
+  /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
+  readonly environmentDegraded: EnvironmentDegraded[];
+
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix is `coverage-` for both. */
   readonly strategy: "coverage" | "exploratory";
   readonly coverage: CoverageReport;
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
+  readonly outcome: CoverageRunOutcome;
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
   readonly hangs: HangFinding[];
   /** Declared mission spend budgets (#150/#180): the observed trajectory, whatever the outcome. */
@@ -1023,7 +1056,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  const session = await port.open(launch);
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const health = await startHostHealth(opts.hostHealth);
+  const session = await port.open(launch).catch((e: unknown) => {
+    health.stop();
+    throw e;
+  });
 
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -1037,6 +1075,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
+    hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -1054,6 +1093,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     onTranscriptEntry: journal.onTranscriptEntry,
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    health.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
@@ -1084,6 +1124,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
         ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
         ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
       },
+      hostHealth: health,
     });
 
     // #149: every repro Recording (per-state, and each defect's own) is stamped with the emulation
@@ -1113,7 +1154,9 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
         ? "crashed"
         : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
-          : result.outcome === "budget"
+          : // #203: a frontier drained by timed-out actions, or ended on a page hung only on a starved
+            // host (no hang finding left), explored too little to be clean — a found defect still wins.
+            result.outcome === "budget" || result.outcome === "insufficient-exploration" || (result.outcome === "hang" && result.hangs.length === 0)
             ? found > 0
               ? "defects-found"
               : "inconclusive"
@@ -1125,11 +1168,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     ]);
     // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
     // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
-    const missionOutcome = applyServerLogOutcome(preLogOutcome, serverLogRun);
+    const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun));
+    const missionOutcome: MissionOutcome = host.outcome;
     const coverageFailure: MissionFailure | undefined = thin
       ? { kind: "insufficient-coverage", message: `coverage below thresholds: ${result.coverage.sufficiency.shortfalls.join("; ")}` }
       : undefined;
-    const failure = result.failure ?? coverageFailure;
+    const failure = result.failure ?? host.failure ?? coverageFailure;
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
@@ -1159,10 +1203,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...serverLogResult(serverLogRun),
       defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
       resultPath: resultPathFor(journal.recordingPath),
+      ...host.fields,
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed, runUsage) };
   } finally {
     disarmKillSwitch();
+    health.stop();
     await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
@@ -1197,6 +1243,8 @@ export const CLI_ADVERSARIAL_STRATEGIES: readonly MisuseStrategy[] = [
  * browser is opened, so an unauthorized origin never launches Chromium.
  */
 export interface RunAdversarialCliMissionOptions {
+  /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
+  readonly hostHealth?: HostHealthSampler;
   readonly seedUrl: string;
   readonly allowlist: readonly string[];
   readonly strategies: readonly MisuseStrategy[];
@@ -1297,6 +1345,10 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly serverLogs?: ServerLogsSummary;
   /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
+  /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
+  readonly hostHealth: HostHealthSummary;
+  /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
+  readonly environmentDegraded: EnvironmentDegraded[];
 };
 
 /**
@@ -1323,7 +1375,12 @@ export async function runAdversarialCliMission(
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  const session = await port.open(launch);
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const health = await startHostHealth(opts.hostHealth);
+  const session = await port.open(launch).catch((e: unknown) => {
+    health.stop();
+    throw e;
+  });
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
@@ -1334,6 +1391,7 @@ export async function runAdversarialCliMission(
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
+    hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -1351,12 +1409,14 @@ export async function runAdversarialCliMission(
     onTranscriptEntry: journal.onTranscriptEntry,
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    health.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
+      hostHealth: health,
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
@@ -1395,7 +1455,8 @@ export async function runAdversarialCliMission(
     journal.writeTranscript(transcript);
     // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
     // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
-    const missionOutcome = applyServerLogOutcome(outcome.outcome, serverLogRun);
+    const host = await finishHostHealth(health, applyServerLogOutcome(outcome.outcome, serverLogRun));
+    const missionOutcome: MissionOutcome = host.outcome;
     const exitCode = missionExitCode(missionOutcome);
     const resultPath = resultPathFor(journal.recordingPath);
     const engine = currentEngineInfo();
@@ -1442,10 +1503,13 @@ export async function runAdversarialCliMission(
       ...serverLogResult(serverLogRun),
       defects: unifiedDefects(outcome.defects, serverLogRun?.defects),
       resultPath,
+      ...(host.failure === undefined || outcome.failure !== undefined ? {} : { failure: host.failure }),
+      ...host.fields,
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) };
   } finally {
     disarmKillSwitch();
+    health.stop();
     await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
@@ -1461,6 +1525,8 @@ export async function runAdversarialCliMission(
  * opened — an unauthorized origin never launches Chromium.
  */
 export interface RunFeatureCliMissionOptions {
+  /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
+  readonly hostHealth?: HostHealthSampler;
   readonly seedUrl: string;
   readonly allowlist: readonly string[];
   readonly capability: string;
@@ -1538,6 +1604,10 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   readonly serverLogDefects?: ServerLogDefect[];
   /** Always zero (#188): a feature mission makes no model call — stated, never absent ("not tracked"). */
   readonly usage: UsageCounts;
+  /** The host's health over the run (#203): peaks, the slowest render, starved steps. */
+  readonly hostHealth: HostHealthSummary;
+  /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
+  readonly environmentDegraded: EnvironmentDegraded[];
 };
 
 /** A model-free mission's usage (#188): nothing called, nothing to price — a known $0. */
@@ -1568,7 +1638,12 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  const session = await portFactory().open(launch);
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const health = await startHostHealth(opts.hostHealth);
+  const session = await portFactory().open(launch).catch((e: unknown) => {
+    health.stop();
+    throw e;
+  });
 
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
@@ -1580,6 +1655,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
     recordingPath: journal.recordingPath,
+    hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(opts.saveStorageState === undefined
@@ -1596,6 +1672,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     onTranscriptEntry: journal.onTranscriptEntry,
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    health.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
@@ -1614,6 +1691,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
       ...(opts.safety === undefined ? {} : { safety: opts.safety }),
+      hostHealth: health,
     });
 
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
@@ -1660,14 +1738,15 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ]);
     // #142 follow-up: a server-log defect counts as `defects-found`; an unreadable `--log-defect`
     // oracle turns an otherwise-`clean` run `inconclusive` — never a false clean.
-    const missionOutcome = applyServerLogOutcome(preLogOutcome, serverLogRun);
+    const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun));
+    const missionOutcome: MissionOutcome = host.outcome;
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
       ...result,
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "feature" as const,
       transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],
-      failure: result.failure ?? coverageFailure,
+      failure: result.failure ?? host.failure ?? coverageFailure,
       missionOutcome,
       exitCode,
       recordingPaths,
@@ -1683,10 +1762,12 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
       resultPath: resultPathFor(journal.recordingPath),
       usage: NO_MODEL_USAGE,
+      ...host.fields,
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
   } finally {
     disarmKillSwitch();
+    health.stop();
     await serverLog?.abort();
     await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);

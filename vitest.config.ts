@@ -46,7 +46,11 @@ export default defineConfig({
     // Tests check the inbox store's and SQLite store's logic, not the disk flush; with fsync on, a
     // test's duration followed the HOST's disk writeback (seconds under memory pressure), turning
     // fast I/O tests into load-dependent timeouts. Production never sets this (see durability.ts).
-    env: { JEVITATE_DURABLE_WRITES: "off" },
+    //
+    // Host-starvation attribution (#203) is judged against the REAL host by default; on a loaded CI box
+    // that would turn unrelated tests' hangs/timeouts into `environment-degraded` and their outcomes
+    // `inconclusive`. Tests of the attribution itself inject a fake host with `attribute: true`.
+    env: { JEVITATE_DURABLE_WRITES: "off", JEVITATE_HOST_STARVATION: "off" },
     // Only the workspace's `browser` project runs on threads (see
     // vitest.workspace.ts): at most two real-Chromium test files at once.
     poolOptions: { threads: { maxThreads: 2, minThreads: 1 } },

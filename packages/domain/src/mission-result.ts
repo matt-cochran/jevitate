@@ -25,6 +25,11 @@ import { MISSION_OUTCOMES } from "./mission-outcome.js";
  *    most — never its contents): what `verify-fix` needs to replay a finding.
  *  - `engine` — the build that produced it; `usage` — model calls and tokens (present whenever the
  *    run tracked them, which the CLI always does).
+ *  - `hostHealth` — the host's health over the run (#203): peak load per core, minimum free memory,
+ *    peak driver event-loop lag, the slowest render, and how many steps ran on a starved host.
+ *    `environmentDegraded` — findings (a hang, a click timeout, a no-progress stop) met while the host
+ *    was starved: advisory, never a defect or hang finding, never failing the run. Both are additive
+ *    (schemaVersion 1): every result written since #203 carries them; older results parse without.
  *
  * Everything else on a result is strategy-specific (a goal run's `checks`/`answer`, a coverage run's
  * `coverage`, an adversarial run's `advisories`/`scope`, a usability run's `report`): the schema lets
@@ -76,6 +81,56 @@ export const ResultUsageSchema = z.looseObject({
   priced: z.enum(["full", "partial", "none"]),
 });
 
+/**
+ * The host's health over a run (#203) — so triage can tell a starved host from an app finding at a
+ * glance. Every number is `null` when the platform could not measure it (e.g. no load average on
+ * Windows); never a guess.
+ */
+export const HostHealthSummarySchema = z.looseObject({
+  /** Host samples taken over the run. */
+  samples: z.number().int().nonnegative(),
+  /** Logical cores the load average is divided by. */
+  cores: z.number().int().positive(),
+  /** Peak 1-minute load average per core (1 = every core busy with one runnable task). */
+  peakLoadPerCore: z.number().nonnegative().nullable(),
+  /** Least memory available to a new browser context (bytes). */
+  minFreeMemoryBytes: z.number().nonnegative().nullable(),
+  /** Peak delay of the driver's (this process's) event loop (ms). */
+  peakEventLoopLagMs: z.number().nonnegative().nullable(),
+  /** Slowest page render seen (DOMContentLoaded for a navigation, settle time for an in-page transition; ms). */
+  slowestRenderMs: z.number().nonnegative().nullable(),
+  /** The run's own render baseline (median of its first renders; ms) the trend is judged against. */
+  baselineRenderMs: z.number().nonnegative().nullable(),
+  /** Steps recorded, and how many of them ran while the host was starved. */
+  steps: z.number().int().nonnegative(),
+  degradedSteps: z.number().int().nonnegative(),
+  /** Most steps ran starved: the run proved nothing (its outcome is never `clean`). */
+  degraded: z.boolean(),
+  /** The distinct starvation causes seen (first few), e.g. `load 3.10/core > 2`. */
+  starvation: z.array(z.string()),
+  /** `off` when starvation attribution was disabled (`JEVITATE_HOST_STARVATION=off`): sampled, never judged. */
+  attribution: z.enum(["on", "off"]),
+});
+export type HostHealthSummary = z.infer<typeof HostHealthSummarySchema>;
+
+/** Which finding the host's starvation explains. */
+export const DEGRADED_FINDINGS = ["hang", "click-timeout", "no-progress"] as const;
+export type DegradedFindingKind = (typeof DEGRADED_FINDINGS)[number];
+
+/** A finding met while the host was starved (#203): advisory, never a defect/hang, never failing the run. */
+export const EnvironmentDegradedSchema = z.looseObject({
+  kind: z.literal("environment-degraded"),
+  finding: z.enum(DEGRADED_FINDINGS),
+  /** What was seen (the hang's detail, the timed-out action's reason). */
+  detail: z.string(),
+  /** Why the host counted as starved around it. */
+  cause: z.string(),
+  /** The transcript step it was met at, when known. */
+  step: z.number().int().nonnegative().optional(),
+  advisory: z.literal(true),
+});
+export type EnvironmentDegraded = z.infer<typeof EnvironmentDegradedSchema>;
+
 /** The common fields of every strategy's result (strategy-specific fields pass through). */
 export const MissionResultSchema = z.looseObject({
   schemaVersion: z.literal(MISSION_RESULT_SCHEMA_VERSION),
@@ -91,6 +146,9 @@ export const MissionResultSchema = z.looseObject({
   engine: ResultEngineSchema,
   usage: ResultUsageSchema.optional(),
   failure: z.looseObject({ kind: z.string(), message: z.string() }).optional(),
+  /** #203 — additive: optional so results written before it still parse. */
+  hostHealth: HostHealthSummarySchema.optional(),
+  environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
 });
 export type MissionResult = z.infer<typeof MissionResultSchema>;
 
@@ -122,4 +180,7 @@ export interface MissionResultCore {
   readonly resultPath: string;
   readonly target: { readonly seedUrl: string; readonly allowlist: readonly string[]; readonly storageStatePath?: string };
   readonly engine: { readonly version: string; readonly commit: string; readonly builtAt: string };
+  /** #203: every result written now carries the host's health and its environment-degraded findings. */
+  readonly hostHealth: HostHealthSummary;
+  readonly environmentDegraded: readonly EnvironmentDegraded[];
 }

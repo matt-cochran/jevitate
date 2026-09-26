@@ -234,6 +234,20 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
     controlCount: 1,
   });
   const engine = { version: "1.2.3", commit: "abc1234", builtAt: "2026-09-24T00:00:00Z" };
+  const HOST_HEALTH = {
+    samples: 3,
+    cores: 8,
+    peakLoadPerCore: 2.6,
+    minFreeMemoryBytes: 1e9,
+    peakEventLoopLagMs: 40,
+    slowestRenderMs: 900,
+    baselineRenderMs: 300,
+    steps: 5,
+    degradedSteps: 4,
+    degraded: true,
+    starvation: ["load 2.60/core > 2"],
+    attribution: "on" as const,
+  };
 
   it("prefers the live step list over the file, and carries engine, usage-so-far, the real transcriptPath and a partial report", async () => {
     const { deps, handlers, calls } = fakeDeps({ transcript: [] });
@@ -246,6 +260,7 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
         transcript: () => live,
         usage: { snapshot: () => ({ judgments: 6, generations: 2, inputTokens: 900, outputTokens: 120 }) },
         partialReport: () => ({ screensObserved: 6 }),
+        hostHealth: () => HOST_HEALTH,
       },
       {
         ...deps,
@@ -271,6 +286,8 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
       engine,
       usage: { judgments: 6, generations: 2, inputTokens: 900, outputTokens: 120 },
       partialReport: { screensObserved: 6 },
+      // #203: a killed run's result carries the host's health so far, like every other result.
+      hostHealth: HOST_HEALTH,
     });
   });
 

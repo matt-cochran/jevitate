@@ -33,6 +33,7 @@ import type { MissionFailure } from "@jevitate/domain";
 import type { SettleConfig, TimingConfig } from "../settle-config.js";
 import { outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "../mission-failure.js";
@@ -122,6 +123,8 @@ export interface CoverageReport {
   readonly defects: DefectRecord[];
   /** Actions the frontier attempted that did not land (gate refusal, action failure) — #75. */
   readonly failedActions: number;
+  /** Of those, the ones that failed on a TIMEOUT (#203) — a frontier drained by these is `insufficient-exploration`. */
+  readonly timedOutActions: number;
   /** What the run exercised vs. its thresholds, and whether silence here may read as `clean` (#75,
    *  mirroring the adversarial coverage thresholds from #69). */
   readonly sufficiency: CoverageSufficiency;
@@ -136,7 +139,9 @@ export interface InductionRunResult {
    *  bounced to a login page) — the run never got to test what it was asked to (#82) — or, mid-run,
    *  the frontier could not return to the seed after a departure (#114). */
   /** `stalled`: no step completed within the stall watchdog's bound (#114). */
-  readonly outcome: "exhausted" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
+  /** `insufficient-exploration` (#203): the frontier emptied because its actions TIMED OUT (each one
+   *  blacklisted its control), not because its states ran out — never reported as `exhausted`. */
+  readonly outcome: "exhausted" | "insufficient-exploration" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
   /** Why the run crashed/could not reach its target/stalled — present for `crashed`, `scope-unreachable` and `stalled`. */
@@ -187,6 +192,8 @@ export interface InductionMissionParams {
   readonly openFreshSession?: () => Promise<VerifySession>;
   /** Fresh-context replays that confirm a hang. Default 2. */
   readonly hangReplays?: number;
+  /** The run's host-health sampler (#203): a hang met while the host was starved is `environment-degraded`, never a finding. */
+  readonly hostHealth?: HostHealthSampler;
   /** The target's timing configuration (API path prefixes). */
   readonly timingConfig?: TimingConfig;
   /** How much of the target a run must exercise before "found nothing" may be reported `clean`
@@ -439,6 +446,7 @@ async function runInductionFrontier(
   let transitionsExercised = 0;
   let actions = 0;
   let failedActions = 0;
+  let timedOutActions = 0;
   let nonNavActionsExercised = 0;
   const sufficiencyThresholds = resolveCoverageSufficiencyThresholds(params.sufficiencyThresholds);
 
@@ -462,6 +470,7 @@ async function runInductionFrontier(
     frontierExhausted,
     defects,
     failedActions,
+    timedOutActions,
     sufficiency: assessCoverageSufficiency({ actions, failedActions, nonNavActionsExercised }, sufficiencyThresholds),
     scope: { routeGlobs, outOfScopeTransitions, departures: departures.slice(0, MAX_LISTED_DEPARTURES) },
   });
@@ -682,6 +691,7 @@ async function runInductionFrontier(
     lastTiming = undefined;
       if (!result.ok) {
         failedActions += 1;
+        if (/timeout/i.test(result.reason ?? "")) timedOutActions += 1;
         // A control that failed with a timeout (or was refused as not actionable — a clipped/
         // offscreen skip link, an occluded target) is never re-chosen for the rest of the run
         // (#75): every OTHER state that re-offers the same control identity drops it at `push`.
@@ -765,7 +775,7 @@ async function runInductionFrontier(
           ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
         });
         watchdog.suspend(); // the reproduction is bounded on its own (fresh contexts, bounded replays)
-        await recordCoverageHang({
+        const recorded = await recordCoverageHang({
           hang,
           // The path starts at the seed (the frontier's reach navigates there first): prepend it.
           recording: withSeed(branch, params.seedUrl),
@@ -774,6 +784,7 @@ async function runInductionFrontier(
           ...(params.safety === undefined ? {} : { safety: params.safety }),
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
+          ...(params.hostHealth === undefined ? {} : { hostHealth: params.hostHealth }),
           // Re-detected with the SAME perception bounds the mission used.
           perceive: {
             ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
@@ -784,6 +795,10 @@ async function runInductionFrontier(
         if (!(await guard(sessions.reset(hang)))) {
           return {
             outcome: "hang",
+            // #203: the page that could not be reset from was hung on a starved host — not an app hang.
+            ...(recorded === "degraded"
+              ? { failure: { kind: "degraded-environment", message: `the page stopped responding (${hang.kind}) while the host was starved, and no fresh session could replace it` } }
+              : {}),
             coverage: report(false),
             recordings: [...statePaths.values()],
             transcript: transcript.entries(),
@@ -891,6 +906,23 @@ async function runInductionFrontier(
       currentFingerprint = newFingerprint;
     }
 
+    // #203: states did not run out — the frontier was drained by actions that timed out (each one
+    // blacklisted its control). At least as many timed-out actions as exercised transitions means the
+    // frontier ended on timeouts, so "exhausted" would claim coverage the run never had.
+    if (timedOutActions > 0 && timedOutActions >= transitionsExercised) {
+      return {
+        outcome: "insufficient-exploration",
+        failure: {
+          kind: "insufficient-exploration",
+          message: `the frontier ended because ${timedOutActions} action(s) timed out (vs ${transitionsExercised} transition(s) exercised, ${visited.size} state(s) visited), not because its states ran out`,
+        },
+        coverage: report(true),
+        recordings: [...statePaths.values()],
+        transcript: transcript.entries(),
+        timing: summarizeTimings(timings),
+        hangs: [...hangs.values()],
+      };
+    }
     return {
       outcome: "exhausted",
       coverage: report(true),
