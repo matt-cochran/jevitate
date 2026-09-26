@@ -465,3 +465,51 @@ describe("#211: a verifyFix item's strategy comes from its result's content, nev
     }
   });
 });
+
+describe("#214: `check` never gates on an advisory defect (a Jev judgment alone)", () => {
+  const flagged = {
+    fingerprint: "a1b2c3d4e5f60718",
+    kind: "judgment-flagged-state",
+    stateFingerprint: "s1",
+    url: `${URL0}?saved=1`,
+    title: "judgment flagged defect",
+    advisory: true,
+  };
+  function coverageRunner(extra: unknown[] = [], missionOutcome = "clean"): CheckRunners["coverage"] {
+    return (async (o: { strategy?: string; outDir?: string }) => {
+      const resultPath = join(o.outDir ?? dir, "coverage-2026-09-26T10-00-00-000Z.result.json");
+      const result = {
+        strategy: o.strategy ?? "coverage",
+        target: { seedUrl: URL0, allowlist: ["https://shop.example"] },
+        transcript: [{ step: 0, op: "click" }],
+        defects: [flagged, ...extra],
+        coverage: { defects: [{ ...flagged, reason: "judgment flagged defect", recording: { version: "1", site: URL0, pages: [] } }] },
+        hangs: [],
+      };
+      const exitCode = missionOutcome === "defects-found" ? 1 : 0;
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome, exitCode, result }));
+      return { ...result, resultPath, missionOutcome, exitCode };
+    }) as unknown as CheckRunners["coverage"];
+  }
+  const run = (coverage: CheckRunners["coverage"], extra: Record<string, unknown> = {}) => {
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage: new UsageTracker() };
+    const s = suite(0, extra, { missions: [{ name: "cov", strategy: "coverage" }] });
+    return runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { coverage }, gateways: async () => gw, aiMode: "fake" });
+  };
+
+  it("a coverage run whose only defect is judgment-flagged passes: listed as an advisory finding, not gating", async () => {
+    const r = await run(coverageRunner());
+    expect(r).toMatchObject({ verdict: "pass", exitCode: 0 });
+    expect(r.items[0]).toMatchObject({ verdict: "passed", gating: [] });
+    expect(r.findings.some((f) => f.severity === "advisory")).toBe(true);
+    expect(r.findings.some((f) => f.severity === "hard")).toBe(false);
+  });
+
+  it("an advisory defect of any kind is not gating; a hard-signal defect beside it still gates", async () => {
+    const advisory5xx = { fingerprint: "0f0e0d0c0b0a0908", kind: "http-5xx", route: "/app", url: URL0, title: "PUT /api → 500", advisory: true };
+    expect(await run(coverageRunner([advisory5xx]))).toMatchObject({ verdict: "pass", exitCode: 0 });
+    const hard5xx = { ...advisory5xx, fingerprint: "1f1e1d1c1b1a1918", advisory: undefined };
+    rmSync(join(dir, "out"), { recursive: true, force: true });
+    expect(await run(coverageRunner([hard5xx], "defects-found"))).toMatchObject({ verdict: "fail", exitCode: 1 });
+  });
+});
