@@ -11,13 +11,20 @@ import type { JourneyRunResult } from "@jevitate/runtime";
 import {
   matchGlob,
   parseSecretField,
+  resolveCoverageThresholds,
   scopeGlobs,
   secretFieldSecrets,
   SecretFieldSpecError,
+  type CoverageThresholds,
   type SecretField,
   type SuccessCheck,
 } from "@jevitate/explore";
-import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
+import { buildMissionFixtures, checkSetupRefs, type FixtureFlags } from "./fixture-cli.js";
+import { parseLogSourceSpecs } from "./log-sources.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
+import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
+import { effectiveExploreOptions, type ExploreItemKind, type SuiteExploreOptions } from "./suite-explore-options.js";
 import { FixtureSpecError, SETUP_REF, UnboundSetupRefError, substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 import {
   consolidate,
@@ -50,7 +57,7 @@ import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
-import type { CheckSuite, SuiteBudget, SuiteGoal, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
+import type { CheckSuite, SuiteBudget, SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { loadRunFile, resolveBaseline, scanRuns, summarizeRun, type RunSummary } from "./report-api.js";
 
 /**
@@ -444,22 +451,166 @@ interface PreparedTarget {
   readonly fixturesFile?: string;
 }
 
+/** What an item's fixture lifecycle is built from: its fixtures file and hooks, authenticated like its session. */
+interface FixtureSource {
+  readonly allowlist: readonly string[];
+  readonly flags: FixtureFlags;
+  readonly storageState?: string;
+  readonly secretFields: readonly SecretField[];
+}
+
 /**
- * The target's fixture lifecycle for one item (#170), authenticated like the item's session: the
- * target's storage state and `secretFields`. `undefined` when the target declares no fixtures.
+ * An item's fixture lifecycle (#170/#195), authenticated like the item's session: its storage
+ * state and `secretFields`. `undefined` when it declares no fixtures file and no hooks.
  */
-function fixturesFor(p: Pick<PreparedTarget, "target" | "allowlist" | "secretFields" | "fixturesFile">, baseUrl: string): MissionFixtures | undefined {
-  if (p.fixturesFile === undefined) return undefined;
-  return buildMissionFixtures(
-    { fixtures: p.fixturesFile },
-    {
-      allowlist: p.allowlist,
-      baseUrl: baseUrl.replace(SETUP_REF, "0"),
-      ...(p.target.storageState === undefined ? {} : { storageState: p.target.storageState }),
-      secretFields: p.secretFields,
-      secrets: secretFieldSecrets(p.secretFields),
-    },
-  );
+function fixturesFor(f: FixtureSource, baseUrl: string): MissionFixtures | undefined {
+  return buildMissionFixtures(f.flags, {
+    allowlist: f.allowlist,
+    baseUrl: baseUrl.replace(SETUP_REF, "0"),
+    ...(f.storageState === undefined ? {} : { storageState: f.storageState }),
+    secretFields: f.secretFields,
+    secrets: secretFieldSecrets(f.secretFields),
+  });
+}
+
+/** The target's own fixtures (around Journey items), with `storageState` the item's session. */
+function targetFixtures(p: PreparedTarget, storageState: string | undefined): FixtureSource {
+  return {
+    allowlist: p.allowlist,
+    flags: p.fixturesFile === undefined ? {} : { fixtures: p.fixturesFile },
+    ...(storageState === undefined ? {} : { storageState }),
+    secretFields: p.secretFields,
+  };
+}
+
+/** An item's session: its own `storageState` (`null`: none), else the target's. */
+function sessionOf(t: SuiteTarget, own: string | null | undefined): string | undefined {
+  return own === null ? undefined : (own ?? t.storageState);
+}
+
+/**
+ * Everything one goal/mission item runs with (#195): `explore`'s options, the target's defaults
+ * overridden by the item's own, resolved and validated at preflight exactly as `explore` does for
+ * its flags — the target config its safety/settle/timing flags build, its backend log sources,
+ * secret references resolved from the environment, actors, personas and fixtures.
+ */
+interface ItemSetup {
+  readonly x: SuiteExploreOptions;
+  readonly storageState?: string;
+  readonly secretFields: readonly SecretField[];
+  readonly secrets?: readonly string[];
+  readonly config?: TargetConfig;
+  readonly serverLog?: ServerLogOptions;
+  readonly actors?: MissionActors;
+  readonly personas?: readonly Persona[];
+  readonly fixtures?: FixtureSource;
+  readonly coverageThresholds?: CoverageThresholds;
+}
+
+const TARGET_FLAG_KEYS = [
+  "deny", "paid", "allowDestructive", "allowWrites", "allowWrite", "readRpc", "hangReplayWrites", "settleIgnore", "longPollMs", "apiPrefix", "ignoreNoProgress",
+] as const;
+
+function envSecret(ref: string, env: Readonly<Record<string, string | undefined>>): string {
+  const name = ref.slice("env:".length);
+  const v = env[name];
+  if (v === undefined || v === "") throw new Error(`secret ${ref}: environment variable ${name} is not set`);
+  return v;
+}
+
+function itemSetup(
+  p: PreparedTarget,
+  item: SuiteItemOverrides & { readonly fixtures?: string },
+  kind: ExploreItemKind,
+  opts: RunCheckOptions,
+  /** A goal's start URL and the texts that may reference `${setup.x}`. */
+  refs?: { readonly url: string; readonly texts: Readonly<Record<string, string | readonly string[] | undefined>> },
+): ItemSetup {
+  const t = p.target;
+  const env = opts.env ?? process.env;
+  const x = effectiveExploreOptions(t.explore, item.explore, kind);
+  let storageState = sessionOf(t, item.storageState);
+  if (item.storageState !== undefined && item.storageState !== null && !existsSync(item.storageState)) {
+    throw new Error(`storage state not found: ${item.storageState}`);
+  }
+  const secretFields = [
+    ...(item.secretFields === undefined ? p.secretFields : item.secretFields.map((s) => parseSecretField(s, "value", env))),
+    ...(x.totp ?? []).map((s) => parseSecretField(s, "totp", env)),
+  ];
+  const secrets = x.secret?.map((r) => envSecret(r, env));
+  if (x.fixture !== undefined && !existsSync(x.fixture)) throw new Error(`fixture (upload file) not found: ${x.fixture}`);
+  let config = p.config;
+  if (TARGET_FLAG_KEYS.some((k) => x[k] !== undefined)) {
+    config = resolveTargetConfig(opts.targetsConfig ?? {}, new URL(t.url).origin, {
+      ...(x.settleIgnore === undefined ? {} : { settleIgnore: x.settleIgnore }),
+      ...(x.ignoreNoProgress === undefined ? {} : { ignoreNoProgress: x.ignoreNoProgress }),
+      ...(x.apiPrefix === undefined ? {} : { apiPrefixes: x.apiPrefix }),
+      ...(x.deny === undefined ? {} : { deny: x.deny }),
+      ...(x.paid === undefined ? {} : { paid: x.paid }),
+      ...(x.readRpc === undefined ? {} : { readRpc: x.readRpc }),
+      ...(x.allowDestructive === true ? { allowDestructive: true } : {}),
+      ...(x.allowWrites === true ? { allowWrites: true } : {}),
+      ...(x.allowWrite === undefined ? {} : { allowWrite: x.allowWrite }),
+      ...(x.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
+      ...(x.longPollMs === undefined ? {} : { longPollMs: x.longPollMs }),
+    });
+  }
+  // #142: an item's (or its target's) log sources replace targets.json's, as `--log-source` does.
+  let serverLog = p.serverLog;
+  if (x.logSource !== undefined || x.logDefect !== undefined) {
+    const allowLogCmd = x.allowLogCmd ?? false;
+    serverLog = {
+      sources: parseLogSourceSpecs(x.logSource ?? [], allowLogCmd),
+      logDefect: parseLogDefectSpecs(x.logDefect ?? []),
+      allowLogCmd,
+      quietOk: x.logQuietOk ?? [],
+      logIgnore: parseLogIgnoreSpecs(x.logIgnore ?? []),
+      ...(x.serverLogDrainMs === undefined ? {} : { drainMs: x.serverLogDrainMs }),
+    };
+  }
+  const actors = x.actor === undefined ? null : resolveMissionActors(x.actor);
+  if (actors !== null) {
+    checkActorsAgainstSpec(actors, p.invariants);
+    storageState = actors.primary.storageState;
+  }
+  const personas = [...(x.persona ?? []).map((s) => parsePersonaSpec(s)), ...(x.personas === undefined ? [] : loadPersonasFile(x.personas))];
+  const seen = new Set<string>();
+  for (const q of personas) {
+    if (seen.has(q.name)) throw new Error(`persona ${q.name} is declared twice`);
+    seen.add(q.name);
+  }
+  let fixtures: FixtureSource | undefined;
+  if (kind === "goal") {
+    const flags: FixtureFlags = {
+      ...((item.fixtures ?? p.fixturesFile) === undefined ? {} : { fixtures: item.fixtures ?? p.fixturesFile }),
+      ...(x.before === undefined ? {} : { before: x.before }),
+      ...(x.after === undefined ? {} : { after: x.after }),
+      ...(x.allowShellHooks === undefined ? {} : { allowShellHooks: x.allowShellHooks }),
+      ...(x.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: String(x.hookTimeoutMs) }),
+    };
+    fixtures = { allowlist: p.allowlist, flags, ...(storageState === undefined ? {} : { storageState }), secretFields };
+    // Validated now (the spec, and every ${setup.x} the goal uses), before anything runs.
+    checkSetupRefs(refs?.texts ?? {}, fixturesFor(fixtures, refs?.url ?? t.url));
+  }
+  const coverageThresholds =
+    kind === "adversarial" && (x.minControlCoverage !== undefined || x.requireFormSubmit !== undefined)
+      ? resolveCoverageThresholds({
+          ...(x.minControlCoverage === undefined ? {} : { minControlRatio: x.minControlCoverage }),
+          ...(x.requireFormSubmit === undefined ? {} : { requireFormSubmit: x.requireFormSubmit }),
+        })
+      : undefined;
+  return {
+    x,
+    ...(storageState === undefined ? {} : { storageState }),
+    secretFields,
+    ...(secrets === undefined ? {} : { secrets }),
+    ...(config === undefined ? {} : { config }),
+    ...(serverLog === undefined ? {} : { serverLog }),
+    ...(actors === null ? {} : { actors }),
+    ...(personas.length === 0 ? {} : { personas }),
+    ...(fixtures === undefined ? {} : { fixtures }),
+    ...(coverageThresholds === undefined ? {} : { coverageThresholds }),
+  };
 }
 
 interface Planned {
@@ -473,6 +624,10 @@ interface Planned {
   readonly goal?: SuiteGoal;
   readonly mission?: SuiteMission;
   readonly verify?: SuiteVerifyFix;
+  /** Goal and mission items: what they run with (#195). */
+  readonly setup?: ItemSetup;
+  /** A persona matrix cell: the persona this item runs as (#143/#195). */
+  readonly persona?: Persona;
 }
 
 /** The implicit invariant sweep: a target with invariants but no goal or mission gets one. */
@@ -482,9 +637,13 @@ function invariantSweep(): SuiteMission {
 
 async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<PreparedTarget> {
   const allowlist = resolveExploreAllowlist(t.url, t.allow);
+  // #147/#195: every observer a goal item (or the target's default) declares may be named by the invariants.
+  const observers = new Set(
+    [t.explore?.actor, ...t.goals.map((g) => g.explore?.actor)].flatMap((a) => (a ?? []).slice(1).map((spec) => spec.slice(0, spec.indexOf("=")))),
+  );
   let invariants: InvariantSpec | undefined;
   try {
-    invariants = loadInvariantFiles(t.invariants, { allowlist, baseUrl: t.url });
+    invariants = loadInvariantFiles(t.invariants, { allowlist, baseUrl: t.url, ...(observers.size === 0 ? {} : { observers: [...observers] }) });
   } catch (e) {
     throw new CheckPreflightError(`target ${t.name}: ${errorMessage(e)}`);
   }
@@ -554,10 +713,10 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     throw new CheckPreflightError(`target ${t.name}: ${errorMessage(e)}`);
   }
   const fixturesFile = t.fixtures ?? config?.fixtures;
-  if (fixturesFile !== undefined || t.goals.some((g) => `${g.url ?? ""}${g.goal}${g.success.join("")}`.includes("${setup."))) {
+  if (fixturesFile !== undefined) {
+    // The target's own spec (around Journeys; goals validate theirs in their item setup).
     try {
-      const fx = fixturesFor({ target: t, allowlist, secretFields, ...(fixturesFile === undefined ? {} : { fixturesFile }) }, t.url);
-      for (const g of t.goals) checkSetupRefs({ [`goal ${g.name} url`]: g.url, [`goal ${g.name}`]: g.goal, [`goal ${g.name} success`]: g.success }, fx);
+      fixturesFor({ allowlist, flags: { fixtures: fixturesFile }, secretFields, ...(t.storageState === undefined ? {} : { storageState: t.storageState }) }, t.url);
     } catch (e) {
       if (!(e instanceof FixtureSpecError || e instanceof UnboundSetupRefError)) throw e;
       throw new CheckPreflightError(`target ${t.name}: fixtures: ${e.message}`);
@@ -577,7 +736,30 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
   };
 }
 
-function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | undefined): Planned[] {
+/** The item's setup, a refusal naming the target and item otherwise (before anything runs). */
+function setupOrRefuse(p: PreparedTarget, label: string, run: () => ItemSetup): ItemSetup {
+  try {
+    return run();
+  } catch (e) {
+    const fixtures = e instanceof FixtureSpecError || e instanceof UnboundSetupRefError ? "fixtures: " : "";
+    throw new CheckPreflightError(`target ${p.target.name}: ${label}: ${fixtures}${errorMessage(e)}`);
+  }
+}
+
+/** One planned item per persona (each from its own session, gated on its own), else the item itself. */
+function perPersona(item: Planned): Planned[] {
+  const personas = item.setup?.personas;
+  if (personas === undefined || item.setup === undefined) return [item];
+  const setup = item.setup;
+  return personas.map((q) => ({
+    ...item,
+    name: `${item.name}@${q.name}`,
+    persona: q,
+    setup: { ...setup, storageState: q.storageState, ...(setup.fixtures === undefined ? {} : { fixtures: { ...setup.fixtures, storageState: q.storageState } }) },
+  }));
+}
+
+function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | undefined, opts: RunCheckOptions): Planned[] {
   const out: Planned[] = [];
   const skip = (routes: readonly string[] | undefined): string | undefined =>
     changed === undefined || changed.length === 0 || affectedBy(routes, changed) ? undefined : `not affected by --changed-routes ${changed.join(",")}`;
@@ -591,11 +773,14 @@ function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | 
     }
     for (const g of t.goals) {
       const s = skip(g.routes ?? [pathOf(g.url ?? t.url)]);
-      out.push({ t: p, kind: "goal", name: g.name, goal: g, needsAi: true, ...(s === undefined ? {} : { skipped: s }) });
+      const texts = { [`goal ${g.name} url`]: g.url, [`goal ${g.name}`]: g.goal, [`goal ${g.name} success`]: g.success };
+      const setup = setupOrRefuse(p, `goal ${g.name}`, () => itemSetup(p, g, "goal", opts, { url: g.url ?? t.url, texts }));
+      out.push(...perPersona({ t: p, kind: "goal", name: g.name, goal: g, needsAi: true, setup, ...(s === undefined ? {} : { skipped: s }) }));
     }
     const missions = t.missions.length === 0 && t.goals.length === 0 && p.invariants !== undefined ? [invariantSweep()] : t.missions;
     for (const m of missions) {
-      out.push({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature" });
+      const setup = setupOrRefuse(p, `mission ${m.name}`, () => itemSetup(p, m, m.strategy, opts));
+      out.push(...perPersona({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature", setup }));
     }
     for (const v of t.verifyFix) out.push({ t: p, kind: "verify-fix", name: v.name, verify: v, needsAi: false });
   }
@@ -649,25 +834,50 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
     suite: { name: opts.suite.name, target: t.name, item: item.name },
   };
+  // Goal and mission items run with their own setup (#195): explore's options, target defaults
+  // overridden per item; Journey and verify-fix items with the target's, and their own session.
+  const setup = item.setup;
+  const x: SuiteExploreOptions = setup?.x ?? {};
+  const session = setup !== undefined ? setup.storageState : sessionOf(t, item.journey?.storageState ?? item.verify?.storageState);
   const common = {
     outDir: ctx.resultsDir,
     ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
     ...(opts.browser === undefined ? {} : { browser: opts.browser }),
-    ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
+    ...(session === undefined ? {} : { storageState: session }),
+    ...(x.saveStorageState === undefined ? {} : { saveStorageState: x.saveStorageState }),
   };
   const invariants = {
     ...(item.t.invariants === undefined ? {} : { invariants: item.t.invariants }),
     ...(item.t.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: item.t.invariantAuthTokens }),
   };
-  const withServerLog = item.t.serverLog === undefined ? {} : { serverLog: item.t.serverLog };
+  const serverLog = setup?.serverLog ?? (setup === undefined ? item.t.serverLog : undefined);
+  const withServerLog = serverLog === undefined ? {} : { serverLog };
+  const secretFields = setup?.secretFields ?? item.t.secretFields;
+  const withSecretFields = secretFields.length === 0 ? {} : { secretFields };
+  const withSecrets = setup?.secrets === undefined ? {} : { secrets: setup.secrets };
+  const conversation = {
+    ...(x.replyWaitMs === undefined ? {} : { replyWaitMs: x.replyWaitMs }),
+    ...(x.replyCeilingMs === undefined ? {} : { replyCeilingMs: x.replyCeilingMs }),
+    ...(x.replyMaxChars === undefined ? {} : { replyMaxChars: x.replyMaxChars }),
+    ...(x.jobWaitMs === undefined ? {} : { jobWaitMs: x.jobWaitMs }),
+  };
+  const withConversation = Object.keys(conversation).length === 0 ? {} : { conversation };
+  const withOverflow =
+    x.checkOverflow === undefined && x.ignoreOverflow === undefined
+      ? {}
+      : { overflow: { checkOverflow: x.checkOverflow ?? false, ignoreSelectors: x.ignoreOverflow ?? [] } };
+  const withStall = x.stallTimeout === undefined ? {} : { stallTimeoutMs: Math.round(x.stallTimeout * 1000) };
+  const withHangReplays = x.hangReplays === undefined ? {} : { hangReplays: x.hangReplays };
+  const withFixture = x.fixture === undefined ? {} : { fixture: x.fixture };
   // An item's own viewport/device, else its target's.
   const emulationFor = (own: EmulationSpec | undefined): { emulation?: EmulationSpec } => {
     const e = own ?? t.emulation;
     return e === undefined ? {} : { emulation: e };
   };
-  const targetConfig = item.t.config === undefined ? {} : { target: item.t.config };
+  const config = setup === undefined ? item.t.config : setup.config;
+  const targetConfig = config === undefined ? {} : { target: config };
   // A feature mission takes the target's safety directly (it has no settle/hang config to apply).
-  const targetSafety = item.t.config?.safety === undefined ? {} : { safety: item.t.config.safety };
+  const targetSafety = config?.safety === undefined ? {} : { safety: config.safety };
 
   if (item.kind === "journey" && item.journey !== undefined) {
     const j = item.t.journeys.get(item.journey.id);
@@ -682,9 +892,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       ...emulationFor(sj.emulation),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
-      // #170: the target's session, exactly as `journey run --storage-state` (#118) and its fixtures.
-      ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
-      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(item.t, site) }),
+      // #170: the item's session (default: the target's), exactly as `journey run --storage-state` (#118), and its fixtures.
+      ...(session === undefined ? {} : { storageState: session }),
+      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, session), site) }),
     }));
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);
@@ -719,7 +929,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
     let url = g.url ?? t.url;
     let goal = g.goal;
     let successChecks = item.t.goals.get(g.name) ?? [];
-    const fx = fixturesFor(item.t, url);
+    const fx = setup?.fixtures === undefined ? undefined : fixturesFor(setup.fixtures, url);
     try {
       if (fx !== undefined) {
         await fx.setup();
@@ -743,7 +953,12 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         gen,
         usage,
         bounds: bounds(g.maxActions, g.maxDecisions, remaining),
-        ...(item.t.secretFields.length === 0 ? {} : { secretFields: item.t.secretFields }),
+        ...withSecretFields,
+        ...withSecrets,
+        ...withFixture,
+        ...withHangReplays,
+        ...withConversation,
+        ...(setup?.actors === undefined ? {} : { actors: setup.actors }),
         ...(fx === undefined ? {} : { fixtures: fx }),
       });
       stampResultFile(r.resultPath, stamp);
@@ -770,6 +985,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         capability: m.feature ?? m.name,
         routeGlobs: m.routes ?? scopeGlobs(url),
         bounds: b,
+        ...withStall,
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -789,7 +1005,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         gen,
         usage,
         bounds: b,
-        ...(m.routes === undefined ? {} : { routeGlobs: [...m.routes] }),
+        ...withStall,
+        ...withOverflow,
+        ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -809,6 +1027,10 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         usage,
         ...(b === undefined ? {} : { bounds: b }),
         ...(m.routes === undefined ? {} : { routeGlobs: [...m.routes] }),
+        ...withSecrets,
+        ...withHangReplays,
+        ...withOverflow,
+        ...(setup?.coverageThresholds === undefined ? {} : { coverageThresholds: setup.coverageThresholds }),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
@@ -823,7 +1045,13 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       job: m.goal ?? "",
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
       allowlist: item.t.allowlist,
-      ...(item.t.secretFields.length === 0 ? {} : { secretFields: item.t.secretFields }),
+      ...withSecretFields,
+      ...withSecrets,
+      ...withFixture,
+      ...withConversation,
+      ...withOverflow,
+      ...(x.minConfidence === undefined ? {} : { minConfidence: x.minConfidence }),
+      ...(x.show === undefined ? {} : { show: x.show }),
       judge,
       gen,
       usage,
@@ -852,7 +1080,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       ...(opts.targetsConfig === undefined ? {} : { targets: opts.targetsConfig }),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
-      ...(t.storageState === undefined ? {} : { storageState: t.storageState }),
+      ...(session === undefined ? {} : { storageState: session }),
     });
     const missionOutcome =
       r.verdict === "fixed" ? "clean" : r.verdict === "still-reproduces" ? "defects-found" : r.verdict === "intermittent" ? "intermittent" : "inconclusive";
@@ -905,7 +1133,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   // Preflight — everything validated before the first browser opens.
   const prepared: PreparedTarget[] = [];
   for (const t of opts.suite.targets) prepared.push(await prepareTarget(t, opts));
-  const items = plan(prepared, opts.changedRoutes);
+  const items = plan(prepared, opts.changedRoutes, opts);
   let gw: Promise<CheckGateways> | undefined;
   const gateways = (): Promise<CheckGateways> => {
     if (opts.gateways === undefined) return Promise.reject(new CheckAiSetupError("this suite needs a model gateway: pass --real or --fake-ai (or set \"ai\" in the suite)"));

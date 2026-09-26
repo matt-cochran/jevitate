@@ -1,12 +1,28 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
+import { validateDenyPatterns } from "@jevitate/explore";
+import {
+  SUITE_EXPLORE_OPTIONS,
+  isSuiteExploreOption,
+  type ExploreItemKind,
+  type SuiteExploreOption,
+  type SuiteExploreOptionName,
+  type SuiteExploreOptions,
+} from "./suite-explore-options.js";
 
 /**
  * The `jevitate check --suite <file.json>` schema (#137). Validated in full BEFORE anything runs:
  * a typo'd field, a wrong type or an unknown strategy is a refusal naming the path, never a
  * silently skipped item. Relative file paths in the suite (invariants, storage state, journeys
- * dir, verify-fix results) resolve against the suite file's own directory.
+ * dir, verify-fix results, fixture/upload files, actor/persona states) resolve against the suite
+ * file's own directory.
+ *
+ * #195: goal and mission items take `jevitate explore`'s option set (`SUITE_EXPLORE_OPTIONS`, by
+ * the flag's camelCase name: `deny`, `apiPrefix`, `logSource`, `stallTimeout`, `persona`, …). A
+ * target sets them as defaults for every item they apply to; an item's own value replaces the
+ * target's. An item may also set its own `storageState` (`null`: start without the target's
+ * session, e.g. to drive a login), `secretFields`, and — goals — `fixtures`.
  *
  * ```json
  * {
@@ -26,8 +42,9 @@ import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/p
  *     "journeys": ["login", { "id": "checkout", "params": { "sku": "A1" }, "routes": ["/cart/**"] }],
  *     "goals": [{ "name": "export", "goal": "export the report as CSV", "success": ["requestMade:GET /api/export"], "routes": ["/reports/**"] }],
  *     "viewport": "1280x800",
+ *     "deny": ["/^Archive/i"], "apiPrefix": ["/api/"], "logSource": ["docker:shop-api"], "logDefect": ["error"],
  *     "missions": [
- *       { "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60 },
+ *       { "strategy": "adversarial", "url": "https://staging.shop.example/settings", "maxActions": 60, "paid": ["/^Analyze/"] },
  *       { "strategy": "exploratory", "device": "iPhone 13" }
  *     ],
  *     "verifyFix": [{ "result": "baseline/adversarial-….result.json", "fingerprint": "3fa2…" }]
@@ -55,10 +72,24 @@ export interface SuiteJourney {
   readonly params: Readonly<Record<string, string>>;
   /** Route globs this Journey covers (for `--changed-routes`); default: its Recording's page routes. */
   readonly routes?: readonly string[];
+  /** The item's own session (`null`: none, whatever the target's); default: the target's. */
+  readonly storageState?: string | null;
 }
 
-export interface SuiteGoal {
+/** What goal and mission items may set beyond their own fields (#195). */
+export interface SuiteItemOverrides {
+  /** The item's own session (`null`: start fresh, without the target's); default: the target's. */
+  readonly storageState?: string | null;
+  /** The item's own `secretFields` (replacing the target's). */
+  readonly secretFields?: readonly string[];
+  /** `explore`'s generic options, overriding the target's defaults. */
+  readonly explore?: SuiteExploreOptions;
+}
+
+export interface SuiteGoal extends SuiteItemOverrides {
   readonly name: string;
+  /** The item's own mission fixtures file (replacing the target's). */
+  readonly fixtures?: string;
   /** `viewport` or `device`; default: the target's. */
   readonly emulation?: EmulationSpec;
   readonly goal: string;
@@ -70,7 +101,7 @@ export interface SuiteGoal {
   readonly maxDecisions?: number;
 }
 
-export interface SuiteMission {
+export interface SuiteMission extends SuiteItemOverrides {
   readonly name: string;
   /** `viewport` or `device`; default: the target's. */
   readonly emulation?: EmulationSpec;
@@ -91,6 +122,8 @@ export interface SuiteVerifyFix {
   readonly result: string;
   readonly fingerprint: string;
   readonly replays?: number;
+  /** The item's own session (`null`: none, whatever the target's); default: the target's. */
+  readonly storageState?: string | null;
 }
 
 export interface SuiteTarget {
@@ -115,6 +148,8 @@ export interface SuiteTarget {
   readonly goals: readonly SuiteGoal[];
   readonly missions: readonly SuiteMission[];
   readonly verifyFix: readonly SuiteVerifyFix[];
+  /** `explore`'s generic options: defaults for every goal and mission item they apply to (#195). */
+  readonly explore?: SuiteExploreOptions;
 }
 
 export interface CheckSuite {
@@ -153,8 +188,14 @@ class Reader {
     throw new SuiteError(`${this.source}: ${path}: ${msg}`);
   }
 
-  keys(obj: Json, path: string, allowed: readonly string[]): void {
-    for (const k of Object.keys(obj)) if (!allowed.includes(k)) this.fail(`${path}.${k}`, `unknown field (allowed: ${allowed.join(", ")})`);
+  /** Refuses a field not in `own` (nor, with `explore`, one of `explore`'s options, #195). */
+  keys(obj: Json, path: string, own: readonly string[], explore = false): void {
+    for (const k of Object.keys(obj)) {
+      if (own.includes(k) || (explore && isSuiteExploreOption(k))) continue;
+      const camel = k.replace(/^-+/, "").replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+      if (explore && camel !== k && (isSuiteExploreOption(camel) || own.includes(camel))) this.fail(`${path}.${k}`, `unknown field; did you mean ${JSON.stringify(camel)}?`);
+      this.fail(`${path}.${k}`, `unknown field (allowed: ${own.join(", ")}${explore ? "; and explore's options by camelCase name, e.g. deny, apiPrefix, logSource" : ""})`);
+    }
   }
 
   string(obj: Json, key: string, path: string): string;
@@ -222,10 +263,141 @@ class Reader {
 
 const emulationOf = (e: EmulationSpec | undefined): { emulation?: EmulationSpec } => (e === undefined ? {} : { emulation: e });
 
+// ── explore options (#195) ───────────────────────────────────────────────────
+
+const ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const NO_LITERAL = "a suite never carries a literal secret; the value is read from the environment when the check starts";
+
+/**
+ * Each suite level's own field names; targets, goals and missions also take every generic explore
+ * option (`SUITE_EXPLORE_OPTIONS`).
+ */
+export const SUITE_FIELDS = {
+  target: ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"],
+  journey: ["id", "params", "routes", "viewport", "device", "storageState"],
+  goal: ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fixtures"],
+  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields"],
+  verifyFix: ["name", "result", "fingerprint", "replays", "storageState"],
+} as const satisfies Record<string, readonly string[]>;
+
+function envBindings(r: Reader, obj: Json, key: string, path: string): string[] {
+  const list = r.strings(obj, key, path);
+  list.forEach((b, i) => {
+    const at = b.lastIndexOf("=env:");
+    const head = at === -1 ? "" : b.slice(0, at);
+    // The entry is never echoed: a value pasted in place of env:<VAR> must not reach a log.
+    if (at === -1 || !ENV_VAR.test(b.slice(at + 5)) || head.indexOf("=") <= 0 || head.endsWith("=")) {
+      r.fail(`${path}.${key}[${i}]`, `must be '<label|testId|type|id|name>=<value>=env:<VAR>'; ${NO_LITERAL}`);
+    }
+  });
+  return list;
+}
+
+function readOption(r: Reader, obj: Json, key: SuiteExploreOptionName, path: string): unknown {
+  const spec: SuiteExploreOption = SUITE_EXPLORE_OPTIONS[key];
+  const at = `${path}.${key}`;
+  const v = obj[key];
+  switch (spec.shape) {
+    case "string": {
+      const s = r.string(obj, key, path);
+      if (spec.oneOf !== undefined && !spec.oneOf.includes(s)) r.fail(at, `must be ${spec.oneOf.map((o) => JSON.stringify(o)).join(" | ")}`);
+      return s;
+    }
+    case "path":
+      return r.resolvePath(r.string(obj, key, path));
+    case "boolean":
+      if (typeof v !== "boolean") r.fail(at, "must be a boolean");
+      return v;
+    case "positive":
+      return r.number(obj, key, path);
+    case "integer": {
+      const n = r.number(obj, key, path, { integer: true }) as number;
+      if (spec.range !== undefined && (n < spec.range[0] || n > spec.range[1])) r.fail(at, `must be an integer in ${spec.range[0]}..${spec.range[1]}`);
+      return n;
+    }
+    case "count":
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) r.fail(at, "must be a non-negative integer");
+      return v;
+    case "ratio":
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) r.fail(at, "must be a number in 0..1");
+      return v;
+    case "strings": {
+      const list = r.strings(obj, key, path);
+      if (key === "deny" || key === "paid") {
+        try {
+          validateDenyPatterns(list, key);
+        } catch (e) {
+          r.fail(at, e instanceof Error ? e.message : String(e));
+        }
+      }
+      return list;
+    }
+    case "named-paths":
+      return r.strings(obj, key, path).map((e, i) => {
+        const eq = e.indexOf("=");
+        if (eq <= 0 || eq === e.length - 1) r.fail(`${at}[${i}]`, "must be '<name>=<storageState path>'");
+        return `${e.slice(0, eq)}=${r.resolvePath(e.slice(eq + 1))}`;
+      });
+    case "env-refs":
+      return r.strings(obj, key, path).map((e, i) => {
+        if (!e.startsWith("env:") || !ENV_VAR.test(e.slice(4))) r.fail(`${at}[${i}]`, `must be an env:<VAR> reference; ${NO_LITERAL}`);
+        return e;
+      });
+    case "env-bindings":
+      return envBindings(r, obj, key, path);
+  }
+}
+
+/**
+ * The generic explore options set in `obj`. For an item (`kind` given) an option that does not
+ * apply to it is refused, as `explore` refuses the flag; a target's are defaults for any kind.
+ */
+function exploreOptionsOf(r: Reader, obj: Json, path: string, kind?: ExploreItemKind): SuiteExploreOptions | undefined {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    if (!isSuiteExploreOption(key)) continue;
+    const applies: readonly ExploreItemKind[] = SUITE_EXPLORE_OPTIONS[key].appliesTo;
+    if (kind !== undefined && !applies.includes(kind)) {
+      r.fail(`${path}.${key}`, `does not apply to a ${kind === "goal" ? "goal" : `${kind} mission`} item (applies to: ${applies.join(", ")})`);
+    }
+    out[key] = readOption(r, obj, key, path);
+  }
+  const has = (k: string): boolean => out[k] !== undefined;
+  if (kind !== undefined) {
+    if ((has("actor") || has("persona") || has("personas")) && obj.storageState !== undefined) {
+      r.fail(`${path}.storageState`, "cannot be combined with actor/persona/personas (each brings its own session)");
+    }
+    if (has("actor") && (has("persona") || has("personas"))) r.fail(`${path}.actor`, "cannot be combined with persona/personas");
+    if ((has("persona") || has("personas")) && has("saveStorageState")) {
+      r.fail(`${path}.saveStorageState`, "cannot be combined with persona/personas (one file cannot hold every persona)");
+    }
+  }
+  return Object.keys(out).length === 0 ? undefined : (out as SuiteExploreOptions);
+}
+
+/** An item's `storageState`: a path (resolved), `null` (start without the target's session), or absent. */
+function storageStateOf(r: Reader, obj: Json, path: string): { storageState?: string | null } {
+  if (obj.storageState === null) return { storageState: null };
+  const s = r.string(obj, "storageState", path, true);
+  return s === undefined ? {} : { storageState: r.resolvePath(s) };
+}
+
+/** The goal/mission overrides: own session, own secret fields, explore options. */
+function overridesOf(r: Reader, obj: Json, path: string, kind: ExploreItemKind): SuiteItemOverrides {
+  const secretFields = envBindings(r, obj, "secretFields", path);
+  if (secretFields.length > 0 && kind !== "goal" && kind !== "usability") r.fail(`${path}.secretFields`, "applies only to goal and usability items");
+  const explore = exploreOptionsOf(r, obj, path, kind);
+  return {
+    ...storageStateOf(r, obj, path),
+    ...(secretFields.length === 0 ? {} : { secretFields }),
+    ...(explore === undefined ? {} : { explore }),
+  };
+}
+
 function journeyOf(r: Reader, v: unknown, path: string): SuiteJourney {
   if (typeof v === "string" && v.trim() !== "") return { id: v, params: {} };
   if (!isRecord(v)) return r.fail(path, "must be a Journey id or { id, params?, routes? }");
-  r.keys(v, path, ["id", "params", "routes", "viewport", "device"]);
+  r.keys(v, path, SUITE_FIELDS.journey);
   const params = v.params ?? {};
   if (!isRecord(params) || !Object.values(params).every((p) => typeof p === "string")) r.fail(`${path}.params`, "must be an object of string values");
   const routes = r.strings(v, "routes", path);
@@ -235,12 +407,13 @@ function journeyOf(r: Reader, v: unknown, path: string): SuiteJourney {
     params: params as Record<string, string>,
     ...(routes.length === 0 ? {} : { routes }),
     ...(emulation === undefined ? {} : { emulation }),
+    ...storageStateOf(r, v, path),
   };
 }
 
 function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device"]);
+  r.keys(v, path, SUITE_FIELDS.goal, true);
   const success = r.strings(v, "success", path);
   if (success.length === 0) r.fail(`${path}.success`, "at least one success check is required (a goal without one proves nothing)");
   const successWhen = v.successWhen;
@@ -249,7 +422,10 @@ function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
   const url = r.url(v, "url", path, true);
   const maxActions = r.number(v, "maxActions", path, { integer: true });
   const maxDecisions = r.number(v, "maxDecisions", path, { integer: true });
+  const fixtures = r.string(v, "fixtures", path, true);
   return {
+    ...overridesOf(r, v, path, "goal"),
+    ...(fixtures === undefined ? {} : { fixtures: r.resolvePath(fixtures) }),
     name: r.string(v, "name", path, true) ?? `goal-${i + 1}`,
     goal: r.string(v, "goal", path),
     ...emulationOf(r.emulation(v, path)),
@@ -264,7 +440,7 @@ function goalOf(r: Reader, v: unknown, path: string, i: number): SuiteGoal {
 
 function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "maxActions", "maxDecisions", "viewport", "device"]);
+  r.keys(v, path, SUITE_FIELDS.mission, true);
   const strategy = r.string(v, "strategy", path);
   if (!STRATEGIES.includes(strategy as MissionStrategy)) r.fail(`${path}.strategy`, `must be one of ${STRATEGIES.join(" | ")}`);
   const s = strategy as MissionStrategy;
@@ -278,6 +454,7 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   const maxActions = r.number(v, "maxActions", path, { integer: true });
   const maxDecisions = r.number(v, "maxDecisions", path, { integer: true });
   return {
+    ...overridesOf(r, v, path, s),
     name: r.string(v, "name", path, true) ?? (feature === undefined ? s : `${s}-${feature}`),
     strategy: s,
     ...emulationOf(r.emulation(v, path)),
@@ -293,7 +470,7 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
 
 function verifyOf(r: Reader, v: unknown, path: string): SuiteVerifyFix {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "result", "fingerprint", "replays"]);
+  r.keys(v, path, SUITE_FIELDS.verifyFix);
   const fingerprint = r.string(v, "fingerprint", path);
   const replays = r.number(v, "replays", path, { integer: true });
   return {
@@ -301,6 +478,7 @@ function verifyOf(r: Reader, v: unknown, path: string): SuiteVerifyFix {
     result: r.resolvePath(r.string(v, "result", path)),
     fingerprint,
     ...(replays === undefined ? {} : { replays }),
+    ...storageStateOf(r, v, path),
   };
 }
 
@@ -308,12 +486,13 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
   if (!isRecord(v)) return r.fail(path, "must be an object");
-  r.keys(v, path, ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"]);
+  r.keys(v, path, SUITE_FIELDS.target, true);
   const name = r.string(v, "name", path);
   if (!NAME.test(name)) r.fail(`${path}.name`, "must match [A-Za-z0-9][A-Za-z0-9._-]*");
   const url = r.url(v, "url", path) ?? r.fail(`${path}.url`, "is required");
   const storageState = r.string(v, "storageState", path, true);
-  const secretFields = r.strings(v, "secretFields", path);
+  const secretFields = envBindings(r, v, "secretFields", path);
+  const explore = exploreOptionsOf(r, v, path);
   const fixtures = r.string(v, "fixtures", path, true);
   const journeysDir = r.string(v, "journeysDir", path, true);
   const goals = r.list(v, "goals", path);
@@ -331,6 +510,7 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
     goals: goals.map((g, i) => goalOf(r, g, `${path}.goals[${i}]`, i)),
     missions: r.list(v, "missions", path).map((m, i) => missionOf(r, m, `${path}.missions[${i}]`)),
     verifyFix: r.list(v, "verifyFix", path).map((m, i) => verifyOf(r, m, `${path}.verifyFix[${i}]`)),
+    ...(explore === undefined ? {} : { explore }),
   };
 }
 
