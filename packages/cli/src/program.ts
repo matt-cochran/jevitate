@@ -132,6 +132,8 @@ import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
+import { registerInvariantsCommands } from "./invariants-validate.js";
+import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "./secret-args.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
@@ -1701,8 +1703,8 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
-      "--secret <value>",
-      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
+      "--secret <value|env:VAR>",
+      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable); env:VAR reads it from the environment (preferred: a literal is visible in the process list and shell history). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2011,6 +2013,16 @@ export function buildProgram(deps: CliDeps): Command {
         }
       }
       const strategy = o.strategy ?? "goal";
+      // #195: `--secret env:VAR` is resolved from the environment before anything runs (fail closed).
+      try {
+        const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
+        if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
+        o.secret = resolved.secrets;
+      } catch (err) {
+        if (!(err instanceof SecretArgError)) throw err;
+        emitJson(program, fail("E_EXPLORE_ARGS", err.message));
+        return;
+      }
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
       if (wantsMultiRun(o)) {
         try {
@@ -2704,8 +2716,8 @@ export function buildProgram(deps: CliDeps): Command {
       "let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed)",
     )
     .option(
-      "--secret <value>",
-      "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
+      "--secret <value|env:VAR>",
+      "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2727,6 +2739,16 @@ export function buildProgram(deps: CliDeps): Command {
           FixtureFlags &
           EmulationFlags
       >();
+      // #195: `--secret env:VAR`, as on explore.
+      try {
+        const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
+        if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
+        o.secret = resolved.secrets;
+      } catch (err) {
+        if (!(err instanceof SecretArgError)) throw err;
+        emitJson(program, fail("E_VERIFY_FIX_ARGS", err.message));
+        return;
+      }
       let verifyFixEmulation: EmulationSpec | undefined;
       try {
         verifyFixEmulation = emulationFromFlags(o);
@@ -3602,6 +3624,7 @@ export function buildProgram(deps: CliDeps): Command {
   );
   registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
   registerLogsCommands(program, deps);
+  registerInvariantsCommands(program);
 
   return program;
 }

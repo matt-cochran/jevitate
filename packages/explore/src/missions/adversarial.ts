@@ -706,6 +706,19 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     };
   };
 
+  /** A declared-invariant violation (#86) as a step finding. */
+  const declaredFinding = (v: InvariantViolation): StepFinding => ({
+    fingerprint: v.fingerprint,
+    related: [v.fingerprint],
+    kind: "invariant",
+    title: `Invariant "${v.id}" violated on ${v.route}`,
+    route: v.route,
+    url: v.url,
+    signals: [],
+    invariantReason: v.reason,
+    invariant: v,
+  });
+
   /**
    * The independent oracle for one step: drains the hard signals and checks the user invariants —
    * the code-level `userInvariant` and the declared spec (against the `before` snapshot armed for
@@ -756,19 +769,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         invariantReason: reason,
       });
     }
-    for (const v of declaredResult?.violations ?? []) {
-      findings.push({
-        fingerprint: v.fingerprint,
-        related: [v.fingerprint],
-        kind: "invariant",
-        title: `Invariant "${v.id}" violated on ${v.route}`,
-        route: v.route,
-        url: v.url,
-        signals: [],
-        invariantReason: v.reason,
-        invariant: v,
-      });
-    }
+    for (const v of declaredResult?.violations ?? []) findings.push(declaredFinding(v));
     if (findings.length === 0 && stepAdvisories.length === 0) return null;
     const reasons = [
       ...hardSignals.map((s) => s.detail),
@@ -1529,6 +1530,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
 
     // Anything that arrived after the last adjudication still counts.
     await drainLate(Math.max(1, transcript.nextStep - 1));
+    // #195: the monitor's end-of-run flush — a never.response hit to the LAST step is never lost.
+    if (declared !== null) {
+      const late = await declared.flushResponses().catch(() => null);
+      if (late !== null && late.violations.length > 0) await fold(Math.max(1, transcript.nextStep - 1), late.violations.map(declaredFinding));
+    }
     return finish(stop === "budget" ? budgetVerdict() : verdict(), stop);
   } catch (e) {
     crashHost = await probeHost();

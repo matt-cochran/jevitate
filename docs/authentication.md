@@ -7,6 +7,17 @@ Starting a run logged in, driving login and MFA forms without exposing secrets, 
 `--secret <value>` **only redacts**: the value is kept out of every model call,
 transcript, Recording and issue draft, but it is never typed into a field.
 
+Prefer `--secret env:VAR`: the value is read from the environment variable `VAR`, so it
+never appears in the process list or your shell history (the same `env:` binding
+`--secret-field` uses), and it is redacted exactly like a literal. An unset or empty
+variable, or a malformed `env:` ref, refuses the run before any browser opens — it is never
+treated as an empty secret or as the text `env:VAR`. A literal `--secret` still works but
+prints a warning on stderr. `verify-fix --secret` takes the same two forms.
+
+```bash
+APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" --secret env:APP_API_TOKEN
+```
+
 - **Start logged in (preferred).** Save a Playwright storageState once, for example
   with `npx playwright codegen --save-storage=auth.json https://app.example.test/login`,
   and pass `--storage-state auth.json`. The file holds live session cookies and
