@@ -1687,6 +1687,11 @@ export function buildProgram(deps: CliDeps): Command {
       "--success-when <when>",
       "when the --success page checks must hold: final (default; on the final page) | held (on the final page, or all together at any settled step — a one-time secret, a toast). reloadThen is always final",
     )
+    .option(
+      "--allow-vacuous-checks",
+      "downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed " +
+        "(an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal",
+    )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
@@ -1973,6 +1978,7 @@ export function buildProgram(deps: CliDeps): Command {
         show?: string;
         success: string[];
         successWhen?: string;
+        allowVacuousChecks?: boolean;
         feature?: string;
         route: string[];
         scope?: string;
@@ -2638,6 +2644,7 @@ export function buildProgram(deps: CliDeps): Command {
           goal,
           successChecks,
           ...(successWhen === undefined ? {} : { successWhen }),
+          ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
           allowlist,
           judge,
           gen,

@@ -147,6 +147,12 @@ export interface RunExplorationOptions {
    * `held` — on the final page or together at any settled step. `reloadThen` is final-only.
    */
   readonly successWhen?: SuccessWhen;
+  /**
+   * #202 (`--allow-vacuous-checks`): a check satisfied before the run's first action (held on the
+   * seed page and never changed; a request matched only by page load/polling) is a warning instead
+   * of a failure. Default: it fails — a run that proved nothing is never clean.
+   */
+  readonly allowVacuousChecks?: boolean;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
@@ -629,6 +635,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
+      ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       bounds: opts.bounds,
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),

@@ -216,6 +216,9 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
           "do nothing",
           "--success",
           "urlIncludes:/server-log-mission/page",
+          // #202: a "do nothing" goal whose check holds on the seed page — vacuous by design here
+          // (this test is about the log source's verdict, not the goal's), so it opts out explicitly.
+          "--allow-vacuous-checks",
           "--allow",
           site.url,
           "--log-source",
@@ -277,6 +280,9 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
           "do nothing",
           "--success",
           "urlIncludes:/server-log-mission/page",
+          // #202: a "do nothing" goal whose check holds on the seed page — vacuous by design here
+          // (this test is about the log source's verdict, not the goal's), so it opts out explicitly.
+          "--allow-vacuous-checks",
           "--allow",
           site.url,
           "--log-source",
@@ -338,6 +344,9 @@ describe("jevitate explore --log-source (#142, served fixture)", () => {
           "do nothing",
           "--success",
           "urlIncludes:/server-log-mission/page",
+          // #202: a "do nothing" goal whose check holds on the seed page — vacuous by design here
+          // (this test is about the log source's verdict, not the goal's), so it opts out explicitly.
+          "--allow-vacuous-checks",
           "--allow",
           site.url,
           "--log-source",
