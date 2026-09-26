@@ -81,7 +81,7 @@ import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
-import { currentUrlSafe, persistStorageState, serverLogResult, type ServerLogOptions } from "./explore-api.js";
+import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
@@ -747,6 +747,7 @@ function freshSessionOpener(
  */
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // #150 — usability reads only a spec's `budget`: it does not check invariants or captures (#86/
   // #147) today. Refused BEFORE a browser opens, same as every other bad-input refusal here.
   if (opts.invariants !== undefined && (opts.invariants.invariants.length > 0 || opts.invariants.capture !== undefined)) {

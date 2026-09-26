@@ -2,8 +2,10 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
-import { persistStorageState } from "./explore-api.js";
+import { StorageStateSnapshotter, writeKillSnapshot } from "./storage-state-snapshot.js";
+import { persistStorageState, runFeatureCliMission } from "./explore-api.js";
+import { SessionFileInProjectError } from "./project-dir.js";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 
 /**
  * #159 unit coverage for the pieces `explore-api.ts`/`ux-api.ts`/`kill-signal.ts` build on:
@@ -11,7 +13,8 @@ import { persistStorageState } from "./explore-api.js";
  *    snapshot the kill switch writes synchronously and `persistStorageState` falls back to.
  *  - `persistStorageState`: never overwrites a good file with a live capture taken from a
  *    login-like page, and falls back to the last known-good snapshot when a live capture is unsafe
- *    or fails outright (a crashed/closed browser context) — never throwing itself either way.
+ *    or fails outright (a crashed/closed browser context) — never throwing itself either way, except
+ *    to refuse a path inside a repo's .jevitate/ (#195).
  */
 describe("StorageStateSnapshotter", () => {
   it("does nothing when disabled — the browser is never touched", async () => {
@@ -131,5 +134,54 @@ describe("persistStorageState", () => {
     await persistStorageState({ page: { url: () => "http://x.test/login" }, saveStorageState }, file);
     expect(saveStorageState).not.toHaveBeenCalled();
     expect(await readFile(file, "utf8")).toBe("PRE-EXISTING-GOOD-STATE");
+  });
+});
+
+describe("no storage-state writer writes into a repo's .jevitate/ (#195)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "jev-repo-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("persistStorageState — every caller's final write — refuses loudly and writes nothing", async () => {
+    const file = join(root, ".jevitate", "state.json");
+    const saveStorageState = vi.fn();
+    const snap = { snapshot: () => '{"cookies":["x"],"origins":[]}' } as unknown as StorageStateSnapshotter;
+    await expect(persistStorageState({ page: { url: () => "http://x.test/app" }, saveStorageState }, file, snap)).rejects.toThrow(SessionFileInProjectError);
+    await expect(persistStorageState({ page: { url: () => "http://x.test/app" }, saveStorageState }, file, snap)).rejects.toThrow(
+      `saveStorageState ${file} is inside the repo's ${join(root, ".jevitate")}/`,
+    );
+    expect(saveStorageState).not.toHaveBeenCalled();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("a runner refuses the path before any browser opens", async () => {
+    const open = vi.fn();
+    await expect(
+      runFeatureCliMission({
+        seedUrl: "http://x.test/app",
+        allowlist: ["http://x.test"],
+        capability: "f",
+        routeGlobs: ["/**"],
+        saveStorageState: join(root, "app", ".jevitate", "logs", "s.json"),
+        browserPortFactory: () => ({ open }) as never,
+      }),
+    ).rejects.toThrow(SessionFileInProjectError);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("the kill switch's synchronous write skips it and says so on stderr", () => {
+    const file = join(root, ".jevitate", "kill.json");
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      writeKillSnapshot(file, "{}");
+      expect(existsSync(file)).toBe(false);
+      expect(String(err.mock.calls[0]?.[0])).toContain(`storage state not written: save-storage-state ${file} is inside the repo's`);
+    } finally {
+      err.mockRestore();
+    }
   });
 });
