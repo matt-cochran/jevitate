@@ -44,7 +44,16 @@ import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { coveredByInterceptors } from "./occlusion.js";
 import { descriptorToLocator } from "@jevitate/recorder";
-import { ObservedPages, goalAsksForReply, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
+import {
+  NO_ANSWER_REASON,
+  ObservedPages,
+  answerNotFoundReason,
+  controlFields,
+  goalAsksForReply,
+  reportAnswer,
+  type AnswerVerdict,
+  type RunAnswer,
+} from "./answer.js";
 import {
   REPLY_CEILING_MS,
   GOAL_CHECK_TRIGGER,
@@ -484,6 +493,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * panel's intro / placeholder copy, on screen before the conversation, is never a reply.
    */
   const replyGoal = goalAsksForReply(cfg.goal);
+  /**
+   * #207 — a find-out goal (read-only, #158; not a reply goal, #200) is answered from page text: its
+   * decisions carry the page's visible text, and a model `blocked` on a page state is first turned
+   * into one grounded report attempt there (the answer may be plain text no control carries).
+   */
+  const findOut = cfg.readOnly === true && !replyGoal;
+  /** #207: page states whose `blocked` was already turned into a report attempt (once per state). */
+  const blockedReported = new Set<string>();
+  /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
+  let lastReportNotFound = false;
   const replies = new ObservedPages(secrets);
   /** The page text just before the run's first message was sent (null until one is sent). */
   let preSend: string | null = null;
@@ -1008,11 +1027,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const offered = new Set(snap.controls.filter((c) => offeredKeys.has(keyOf(c))).map((c) => c.index));
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
-      {
-        const pageText = await readPageText(page);
-        observed.add(snap.url, pageText);
-        noteReplyText(snap.url, pageText);
-      }
+      // #207: a form field's current value is page content too (grounded as such, never as page text).
+      const visibleText = await readPageText(page);
+      observed.add(snap.url, visibleText, controlFields(snap.controls));
+      noteReplyText(snap.url, visibleText);
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded
       // (jevitate's own refusal) and told to the model.
@@ -1062,6 +1080,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               : { conversation: { latestReply: conversation.latestReply, sentMessages: conversation.sent } }),
             ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
             ...(maxChoices === undefined ? {} : { maxChoices }),
+            ...(findOut ? { pageText: visibleText } : {}),
           });
         decision = await decideWith().catch(async (e: unknown) => {
           const refusal = firstLine(e);
@@ -1098,6 +1117,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // #172 — a find-out goal that has seen the whole page and still only idles (or gives up)
         // ends with a report ATTEMPT, grounded by code like any report, never a bare `blocked`.
         history.push(`last chance: "${decision.op}" became a report attempt — the answer must be on the pages already seen`);
+        decision = { ...decision, op: "report", control: null, targetMissing: false };
+      }
+      if (findOut && decision.op === "blocked" && !blockedReported.has(snap.signature)) {
+        // #207 — a find-out goal's `blocked` is never a bare give-up while the page may show the
+        // answer as plain text: one report ATTEMPT on this page state first, grounded by code.
+        blockedReported.add(snap.signature);
+        history.push(`"blocked" became a report attempt — a find-out goal is answered from the pages already seen`);
         decision = { ...decision, op: "report", control: null, targetMissing: false };
       }
 
@@ -1207,6 +1233,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           (decision.goalMet !== null && decision.goalMet >= GOAL_CHECK_TRIGGER)) &&
         decision.op !== "done" &&
         decision.op !== "report" &&
+        // #207: a find-out goal is verified by a grounded answer; its `blocked` (after a report
+        // attempt on this state found none) never becomes an answerless "goal already met".
+        !(findOut && decision.op === "blocked") &&
         !goalChecked.has(snap.signature)
       ) {
         goalChecked.add(snap.signature);
@@ -1306,6 +1335,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         reportRejections += 1;
+        lastReportNotFound = verdict.answer === null && verdict.reason === NO_ANSWER_REASON;
         history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
         record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
           answer: verdict.answer,
@@ -2002,6 +2032,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   if (stop === "no-progress" && cfg.hostHealth !== undefined) {
     const judged = await cfg.hostHealth.judge();
     if (judged.starved !== null) degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
+  }
+
+  // #207 — a run whose latest report found no answer, and that then stopped for want of progress or
+  // gave up, ends saying so and what it searched — not a generic "no progress" / "blocked".
+  if (lastReportNotFound && answer === undefined && (stop === "no-progress" || stop === "blocked") && failure === undefined) {
+    incomplete = answerNotFoundReason(observed.pages());
   }
 
   await readOnly?.disarm();

@@ -248,3 +248,17 @@ describe("decide — upload offering", () => {
     expect(d.control).toBeNull();
   });
 });
+
+describe("decide — a find-out goal's decision shows the page's visible text (#207)", () => {
+  it("carries it as redacted, bounded `visibleText` with the report guidance; absent when not given", async () => {
+    const judge = new FakeJudgmentGateway({ action: choice("report"), goalAlreadyMet: notMet });
+    const text = `API keys\nID\tName\nk_live_1\tProduction key\nowner s3cr3t-token ${"x".repeat(10_000)}`;
+    const d = await decide(judge, { goal: "find out the key's name", snapshot: snap, history: [], secrets: ["s3cr3t-token"], pageText: text });
+    expect(d.op).toBe<Op>("report");
+    expect(d.state.visibleText).toContain("k_live_1 Production key");
+    expect(d.state.visibleText).not.toContain("s3cr3t-token");
+    expect((d.state.visibleText ?? "").length).toBeLessThanOrEqual(4_100);
+    const without = await decide(judge, { goal: "log in", snapshot: snap, history: [] });
+    expect(without.state.visibleText).toBeUndefined();
+  });
+});
