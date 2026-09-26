@@ -130,3 +130,58 @@ describe("server-log defect route templating (#169 item 3)", () => {
     expect(result.defects[0]?.title).not.toContain("x.test");
   });
 });
+
+/**
+ * #199 — a process-based source (`docker:`/`cmd:`) that jevitate stops itself when the mission ends
+ * must not be recorded as a failed source: `close()` sends SIGTERM (via the process group), and many
+ * real backends (docker's own `logs -f` CLI included) self-report a nonzero exit code like 143 for
+ * that rather than dying to the raw signal. Before the fix, `openProcessSource`'s startup-health-
+ * check exit handler (#169) could not tell that exit apart from a source that just died on its own,
+ * so a clean mission-end stop discarded the whole `--log-defect` oracle. Uses a real `cmd:` child
+ * (no docker needed) whose shell script traps SIGTERM and self-exits 143, mirroring `docker logs -f`.
+ */
+describe("process-based --log-source stopped at mission end (#199)", () => {
+  it("a long-running cmd: source stopped when the mission ends is not a failure, and the --log-defect oracle still runs", async () => {
+    const spec: LogSourceSpec = {
+      kind: "cmd",
+      command: 'trap "exit 143" TERM; i=0; while :; do i=$((i+1)); echo "tick $i"; sleep 0.02; done',
+      raw: "cmd:tick-loop",
+    };
+    const rt = openServerLogRuntime({
+      sources: [spec],
+      logDefect: [parseLogDefectSpec("error")], // declared, never matches — oracle health must not depend on that
+      secrets: [],
+      drainMs: 500,
+    });
+    expect(rt).toBeDefined();
+    await sleep(300); // the target is demonstrably active: several lines land before the mission "ends"
+
+    // Mirrors a real mission ending: jevitate stops its own source (finish() -> closeLogSources()).
+    const result = await rt!.finish([]);
+
+    expect(result.summary.sources[0]?.opened).toBe(true);
+    expect(result.summary.sources[0]?.linesRead).toBeGreaterThan(0);
+    expect(result.summary.sources[0]?.error).toBeUndefined();
+    expect(result.summary.oracleOk).toBe(true);
+    expect(result.summary.oracleReason).toBeUndefined();
+  }, 10_000);
+
+  it("a cmd: source that exits on its own before the mission ends is still recorded as a failure", async () => {
+    const spec: LogSourceSpec = { kind: "cmd", command: 'echo "starting"; exit 7', raw: "cmd:dies-early" };
+    const rt = openServerLogRuntime({
+      sources: [spec],
+      logDefect: [parseLogDefectSpec("error")],
+      secrets: [],
+      drainMs: 500,
+    });
+    expect(rt).toBeDefined();
+    await sleep(300); // well past the process's own (near-immediate) self-exit, before finish() ever runs
+
+    const result = await rt!.finish([]);
+
+    expect(result.summary.sources[0]?.error).toMatch(/exited with code 7/);
+    expect(result.summary.sources[0]?.error).toContain("the source may not be running");
+    expect(result.summary.oracleOk).toBe(false);
+    expect(result.summary.oracleReason).toContain("failed to open or read a line");
+  }, 10_000);
+});
