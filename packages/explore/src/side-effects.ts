@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { requestEndpoint, thirdPartyOrigin } from "./authorized-targets.js";
 import type { CapturedRequest, InflightRequest, PageMonitor, RequestCapture } from "./page-monitor.js";
 import type { ControlRisk } from "./safety.js";
 
@@ -100,9 +101,18 @@ export class SideEffectGuard {
   /** Whether the most recently CLOSED click sent any request at all (#130a). */
   #lastClick: LastClick | null = null;
 
-  constructor(monitor: PageMonitor, opts: { readonly isWrite?: WriteClassifier } = {}) {
+  /** The run's authorized origins: an off-origin write is named origin + path (#194). */
+  readonly #origins: readonly string[];
+
+  constructor(monitor: PageMonitor, opts: { readonly isWrite?: WriteClassifier; readonly allowlist?: readonly string[] } = {}) {
     this.#monitor = monitor;
     this.#isWrite = opts.isWrite ?? writeClassifier();
+    this.#origins = opts.allowlist ?? [];
+  }
+
+  /** How a request is named (#194): path on an allowed origin, else origin + path. */
+  #name(url: string): string {
+    return this.#origins.length === 0 ? pathOf(url) : requestEndpoint(url, this.#origins);
   }
 
   #valuesKey(): string {
@@ -152,12 +162,12 @@ export class SideEffectGuard {
       .filter((r: CapturedRequest) => this.#write(r))
       .map((r) => ({
         method: r.method.toUpperCase(),
-        path: r.path,
+        path: this.#name(r.url),
         status: r.status,
         rejected: (r.status !== null && r.status >= 400) || (r.status === null && r.failed),
       }));
     const inflight = this.#monitor.pending().filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }));
-    const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: pathOf(r.url), status: null, rejected: false }));
+    const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     if (done.length + pending.length === 0) return;
     this.#fired.set(o.key, { label: o.label, route: o.route, writes: [...done, ...pending], inflight, values: o.values });
   }
@@ -168,7 +178,7 @@ export class SideEffectGuard {
     const out: FiredWrite[] = [];
     for (const f of this.#fired.values()) {
       for (const r of f.inflight) {
-        if (live.has(r)) out.push({ method: r.method.toUpperCase(), path: pathOf(r.url), status: null, rejected: false });
+        if (live.has(r)) out.push({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false });
       }
     }
     return out;
@@ -208,7 +218,7 @@ export class SideEffectGuard {
     const stillInFlight = f.inflight.filter((r) => live.has(r));
     const what = f.writes.map(describeWrite).join(", ");
     if (stillInFlight.length > 0) {
-      const w = stillInFlight.map((r) => `${r.method.toUpperCase()} ${pathOf(r.url)}`).join(", ");
+      const w = stillInFlight.map((r) => `${r.method.toUpperCase()} ${this.#name(r.url)}`).join(", ");
       return {
         refuse: true,
         inflight: true,
@@ -268,7 +278,10 @@ export interface SideEffect {
   readonly control: string;
   readonly request: {
     readonly method: string;
-    /** The request path (no query — never a value). */
+    /**
+     * The request path (no query — never a value); origin + path when the origin is not one of the
+     * run's allowed origins (#194: `https://m.stripe.com/6`, never a bare `/6`).
+     */
     readonly endpoint: string;
     /** The response status; null when it was still in flight or ended without a response. */
     readonly status: number | null;
@@ -281,6 +294,13 @@ export interface SideEffect {
    * the action it followed.
    */
   readonly background?: true;
+  /**
+   * The request went to a THIRD-PARTY origin (#194: outside the run's allowed origins and their
+   * sites, decided by code from the URL — `thirdPartyOrigin`), e.g. Stripe.js's fraud beacon
+   * `https://m.stripe.com/6`, analytics, telemetry. Recorded for the record, but not the mission's
+   * write: the read-only guard never blocks it. `step`/`control` still say which action it followed.
+   */
+  readonly thirdParty?: true;
 }
 
 /** Most side effects a result lists (the rest are counted, never silently dropped). */
@@ -304,10 +324,13 @@ export class SideEffectLog {
   readonly #now: () => number;
   readonly #sources: Array<{ readonly monitor: PageMonitor; readonly capture: RequestCapture }> = [];
   readonly #marks: Mark[] = [];
+  /** The run's authorized origins (#194); empty = every request is first-party, named by path. */
+  readonly #origins: readonly string[];
 
-  constructor(opts: { readonly isWrite?: WriteClassifier; readonly now?: () => number } = {}) {
+  constructor(opts: { readonly isWrite?: WriteClassifier; readonly now?: () => number; readonly allowlist?: readonly string[] } = {}) {
     this.#isWrite = opts.isWrite ?? writeClassifier();
     this.#now = opts.now ?? Date.now;
+    this.#origins = opts.allowlist ?? [];
   }
 
   /** Starts capturing on a page's monitor (call again after a session reset). */
@@ -340,27 +363,29 @@ export class SideEffectLog {
   /** The writes fired so far (finished and still in flight), in start order. */
   entries(): { readonly sideEffects: SideEffect[]; readonly truncated: number } {
     const out: Array<SideEffect & { readonly at: number }> = [];
-    const push = (m: Mark, method: string, path: string, status: number | null, at: number): void => {
+    const push = (m: Mark, method: string, url: string, status: number | null, at: number): void => {
+      const thirdParty = thirdPartyOrigin(url, this.#origins) !== null;
       out.push({
         at,
         step: m.step,
         control: m.control,
-        request: { method: method.toUpperCase(), endpoint: path, status },
+        request: { method: method.toUpperCase(), endpoint: this.#origins.length === 0 ? pathOf(url) : requestEndpoint(url, this.#origins), status },
         ...(m.risk === null ? {} : { risk: m.risk }),
         ...(m.background === true ? { background: true as const } : {}),
+        ...(thirdParty ? { thirdParty: true as const } : {}),
       });
     };
     for (const { monitor, capture } of this.#sources) {
       for (const r of capture.requests()) {
         if (!this.#isWrite({ method: r.method, path: r.path, contentType: r.requestContentType ?? null })) continue;
         const m = this.#owner(r.startedAt);
-        if (m !== undefined) push(m, r.method, r.path, r.status, r.startedAt ?? m.at);
+        if (m !== undefined) push(m, r.method, r.url, r.status, r.startedAt ?? m.at);
       }
       for (const r of monitor.pending()) {
         const path = pathOf(r.url);
         if (!this.#isWrite({ method: r.method, path, contentType: r.requestContentType ?? null })) continue;
         const m = this.#owner(r.startedAt);
-        if (m !== undefined) push(m, r.method, path, null, r.startedAt);
+        if (m !== undefined) push(m, r.method, r.url, null, r.startedAt);
       }
     }
     out.sort((a, b) => a.at - b.at);

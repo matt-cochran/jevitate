@@ -41,7 +41,10 @@ security bug, and how to report one.
   clicks such a control (or matches `--deny` or `--paid`), or a control the run's own `sideEffects`
   show sending a write, is not replayed, and the hang (or `verify-fix`) is `inconclusive`. `--allow-destructive` does not lift this; `--hang-replay-writes` (or
   `safety.hangReplayWrites` in `~/.jevitate/targets.json`) does.
-- Every write request a run fires is listed in the result (`sideEffects`). A repeat guard refuses
+- Every write request a run fires is listed in the result (`sideEffects`). A request outside
+  the `--allow` origins is listed by its full origin and path. A write to a third-party site
+  (not an allowed origin's host or site) is marked `thirdParty: true`, and the read-only guard
+  never blocks it. A repeat guard refuses
   re-firing the same write, and `--read-rpc` marks POST-based read RPCs so they are not mistaken
   for writes.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use

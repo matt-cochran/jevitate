@@ -1,5 +1,6 @@
 import type { Page, Route, Request } from "playwright";
 import type { WriteClassifier } from "@jevitate/recording";
+import { requestEndpoint, thirdPartyOrigin } from "./authorized-targets.js";
 import { controlRisk } from "./safety.js";
 import type { Control } from "./snapshot.js";
 
@@ -22,6 +23,16 @@ import type { Control } from "./snapshot.js";
  *    heartbeat, telemetry) pass through and are listed as `background` side effects: blocking a
  *    rotating refresh token would sign the run out mid-mission. Common auth-refresh endpoints
  *    (`DEFAULT_ALLOWED_WRITES`) and operator globs (`--allow-write`) pass even inside a window.
+ *  - only FIRST-PARTY writes are the mission's (#194): a write to a third-party origin (outside the
+ *    run's `--allow` origins and their sites, decided by `thirdPartyOrigin` from the URL — never by
+ *    the model) is never aborted. Dogfood: Stripe.js's fraud-signal beacon `POST https://m.stripe.com/6`
+ *    was blocked three times as an "app write", and blocking an embedded SDK's own telemetry breaks
+ *    the widget without protecting the app. Why passing them stays safe: jevitate's authority is
+ *    the app under test (guardrail #1); a third-party write the MODEL could cause through a control
+ *    (a pay / checkout / subscribe button) is refused BEFORE the click by `refuses()`, whatever
+ *    origin its request goes to; and a first-party write is still aborted exactly as before. Every
+ *    third-party write is still recorded — listed in `sideEffects` with its full URL (origin + path)
+ *    and `thirdParty: true` — never silently dropped.
  * `--allow-writes` (or a goal that asks for a change — "create…", "update…") lifts the guard; the
  * #116 safety policy still applies then.
  */
@@ -80,7 +91,10 @@ export const READ_ONLY_NOTE =
 
 export interface BlockedWrite {
   readonly method: string;
-  /** Path only (never the query — it can carry a token). */
+  /**
+   * Path only (never the query — it can carry a token); origin + path when the origin is not an
+   * allowed one (#194: a sibling first-party origin such as `api.example.com`).
+   */
   readonly path: string;
 }
 
@@ -88,14 +102,20 @@ export class ReadOnlyGuard {
   readonly #isWrite: WriteClassifier;
   readonly #blocked: BlockedWrite[] = [];
   readonly #allowed: readonly RegExp[];
+  /** The run's authorized origins (#194); empty = every origin is first-party (fail-closed). */
+  readonly #origins: readonly string[];
   #page: Page | null = null;
   #armed = false;
   /** A model-chosen action's window is open (from its act until the page settled after it). */
   #inAction = false;
   readonly #handler = (route: Route, request: Request): Promise<void> => this.#route(route, request);
 
-  constructor(isWrite: WriteClassifier, opts: { readonly allowWrites?: readonly string[] } = {}) {
+  constructor(
+    isWrite: WriteClassifier,
+    opts: { readonly allowWrites?: readonly string[]; readonly allowlist?: readonly string[] } = {},
+  ) {
     this.#isWrite = isWrite;
+    this.#origins = opts.allowlist ?? [];
     this.#allowed = [...DEFAULT_ALLOWED_WRITES, ...(opts.allowWrites ?? [])].filter((g) => g.trim() !== "").map(pathGlob);
   }
 
@@ -146,11 +166,15 @@ export class ReadOnlyGuard {
       /* keep "/" */
     }
     const write = this.#isWrite({ method: request.method(), path, contentType: request.headers()["content-type"] ?? null });
-    if (!write || !this.#inAction || this.#allowed.some((g) => g.test(path))) {
+    // #194: a third-party write (off the allowed origins' sites) is not the mission's: it passes and
+    // is listed as a `thirdParty` side effect by the run's `SideEffectLog`. First-party writes are
+    // judged exactly as before.
+    const thirdParty = write && thirdPartyOrigin(request.url(), this.#origins) !== null;
+    if (!write || thirdParty || !this.#inAction || this.#allowed.some((g) => g.test(path))) {
       await route.fallback().catch(() => undefined);
       return;
     }
-    this.#blocked.push({ method: request.method().toUpperCase(), path });
+    this.#blocked.push({ method: request.method().toUpperCase(), path: requestEndpoint(request.url(), this.#origins) });
     await route.abort("blockedbyclient").catch(() => undefined);
   }
 
