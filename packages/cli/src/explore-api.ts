@@ -34,6 +34,7 @@ import {
   type StopReason,
   type AuthorJourneyResult,
   type AdversarialOutcome,
+  type AdversarialDefect,
   type MisuseStrategy,
   type CapabilityScope,
   type FeatureRunResult,
@@ -79,6 +80,7 @@ import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
+import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
@@ -360,6 +362,11 @@ function browserVersionOf(page: { context(): { browser(): { version(): string } 
 }
 
 export interface RunExplorationResult {
+  /** The result schema's version (#195): the common fields below are filled the same way by every strategy. */
+  readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
+  readonly strategy: "goal";
+  /** The portable verdict (a goal run's own vocabulary; equal to `outcome`). */
+  readonly missionOutcome: GoalBasedOutcome;
   readonly outcome: GoalBasedOutcome;
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
@@ -380,6 +387,9 @@ export interface RunExplorationResult {
   readonly finalUrl: string;
   readonly decisions: number;
   readonly actions: number;
+  /** Every Recording the run wrote (#195: one list on every strategy) — a goal run writes one. */
+  readonly recordingPaths: string[];
+  /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
   readonly recordingPath: string;
   /**
    * The per-decision trail (op, target, confidence, whether the action succeeded and why
@@ -414,8 +424,11 @@ export interface RunExplorationResult {
   readonly resultPath: string;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
-  /** Declared-invariant defects (#86) — present when `--invariants` was given; `verify-fix` replays them. */
-  readonly defects?: InvariantDefect[];
+  /**
+   * EVERY defect the run found (#195): declared-invariant defects (#86, with `--invariants`) and
+   * `server-log` defects (#142, with `--log-defect`) — `verify-fix` replays any of them by fingerprint.
+   */
+  readonly defects: Array<InvariantDefect | ServerLogDefect>;
   /** Per declared invariant: applied / held / violated / unreadable counts. */
   readonly invariants?: InvariantReport[];
   /** The declared spec the run evaluated — persisted so `verify-fix` re-checks the SAME invariants. */
@@ -424,7 +437,7 @@ export interface RunExplorationResult {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
   /** The fixture the mission started from (#140/#144): identity, non-secret outputs, the setup/restore log. */
   readonly fixtures?: MissionFixtureResult;
@@ -654,6 +667,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     );
 
     const result: RunExplorationResult = {
+      schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
+      strategy: "goal",
+      missionOutcome: goalOutcome,
       issues,
       timing: mission.run.timing,
       outcome: goalOutcome,
@@ -666,6 +682,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
       actions: mission.run.actions,
+      recordingPaths: [journal.recordingPath],
       recordingPath: journal.recordingPath,
       transcriptPath: journal.transcriptPath,
       transcript: serverLogRun?.transcript ?? mission.transcript,
@@ -707,6 +724,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
+      defects: unifiedDefects(opts.invariants === undefined ? undefined : mission.invariantDefects, serverLogRun?.defects),
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result, runUsage);
@@ -931,6 +949,8 @@ export interface RunCoverageMissionOptions {
 }
 
 export interface RunCoverageMissionResult {
+  /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
+  readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix is `coverage-` for both. */
   readonly strategy: "coverage" | "exploratory";
   readonly coverage: CoverageReport;
@@ -959,15 +979,18 @@ export interface RunCoverageMissionResult {
   readonly sideEffectsTruncated?: number;
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
-  /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
-  readonly defects?: InvariantDefect[];
+  /**
+   * EVERY defect the run found (#195): declared-invariant defects (#86, each with its own path
+   * Recording) and `server-log` defects (#142). Jev-flagged states stay advisory in `coverage.defects`.
+   */
+  readonly defects: Array<InvariantDefect | ServerLogDefect>;
   readonly invariants?: InvariantReport[];
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
 }
 
@@ -1097,6 +1120,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
 
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
+      schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       hangs: result.hangs,
       recording: null,
       target: {
@@ -1120,6 +1144,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
+      defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
+      resultPath: resultPathFor(journal.recordingPath),
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed, runUsage) };
   } finally {
@@ -1228,10 +1254,20 @@ export interface MissionTarget {
   readonly actors?: ReadonlyArray<{ readonly name: string; readonly storageStatePath: string; readonly role: "primary" | "observer" }>;
 }
 
-export type AdversarialCliMissionResult = AdversarialOutcome & {
+export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & {
+  /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
+  readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
+  readonly strategy: "adversarial";
+  /** The portable verdict (equal to `outcome`, which an adversarial run already states as a `MissionOutcome`). */
+  readonly missionOutcome: MissionOutcome;
+  /** EVERY defect the run found (#195): hard-signal and declared-invariant defects, then `server-log` defects (#142). */
+  readonly defects: Array<AdversarialDefect | ServerLogDefect>;
+  /** Every Recording the run wrote (#195: one list on every strategy) — an adversarial run writes one. */
+  readonly recordingPaths: string[];
   readonly target: MissionTarget;
   /** One ready-to-file draft per defect (and per crash), written next to the Recording. */
   readonly issues: FindingsIssues;
+  /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
   readonly recordingPath: string;
   /** The persisted typed result (`<recording>.result.json`), readable via MCP `get_mission_result`. */
   readonly resultPath: string;
@@ -1246,7 +1282,7 @@ export type AdversarialCliMissionResult = AdversarialOutcome & {
   readonly usage?: UsageCounts;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
 };
 
@@ -1366,6 +1402,10 @@ export async function runAdversarialCliMission(
     );
     const result = {
       ...outcome,
+      schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
+      strategy: "adversarial" as const,
+      missionOutcome,
+      recordingPaths: [journal.recordingPath],
       // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
       recording:
         resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
@@ -1386,6 +1426,8 @@ export async function runAdversarialCliMission(
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
+      defects: unifiedDefects(outcome.defects, serverLogRun?.defects),
+      resultPath,
     };
     return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) };
   } finally {
@@ -1451,6 +1493,9 @@ export interface RunFeatureCliMissionOptions {
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
 export type FeatureCliMissionResult = FeatureRunResult & {
+  /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
+  readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
+  readonly strategy: "feature";
   /**
    * `clean` only when the run actually exercised an in-scope, non-chrome
    * control of the named capability (`coverage.inScopeActionsExercised > 0`).
@@ -1470,12 +1515,12 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   readonly resultPath: string;
   /** Where the run happened — what `verify-fix` needs to replay a declared-invariant defect. */
   readonly target: MissionTarget;
-  /** Declared-invariant defects (#86), each with its own path Recording — present with `--invariants`. */
-  readonly defects?: InvariantDefect[];
+  /** EVERY defect the run found (#195): declared-invariant defects (#86, each with its own path Recording) and `server-log` defects (#142). */
+  readonly defects: Array<InvariantDefect | ServerLogDefect>;
   readonly invariantSpec?: InvariantSpec;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** `server-log` defects (#142, `--log-defect`); `verify-fix` re-checks them by re-tailing the same sources. */
+  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
   /** Always zero (#188): a feature mission makes no model call — stated, never absent ("not tracked"). */
   readonly usage: UsageCounts;
@@ -1604,6 +1649,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
       ...result,
+      schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
+      strategy: "feature" as const,
       transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],
       failure: result.failure ?? coverageFailure,
       missionOutcome,
@@ -1618,6 +1665,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       },
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...serverLogResult(serverLogRun),
+      defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
+      resultPath: resultPathFor(journal.recordingPath),
       usage: NO_MODEL_USAGE,
     };
     return { ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) };
