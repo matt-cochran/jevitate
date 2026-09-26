@@ -39,6 +39,8 @@ export interface BuildStateInput {
   readonly history: readonly string[];
   /** Registered secret/PII values to scrub. Default none. */
   readonly secrets?: readonly string[];
+  /** The page's visible text (untrusted, already bounded) — shown only when given (#207). */
+  readonly visibleText?: string;
 }
 
 /**
@@ -55,6 +57,7 @@ export function buildJudgmentState(input: BuildStateInput): JudgmentState {
     url: redactText(redactUrl(input.url), secrets),
     controls: input.controls.map((c) => redactText(c, secrets)),
     history: input.history.map((h) => redactText(redactUrl(h), secrets)),
+    ...(input.visibleText === undefined || input.visibleText === "" ? {} : { visibleText: redactText(input.visibleText, secrets) }),
   };
   assertNoSecretInPayload(state, secrets);
   return state;

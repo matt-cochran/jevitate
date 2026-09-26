@@ -142,7 +142,7 @@ export function maskSecretFields(snap: Snapshot, fields: readonly SecretField[] 
     if (f === null) return c;
     changed = true;
     const head = c.name !== "" ? `${c.role || c.tag} "${c.name}"` : c.role || c.tag;
-    return { ...c, summary: `${head} (bound: ${secretPlaceholder(f)} — choose \`type\` on it; code types the value)` };
+    return { ...c, value: null, summary: `${head} (bound: ${secretPlaceholder(f)} — choose \`type\` on it; code types the value)` };
   });
   return changed ? { ...snap, controls } : snap;
 }
