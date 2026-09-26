@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MISSION_OUTCOMES } from "./mission-outcome.js";
+import { GOAL_ONLY_OUTCOMES, MISSION_OUTCOMES } from "./mission-outcome.js";
 
 /**
  * The ONE result schema every explore strategy's result follows (#195 part 5) — what `jevitate
@@ -11,7 +11,7 @@ import { MISSION_OUTCOMES } from "./mission-outcome.js";
  *  - `strategy` — which strategy produced it (`goal`, `coverage`, `exploratory`, `adversarial`,
  *    `feature`, `usability`).
  *  - `missionOutcome` / `exitCode` — the verdict (a goal run keeps its own vocabulary:
- *    `succeeded`/`exhausted`/`blocked` besides the shared `MissionOutcome`s); `exitCode` is the
+ *    `succeeded`/`failed`/`exhausted`/`blocked` besides the shared `MissionOutcome`s); `exitCode` is the
  *    portable one.
  *  - `defects` — EVERY defect the run found, whatever oracle found it: hard-signal defects,
  *    declared-invariant defects and `server-log` defects alike, each with its `fingerprint` and
@@ -44,8 +44,6 @@ export const MISSION_RESULT_SCHEMA_VERSION = 1 as const;
 export const RESULT_STRATEGIES = ["goal", "coverage", "exploratory", "adversarial", "feature", "usability"] as const;
 export type ResultStrategy = (typeof RESULT_STRATEGIES)[number];
 
-/** A goal run's own endings besides the shared `MissionOutcome`s. */
-const GOAL_ONLY_OUTCOMES = ["succeeded", "exhausted", "blocked"] as const;
 export const RESULT_MISSION_OUTCOMES = [...MISSION_OUTCOMES, ...GOAL_ONLY_OUTCOMES] as const;
 export type ResultMissionOutcome = (typeof RESULT_MISSION_OUTCOMES)[number];
 

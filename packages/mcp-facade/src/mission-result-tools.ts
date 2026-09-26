@@ -1,4 +1,4 @@
-import { MISSION_EXIT_CODES, MISSION_OUTCOMES, isBrokenRun, type MissionOutcome } from "@jevitate/domain";
+import { GOAL_OUTCOME_FOLD, MISSION_EXIT_CODES, MISSION_OUTCOMES, isBrokenRun, type MissionOutcome } from "@jevitate/domain";
 
 /**
  * The MCP surface for a mission's TYPED result. A mission never answers with a throw: every
@@ -26,16 +26,13 @@ export function parseMissionOutcome(value: unknown): MissionOutcome | null {
 }
 
 /**
- * A goal run (`explore-<stamp>`) persists its OWN outcome (`succeeded`/`exhausted`/`blocked`, or a
- * shared one) as its result's `missionOutcome` (#117). Folded onto the canonical outcome with the
- * same exit code the CLI uses: `succeeded` → clean (0); `exhausted`/`blocked` — the goal's success
- * check did not hold — → defects-found (1). The goal's own word is kept as `goalOutcome`.
+ * A goal run (`explore-<stamp>`) persists its OWN outcome (`succeeded`/`failed`/`exhausted`/`blocked`,
+ * or a shared one) as its result's `missionOutcome` (#117). Folded onto the canonical outcome by the
+ * domain's single mapping (`GOAL_OUTCOME_FOLD`, the same the CLI exits with): `succeeded` → clean (0);
+ * `failed`/`exhausted`/`blocked` — the goal's success check did not hold — → defects-found (1). The
+ * goal's own word is kept as `goalOutcome`.
  */
-const GOAL_OUTCOMES: Readonly<Record<string, MissionOutcome>> = {
-  succeeded: "clean",
-  exhausted: "defects-found",
-  blocked: "defects-found",
-};
+const GOAL_OUTCOMES: Readonly<Record<string, MissionOutcome>> = GOAL_OUTCOME_FOLD;
 
 /** Narrows a persisted result's `missionOutcome` (canonical, or a goal run's own) to a status, or null. */
 export function parseResultOutcome(value: unknown): { outcome: MissionOutcome; goalOutcome?: string } | null {

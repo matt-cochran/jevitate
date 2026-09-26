@@ -47,6 +47,7 @@ import {
   FORM_MISUSE_STRATEGIES,
   controlKey,
   detectForms,
+  isExercisable,
   planMisuseEpisode,
   type EpisodeContext,
   type LastAction,
@@ -186,7 +187,13 @@ export type AdversarialStop =
   | "hang"
   | "crashed"
   /** A declared mission spend budget (#150) was crossed, or a paid action was refused before crossing it. */
-  | "budget";
+  | "budget"
+  /**
+   * #209: every target control the run found was refused by the safety policy (paid, destructive,
+   * `--deny`'d) and none could be exercised — hunting on would only scroll and re-plan. The run is
+   * `inconclusive` (`insufficient-coverage`), its shortfall naming the refusal and how to permit it.
+   */
+  | "targets-refused";
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
@@ -1058,9 +1065,9 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
      * offered as a target (#193) — withheld at planning, its refusal recorded once, like the
      * frontier missions do (#186).
      */
-    const refuses = (c: Control): boolean =>
-      affordedOp(c) === "click" &&
-      safety.withholds("click", c, (reason) =>
+    const refuses = (c: Control): boolean => {
+      if (affordedOp(c) !== "click") return false;
+      const withheld = safety.withholds("click", c, (reason) =>
         transcript.record({
           op: null,
           control: c,
@@ -1072,6 +1079,11 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           snapshot: snap,
         }),
       );
+      // #209: the coverage shortfall names what the policy refused (and how to permit it).
+      const risk = withheld ? safety.policy.refuses(c)?.risk : undefined;
+      if (risk !== undefined) cov.refused(snap.url, c, risk);
+      return withheld;
+    };
     /** Page chrome (#115/#193): a landmark control, or one seen unchanged on 2+ in-scope pathnames. */
     const chrome = new ChromeTracker();
     const isChrome = (c: Control): boolean => (c.landmark ?? null) !== null || chrome.isChrome(c);
@@ -1258,6 +1270,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       let stepTiming = snapTiming;
       snapTiming = undefined;
       observeTarget(snap);
+      // #209: when EVERY target control on the page is one the safety policy refuses (three "Buy"
+      // buttons, refused as paid), no strategy can exercise anything — stop now, naming the refusal,
+      // instead of scrolling and re-planning until the budget runs out.
+      if (inScope(snap.url)) for (const c of snap.controls) if (isExercisable(c, inScope)) refuses(c);
+      if (cov.everyTargetRefused()) {
+        stop = "targets-refused";
+        break;
+      }
       const planning = (on: Snapshot, as: MisuseStrategy, extra: Partial<EpisodeContext> = {}): EpisodeContext => ({
         snapshot: on,
         strategy: as,
@@ -1383,7 +1403,10 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         // never clicked — a no-op like a disabled target, counted against no budget.
         const unsafe = safety.gate(s.op, s.control);
         if (unsafe !== null) {
-          if (s.control !== null) refusedIds.add(controlIdentity(s.control));
+          if (s.control !== null) {
+            refusedIds.add(controlIdentity(s.control));
+            cov.refused(stepSnap.url, s.control, unsafe.risk);
+          }
           if (s.submitsForm !== undefined) cov.blocked(stepSnap.url, s.submitsForm, unsafe.reason, "denied");
           transcript.record({
             op: null,

@@ -719,7 +719,8 @@ export interface RunUsabilityMissionResult {
   readonly sideEffectsTruncated?: number;
   /**
    * The typed verdict. UX findings are advisory, so a completed review is `clean`; a run whose
-   * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced.
+   * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced — or
+   * (#209) one whose job was never completed (`failure.kind: "job-incomplete"`).
    */
   readonly missionOutcome: MissionOutcome;
   readonly exitCode: number;
@@ -1064,8 +1065,16 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
           : run.stop === "hang"
             ? hangOutcome(hang?.reproduction.status ?? "inconclusive")
             : "clean";
+    // #209: a review whose job was never completed (the loop gave up, ran out of budget, or its
+    // `done` was never verified) did not see what a user who finished it would: its silence about
+    // the rest proves nothing, so it is `inconclusive` (`job-incomplete`) — never `clean`, whatever
+    // the advisory UX findings say.
+    const jobIncomplete: MissionFailure | undefined =
+      loopOutcome === "clean" && run.outcome.status === "incomplete"
+        ? { kind: "job-incomplete", message: `the job under review was not completed: ${run.outcome.reason}` }
+        : undefined;
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never `clean`.
-    const host = await finishHostHealth(health, loopOutcome);
+    const host = await finishHostHealth(health, jobIncomplete === undefined ? loopOutcome : "inconclusive");
     const runOutcome: MissionOutcome = host.outcome;
     const base = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
@@ -1091,7 +1100,10 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       sideEffects: run.sideEffects,
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
-      ...(run.failure === undefined ? (host.failure === undefined ? {} : { failure: host.failure }) : { failure: run.failure }),
+      ...((): { failure?: MissionFailure } => {
+        const f = run.failure ?? host.failure ?? jobIncomplete;
+        return f === undefined ? {} : { failure: f };
+      })(),
       ...(run.crash === undefined ? {} : { crash: run.crash }),
       finalUrl: run.finalUrl,
       decisions: run.decisions,

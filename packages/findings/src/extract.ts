@@ -327,7 +327,7 @@ function goalCheckObservations(result: Json, ctx: Ctx): FindingObservation[] {
   const goalName = str(suite?.item);
   const out: FindingObservation[] = [];
   const failedChecks = arr(result.checks).filter((c) => isRecord(c) && c.passed === false);
-  if (failedChecks.length === 0 && (outcome === "exhausted" || outcome === "blocked")) {
+  if (failedChecks.length === 0 && (outcome === "exhausted" || outcome === "blocked" || outcome === "failed")) {
     // The goal was not reached but no check names why (none evaluated): still a failed goal.
     out.push(
       observation(
@@ -538,11 +538,19 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   if (mode === "journey") observations.push(...journeyObservations(result));
   else if (mode === "verify-fix") observations.push(...verifyObservations(result));
   else {
-    for (const d of arr(result.defects).filter(isRecord)) push(defectObservation(d, ctx));
+    // #209: a coverage run's frontier defects are in top-level `defects` too. A flagged state stays the
+    // advisory `judgment-flagged-state` observation below (read once, from `coverage.defects`); a
+    // hard one (a horizontal overflow) is a defect, read from `defects` and not again from `coverage`.
+    const top = arr(result.defects).filter(isRecord);
+    const hardTop = new Set(top.filter((d) => str(d.kind) !== "judgment-flagged-state").map((d) => str(d.fingerprint)));
+    for (const d of top) if (str(d.kind) !== "judgment-flagged-state") push(defectObservation(d, ctx));
     for (const h of arr(result.hangs).filter(isRecord)) push(hangObservation(h, ctx));
     for (const a of arr(result.advisories).filter(isRecord)) push(advisoryObservation(a, ctx));
     if (mode === "coverage" && isRecord(result.coverage)) {
-      for (const d of arr(result.coverage.defects).filter(isRecord)) push(flaggedStateObservation(d));
+      for (const d of arr(result.coverage.defects).filter(isRecord)) {
+        if (str(d.fingerprint) !== undefined && hardTop.has(str(d.fingerprint))) continue;
+        push(flaggedStateObservation(d));
+      }
     }
     if (mode === "goal") observations.push(...goalCheckObservations(result, ctx));
   }

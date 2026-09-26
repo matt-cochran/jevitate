@@ -415,7 +415,11 @@ describe("shared decision transcript — every model-deciding strategy writes on
           saveStorageState: saveTo,
           strategy: "exploratory",
         });
-        expect(result.outcome).toBe("exhausted");
+        // #209: was `exhausted` — /whoami (JSON) offers no control, so the frontier emptied having
+        // proved nothing: one name for that ending, `insufficient-coverage` (its missionOutcome was
+        // already `inconclusive`).
+        expect(result.outcome).toBe("insufficient-coverage");
+        expect(result.missionOutcome).toBe("inconclusive");
         // The result says which frontier ran (both write `coverage-*` files).
         expect(result.strategy).toBe("exploratory");
         const written = JSON.parse(await readFile(saveTo, "utf8"));
