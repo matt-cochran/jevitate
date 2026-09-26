@@ -89,6 +89,8 @@ describe("a mission never exhausts its own browser pool (#68)", () => {
           judgment: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
           seedUrl: `${origin}/hub`,
           allowlist: [origin],
+          // The hanging routes are the target: only in-scope pages are hang-checked (#193).
+          routeGlobs: ["/**"],
           maxDepth: 1,
           openFreshSession: freshSession,
           hangReplays: 2,

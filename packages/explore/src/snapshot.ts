@@ -114,7 +114,20 @@ export interface Snapshot {
 
 export interface SnapshotOptions {
   readonly maxCandidates?: number;
+  /**
+   * #192: options kept per long list (a picker's ≈250 countries). Past it, an option is kept only
+   * when `mentioned` names it, so the list cannot crowd out the page's other controls (the dialog's
+   * Save) from the `maxCandidates` budget. Default `LIST_OPTION_CAP`.
+   */
+  readonly listOptionCap?: number;
+  /** Does the run's goal (or recent history) name this control? Such an option is always kept. */
+  readonly mentioned?: (name: string) => boolean;
 }
+
+/** Options kept per long list before only the goal-named ones are (#192). */
+export const LIST_OPTION_CAP = 25;
+
+const LIST_OPTION_ROLES = new Set(["option", "menuitem", "menuitemradio", "menuitemcheckbox", "treeitem"]);
 
 /** The interactive controls the loop considers. Lean, per P1 (spec §9). */
 const INTERACTIVE_SELECTOR = [
@@ -128,6 +141,16 @@ const INTERACTIVE_SELECTOR = [
   "[role=textbox]",
   "[role=checkbox]",
   "[role=combobox]",
+  // Custom pickers, menus and tab bars (component-library ARIA widgets): their items are what a user
+  // clicks, so a mission must see them (#192). Long lists are capped per list (`listOptionCap`).
+  "[role=option]",
+  "[role=menuitem]",
+  "[role=menuitemradio]",
+  "[role=menuitemcheckbox]",
+  "[role=tab]",
+  "[role=radio]",
+  "[role=switch]",
+  "[role=treeitem]",
   "[contenteditable=true]",
 ].join(",");
 
@@ -445,6 +468,30 @@ function computeSignature(
   });
 }
 
+/**
+ * BROWSER CODE — serialized by `evaluateAll`: for each candidate that is an item of an ARIA list
+ * (explicit role in `roles`), its list (the index of its nearest list container), its visible name
+ * and whether it renders; `null` for every other candidate.
+ */
+function readListItems(els: Element[], roles: string[]): Array<{ list: number; name: string; visible: boolean } | null> {
+  const LIST = '[role=listbox],[role=menu],[role=menubar],[role=tablist],[role=radiogroup],[role=tree],[role=grid],ul,ol';
+  const lists: Element[] = [];
+  return els.map((el) => {
+    const role = (el.getAttribute("role") ?? "").toLowerCase();
+    if (!roles.includes(role)) return null;
+    const container = el.parentElement?.closest(LIST) ?? el.parentElement ?? el;
+    let list = lists.indexOf(container);
+    if (list === -1) {
+      lists.push(container);
+      list = lists.length - 1;
+    }
+    const name = (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+    const style = getComputedStyle(el);
+    const visible = el.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
+    return { list, name, visible };
+  });
+}
+
 export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snapshot> {
   const maxCandidates = opts?.maxCandidates ?? DEFAULT_BOUNDS.maxCandidates;
   const url = page.url();
@@ -454,13 +501,48 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
   const controls: Control[] = [];
   const keptFacts: DescribedFacts[] = [];
   let truncated = false;
+  const listOptionCap = opts?.listOptionCap ?? LIST_OPTION_CAP;
+  // #192: one in-page pass over every candidate finds the items of ARIA lists (options, menu items,
+  // tabs, radios…) that are invisible, or past their list's cap and not named by the goal — skipped
+  // without a per-element round trip, so a 300-item picker costs one evaluation, not 300.
+  const listItems = await page
+    .locator(INTERACTIVE_SELECTOR)
+    .evaluateAll(readListItems, [...LIST_OPTION_ROLES])
+    .catch(() => null);
+  const skip: boolean[] = [];
+  const skipReason: Array<"hidden" | "capped" | undefined> = [];
+  if (listItems !== null && listItems.length === handles.length) {
+    const perList = new Map<number, number>();
+    listItems.forEach((it, i) => {
+      if (it === null) return;
+      if (!it.visible) {
+        skip[i] = true;
+        skipReason[i] = "hidden";
+        return;
+      }
+      const n = (perList.get(it.list) ?? 0) + 1;
+      perList.set(it.list, n);
+      if (n > listOptionCap && opts?.mentioned?.(it.name) !== true) {
+        skip[i] = true;
+        skipReason[i] = "capped";
+      }
+    });
+  }
+  // Bounded: a page with thousands of candidates never turns perception into a crawl.
+  let evaluated = 0;
+  const maxEvaluated = maxCandidates * 4;
 
-  for (const handle of handles) {
+  for (const [i, handle] of handles.entries()) {
     try {
-      if (controls.length >= maxCandidates) {
+      if (controls.length >= maxCandidates || evaluated >= maxEvaluated) {
         truncated = true;
         continue;
       }
+      if (skip[i] === true) {
+        truncated = truncated || skipReason[i] === "capped";
+        continue;
+      }
+      evaluated += 1;
       const raw = await handle.evaluate(readControlFacts);
       // Hidden file inputs are the sole exception (see the module doc).
       if (!raw.visible && raw.inputType !== "file") continue;

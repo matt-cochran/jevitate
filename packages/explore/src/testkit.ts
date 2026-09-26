@@ -93,12 +93,15 @@ export class ScriptedJudge implements JudgmentPort {
    * P(yes). Default 0.9 — a scripted `done` is grounded unless a test says otherwise.
    */
   goalMetProbability = 0.9;
+  /** Per-question overrides of `goalMetProbability`, by noul question name (e.g. the #188 sign-in scope head). */
+  noulProbabilities: Record<string, number> = {};
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
     if (!("action" in args.questions)) {
       this.goalCalls.push(args);
       const out: Record<string, Answer> = {};
       for (const [name, q] of Object.entries(args.questions)) {
-        if (q.kind === "noul") out[name] = { kind: "noul", value: this.goalMetProbability >= 0.5, probability: this.goalMetProbability };
+        const p = this.noulProbabilities[name] ?? this.goalMetProbability;
+        if (q.kind === "noul") out[name] = { kind: "noul", value: p >= 0.5, probability: p };
       }
       return out;
     }

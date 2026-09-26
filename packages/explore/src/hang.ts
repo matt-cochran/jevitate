@@ -66,6 +66,15 @@ export function hangFingerprint(h: Pick<HangSignal, "kind" | "route" | "pending"
   return contentHash(`hang|${h.kind}|${h.route}|${endpoint}`).slice(0, 16);
 }
 
+/**
+ * #193 — hangs are only checked on IN-SCOPE pages. A page reached only by a departure from the
+ * mission's target (a header link, a "home" button) is never judged, so a hang signal seen there is
+ * noted on the departure as advisory — never a finding, never part of the mission outcome.
+ */
+export function outOfScopeHangNote(h: Pick<HangSignal, "kind">): string {
+  return `${h.kind} hang signal on this out-of-scope page not checked (advisory, not a finding)`;
+}
+
 export interface HangEvidence {
   /** Did the main-thread probe answer within its bound? */
   readonly responsive: boolean;

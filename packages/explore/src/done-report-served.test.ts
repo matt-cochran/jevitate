@@ -120,6 +120,32 @@ describe("done recognition (#91)", () => {
   );
 
   it(
+    "#188: a model `blocked` on a page that already shows the goal met is grounded — done, never incomplete",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "blocked" }]);
+      judge.goalMetProbability = GOAL_MET_THRESHOLD;
+      const r = await run(judge, "/decision", APPROVE_GOAL);
+      expect(r.stop).toBe("done");
+      expect(r.outcome).toEqual({ status: "completed", verifiedBy: "grounded-judgment" });
+      expect(r.transcript.at(-1)?.reason).toMatch(/goal already met — stopped instead of "blocked"/);
+    },
+    60_000,
+  );
+
+  it(
+    "#188: a model `blocked` where the goal is not met still ends blocked (asked once, rejected)",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "blocked" }]);
+      judge.goalMetProbability = 0.4;
+      const r = await run(judge, "/decision", APPROVE_GOAL);
+      expect(r.stop).toBe("blocked");
+      expect(r.outcome.status).toBe("incomplete");
+      expect(judge.goalCalls).toHaveLength(1);
+    },
+    60_000,
+  );
+
+  it(
     "a coin-flip judgment (p=0.50) never ends the run done — the signal is only a trigger, code adjudicates",
     async () => {
       const judge = new ScriptedJudge([

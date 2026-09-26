@@ -330,10 +330,23 @@ async function attempt(action: () => Promise<void>): Promise<ActResult> {
 export function failureLine(message: string): string {
   const lines = message.split("\n");
   const first = lines[0] ?? message;
-  const intercept = lines.map((l) => l.trim().replace(/^-\s*/, "")).find((l) => /intercepts pointer events/.test(l));
-  if (intercept === undefined || first.includes(intercept)) return first;
-  return `${first} (${intercept.replace(/\s+from\s+<.*?>\s+subtree/, "").slice(0, 200)})`;
+  const log = lines.map((l) => l.trim().replace(/^(?:\d+\s*×\s*)?-\s*/, ""));
+  const intercept = log.find((l) => /intercepts pointer events/.test(l));
+  if (intercept !== undefined && !first.includes(intercept)) {
+    return `${first} (${intercept.replace(/\s+from\s+<.*?>\s+subtree/, "").slice(0, 200)})`;
+  }
+  // #188 — a bare "Timeout 5000ms exceeded." hides WHY Playwright never clicked (two Verify clicks
+  // timed out on a page that passed the gate). Keep the call log's last actionability state.
+  if (/Timeout \d+ms exceeded/.test(first)) {
+    const why = [...log].reverse().find((l) => ACTIONABILITY_STATE.test(l));
+    if (why !== undefined) return `${first} (${why.slice(0, 200)})`;
+  }
+  return first;
 }
+
+/** Playwright call-log lines that say what an action was still waiting on when it timed out. */
+const ACTIONABILITY_STATE =
+  /^element (?:is not|is outside|was detached)|^waiting for (?:element to be|scheduled navigations)|^element does not receive pointer events/;
 
 /**
  * Parses the element that intercepted a click out of Playwright's own failure text

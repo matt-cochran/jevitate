@@ -56,7 +56,7 @@ describe("CoverageTracker", () => {
     t.acted("https://app.test/profile", SAVE);
     t.blocked("https://app.test/profile", "form#f", "Please fill out this field");
     const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
-    expect(r.forms).toEqual({ found: 1, submitted: 0, blocked: 1 });
+    expect(r.forms).toEqual({ found: 1, submitted: 0, blocked: 1, blockedBy: { validation: 1 } });
     expect(r.sufficient).toBe(false);
     expect(r.shortfalls).toEqual([
       'form submitted 0 times (1 attempt blocked by validation: "Please fill out this field")',
@@ -71,8 +71,22 @@ describe("CoverageTracker", () => {
     t.blocked("https://app.test/profile", "form#f", "Please fill out this field");
     t.submitted("https://app.test/profile", "form#f");
     const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
-    expect(r.forms).toEqual({ found: 1, submitted: 1, blocked: 2 });
+    expect(r.forms).toEqual({ found: 1, submitted: 1, blocked: 2, blockedBy: { validation: 2 } });
     expect(r.sufficient).toBe(true);
+  });
+
+  it("a submit blocked because it was disabled or refused by the safety policy says why (#193)", () => {
+    const t = new CoverageTracker(inScope);
+    t.observe(snap("https://app.test/profile", [NAME, SAVE]));
+    t.acted("https://app.test/profile", NAME);
+    t.blocked("https://app.test/profile", "form#f", "the submit control is disabled", "disabled");
+    t.blocked("https://app.test/profile", "form#f", "matches --deny Save", "denied");
+    t.blocked("https://app.test/profile", "form#f", undefined, "denied");
+    const r = t.report(DEFAULT_COVERAGE_THRESHOLDS, 0);
+    expect(r.forms).toEqual({ found: 1, submitted: 0, blocked: 3, blockedBy: { disabled: 1, denied: 2 } });
+    expect(r.shortfalls).toEqual([
+      'form submitted 0 times (1 attempt blocked with the submit disabled: "the submit control is disabled"; 2 attempts blocked by the safety policy: "matches --deny Save")',
+    ]);
   });
 
   it("whatever the thresholds, a run that exercised nothing is never sufficient", () => {
