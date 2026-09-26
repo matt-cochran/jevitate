@@ -81,7 +81,7 @@ import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogD
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { finishHostHealth, startHostHealth } from "./host-health-run.js";
-import type { HostHealthSampler } from "@jevitate/explore";
+import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
@@ -676,10 +676,11 @@ export interface RunUsabilityMissionResult {
   /** Where the review ran (#195: every strategy states its scope the same way) — a session PATH at most. */
   readonly target: MissionTarget;
   /**
-   * EVERY defect the review found (#195) — here only `server-log` defects (#142), each marked
-   * `advisory: true`: reported like every other strategy's, never gating a UX review's outcome.
+   * EVERY defect the review found (#195) — HTTP 5xx hard-signal defects (#208) and `server-log`
+   * defects (#142), each marked `advisory: true`: reported like every other strategy's, never gating
+   * a UX review's outcome.
    */
-  readonly defects: AdvisoryServerLogDefect[];
+  readonly defects: Array<AdvisoryServerLogDefect | (Http5xxDefect & { readonly advisory: true })>;
   /** Hang findings (0 or 1: the review stops at a hang), as every strategy lists them (#195). */
   readonly hangs: HangFinding[];
   /** Every Recording the review wrote (#195: one list on every strategy) — a review writes one. */
@@ -806,6 +807,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     health.stop();
     throw e;
   });
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
   // #149: one signal finding per distinct fingerprint (route + element) — a wide table seen across
@@ -860,6 +863,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // `--save-storage-state` was not given).
   const journalListener = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     health.noteStep(entry);
+    http5xx.noteStep(entry);
     capture.noteEntry(entry, all);
     journal.onTranscriptEntry(entry, capture.withScreenshots(all));
     snapshotter.noteSettledStep(currentUrlSafe(session));
@@ -1095,9 +1099,13 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...(hang === undefined ? {} : { hang }),
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
-      // always advisory, and a `server-log` defect here is treated the same way.
+      // always advisory, and a `server-log` defect here is treated the same way. So is an HTTP 5xx
+      // hard-signal defect (#208): listed with its fingerprint (verify-fix replays it), advisory here.
       ...serverLogResult(serverLogRun),
-      defects: advisoryDefects(serverLogRun?.defects),
+      defects: [
+        ...http5xx.defects(run.transcript).map((d) => ({ ...d, advisory: true as const })),
+        ...advisoryDefects(serverLogRun?.defects),
+      ],
       ...(budget === null ? {} : { budget: budget.trajectory() }),
       ...host.fields,
     };
