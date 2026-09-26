@@ -1604,7 +1604,9 @@ export interface RunFeatureCliMissionOptions {
 }
 
 /** The feature mission's result plus its typed verdict, exit code, and where its artifacts landed. */
-export type FeatureCliMissionResult = FeatureRunResult & {
+export type FeatureCliMissionResult = Omit<FeatureRunResult, "outcome"> & {
+  /** The frontier's ending — `insufficient-coverage` (#209) when it emptied having proved nothing about the feature. */
+  readonly outcome: FeatureRunResult["outcome"] | "insufficient-coverage";
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "feature";
@@ -1786,6 +1788,9 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const exitCode = missionExitCode(missionOutcome);
     const typed = {
       ...result,
+      // #209: one name — a frontier that emptied having proved nothing about the feature is not
+      // `exhausted` ("fully covered"): it is `insufficient-coverage`, the same word as its failure.kind.
+      outcome: thin && result.outcome === "exhausted" ? ("insufficient-coverage" as const) : result.outcome,
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "feature" as const,
       transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],

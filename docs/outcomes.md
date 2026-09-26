@@ -140,7 +140,8 @@ at the page that has them.
 
 | `outcome` | Meaning |
 |---|---|
-| `exhausted` | the state frontier was fully explored |
+| `exhausted` | the state frontier was fully explored, and exercised the feature |
+| `insufficient-coverage` | the frontier emptied having exercised nothing in scope, or nothing relevant to the feature — `inconclusive`, `failure.kind: "insufficient-coverage"` |
 | `cap` | the action budget ran out |
 | `path-cap` | the max-discovered-paths budget ran out |
 | `scope-unreachable` | as above — `inconclusive` |

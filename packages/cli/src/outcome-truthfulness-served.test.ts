@@ -109,6 +109,8 @@ describe("#209 item 3 — a feature run that exercised nothing relevant is never
       expect(r.missionOutcome).toBe("inconclusive");
       expect(r.exitCode).toBe(2);
       expect(r.failure?.kind).toBe("insufficient-coverage");
+      // One name for one ending (item 5): not `exhausted`, which reads as "fully covered".
+      expect(r.outcome).toBe("insufficient-coverage");
       expect(r.failure?.message).toContain('no control relevant to "Edit profile" was exercised');
       expect(r.failure?.message).toContain("relevance=0");
     },

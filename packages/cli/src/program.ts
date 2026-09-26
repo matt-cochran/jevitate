@@ -600,7 +600,7 @@ Outcomes, stop reasons and exit codes:
   starved is listed in "environmentDegraded" (advisory, never a finding); a run most of whose steps
   ran starved is inconclusive (failure.kind degraded-environment), never clean.
   --feature's own "outcome" (folds into missionOutcome above):
-    exhausted | cap | path-cap | scope-unreachable | stalled | crashed | hang
+    exhausted | insufficient-coverage | cap | path-cap | scope-unreachable | stalled | crashed | hang
   See README.md "Mission outcomes and exit codes" for what each value means.
 `;
 
