@@ -195,6 +195,27 @@ export function groundAnswer(
   return { accept: true, answer };
 }
 
+/** A reply noun/verb in a goal: "wait for its reply", "report the response", "what it responds". */
+const REPLY_WORD = /\b(?:repl(?:y|ies|ied)|respon(?:se|ses|ds?|ded))\b/i;
+/** "answer" names a reply only next to a conversational counterpart ("the assistant's answer"). */
+const ANSWER_WORD = /\banswer(?:s|ed)?\b/i;
+/** Someone/something the goal converses with, or the act of messaging it. */
+const COUNTERPART = /\b(?:assistant|chat ?bot|chat|bot|agent|copilot|ai)\b/i;
+const MESSAGING = /\b(?:ask|asks|send|message|say|tell)\b/i;
+
+/**
+ * True when a goal asks about a conversational REPLY (#200) — "ask the assistant X, wait for its
+ * reply, and report the reply". Code-side and conservative (independent adjudication, no model): a
+ * reply word ("reply", "response", "responds") together with a counterpart or the act of messaging,
+ * or "answer" together with a named counterpart ("the assistant's answer"). Such a goal's report may
+ * be grounded ONLY on text that appeared after the run's own send — never on copy (a chat panel's
+ * intro / placeholder) that was on screen before the conversation.
+ */
+export function goalAsksForReply(goal: string): boolean {
+  if (REPLY_WORD.test(goal)) return COUNTERPART.test(goal) || MESSAGING.test(goal);
+  return ANSWER_WORD.test(goal) && COUNTERPART.test(goal);
+}
+
 /** The observed pages as the generator's `pages` input: current page first, bounded. */
 export function pagesContext(pages: readonly ObservedPage[], limit = ANSWER_PAGES_CHARS): string {
   let out = "";

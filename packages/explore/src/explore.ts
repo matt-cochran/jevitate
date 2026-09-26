@@ -43,7 +43,7 @@ import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { coveredByInterceptors } from "./occlusion.js";
 import { descriptorToLocator } from "@jevitate/recorder";
-import { ObservedPages, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
+import { ObservedPages, goalAsksForReply, reportAnswer, type AnswerVerdict, type RunAnswer } from "./answer.js";
 import {
   REPLY_CEILING_MS,
   GOAL_CHECK_TRIGGER,
@@ -55,6 +55,7 @@ import {
   groundDone,
   isSubmitControl,
   lastQuestion,
+  newPageText,
   readPageText,
   repetitiveTurns,
   sameMessage,
@@ -449,6 +450,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let reportRejections = 0;
   /** The visible text of every page state observed — what a reported answer is grounded against (#101). */
   const observed = new ObservedPages(secrets);
+  /**
+   * #200 — a goal about a conversational reply (`goalAsksForReply`, code-side) is reported from, and
+   * grounded on, ONLY text that appeared after the run's first send: each observed state's text minus
+   * the pre-send snapshot and the run's own messages, plus every reply the reply wait read. A chat
+   * panel's intro / placeholder copy, on screen before the conversation, is never a reply.
+   */
+  const replyGoal = goalAsksForReply(cfg.goal);
+  const replies = new ObservedPages(secrets);
+  /** The page text just before the run's first message was sent (null until one is sent). */
+  let preSend: string | null = null;
+  const noteReplyText = (url: string, pageText: string): void => {
+    if (preSend !== null) replies.add(url, withoutAuthored(newPageText(preSend, pageText, ""), conversation.sent));
+  };
   /** The grounded answer a `report` ended the run with. */
   let answer: RunAnswer | undefined;
   /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
@@ -957,7 +971,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const offered = new Set(snap.controls.filter((c) => offeredKeys.has(keyOf(c))).map((c) => c.index));
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
-      observed.add(snap.url, await readPageText(page));
+      {
+        const pageText = await readPageText(page);
+        observed.add(snap.url, pageText);
+        noteReplyText(snap.url, pageText);
+      }
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded
       // (jevitate's own refusal) and told to the model.
@@ -1204,15 +1222,45 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // `report` (#101) ends a find-out goal with an ANSWER — a proposal too: the answer is generated
       // from the observed page text and accepted only when code grounds every claim on it.
       if (decision.op === "report") {
-        const verdict: AnswerVerdict = await reportAnswer(cfg.gen, {
-          goal: cfg.goal,
-          url: snap.url,
-          pages: observed.pages(),
-          history,
-          secrets,
-        }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
+        if (replyGoal) {
+          // #200 — a reply still on its way is listened for (what is left of the reply wait) before
+          // the report is judged; then the current page's post-send text is taken in.
+          if (awaitingReply && lastTurn !== null && busyWaitedMs < replyWaitMs) {
+            const t0 = now();
+            const listen = replyWaitMs - busyWaitedMs;
+            const reply = await waitForReply(page, { ...lastTurn, timeoutMs: listen, ceilingMs: listen });
+            busyWaitedMs += now() - t0;
+            if (reply.received) {
+              conversation.latestReply = reply.text;
+              replies.add(snap.url, reply.text);
+              awaitingReply = false;
+              busyWaitedMs = 0;
+              history.push(`waited for the reply → reply: ${quote(reply.text, 300)}`);
+            }
+          }
+          noteReplyText(snap.url, await readPageText(page));
+        }
+        const replyPages = replyGoal ? replies.pages() : null;
+        const verdict: AnswerVerdict =
+          replyPages !== null && replyPages.length === 0
+            ? {
+                accept: false as const,
+                reason:
+                  preSend === null
+                    ? "no reply observed: no message was sent yet — text on the page before the conversation is not a reply"
+                    : `no reply observed: no new message appeared after the send within the reply wait (${Math.round(replyWaitMs / 1000)}s)`,
+                answer: null,
+              }
+            : await reportAnswer(cfg.gen, {
+                goal: cfg.goal,
+                url: snap.url,
+                pages: replyPages ?? observed.pages(),
+                history,
+                secrets,
+              }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
-          record(true, `report accepted: answer grounded on the observed pages (${verdict.answer.evidence.length} claim(s))`, {
+          const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
+          record(true, `report accepted: answer grounded on ${on} (${verdict.answer.evidence.length} claim(s))`, {
             answer: verdict.answer,
           });
           answer = verdict.answer;
@@ -1271,6 +1319,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           busyWaitedMs += now() - t0;
           if (reply.received) {
             conversation.latestReply = reply.text;
+            replies.add(snap.url, reply.text);
             awaitingReply = false;
             busyWaitedMs = 0;
           }
@@ -1638,8 +1687,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           unsent.submitted();
           conversation.sent.push(message);
+          preSend ??= baseline;
           const reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
-          if (reply.received) conversation.latestReply = reply.text;
+          if (reply.received) {
+            conversation.latestReply = reply.text;
+            replies.add(snap.url, reply.text);
+          }
           awaitingReply = !reply.received;
           busyWaitedMs = reply.waitedMs;
           lastTurn = { baseline, sent: message };
@@ -1836,8 +1889,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           if (turn) {
             message = submits ? pendingTexts.join("\n") : control.name;
             conversation.sent.push(message);
+            preSend ??= baseline;
             reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
-            if (reply.received) conversation.latestReply = reply.text;
+            if (reply.received) {
+              conversation.latestReply = reply.text;
+              replies.add(snap.url, reply.text);
+            }
             awaitingReply = !reply.received;
             busyWaitedMs = reply.waitedMs;
             lastTurn = { baseline, sent: message };
