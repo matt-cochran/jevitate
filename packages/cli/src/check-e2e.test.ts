@@ -30,6 +30,12 @@ const APP = `<!doctype html><html><body><main data-testid="app-shell">
     };
   </script></main></body></html>`;
 
+/** #195: the same app plus a harmless control, so a run refused Import still exercises something. */
+const APP_WITH_REFRESH = APP.replace(
+  '<button type="button" id="imp">Import</button>',
+  '<button type="button" id="imp">Import</button> <button type="button" id="ref" onclick="document.title=\'refreshed\'">Refresh</button>',
+);
+
 let server: Server;
 let origin: string;
 let dir: string;
@@ -37,6 +43,10 @@ let dir: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
+    if (path === "/app2") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(APP_WITH_REFRESH);
+      return;
+    }
     if (path === "/app") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(APP);
       return;
@@ -141,6 +151,69 @@ describe("jevitate check — served suite (#137)", () => {
       expect(sarif.version).toBe("2.1.0");
       expect(sarif.runs[0]?.results.map((x) => x.level)).toEqual(["error"]);
       expect(await readFile(join(out, "report.md"), "utf8")).toContain("charge-implies-delivery");
+    },
+    240_000,
+  );
+
+  it(
+    "#195: a per-item explore option takes effect — the same sweep with deny on Import passes where the open one fails",
+    async () => {
+      await writeFile(
+        join(dir, "credits.json"),
+        JSON.stringify({
+          observe: {
+            balance: { dom: { selector: "[data-testid=credit-balance]", number: true } },
+            imports: { dom: { selector: "[data-testid=imports] li", read: "count" } },
+          },
+          invariants: [{ id: "charge-implies-delivery", require: "delta(balance) < 0 -> delta(imports) >= 1" }],
+        }),
+      );
+      await writeFile(
+        join(dir, "suite-deny.json"),
+        JSON.stringify({
+          version: 1,
+          name: "deny",
+          budget: { maxActions: 40, maxMinutes: 5 },
+          targets: [
+            {
+              name: "imports",
+              url: `${origin}/app2`,
+              invariants: ["credits.json"],
+              missions: [
+                { name: "open", strategy: "feature", feature: "invariants" },
+                { name: "guarded", strategy: "feature", feature: "invariants", deny: ["/^Import$/"] },
+              ],
+            },
+          ],
+        }),
+      );
+      const lines: string[] = [];
+      const program = buildProgram({
+        profiles: new ProfileManager("/unused"),
+        journeysDir: join(dir, "journeys"),
+        explore: { browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(dir, "no-targets.json") },
+      });
+      program.configureOutput({ writeOut: (s) => lines.push(s) });
+      program.exitOverride();
+      process.exitCode = undefined;
+      await program.parseAsync(["check", "--suite", join(dir, "suite-deny.json"), "--out", join(dir, "out-deny"), "--json"], { from: "user" });
+      process.exitCode = undefined;
+      const env = JSON.parse(lines.join("")) as { ok: boolean; data: CheckResult };
+      expect(env.ok).toBe(true);
+      expect(env.data.items.map((i) => [i.name, i.verdict])).toEqual([
+        ["open", "failed"],
+        ["guarded", "passed"],
+      ]);
+      // The guarded run's safety policy refused Import by the item's own deny; it clicked Refresh only.
+      type Step = { op: string | null; target: string; actOk: boolean; reason?: string };
+      const transcripts = await Promise.all(
+        env.data.results.map(async (p) => (JSON.parse(await readFile(p, "utf8")) as { result: { transcript: Step[] } }).result.transcript),
+      );
+      const open = transcripts[0] ?? [];
+      const guarded = transcripts[1] ?? [];
+      expect(open.some((s) => s.op === "click" && s.target === 'button "Import"' && s.actOk)).toBe(true);
+      expect(guarded.some((s) => s.op === "click" && s.target === 'button "Import"')).toBe(false);
+      expect(guarded.find((s) => s.target === 'button "Import"')?.reason).toBe('refused by the safety policy: "Import" matches --deny "/^Import$/"');
     },
     240_000,
   );

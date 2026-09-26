@@ -184,13 +184,14 @@ function stepEvidence(steps: readonly number[], base: EvidenceRef): EvidenceRef[
   return steps.slice(0, 10).map((step) => ({ ...base, step }));
 }
 
-/** A hard-signal or invariant defect (`result.defects[]`: adversarial, or declared invariants anywhere). */
+/** A defect (`result.defects[]`, #195: every strategy's hard-signal, declared-invariant and server-log defects). */
 function defectObservation(d: Json, ctx: Ctx): FindingObservation | null {
   const fingerprint = str(d.fingerprint);
   const kind = str(d.kind);
   if (fingerprint === undefined || kind === undefined) return null;
   const inv = isRecord(d.invariant) ? d.invariant : undefined;
-  const category: FindingCategory = kind === "invariant" ? "invariant" : "defect";
+  // #195: a defect its strategy reports but never gates on (a usability run's `server-log` one) is advisory.
+  const category: FindingCategory = d.advisory === true ? "advisory" : kind === "invariant" ? "invariant" : "defect";
   const invId = str(inv?.id);
   const action = isRecord(inv?.action) ? inv.action : undefined;
   const control = str(action?.control) ?? lastControl(d.repro);
@@ -502,7 +503,9 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const ctx: Ctx = {
     path,
     ...(str(result.transcriptPath) === undefined ? {} : { transcript: str(result.transcriptPath) }),
-    ...(str(result.recordingPath) === undefined ? {} : { recording: str(result.recordingPath) }),
+    ...((str(result.recordingPath) ?? str(arr(result.recordingPaths)[0])) === undefined
+      ? {}
+      : { recording: str(result.recordingPath) ?? str(arr(result.recordingPaths)[0]) }),
   };
   const observations: FindingObservation[] = [];
   const push = (o: FindingObservation | null): void => {

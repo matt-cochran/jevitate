@@ -5,6 +5,8 @@ import type { InvariantSpec, PageSegment, RecordedStep, Recording, Step, TargetD
 import { redactUrl, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
 import {
   InvariantDefectLog,
+  finishDeclaredRun,
+  type DeclaredRun,
   InvariantMonitor,
   recordingStepCount,
   type InvariantDefect,
@@ -158,10 +160,7 @@ export interface InductionRunResult {
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
-interface Declared {
-  readonly monitor: InvariantMonitor;
-  readonly log: InvariantDefectLog;
-}
+type Declared = DeclaredRun;
 
 export interface InductionMissionParams {
   readonly page: Page;
@@ -348,6 +347,7 @@ export async function runInductionMission(params: InductionMissionParams): Promi
             ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
           }),
           log: new InvariantDefectLog(),
+          lastRepro: null,
         };
   const safety = new MissionSafety(params.safety);
   // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule,
@@ -356,6 +356,8 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
   const result = { ...(await runInductionFrontier(params, declared, safety, budget)), ...safety.result() };
+  // #195: the shared end-of-run path — a never.response hit to the LAST action is never lost.
+  if (declared !== null) await finishDeclaredRun(declared);
   return {
     ...result,
     ...(declared === null ? {} : { invariantDefects: declared.log.defects(), invariants: declared.monitor.report() }),
@@ -715,9 +717,8 @@ async function runInductionFrontier(
         // replays this path from the seed (the frontier's reach navigates there first).
         const path = withSeed(branch, params.seedUrl);
         const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: liveControl.name, url: actedOn }));
-        for (const v of checked.violations) {
-          declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
-        }
+        declared.lastRepro = { recordingStepIndex: recordingStepCount(path) - 1, recording: path };
+        for (const v of checked.violations) declared.log.add(v, declared.lastRepro);
       }
 
       // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.

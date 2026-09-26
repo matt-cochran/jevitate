@@ -78,3 +78,57 @@ export function isAuthorizedExploreTarget(url: string, allowlist: readonly strin
   const origin = originOf(url);
   return origin !== null && normalizeAllowlist(allowlist).includes(origin);
 }
+
+/**
+ * The "site" a host belongs to, for the third-party test (#194) — deliberately LOOSE: an IP address
+ * or a single-label host (`localhost`) is its own site; any other host is its last two labels. With
+ * no public-suffix list, `a.example.co.uk` and `b.other.co.uk` share the site `co.uk`: a coarser site
+ * only makes MORE hosts first-party, i.e. more writes stay blocked — the safe direction.
+ */
+function siteOf(host: string): string {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  if (h.startsWith("[") || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(h)) return h;
+  const labels = h.split(".");
+  return labels.length <= 2 ? h : labels.slice(-2).join(".");
+}
+
+/**
+ * The origin of a request URL when it is THIRD-PARTY to the run (#194) — decided by code from the
+ * URL, never by the model — or `null` when it is the app's own (first-party).
+ *
+ * Third-party means: an http(s) origin that is not on the allowlist AND whose host shares neither the
+ * host nor the site (`siteOf`) of any allowed origin. So an app's own API on a sibling subdomain
+ * (`api.example.com` next to an allowed `app.example.com`) or on another port of an allowed host stays
+ * first-party. Fail-closed: a URL that does not parse, a non-http(s) scheme (`data:`, `blob:`) or an
+ * empty allowlist is never third-party (the caller keeps treating it as the app's).
+ * Evidence: Stripe.js's fraud-signal beacon `POST https://m.stripe.com/6` is third-party.
+ */
+export function thirdPartyOrigin(url: string, allowlist: readonly string[]): string | null {
+  const origin = originOf(url);
+  if (origin === null) return null;
+  const allowed = normalizeAllowlist(allowlist);
+  if (allowed.length === 0 || allowed.includes(origin)) return null;
+  const host = new URL(origin).hostname;
+  for (const a of allowed) {
+    const ah = new URL(a).hostname;
+    if (ah === host || siteOf(ah) === siteOf(host)) return null;
+  }
+  return origin;
+}
+
+/**
+ * How a request is named in side effects and refusals (#194): its path when its origin is an allowed
+ * one; otherwise origin + path, so an off-origin request never shows as a bare path (`/6` was Stripe's
+ * `https://m.stripe.com/6`). Never the query or hash (they can carry a token). An empty allowlist
+ * names every request in full.
+ */
+export function requestEndpoint(url: string, allowlist: readonly string[]): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url.split(/[?#]/)[0] ?? url;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return u.pathname;
+  return normalizeAllowlist(allowlist).includes(u.origin) ? u.pathname : `${u.origin}${u.pathname}`;
+}

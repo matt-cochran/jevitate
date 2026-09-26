@@ -132,7 +132,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | **Missions** | `explore` with a `--goal`, or `--strategy adversarial \| coverage \| exploratory \| usability`, or `--feature <name>` ([exploration](./docs/exploration.md)) |
 | **Success checks** | URL, visibility, text, values, counts, network (`requestMade`, `responseStatus`), persistence (`reloadThen`), computed style and layout. Find-out goals are answered only with grounded claims ([success checks](./docs/success-checks.md)) |
 | **App-declared invariants** | rules over DOM, network and read-only probes, checked around every action ([invariants](./docs/invariants.md)) |
-| **Reproduce and verify** | `verify-fix`, `regression capture`, `regression run` ([verification](./docs/verification.md)) |
+| **Reproduce and verify** | `verify-fix`, `regression capture`, `regression run`, and `ledger add` / `ledger verify` to re-check a finding by fingerprint long after its run ([verification](./docs/verification.md)) |
 | **CI** | `jevitate check --suite` with a budget, JUnit and SARIF; `report` and `diff` for deduped findings and baselines ([CI](./docs/ci.md)) |
 | **Real apps** | storage-state logins, bound secrets and TOTP, fixtures that reset state around every replay, repeat-and-vote, persona and multi-actor runs ([auth](./docs/authentication.md), [fixtures](./docs/fixtures.md), [multi-run](./docs/multi-run.md)) |
 | **Evidence** | hangs (confirmed by replay), page timing, backend log correlation, redacted issue drafts ([exploration](./docs/exploration.md), [operations](./docs/operations.md)) |
@@ -204,7 +204,10 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 - A hard-signal defect (e.g. an HTTP 500) is re-checked with `verify-fix`, not committed by
   `regression capture`. Declare the broken rule as an invariant to commit it
   ([verification](./docs/verification.md)).
-- Usability findings are advisory, and their quality grader is not yet calibrated across apps.
+- UX quality findings (`jevitate ux`, `explore --strategy usability`) are a 0.2.0 PREVIEW:
+  advisory, the quality grader is not yet calibrated across apps, and finding grouping/dedup is
+  still being redesigned ([#133](https://github.com/matt-cochran/jevitate/issues/133),
+  [#198](https://github.com/matt-cochran/jevitate/issues/198)).
 - Chromium only.
 
 ## Documentation

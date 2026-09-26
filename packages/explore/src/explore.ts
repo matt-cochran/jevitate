@@ -85,6 +85,7 @@ import {
 } from "./status.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
+import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 
@@ -573,15 +574,30 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. */
   // A write is classified by the shared classifier (#110): a gRPC-web/Connect read is never guarded.
   const isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
-  const sideEffects = new SideEffectGuard(monitorFor(page), { isWrite });
+  const sideEffects = new SideEffectGuard(monitorFor(page), { isWrite, allowlist: cfg.allowlist });
   /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */
   const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
   /** The writes the run's actions fire (#116: the result's `sideEffects`). */
-  const effectLog = new SideEffectLog({ isWrite, now });
+  /**
+   * #194 — which origins are the app's: the allowlist's sites, plus every origin the page sends API
+   * credentials to (observed on every request below). A write elsewhere is `thirdParty`.
+   */
+  const firstParty = new FirstPartyOrigins(cfg.allowlist);
+  const onRequestSeen = (r: { url(): string; headers(): Record<string, string> }): void => {
+    firstParty.observe(r.url(), r.headers());
+  };
+  page.on("request", onRequestSeen);
+  // #194: a write to a third-party origin is listed with its full URL and `thirdParty: true`.
+  const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
   const readOnly =
     cfg.readOnly === true
-      ? new ReadOnlyGuard(isWrite, cfg.safety?.allowWriteRequests === undefined ? {} : { allowWrites: cfg.safety.allowWriteRequests })
+      ? new ReadOnlyGuard(isWrite, {
+          // #194: only writes to the app's own origins are blocked; a third-party beacon passes (listed).
+          allowlist: cfg.allowlist,
+          firstParty,
+          ...(cfg.safety?.allowWriteRequests === undefined ? {} : { allowWrites: cfg.safety.allowWriteRequests }),
+        })
       : null;
   const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
@@ -949,7 +965,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const blocked = readOnly?.drain() ?? [];
         if (blocked.length > 0) {
           const what = [...new Set(blocked.map((b) => `${b.method} ${b.path}`))].join(", ");
-          const note = `blocked write request(s) ${redactText(what, secrets)}: this find-out goal is read-only — find the answer without changing anything`;
+          // #194: a blocked write off the --allow origins says how to declare or exempt it.
+          const hints = [...new Set(blocked.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))];
+          const note =
+            `blocked write request(s) ${redactText(what, secrets)}: this find-out goal is read-only — find the answer without changing anything` +
+            (hints.length === 0 ? "" : ` (${redactText(hints.join("; "), secrets)})`);
           history.push(note);
           transcript.record({
             op: null,
@@ -1883,6 +1903,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   }
 
   await readOnly?.disarm();
+  page.off("request", onRequestSeen);
   const finished = recorder.tryFinish({ intent: cfg.goal });
   const cause = blockingCause();
   const finalOutcome: RunOutcome =

@@ -11,7 +11,7 @@
 import { logsDirFor } from "./project-dir.js";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -57,6 +57,7 @@ import {
   parseUxEvidenceFile,
   persistableScreen,
   resolveMinConfidence,
+  resolveMaxFindingsPerRoute,
   resolveQualityPolicy,
   withSignalFindings,
   makeSignalFinding,
@@ -73,14 +74,15 @@ import {
 } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
-import { loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
+import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
-import { MissionJournal, artifactStamp, closeQuietly, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
+import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
+import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
-import { currentUrlSafe, persistStorageState, serverLogResult, type ServerLogOptions } from "./explore-api.js";
+import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type MissionTarget, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
@@ -343,6 +345,12 @@ export interface RunUxReviewOptions {
    * `JEVITATE_UX_SHOW` > config `ux.show` > every grade (#133: the uncalibrated grader labels, it does not filter).
    */
   readonly show?: string;
+  /**
+   * Cap on findings per route (issue #198 interim, 0.2.0). Precedence: this (CLI
+   * `--max-findings-per-page`) > `JEVITATE_UX_MAX_FINDINGS_PER_PAGE` > config
+   * `ux.maxFindingsPerPage` > `DEFAULT_MAX_FINDINGS_PER_ROUTE` (5).
+   */
+  readonly maxFindingsPerRoute?: number | string;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Path of the config file holding `ux.minConfidence`. Default `~/.jevitate/config.json`. */
   readonly configPath?: string;
@@ -404,6 +412,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
     loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
+  const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
   const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
   // #134: a live usability run's evidence sidecar gives offline review the SAME screens and run
   // signals the live analysis had; otherwise the Recording (+ transcript) is all there is.
@@ -441,6 +450,7 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
     minConfidence,
     quality,
+    maxFindingsPerRoute,
     evidenceCaveats,
     calibrationCaveats,
   });
@@ -568,6 +578,8 @@ export interface RunUsabilityMissionOptions {
    * `JEVITATE_UX_SHOW` > config `ux.show` > every grade (#133: the uncalibrated grader labels, it does not filter).
    */
   readonly show?: string;
+  /** Cap on findings per route (see `RunUxReviewOptions.maxFindingsPerRoute`). */
+  readonly maxFindingsPerRoute?: number | string;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Path of the config file holding `ux.minConfidence`. Default `~/.jevitate/config.json`. */
   readonly configPath?: string;
@@ -649,6 +661,20 @@ export class UsabilityInvariantsUnsupportedError extends Error {
 }
 
 export interface RunUsabilityMissionResult {
+  /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
+  readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
+  readonly strategy: "usability";
+  /** Where the review ran (#195: every strategy states its scope the same way) — a session PATH at most. */
+  readonly target: MissionTarget;
+  /**
+   * EVERY defect the review found (#195) — here only `server-log` defects (#142), each marked
+   * `advisory: true`: reported like every other strategy's, never gating a UX review's outcome.
+   */
+  readonly defects: AdvisoryServerLogDefect[];
+  /** Hang findings (0 or 1: the review stops at a hang), as every strategy lists them (#195). */
+  readonly hangs: HangFinding[];
+  /** Every Recording the review wrote (#195: one list on every strategy) — a review writes one. */
+  readonly recordingPaths: string[];
   /** The UX report; `null` when the analysis was unavailable (see `analysisUnavailable`). */
   readonly report: UxReport | null;
   readonly reportPath: string | null;
@@ -663,7 +689,10 @@ export interface RunUsabilityMissionResult {
   readonly screensObserved: number;
   /** The explore loop's decision transcript, written next to the report (each step: its screenshot). */
   readonly transcriptPath: string;
-  /** The run's Recording, written next to the report (crash-safe: flushed after every step). */
+  /**
+   * The run's Recording, written next to the report (crash-safe: flushed after every step).
+   * @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor.
+   */
   readonly recordingPath: string;
   /** Where the per-step screenshots are written (secret fields masked). */
   readonly screenshotDir: string;
@@ -699,13 +728,13 @@ export interface RunUsabilityMissionResult {
   readonly engine: EngineInfo;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
   readonly usage?: UsageCounts;
-  /** The hang finding (with its reproduction k/N), present when the run stopped on a hang (#126). */
+  /** The hang finding (with its reproduction k/N), present when the run stopped on a hang (#126); also in `hangs`. */
   readonly hang?: HangFinding;
   /** The persisted typed result (`usability-<stamp>.recording.result.json`), readable via MCP `get_mission_result`. */
-  readonly resultPath?: string;
+  readonly resultPath: string;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
-  /** `server-log` defects (#142, `--log-defect`) — advisory here, like every UX finding; never gates the outcome. */
+  /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
@@ -736,6 +765,7 @@ function freshSessionOpener(
  */
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  assertSaveStorageStateOutsideProject(opts.saveStorageState);
   // #150 — usability reads only a spec's `budget`: it does not check invariants or captures (#86/
   // #147) today. Refused BEFORE a browser opens, same as every other bad-input refusal here.
   if (opts.invariants !== undefined && (opts.invariants.invariants.length > 0 || opts.invariants.capture !== undefined)) {
@@ -749,6 +779,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     loadUxMinConfidenceByAppClass(opts.configPath, opts.appContext.appClass),
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
+  const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
@@ -1013,6 +1044,16 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
             ? hangOutcome(hang?.reproduction.status ?? "inconclusive")
             : "clean";
     const base = {
+      schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
+      strategy: "usability" as const,
+      target: {
+        seedUrl: opts.url,
+        allowlist: [...opts.allowlist],
+        ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
+      },
+      recordingPaths: [journal.recordingPath],
+      resultPath: resultPathFor(journal.recordingPath),
+      hangs: hang === undefined ? [] : [hang],
       timing: run.timing,
       stop: run.stop,
       outcome: run.outcome,
@@ -1036,6 +1077,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       // #142 follow-up: reported but never gates `missionOutcome`/`exitCode` — a UX finding is
       // always advisory, and a `server-log` defect here is treated the same way.
       ...serverLogResult(serverLogRun),
+      defects: advisoryDefects(serverLogRun?.defects),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
     };
     if (outcome.kind === "failed") {
@@ -1057,6 +1099,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
       minConfidence,
       quality,
+      maxFindingsPerRoute,
       calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");

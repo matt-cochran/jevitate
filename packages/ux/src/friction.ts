@@ -203,8 +203,22 @@ function frictionFor(f: UxFinding, points: readonly FrictionPoint[]): FrictionPo
   return [...candidates].sort((a, b) => IMPACT_RANK[b.impact] - IMPACT_RANK[a.impact] || a.steps[0]! - b.steps[0]!)[0];
 }
 
-function contribution(f: UxFinding): ContributingFinding {
-  return { rubricItemId: f.rubricItemId, observation: f.observation, confidence: f.confidence, ...(f.quality ? { quality: f.quality } : {}) };
+/**
+ * A collapsed-away finding's rationale entry, flattened: if `f` was ITSELF a lead with its own
+ * `contributing` (e.g. 0.2.0's same-control grouping in analyzer.ts, #198), those entries are
+ * carried along rather than dropped when `f` in turn becomes someone else's `contributing` item —
+ * every rubric item that fired stays visible, however many collapse passes it went through.
+ */
+function contribution(f: UxFinding): readonly ContributingFinding[] {
+  const self: ContributingFinding = {
+    rubricItemId: f.rubricItemId,
+    observation: f.observation,
+    confidence: f.confidence,
+    occurrences: f.occurrences,
+    citation: f.citation,
+    ...(f.quality ? { quality: f.quality } : {}),
+  };
+  return f.contributing && f.contributing.length > 0 ? [self, ...f.contributing] : [self];
 }
 
 const SEVERITY_RANK = { info: 0, minor: 1, major: 2 } as const;
@@ -249,7 +263,7 @@ export function groundFindings(outcome: AnalysisOutcome, points: readonly Fricti
     // A run signal observed on the same friction point is the finding; the heuristics are its rationale.
     const owner = signals.findIndex((s) => overlaps(s.journeyEvidence?.steps ?? [], point.steps) || overlaps(s.screenIds, point.screenIds));
     if (owner !== -1) {
-      merged.set(owner, [...(merged.get(owner) ?? []), ...findings.map(contribution)]);
+      merged.set(owner, [...(merged.get(owner) ?? []), ...findings.flatMap(contribution)]);
       continue;
     }
     const ranked = [...findings].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.confidence - a.confidence);
@@ -261,7 +275,7 @@ export function groundFindings(outcome: AnalysisOutcome, points: readonly Fricti
         severity: IMPACT_SEVERITY[point.impact],
         impact: point.impact,
         journeyEvidence: { id: point.id, kind: point.kind, steps: point.steps, detail: point.detail },
-        ...(rest.length > 0 ? { contributing: rest.map(contribution) } : {}),
+        ...(rest.length > 0 ? { contributing: rest.flatMap(contribution) } : {}),
       }),
     );
   }

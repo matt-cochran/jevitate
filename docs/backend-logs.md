@@ -8,9 +8,11 @@ Tail your backend's logs during a run, attach them to the step that caused them,
 backend log for the run and correlates its lines to the step they landed during — turning "blocked:
 could not verify plan limit" into "blocked: the server denied `GetActiveRatePlanForOffer` for this
 user". Sources are **operator-declared, read-only and never the model's choice** — CLI/local-config
-only, never part of an MCP `MissionRequest`. On a usability run a `server-log` defect is reported
-(`serverLogs`/`serverLogDefects` on the result) but stays advisory, like every other UX finding — it
-never gates `missionOutcome`/`exitCode`.
+only, never part of an MCP `MissionRequest`. A `server-log` defect is listed in the result's
+`defects` on every strategy, like any other defect ([result schema](./results.md)). On a usability
+run it is marked `advisory: true`, like every other UX finding — it never gates
+`missionOutcome`/`exitCode`. (`serverLogDefects` is a deprecated alias of the server-log subset,
+kept for 0.2.0 only.)
 
 ```bash
 jevitate explore --url http://localhost:5173/imports --goal "import https://example.com" \

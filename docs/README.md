@@ -27,6 +27,7 @@ full flag list.
 **Use the results**
 
 - [Outcomes and exit codes](./outcomes.md): every `outcome`, `stop` and `missionOutcome` value.
+- [Result schema](./results.md): the one versioned result shape every strategy writes.
 - [Verification](./verification.md): `verify-fix`, `regression capture`, `regression run`, and
   exact replay.
 - [CI, reports and baselines](./ci.md): `jevitate check`, `report`, `diff`, `baseline`.

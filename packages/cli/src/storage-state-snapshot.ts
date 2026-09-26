@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { sessionFileInProjectRefusal } from "./project-dir.js";
 import { isLoginLikeUrl } from "@jevitate/explore";
 
 /**
@@ -69,6 +70,13 @@ export class StorageStateSnapshotter {
  * being flushed, nor keep the process from exiting).
  */
 export function writeKillSnapshot(path: string, json: string): void {
+  // #195: never into a repo's .jevitate/ — refused loudly (stderr), the write skipped; the kill path
+  // must still flush the other missions and exit, so it does not throw.
+  const refusal = sessionFileInProjectRefusal(path, "save-storage-state");
+  if (refusal !== undefined) {
+    process.stderr.write(`jevitate: storage state not written: ${refusal}\n`);
+    return;
+  }
   try {
     writeFileSync(path, json, { encoding: "utf8", mode: 0o600 });
   } catch {

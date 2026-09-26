@@ -344,6 +344,83 @@ describe("UxAnalyzer", () => {
     expect(outcome.findings[0]?.confidenceBasis?.agreement).toBe(1);
   });
 
+  describe("0.2.0 (#198 interim): grouping findings by control — several rubric items on ONE control collapse", () => {
+    const nielsen1: RubricEntry = {
+      id: "nielsen-1",
+      principle: "Visibility of system status",
+      citation: { source: "NN/g", ref: "n1" },
+      tier: "semantic",
+      requiredEvidence: ["controls", "visibleText", "job"],
+      questions: [{ id: "q", instruction: "clear?", criteria: "c", kind: "noul", flag: { when: "noul-false" }, severity: "major" }],
+    };
+    const nielsen2: RubricEntry = { ...nielsen1, id: "nielsen-2", principle: "Match with the real world", citation: { source: "NN/g", ref: "n2" } };
+    const nielsen3: RubricEntry = { ...nielsen1, id: "nielsen-3", principle: "User control and freedom", citation: { source: "NN/g", ref: "n3" } };
+
+    /** Every entry's own question flags (noul-false), with a per-entry violation probability; applicability always 1. */
+    function multiEntryJudge(violationByEntry: Record<string, number>): JudgmentPort {
+      return {
+        systemOne: async (args) => {
+          const out: Record<string, Answer> = {};
+          for (const [k, q] of Object.entries(args.questions)) {
+            if (q.kind === "choice") {
+              out[k] = { kind: "choice", value: "actionable", confidence: 0.8 };
+              continue;
+            }
+            const [entryId, qid] = k.split("::");
+            out[k] =
+              qid === APPLIES_QUESTION_ID
+                ? { kind: "noul", value: true, probability: 1 }
+                : { kind: "noul", value: false, probability: 1 - (violationByEntry[entryId!] ?? 0) };
+          }
+          return out;
+        },
+      };
+    }
+
+    it("the SAME control firing on 7 (here: 3) rubric items becomes ONE finding, listing every citation, led by the highest confidence", async () => {
+      // Highest violation probability (and so highest confidence) on nielsen-1.
+      const judge = multiEntryJudge({ "nielsen-1": 0.95, "nielsen-2": 0.5, "nielsen-3": 0.2 });
+      const gen = scriptedGen((id) => ({
+        violated: true,
+        implicatedControls: [0], // the SAME single control ("Pay") for every rubric item
+        quotes: ["Pay for your order"],
+        observation: `${id}: button "Pay" is unclear on this screen`,
+        userImpact: "a buyer may hesitate at checkout",
+        recommendation: 'make "Pay" the clear next step',
+      }));
+      const analyzer = new UxAnalyzer({ judge, gen });
+      const outcome = await analyzer.analyze({ screens: [screen()], rubric: loadRubric([nielsen1, nielsen2, nielsen3]), appContext, judgmentBudget: 10 });
+      if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+      expect(outcome.findings).toHaveLength(1);
+      const f = outcome.findings[0]!;
+      expect(f.rubricItemId).toBe("nielsen-1");
+      expect(f.contributing?.map((c) => c.rubricItemId).sort()).toEqual(["nielsen-2", "nielsen-3"]);
+      // every citation is kept, not just the lead's
+      expect(f.citation).toEqual({ source: "NN/g", ref: "n1" });
+      expect(f.contributing?.find((c) => c.rubricItemId === "nielsen-2")?.citation).toEqual({ source: "NN/g", ref: "n2" });
+      expect(f.contributing?.find((c) => c.rubricItemId === "nielsen-3")?.citation).toEqual({ source: "NN/g", ref: "n3" });
+      expect(f.contributing?.every((c) => c.occurrences === 1)).toBe(true);
+    });
+
+    it("different rubric items on DIFFERENT controls on the same route stay separate findings", async () => {
+      const judge = multiEntryJudge({ "nielsen-1": 0.9, "nielsen-2": 0.9 });
+      const gen = scriptedGen((id) => ({
+        violated: true,
+        implicatedControls: id === "nielsen-1" ? [0] : [1],
+        quotes: [],
+        observation: `${id}: this control is a problem`,
+        userImpact: "confusing",
+        recommendation: "fix it",
+      }));
+      const analyzer = new UxAnalyzer({ judge, gen });
+      const outcome = await analyzer.analyze({ screens: [screen({ controls: twoButtons })], rubric: loadRubric([nielsen1, nielsen2]), appContext, judgmentBudget: 10 });
+      if (outcome.kind !== "analyzed") throw new Error("expected analyzed");
+      expect(outcome.findings).toHaveLength(2);
+      expect(outcome.findings.map((f) => f.rubricItemId).sort()).toEqual(["nielsen-1", "nielsen-2"]);
+      expect(outcome.findings.every((f) => f.contributing === undefined)).toBe(true);
+    });
+  });
+
   it("a specifics-generation error becomes `failed`, never a silent empty result", async () => {
     const broken: GenerationPort = { generate: async () => { throw new Error("openrouter down"); } };
     const analyzer = new UxAnalyzer({ judge: flaggingJudge(0.1, 0.9), gen: broken });

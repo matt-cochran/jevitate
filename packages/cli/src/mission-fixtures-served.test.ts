@@ -139,6 +139,8 @@ describe("mission fixtures — setup, bound outputs, restore, verify-fix replays
         );
         const judge = new DoneJudge();
         log.length = 0;
+        // #195: the hook's secret comes from the environment (`--secret env:VAR`), redacted like a literal.
+        process.env.JEV_TEST_HOOK_SECRET = HOOK_SECRET;
         const { data, raw, exitCode } = await explore(
           [
             "--url", `${origin}/items/\${setup.itemId}`,
@@ -149,12 +151,13 @@ describe("mission fixtures — setup, bound outputs, restore, verify-fix replays
             "--fixtures", fixtures,
             "--before", `node -e "console.error('reseeding ${HOOK_SECRET}')"`,
             "--allow-shell-hooks",
-            "--secret", HOOK_SECRET,
+            "--secret", "env:JEV_TEST_HOOK_SECRET",
             "--out", outDir,
             "--json",
           ],
           judge,
         );
+        delete process.env.JEV_TEST_HOOK_SECRET;
         expect(data.outcome).toBe("succeeded");
         expect(exitCode).toBe(0);
         const fx = data.fixtures as { identity: string; specHash: string; outputs: { itemId: string }; secretOutputs: string[]; log: { phase: string; name: string; ok: boolean; stderr?: string }[] };

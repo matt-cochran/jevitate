@@ -68,7 +68,16 @@ import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { LogsConfigError, loadLogsRetention, pruneLogs } from "./logs-retention.js";
-import { initProjectDir, logsDirFor, logsRoot, projectDataDir, resultDirsFor, type ProjectInitReport } from "./project-dir.js";
+import {
+  SessionFileInProjectError,
+  assertSessionFileOutsideProject,
+  initProjectDir,
+  logsDirFor,
+  logsRoot,
+  projectDataDir,
+  resultDirsFor,
+  type ProjectInitReport,
+} from "./project-dir.js";
 import { sitePolicyKey, withSiteGate } from "./site-gate-cli.js";
 import { runRegressionCapture, runRegressionRun, RegressionNotFoundError } from "./regression-api.js";
 import {
@@ -92,6 +101,8 @@ import {
   type QueuedMissionExecutor,
 } from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { registerLedgerCommands } from "./ledger-cli.js";
+import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { resolveUsagePricing } from "./usage-config.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
@@ -123,6 +134,8 @@ import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
+import { registerInvariantsCommands } from "./invariants-validate.js";
+import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "./secret-args.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
@@ -169,7 +182,7 @@ import {
   type MissionTranscriptEntryLike,
 } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
-import { MinConfidenceError, QualityPolicyError } from "@jevitate/ux";
+import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
 import {
   runRecording,
@@ -1646,6 +1659,10 @@ export function buildProgram(deps: CliDeps): Command {
       "(--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
     .option(
+      "--max-findings-per-page <n>",
+      "(--strategy usability) cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5",
+    )
+    .option(
       "--success <spec>",
       [
         "independent success check (repeatable; every one must hold). Kinds:",
@@ -1688,8 +1705,8 @@ export function buildProgram(deps: CliDeps): Command {
       [] as string[],
     )
     .option(
-      "--secret <value>",
-      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
+      "--secret <value|env:VAR>",
+      "REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable); env:VAR reads it from the environment (preferred: a literal is visible in the process list and shell history). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -1780,7 +1797,8 @@ export function buildProgram(deps: CliDeps): Command {
     )
     .option(
       "--allow-write <glob>",
-      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments), beyond the built-in auth-refresh ones " +
+      "a write-request path a read-only find-out goal never blocks (repeatable; ** spans segments; a glob starting with https:// matches " +
+        "origin + path, e.g. https://abc.supabase.co/rest/v1/**), beyond the built-in auth-refresh ones " +
         "(**/refresh*, **/token*, **/oauth/**, **/auth/**/refresh*). The app's background writes outside an action always pass",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
@@ -1951,6 +1969,7 @@ export function buildProgram(deps: CliDeps): Command {
         goal?: string;
         appClass?: string;
         minConfidence?: string;
+        maxFindingsPerPage?: string;
         show?: string;
         success: string[];
         successWhen?: string;
@@ -1986,7 +2005,27 @@ export function buildProgram(deps: CliDeps): Command {
         json?: boolean;
       } & BrowserLaunchFlags & FixtureFlags & EmulationFlags>();
 
+      // #195: a session file never lands in the repo's .jevitate/ (refused before any run, multi-runs included).
+      if (o.saveStorageState !== undefined) {
+        try {
+          assertSessionFileOutsideProject(o.saveStorageState, "--save-storage-state");
+        } catch (err) {
+          if (!(err instanceof SessionFileInProjectError)) throw err;
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+      }
       const strategy = o.strategy ?? "goal";
+      // #195: `--secret env:VAR` is resolved from the environment before anything runs (fail closed).
+      try {
+        const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
+        if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
+        o.secret = resolved.secrets;
+      } catch (err) {
+        if (!(err instanceof SecretArgError)) throw err;
+        emitJson(program, fail("E_EXPLORE_ARGS", err.message));
+        return;
+      }
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
       if (wantsMultiRun(o)) {
         try {
@@ -2428,6 +2467,7 @@ export function buildProgram(deps: CliDeps): Command {
             usage: uxUsage,
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
             ...(o.show !== undefined ? { show: o.show } : {}),
+            ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
@@ -2451,7 +2491,7 @@ export function buildProgram(deps: CliDeps): Command {
             emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
-          } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
+          } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
             emitJson(program, fail("E_UX_ARGS", err.message));
           } else if (err instanceof UsabilityInvariantsUnsupportedError) {
             emitJson(program, fail("E_EXPLORE_ARGS", err.message));
@@ -2651,12 +2691,14 @@ export function buildProgram(deps: CliDeps): Command {
       withBrowserLaunchFlags(
         program
           .command("verify-fix")
-          .description("replay a defect's repro from a mission result; passes only if the defect signal is absent on every replay"),
+          .description("replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay"),
       ),
     ),
   )
-    .requiredOption("--result <path>", "the mission's <stem>.result.json (written next to its Recording)")
-    .requiredOption("--fingerprint <fp>", "the defect/hang fingerprint to verify")
+    .argument("[fingerprint]", "the defect/hang fingerprint to verify (same as --fingerprint)")
+    .option("--result <path>", "the mission's <stem>.result.json (written next to its Recording); default: the fingerprint's ledger entry (#195)")
+    .option("--fingerprint <fp>", "the defect/hang fingerprint to verify")
+    .option("--regressions-dir <path>", "regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions)")
     .option("--storage-state <file>", "override the storageState the mission ran with")
     .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
     .option(
@@ -2679,17 +2721,18 @@ export function buildProgram(deps: CliDeps): Command {
       "let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed)",
     )
     .option(
-      "--secret <value>",
-      "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints",
+      "--secret <value|env:VAR>",
+      "REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
     .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command) {
+    .action(async function (this: Command, positional?: string) {
       const o = this.opts<
         {
-          result: string;
-          fingerprint: string;
+          result?: string;
+          fingerprint?: string;
+          regressionsDir?: string;
           storageState?: string;
           replays?: string;
           allowEmulationOverride?: boolean;
@@ -2702,18 +2745,36 @@ export function buildProgram(deps: CliDeps): Command {
           FixtureFlags &
           EmulationFlags
       >();
+      // #195: `--secret env:VAR`, as on explore.
+      try {
+        const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
+        if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
+        o.secret = resolved.secrets;
+      } catch (err) {
+        if (!(err instanceof SecretArgError)) throw err;
+        emitJson(program, fail("E_VERIFY_FIX_ARGS", err.message));
+        return;
+      }
       let verifyFixEmulation: EmulationSpec | undefined;
+      const fingerprint = o.fingerprint ?? positional;
       try {
         verifyFixEmulation = emulationFromFlags(o);
+        if (fingerprint === undefined) throw new Error("a fingerprint is required: verify-fix <fp> or --fingerprint <fp>");
+        if (o.fingerprint !== undefined && positional !== undefined && o.fingerprint !== positional) {
+          throw new Error(`two different fingerprints given (${positional} and --fingerprint ${o.fingerprint})`);
+        }
       } catch (err) {
         emitJson(program, fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
+        process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
         return;
       }
       try {
+        // #195: without --result, the fingerprint's ledger entry is the repro material (the run's output may be long gone).
+        const resultPath = o.result ?? ledgerEntryFor(fingerprint, o.regressionsDir);
         const report = await runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
-          resultPath: o.result,
-          fingerprint: o.fingerprint,
+          resultPath,
+          fingerprint,
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
@@ -2729,7 +2790,7 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, ok(withEngine(report)));
         process.exitCode = report.exitCode;
       } catch (err) {
-        if (err instanceof VerifyFixInputError || err instanceof TargetConfigError) {
+        if (err instanceof VerifyFixInputError || err instanceof TargetConfigError || err instanceof LedgerError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnauthorizedExploreTargetError) {
           emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -2739,6 +2800,17 @@ export function buildProgram(deps: CliDeps): Command {
         process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
       }
     });
+
+  // `ledger add|verify|list` (#195 part 6): the repro material verify-fix needs, kept by fingerprint.
+  registerLedgerCommands(
+    program,
+    {
+      ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
+      ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+      browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
+    },
+    withBrowserLaunchFlags,
+  );
 
   // Additive: `explore author-journey` — Jev-driving authors a promotable
   // Journey (Ticket #6). Drives the goal-based mission, feeds its take(s)
@@ -3464,6 +3536,10 @@ export function buildProgram(deps: CliDeps): Command {
       "--min-confidence <n>",
       "findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3",
     )
+    .option(
+      "--max-findings-per-page <n>",
+      "cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5",
+    )
     .option("--persona <p>", "optional persona for calibration")
     .option("--job <text>", "the job the flow pursues (improves relevance)")
     .option("--out <dir>", "directory to write the UX report")
@@ -3482,6 +3558,7 @@ export function buildProgram(deps: CliDeps): Command {
       const o = this.opts<{
         appClass?: string;
         minConfidence?: string;
+        maxFindingsPerPage?: string;
         show?: string;
         persona?: string;
         job?: string;
@@ -3539,6 +3616,7 @@ export function buildProgram(deps: CliDeps): Command {
           usage: uxUsage,
           ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
           ...(o.show !== undefined ? { show: o.show } : {}),
+          ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
           outDir: o.out,
           ...sidecars,
         });
@@ -3546,7 +3624,7 @@ export function buildProgram(deps: CliDeps): Command {
       } catch (err) {
         if (err instanceof UxAnalysisFailedError) {
           emitJson(program, fail("E_UX_ANALYSIS", err.message));
-        } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof UxConfigError) {
+        } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
           emitJson(program, fail("E_UX_ARGS", err.message));
         } else {
           emitJson(program, fail("E_UX_RUN", String(err instanceof Error ? err.message : err)));
@@ -3571,6 +3649,7 @@ export function buildProgram(deps: CliDeps): Command {
   );
   registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
   registerLogsCommands(program, deps);
+  registerInvariantsCommands(program);
 
   return program;
 }

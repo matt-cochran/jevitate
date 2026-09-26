@@ -88,8 +88,28 @@ pass: it is counted in the result's `invariants` report.
   `scroll_down`, `wait`, `reload`. An op outside that list (a natural guess like
   `"navigate"` or `"scroll"`) is refused when the file loads, with the valid ops listed,
   instead of validating and never firing. The same holds for `capture.*.after.op`.
-- `never`: `pageText` (a pattern) or `assertion` (a success-check assertion) that must
-  never hold. It is checked after every action.
+- `never`: `pageText` (a pattern), `assertion` (a success-check assertion) or `response`
+  that must never hold. It is checked after every action.
+- `never.response`: an app response on the mission's **own** traffic that must never be
+  seen, e.g. a role's guaranteed billing 403:
+
+  ```json
+  { "id": "no-billing-403", "never": { "response": { "url": "/api/v1/tool/billing/**", "status": "403" } } }
+  ```
+
+  `status` is an exact code (`"403"` or `403`) or a class (`"4xx"`); `method` (`"GET"`,
+  `"POST"`, …) optionally narrows it. `url` is a glob (`**` any run, `*` any run without `/`):
+  when it starts with `/` it matches the response URL's **path** (with or without its query
+  string); otherwise it must match the **whole URL** (`"https://api.example.test/v1/**"`).
+  Only responses from the mission's authorized origins are ever matched — the start URL's
+  own origin unless `--allow` names others — so a third-party 403 never fires it. Every
+  matching response is evidence: method, full URL (redacted), status and the step it
+  happened in (`GET https://app.example.test/api/v1/tool/billing/summary?ws=7 → 403 (step 0:
+  page load)`); the violation's `responses` lists them as `{ method, url, status, step }`,
+  step 0 being the page load before any action. A response to the last action that lands
+  after its check (still in flight, e.g. slower than the long-poll threshold) is still caught when
+  the run ends — every mission waits up to 5 s for such a request. Unlike `deniedAs.expect.appResponses`,
+  no observer actor is needed.
 - `always`: an assertion that must hold after every action.
 
 The expression language is small: `before(x)`, `after(x)` (or just `x`), `delta(x)`,
@@ -109,6 +129,21 @@ adversarial and `--feature` missions. Each violation's defect carries:
 - the before and after values (redacted),
 - the action and route,
 - the probe and network evidence (method, URL and status only, never a body).
+
+**Linting files in CI (no browser).** `jevitate invariants validate <file…>` runs exactly
+the check above — schema, observables, merge across files, probe origins — and nothing else:
+
+```bash
+jevitate invariants validate invariants/*.json --url https://app.example.test/ --json
+```
+
+It exits `0` when every file is valid and `1` otherwise, printing each file's path-precise
+problems. With `--json` the envelope's `data` is `{ valid, files: [{ file, valid, invariants?,
+problems }], merge, hint? }` (`merge` lists conflicts between otherwise-valid files). Probe and
+`deniedAs` origins are authorized only against `--url` (and `--allow <origin>`, repeatable,
+which replaces the URL's own origin as on `explore`); without `--url` a file with probes is
+refused, never assumed safe. A `deniedAs.actor` or probe `as:` must be named with
+`--observer <name>` (repeatable).
 
 A defect's fingerprint is the invariant id plus the route. The result also stores the
 spec, so `jevitate verify-fix --result … --fingerprint …` re-checks the same invariant

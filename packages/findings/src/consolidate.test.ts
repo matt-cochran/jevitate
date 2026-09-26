@@ -167,6 +167,29 @@ describe("consolidate (#139)", () => {
     });
   });
 
+  it("reads every strategy's server-log defect from defects (#195); a usability one marked advisory stays advisory", () => {
+    const serverLog = (advisory: boolean) => ({
+      fingerprint: "5e5e5e5e5e5e5e5e",
+      related: ["5e5e5e5e5e5e5e5e"],
+      kind: "server-log",
+      title: "Server error: SaveSettings failed",
+      route: "/settings",
+      level: "error",
+      message: "SaveSettings failed",
+      occurrences: 1,
+      repro: { recordingStepIndex: 0 },
+      ...(advisory ? { advisory: true } : {}),
+    });
+    const hard = adversarial("2026-09-24T09-00-00-000Z", [serverLog(false)]);
+    expect(hard.observations[0]).toMatchObject({ severity: "hard", identity: { category: "defect", signal: "server-log", fingerprint: "5e5e5e5e5e5e5e5e" } });
+    const ux = runFromMissionResult("/r/usability-2026-09-24T09-30-00-000Z.recording.result.json", {
+      missionOutcome: "clean",
+      exitCode: 0,
+      result: { target: { seedUrl: "https://app.example/settings", allowlist: [] }, defects: [serverLog(true)], hangs: [], recordingPaths: ["/r/u.recording.json"] },
+    });
+    expect(ux?.observations[0]).toMatchObject({ severity: "advisory", identity: { category: "advisory", fingerprint: "5e5e5e5e5e5e5e5e" } });
+  });
+
   it("refuses to read what is not a mission result", () => {
     expect(runFromMissionResult("/r/explore-x.json", { version: "1.0.0", site: "x", pages: [] })).toBeNull();
     expect(runFromMissionResult("/r/unknown-x.result.json", { missionOutcome: "clean", exitCode: 0, result: {} })).toBeNull();

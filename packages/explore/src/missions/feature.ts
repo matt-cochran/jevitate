@@ -43,6 +43,8 @@ import type { SideEffect } from "../side-effects.js";
 import type { InvariantSpec } from "@jevitate/recording";
 import {
   InvariantDefectLog,
+  finishDeclaredRun,
+  type DeclaredRun,
   InvariantMonitor,
   recordingStepCount,
   type InvariantDefect,
@@ -129,10 +131,7 @@ export interface FeatureRunResult {
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
-interface Declared {
-  readonly monitor: InvariantMonitor;
-  readonly log: InvariantDefectLog;
-}
+type Declared = DeclaredRun;
 
 const TIMING: StepTiming = { atMs: 0, durationMs: 0, gapBeforeMs: 0 };
 
@@ -268,6 +267,7 @@ export async function runFeatureMission(params: FeatureMissionParams): Promise<F
             ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
           }),
           log: new InvariantDefectLog(),
+          lastRepro: null,
         };
   // The named capability is the mission's goal: a risky control whose verb it names ("buy a pack"
   // → "Buy pack 1") is what the operator asked to test; any other stays refused (#116).
@@ -276,6 +276,8 @@ export async function runFeatureMission(params: FeatureMissionParams): Promise<F
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
   const result = { ...(await runFeatureFrontier(params, declared, safety, budget)), ...safety.result() };
+  // #195: the shared end-of-run path — a never.response hit to the LAST action is never lost.
+  if (declared !== null) await finishDeclaredRun(declared);
   return {
     ...result,
     ...(declared === null ? {} : { invariantDefects: declared.log.defects(), invariants: declared.monitor.report() }),
@@ -548,9 +550,8 @@ async function runFeatureFrontier(
         // replays this very path (the seed navigate is its first step).
         const path = { ...branch, pages: branch.pages.filter((p) => p.steps.length > 0) };
         const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: item.control.name, url: beforeUrl }));
-        for (const v of checked.violations) {
-          declared.log.add(v, { recordingStepIndex: recordingStepCount(path) - 1, recording: path });
-        }
+        declared.lastRepro = { recordingStepIndex: recordingStepCount(path) - 1, recording: path };
+        for (const v of checked.violations) declared.log.add(v, declared.lastRepro);
       }
 
       // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
