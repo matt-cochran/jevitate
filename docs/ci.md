@@ -95,7 +95,9 @@ relative paths resolve against the suite file):
   Journeys follow the site policy for their origin ([site policies](./journeys.md#site-policies)).
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
-  frontier from `url`.
+  frontier from `url`. To lint the files themselves in an earlier, browser-free CI step, run
+  `jevitate invariants validate invariants/*.json --url <target url>` (exit `1` on any problem;
+  see [invariants](./invariants.md)).
 - `verifyFix`: replays a finding from an earlier result. `still-reproduces` and `intermittent` fail.
 
 A GitHub Actions example:

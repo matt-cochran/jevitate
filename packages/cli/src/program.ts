@@ -123,6 +123,7 @@ import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui
 import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
+import { registerInvariantsCommands } from "./invariants-validate.js";
 import { collectAllMissingKeys } from "./init-keys.js";
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
@@ -3571,6 +3572,7 @@ export function buildProgram(deps: CliDeps): Command {
   );
   registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
   registerLogsCommands(program, deps);
+  registerInvariantsCommands(program);
 
   return program;
 }

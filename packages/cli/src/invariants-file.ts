@@ -16,17 +16,24 @@ import {
 
 export class InvariantsFileError extends Error {
   readonly code = "E_EXPLORE_INVARIANTS" as const;
-  constructor(message: string) {
+  /** #195: each path-precise problem on its own (`invariants[2].require: …`); the message joins them. */
+  readonly problems: readonly string[];
+  constructor(message: string, problems: readonly string[] = [message]) {
     super(message);
     this.name = "InvariantsFileError";
+    this.problems = problems;
   }
 }
 
 export interface LoadInvariantsOptions {
-  /** The run's authorized origins: every probe must resolve onto one. */
-  readonly allowlist: readonly string[];
+  /**
+   * The run's authorized origins: every probe must resolve onto one. Omitted (with `baseUrl`) only by
+   * `jevitate invariants validate` without `--url` (#195): then every probe/`deniedAs` is REFUSED
+   * ("needs the mission's authorized origins") — nothing is ever assumed authorized.
+   */
+  readonly allowlist?: readonly string[];
   /** What relative probe paths resolve against (the run's start URL). */
-  readonly baseUrl: string;
+  readonly baseUrl?: string;
   /** #147: the registered observer actors (every `--actor` but the primary) cross-actor checks may name. */
   readonly observers?: readonly string[];
 }
@@ -45,14 +52,14 @@ export function loadInvariantFiles(paths: readonly string[], opts: LoadInvariant
     try {
       specs.push(validateInvariantSpec(raw, opts));
     } catch (e) {
-      if (e instanceof InvariantSpecError) throw new InvariantsFileError(`${path}: ${e.problems.join("; ")}`);
+      if (e instanceof InvariantSpecError) throw new InvariantsFileError(`${path}: ${e.problems.join("; ")}`, e.problems);
       throw e;
     }
   }
   try {
     return mergeInvariantSpecs(specs);
   } catch (e) {
-    if (e instanceof InvariantSpecError) throw new InvariantsFileError(e.problems.join("; "));
+    if (e instanceof InvariantSpecError) throw new InvariantsFileError(e.problems.join("; "), e.problems);
     throw e;
   }
 }

@@ -110,6 +110,21 @@ adversarial and `--feature` missions. Each violation's defect carries:
 - the action and route,
 - the probe and network evidence (method, URL and status only, never a body).
 
+**Linting files in CI (no browser).** `jevitate invariants validate <file…>` runs exactly
+the check above — schema, observables, merge across files, probe origins — and nothing else:
+
+```bash
+jevitate invariants validate invariants/*.json --url https://app.example.test/ --json
+```
+
+It exits `0` when every file is valid and `1` otherwise, printing each file's path-precise
+problems. With `--json` the envelope's `data` is `{ valid, files: [{ file, valid, invariants?,
+problems }], merge, hint? }` (`merge` lists conflicts between otherwise-valid files). Probe and
+`deniedAs` origins are authorized only against `--url` (and `--allow <origin>`, repeatable,
+which replaces the URL's own origin as on `explore`); without `--url` a file with probes is
+refused, never assumed safe. A `deniedAs.actor` or probe `as:` must be named with
+`--observer <name>` (repeatable).
+
 A defect's fingerprint is the invariant id plus the route. The result also stores the
 spec, so `jevitate verify-fix --result … --fingerprint …` re-checks the same invariant
 by replaying up to the step. `--invariants` on `verify-fix` overrides the saved spec.
