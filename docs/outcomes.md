@@ -41,6 +41,7 @@ own terms.
 | `succeeded` | 0 | the success assertion held |
 | `exhausted` | 1 | the action/decision budget ran out before the assertion held |
 | `blocked` | 1 | the model decided it could not proceed (e.g. no matching control) |
+| `defects-found` | 1 | a defect was found: an HTTP 5xx from the app, a violated declared invariant, or a `--log-defect` match. This holds even when the success assertion held: the checks' own verdict stays in `assertionPassed` and `checks`, and `reason` names the defect (`PUT /api/profile → 500`). A broken run or a hang keeps its own outcome, and the defect is still listed in `defects`. |
 | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) |
 | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
 | `hang` | 3 | the app under test hung, and it reproduced on replay |
@@ -69,7 +70,7 @@ above, so it needs no separate exit-code mapping):
 | `action-budget` | the max-decisions budget ran out |
 | `time-budget` | the mission's time budget ran out |
 | `strategies-exhausted` | every misuse strategy was tried with nothing left to do |
-| `not-rendered` | the target page never rendered |
+| `not-rendered` | the target page never rendered. When the start page itself answered 5xx, that is an `http-5xx` defect and the run is `defects-found`. |
 | `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |

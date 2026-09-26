@@ -456,7 +456,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   // The live session; after a hang the mission resets to a fresh page and keeps hunting.
   const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
   // Attach the hard-signal listeners BEFORE navigating (on every page the run works in).
-  let collector = new PageSignalCollector(params.page);
+  let collector = new PageSignalCollector(params.page, Date.now, params.allowlist);
   let crashWatch = new CrashWatch(params.page);
   // Declared invariants (#86): listening for `network` observables from before the first navigation.
   const declared =
@@ -475,7 +475,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   /** A `before` snapshot is armed for the action(s) the next adjudication judges. */
   let armed = false;
   sessions.onReset((page) => {
-    collector = new PageSignalCollector(page);
+    collector = new PageSignalCollector(page, Date.now, params.allowlist);
     crashWatch = new CrashWatch(page);
     declared?.attach(page);
     armed = false;
@@ -915,7 +915,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       return finish(verdict(), "hang");
     }
     if (!seed.rendered) {
-      // Nothing to misuse: the run proves nothing (fail closed on meaning — never `clean`).
+      // Nothing to misuse. #208: the page's own load is still adjudicated — a start page that
+      // answered 5xx (or threw) IS a defect, found by the hard-signal oracle before any misuse, and
+      // wins over "inconclusive". With no signal, the run proves nothing (never `clean`).
+      const seedVerdict = await adjudicate();
+      const step = transcript.nextStep;
+      const why = seed.reason ?? "page did not render";
       transcript.record({
         op: null,
         control: null,
@@ -923,13 +928,19 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         chosenBy: "strategy",
         strategy: "seed-load",
         actOk: false,
-        reason: `${seed.reason ?? "page did not render"} (inconclusive)`,
+        reason: seedVerdict === null ? `${why} (inconclusive)` : `${why}; ${seedVerdict.reason}`,
         snapshot: seed.snapshot,
         timing: seed.timing,
       });
+      if (seedVerdict !== null) {
+        await fold(step, seedVerdict.findings);
+        foldAdvisories(step, seedVerdict.advisories);
+      }
+      // `failure` explains a broken run only: a found defect is the run's result, not its failure.
+      if (defects.size > 0) return finish("defects-found", "not-rendered");
       return finish("inconclusive", "not-rendered", {
         kind: "exception",
-        message: seed.reason ?? "seed page did not render",
+        message: `${why}${seedVerdict === null ? "" : `: ${seedVerdict.reason}`}`,
       });
     }
     // The seed redirected to a login-like page — most often a lost/expired `--storage-state`

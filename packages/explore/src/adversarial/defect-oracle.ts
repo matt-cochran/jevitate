@@ -1,5 +1,7 @@
 import type { Page, Request } from "playwright";
 import { redactUrl } from "@jevitate/ai-core";
+import { http5xxSignalOf, requestHeadersOf } from "../http-5xx.js";
+import { FirstPartyOrigins } from "../third-party.js";
 
 /**
  * The adversarial mission's TRUSTED HARD-SIGNAL defect oracle (spec §3.1/§9).
@@ -106,8 +108,20 @@ const MAX_RECENT_RESPONSES = 50;
 export class PageSignalCollector {
   private buffer: DefectSignal[] = [];
 
-  constructor(page: Page, now: () => number = Date.now) {
+  /**
+   * `allowlist` (#208): the run's authorized origins — a 5xx from a THIRD-PARTY origin (#194,
+   * `FirstPartyOrigins`) is not the app's defect and never becomes an `http-5xx` signal. Omitted,
+   * every origin counts (the pre-#208 behaviour).
+   */
+  constructor(page: Page, now: () => number = Date.now, allowlist?: readonly string[]) {
     const responseSeen = new WeakSet<Request>();
+    const firstParty = allowlist === undefined ? undefined : new FirstPartyOrigins(allowlist);
+    if (firstParty !== undefined) {
+      page.on("request", (r) => {
+        const headers = requestHeadersOf(r);
+        if (headers !== undefined) firstParty.observe(r.url(), headers);
+      });
+    }
     // Every response seen recently, for correlating a console error to WHAT it was about (#88): the
     // same request (its URL quoted in the message) or, failing that, the nearest one in time.
     const recent: Array<{ status: number; url: string; at: number }> = [];
@@ -152,12 +166,10 @@ export class PageSignalCollector {
     });
     page.on("response", (response) => {
       responseSeen.add(response.request());
-      const status = response.status();
-      noteResponse(status, redactUrl(response.url()));
-      if (status >= 500) {
-        const url = redactUrl(response.url());
-        this.buffer.push({ kind: "http-5xx", detail: `${status} ${url}`, url, status });
-      }
+      noteResponse(response.status(), redactUrl(response.url()));
+      // The shared HTTP 5xx rule (#208): the same signal every strategy records.
+      const signal = http5xxSignalOf(response, firstParty, firstParty === undefined ? undefined : requestHeadersOf(response.request()));
+      if (signal !== null) this.buffer.push(signal);
     });
     page.on("requestfailed", (request) => {
       const errorText = request.failure()?.errorText ?? "request failed";

@@ -50,6 +50,8 @@ import {
   type SecretField,
   type BudgetTrajectory,
   type CrashReport,
+  type Http5xxDefect,
+  Http5xxOracle,
   secretFieldSecrets,
 } from "@jevitate/explore";
 import { FsJourneyStore } from "@jevitate/journey";
@@ -82,6 +84,7 @@ import type { TargetConfig } from "./target-config.js";
 import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
+import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { armMissionKillSwitch } from "./kill-signal.js";
 import { finishHostHealth, startHostHealth } from "./host-health-run.js";
@@ -446,10 +449,10 @@ export interface RunExplorationResult {
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /**
-   * EVERY defect the run found (#195): declared-invariant defects (#86, with `--invariants`) and
+   * EVERY defect the run found (#195): HTTP 5xx hard-signal defects (#208), declared-invariant defects (#86, with `--invariants`) and
    * `server-log` defects (#142, with `--log-defect`) — `verify-fix` replays any of them by fingerprint.
    */
-  readonly defects: Array<InvariantDefect | ServerLogDefect>;
+  readonly defects: Array<InvariantDefect | Http5xxDefect | ServerLogDefect>;
   /** Per declared invariant: applied / held / violated / unreadable counts. */
   readonly invariants?: InvariantReport[];
   /** The declared spec the run evaluated — persisted so `verify-fix` re-checks the SAME invariants. */
@@ -579,6 +582,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     health.stop();
     throw e;
   });
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   // #147: each observer in its OWN fresh context (only its own storageState), opened on first use.
   const observers =
     opts.actors === undefined || opts.actors.observers.length === 0
@@ -623,6 +628,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // `--save-storage-state` was not given — `snapshotter.noteSettledStep` checks `enabled` itself).
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     health.noteStep(entry);
+    http5xx.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
@@ -678,8 +684,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // #142 follow-up: a found server-log defect counts as `defects-found` (exit 1); an unreadable
     // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
     const loggedOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
+    // #208: an HTTP 5xx is a hard-signal defect — `defects-found` even when the goal's checks held.
+    const httpDefects = http5xx.defects(mission.transcript);
+    const hardOutcome = applyHttp5xxGoalOutcome(loggedOutcome, httpDefects);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
-    const host = await finishHostHealth(health, loggedOutcome);
+    const host = await finishHostHealth(health, hardOutcome);
     const goalOutcome: GoalBasedOutcome = host.outcome;
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
@@ -758,13 +767,20 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
         : goalOutcome === mission.outcome
         ? (() => {
             const reason = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
-            return reason === undefined ? {} : { reason };
+            // #208: a broken run keeps its outcome, but its reason still names the server error.
+            const withHttp = httpDefects.length === 0 ? reason : `${reason ?? goalOutcome}; HTTP 5xx: ${describeHttp5xx(httpDefects)}`;
+            return withHttp === undefined ? {} : { reason: withHttp };
           })()
-        : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
+        : loggedOutcome === mission.outcome
+          ? { reason: http5xxGoalReason(httpDefects, mission.assertionPassed) }
+          : { reason: serverLogOutcomeReason(goalOutcome, serverLogRun) }),
       ...declaredResult(opts.invariants, mission.invariantDefects, mission.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects(opts.invariants === undefined ? undefined : mission.invariantDefects, serverLogRun?.defects),
+      defects: unifiedDefects<InvariantDefect | Http5xxDefect>(
+        [...(opts.invariants === undefined ? [] : (mission.invariantDefects ?? [])), ...httpDefects],
+        serverLogRun?.defects,
+      ),
       ...host.fields,
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
@@ -1035,7 +1051,7 @@ export interface RunCoverageMissionResult {
    * EVERY defect the run found (#195): declared-invariant defects (#86, each with its own path
    * Recording) and `server-log` defects (#142). Jev-flagged states stay advisory in `coverage.defects`.
    */
-  readonly defects: Array<InvariantDefect | ServerLogDefect>;
+  readonly defects: Array<InvariantDefect | Http5xxDefect | ServerLogDefect>;
   readonly invariants?: InvariantReport[];
   readonly invariantSpec?: InvariantSpec;
   /** Judgment/generation call counts and tokens for this run (#100); present only when `opts.usage` was supplied. */
@@ -1070,6 +1086,9 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     throw e;
   });
 
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
+
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
@@ -1101,6 +1120,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     health.noteStep(entry);
+    http5xx.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
@@ -1152,7 +1172,9 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // spent its budget on controls that failed rather than exercising the target) is `inconclusive`,
     // never `clean` — mirrors the adversarial mission's coverage-sufficiency check (#69, #75, #82).
     // A declared-invariant violation (#86) is a hard defect, whatever the coverage.
-    const found = stampedDefects.length + (result.invariantDefects?.length ?? 0);
+    // #208: the shared HTTP 5xx hard signal's defects count like the strategy's own.
+    const httpDefects = http5xx.defects(result.transcript);
+    const found = stampedDefects.length + (result.invariantDefects?.length ?? 0) + httpDefects.length;
     // Could not return to the seed, or stalled (#114): the run stopped short of its target — inconclusive.
     // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
     // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
@@ -1208,7 +1230,10 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
+      defects: unifiedDefects<InvariantDefect | Http5xxDefect>(
+        [...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])), ...httpDefects],
+        serverLogRun?.defects,
+      ),
       resultPath: resultPathFor(journal.recordingPath),
       ...host.fields,
     };
@@ -1603,7 +1628,7 @@ export type FeatureCliMissionResult = FeatureRunResult & {
   /** Where the run happened — what `verify-fix` needs to replay a declared-invariant defect. */
   readonly target: MissionTarget;
   /** EVERY defect the run found (#195): declared-invariant defects (#86, each with its own path Recording) and `server-log` defects (#142). */
-  readonly defects: Array<InvariantDefect | ServerLogDefect>;
+  readonly defects: Array<InvariantDefect | Http5xxDefect | ServerLogDefect>;
   readonly invariantSpec?: InvariantSpec;
   /** Backend log correlation summary (#142) — present only when `--log-source` was given. */
   readonly serverLogs?: ServerLogsSummary;
@@ -1651,6 +1676,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     health.stop();
     throw e;
   });
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
 
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
@@ -1680,6 +1707,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     health.noteStep(entry);
+    http5xx.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
@@ -1724,7 +1752,9 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
         }
       : undefined;
     // A declared-invariant violation (#86) is a hard defect even on a thin run: it was observed.
-    const invariantDefects = result.invariantDefects?.length ?? 0;
+    // #208: the shared HTTP 5xx hard signal's defects count like declared-invariant ones.
+    const httpDefects = http5xx.defects(result.transcript);
+    const hardDefects = (result.invariantDefects?.length ?? 0) + httpDefects.length;
     // #150 — a crossed mission spend budget is a deliberate, clean stop (not the run breaking): it
     // maps to `inconclusive`, but a defect found before it still wins, reported with `stop: "budget"`.
     const preLogOutcome: MissionOutcome = combineOutcomes([
@@ -1733,10 +1763,10 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
         : result.outcome === "scope-unreachable" || result.outcome === "stalled"
           ? "inconclusive"
           : result.outcome === "budget"
-            ? invariantDefects > 0
+            ? hardDefects > 0
               ? "defects-found"
               : "inconclusive"
-            : invariantDefects > 0
+            : hardDefects > 0
               ? "defects-found"
               : thin
                 ? "inconclusive"
@@ -1766,7 +1796,10 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       },
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),
       ...serverLogResult(serverLogRun),
-      defects: unifiedDefects(opts.invariants === undefined ? undefined : result.invariantDefects, serverLogRun?.defects),
+      defects: unifiedDefects<InvariantDefect | Http5xxDefect>(
+        [...(opts.invariants === undefined ? [] : (result.invariantDefects ?? [])), ...httpDefects],
+        serverLogRun?.defects,
+      ),
       resultPath: resultPathFor(journal.recordingPath),
       usage: NO_MODEL_USAGE,
       ...host.fields,

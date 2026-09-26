@@ -27,7 +27,7 @@ fields the same way:
 | `strategy` | string | The strategy that produced the result. |
 | `missionOutcome` | string | The verdict. It is one of the [mission outcomes](./outcomes.md), except that a goal run keeps its own `succeeded`, `exhausted` and `blocked`. |
 | `exitCode` | number | The process exit code for `missionOutcome`. This is the value to compare across strategies. |
-| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects. Each one has a `fingerprint` (16 hex characters) and a `kind`. A defect the strategy reports without gating on it (a usability run's `server-log` defect) has `advisory: true`. |
+| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects. Each one has a `fingerprint` (16 hex characters) and a `kind`. Every strategy records an HTTP 5xx from the app's own origins as an `http-5xx` defect with the same fingerprint (endpoint pattern + status), whichever strategy found it; a 5xx from a third-party origin is not the app's defect. A defect the strategy reports without gating on it (a usability run's `server-log` or `http-5xx` defect) has `advisory: true`. |
 | `hangs` | array | Every hang finding, each with its `fingerprint` and reproduction. |
 | `recordingPaths` | string[] | Every Recording the run wrote: one for goal, adversarial and usability runs, one per path for coverage and feature runs. It can be empty when a frontier run found no path. |
 | `transcriptPath` | string | The run's decision transcript. |
