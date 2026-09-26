@@ -125,7 +125,7 @@ describe("jevitate invariants validate (#195)", () => {
 
   it("refuses --allow without --url (a usage error envelope)", async () => {
     const r = await run([file("g4.json", GOOD), "--allow", "http://127.0.0.1:3000", "--json"]);
-    expect(r.exitCode).toBe(1);
+    expect(r.exitCode).toBe(64);
     expect(JSON.parse(r.out.trim())).toMatchObject({ ok: false, error: { code: "E_INVARIANTS_ARGS" } });
   });
 });

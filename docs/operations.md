@@ -21,8 +21,8 @@ with the commit in its description), MCP `get_site_health`, and `jevitate ui`'s 
 A run killed by SIGTERM/SIGINT (`timeout -s TERM 900 jevitate explore …`) exits 143/130 and still
 writes `<stem>.result.json`: `missionOutcome: "inconclusive"`, `stop: "terminated"`, the real step
 count and transcript, the `transcriptPath` that exists, `engine`, the `usage` spent so far, and any
-partial report (a usability review's observed screens). With `--json` the same result is printed
-as the envelope before the process exits.
+partial report (a usability review's observed screens). Before the process exits, the same result
+is printed as the envelope with `--json`, or as the human summary without it.
 
 ## Usage accounting
 

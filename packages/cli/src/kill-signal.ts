@@ -6,6 +6,7 @@ import type { HostHealthSummary } from "@jevitate/domain";
 import { closeSharedBrowserPool } from "@jevitate/playwright";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { ok } from "./envelope.js";
+import { formatMissionHuman } from "./cli-output.js";
 import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { writeKillSnapshot } from "./storage-state-snapshot.js";
@@ -80,11 +81,11 @@ export interface KillableMission {
 }
 
 /**
- * What a killed run prints to stdout before exiting (#120): the `--json` envelope, the bare result
- * (a non-`--json` explore prints its result as JSON), or nothing (a caller that owns stdout, e.g.
- * the MCP server, or a library use). Set by the CLI command that armed the mission.
+ * What a killed run prints to stdout before exiting (#120): the `--json` envelope, the human summary
+ * (a non-`--json` explore, #210), or nothing (a caller that owns stdout, e.g. the MCP server, or a
+ * library use). Set by the CLI command that armed the mission.
  */
-export type KillSwitchOutput = "envelope" | "raw" | "none";
+export type KillSwitchOutput = "envelope" | "human" | "none";
 
 const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } as const;
 type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
@@ -248,7 +249,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     // written synchronously, before the exit below.
     if (partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
       try {
-        deps.writeStdout(`${JSON.stringify(output === "envelope" ? ok(partial) : partial)}\n`);
+        deps.writeStdout(output === "envelope" ? `${JSON.stringify(ok(partial))}\n` : formatMissionHuman(partial));
       } catch {
         // Best-effort, like the flush: stdout may already be gone (a closed pipe).
       }

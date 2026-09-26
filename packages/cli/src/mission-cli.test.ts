@@ -154,7 +154,7 @@ test("mission target add with missing required flags fails with E_MISSION_TARGET
     const parsed = JSON.parse(lines.join(""));
     expect(parsed.ok).toBe(false);
     expect(parsed.error.code).toBe("E_MISSION_TARGET_ARGS");
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -178,7 +178,7 @@ test("mission target add with an invalid id fails with E_MISSION_TARGET_ADD (sch
     const parsed = JSON.parse(lines.join(""));
     expect(parsed.ok).toBe(false);
     expect(parsed.error.code).toBe("E_MISSION_TARGET_ADD");
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -195,7 +195,7 @@ test("mission target promote of an unknown id fails with E_UNKNOWN_MISSION_TARGE
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_MISSION_TARGET" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -344,7 +344,7 @@ test("mission run without a gateway selection runs only model-free missions; the
   }
 });
 
-test("mission run marks a mission failed (exit 1) when its target is no longer promoted — it never runs", async () => {
+test("mission run marks a mission failed (exit 2) when its target is no longer promoted — it never runs", async () => {
   const savedExitCode = process.exitCode;
   try {
     const f = await missionRunFixture();
@@ -355,7 +355,7 @@ test("mission run marks a mission failed (exit 1) when its target is no longer p
     expect(env.data.ran).toMatchObject([{ missionId: m.id, status: "failed", error: "unknown or unpromoted mission target" }]);
     expect(await f.queue.get(m.id)).toMatchObject({ status: "failed", error: "unknown or unpromoted mission target" });
     expect(f.specs).toHaveLength(0);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
   } finally {
     process.exitCode = savedExitCode;
   }

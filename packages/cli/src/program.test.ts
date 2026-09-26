@@ -164,7 +164,7 @@ test("profile create prints a success envelope", async () => {
   expect(parsed).toMatchObject({ v: 1, ok: true, data: { name: "main", exists: true } });
 });
 
-test("profile create prints a failure envelope and sets exit code 1 when the action throws", async () => {
+test("profile create prints a failure envelope and sets exit code 2 when the action throws", async () => {
   const savedExitCode = process.exitCode;
   try {
     const profiles = {
@@ -186,7 +186,7 @@ test("profile create prints a failure envelope and sets exit code 1 when the act
       ok: false,
       error: { code: "E_PROFILE_CREATE", message: expect.stringContaining("boom") },
     });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -290,7 +290,7 @@ test("site simulate prints a timing profile with totalMs, using an empty interac
   expect(parsed.data.totalMs).toBe(0);
 });
 
-test("site simulate --seed abc returns a failure envelope and sets exit code 1 (invalid seed must not silently become 0)", async () => {
+test("site simulate --seed abc returns a failure envelope and sets exit code 64 (invalid seed must not silently become 0)", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -310,7 +310,7 @@ test("site simulate --seed abc returns a failure envelope and sets exit code 1 (
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_SEED" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -341,7 +341,7 @@ test("recording diff of two JSON takes prints a variable column", async () => {
   expect(variableColumns[0].values).toEqual(["jane", "bob"]);
 });
 
-test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is missing", async () => {
+test("recording diff fails closed (E_INVALID_TAKE, exit 64) when a take file's `values` field is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
@@ -365,7 +365,7 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
-  expect(process.exitCode).toBe(1);
+  expect(process.exitCode).toBe(64);
 });
 
 test("#124: recording diff gives a clear error (not a zod dump) when handed a raw Recording instead of a take file", async () => {
@@ -393,10 +393,10 @@ test("#124: recording diff gives a clear error (not a zod dump) when handed a ra
   expect(parsed.error.message).toContain("jevitate record");
   // NOT a zod dump: no "Unrecognized keys" issue-array text.
   expect(parsed.error.message).not.toMatch(/Unrecognized keys/);
-  expect(process.exitCode).toBe(1);
+  expect(process.exitCode).toBe(64);
 });
 
-test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is malformed (wrong shape)", async () => {
+test("recording diff fails closed (E_INVALID_TAKE, exit 64) when a take file's `values` field is malformed (wrong shape)", async () => {
   const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
@@ -417,7 +417,7 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
-  expect(process.exitCode).toBe(1);
+  expect(process.exitCode).toBe(64);
 });
 
 test("recording fit prints a policy whose full output round-trips through SitePolicySchema", async () => {
@@ -484,7 +484,7 @@ test("recording promote sets value:{var:...} at the targeted fill step", async (
   expect(parsed.pages[0].steps[0].variableName).toBe("username");
 });
 
-test("recording promote on a click step returns a fail envelope and sets exit code 1", async () => {
+test("recording promote on a click step returns a fail envelope and sets exit code 64", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -508,7 +508,7 @@ test("recording promote on a click step returns a fail envelope and sets exit co
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -569,7 +569,7 @@ test("recording postdoc --decisions applies the decisions and prints the same Re
   expect(parsed.data).toEqual(JSON.parse(JSON.stringify(expected)));
 });
 
-test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) on a malformed decisions file", async () => {
+test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 64) on a malformed decisions file", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -599,7 +599,7 @@ test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) o
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_DECISIONS" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }

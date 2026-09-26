@@ -100,7 +100,7 @@ import {
   type DrainReport,
   type QueuedMissionExecutor,
 } from "./mission-queue-runner.js";
-import { runVerifyFix, VerifyFixInputError, VERIFY_FIX_EXIT_CODES } from "./verify-fix-api.js";
+import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
 import { registerLedgerCommands } from "./ledger-cli.js";
 import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
@@ -136,9 +136,11 @@ import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
 import { registerInvariantsCommands } from "./invariants-validate.js";
 import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "./secret-args.js";
-import { collectAllMissingKeys } from "./init-keys.js";
+import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js";
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
+import { EXIT_CODES, exitCodeForEnvelope } from "./exit-codes.js";
+import { emitEnvelope, formatInitKeysHuman, formatMissionHuman, formatMultiRunHuman, formatVerifyFixHuman, type EmitOptions } from "./cli-output.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -539,14 +541,24 @@ function parsePlannedScript(raw: string): PlannedStep[] {
  * Writes a JSON envelope using the program's CURRENTLY-CONFIGURED output
  * writer (read at call time via `configureOutput()`), so tests that call
  * `program.configureOutput({ writeOut })` after `buildProgram()` still see
- * output routed to their writer. Also sets `process.exitCode` (0 for `ok`,
- * 1 for `fail`) instead of hard-exiting, so `exitOverride()` in tests works.
+ * output routed to their writer. Also sets `process.exitCode` (0 for `ok`; for
+ * `fail`, the error's class from exit-codes.ts — 64 usage, else 2) instead of
+ * hard-exiting, so `exitOverride()` in tests works.
  */
 function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
   const writeOut = program.configureOutput().writeOut;
   writeOut?.(`${JSON.stringify(envelope)}\n`);
   if (envelope.ok) emitUsageLine(program, envelope.data);
-  process.exitCode = envelope.ok ? 0 : 1;
+  process.exitCode = exitCodeForEnvelope(envelope);
+}
+
+/**
+ * #210: the envelope with `--json`, else a human summary (a refusal: `error <CODE>: …` on stderr);
+ * the cost line on stderr either way. Exit code: the verdict's, else the envelope's class (exit-codes.ts).
+ */
+function emitCommandResult<T>(program: Command, envelope: JsonEnvelope<T>, opts: EmitOptions<T>): void {
+  emitEnvelope(program, envelope, opts);
+  if (envelope.ok) emitUsageLine(program, envelope.data);
 }
 
 /** A non-`--json` result: printed as bare JSON on stdout, with the cost summary line on stderr. */
@@ -599,7 +611,10 @@ Outcomes, stop reasons and exit codes:
   ran starved is inconclusive (failure.kind degraded-environment), never clean.
   --feature's own "outcome" (folds into missionOutcome above):
     exhausted | cap | path-cap | scope-unreachable | stalled | crashed | hang
-  See README.md "Mission outcomes and exit codes" for what each value means.
+  Argument/input errors (E_EXPLORE_ARGS, E_EXPLORE_ASSERTION, …) exit 64, never 1.
+  Without --json: a human summary (verdict, defects by fingerprint, result file, next step);
+  with --json: the {v, ok, data} envelope.
+  Every command's exit codes: docs/outcomes.md "Exit codes".
 `;
 
 /**
@@ -683,15 +698,17 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           const out = program.configureOutput().writeOut;
           out?.("jevitate initialized\n");
-          if (data.keys) out?.(`keys: ${JSON.stringify(data.keys)}\n`);
+          // #210: per feature, "ready — n/n configured", never a raw `collected: []` that reads as "missing".
+          if (data.keys) out?.(`${formatInitKeysHuman(data.keys as KeyCollectionReport)}\n`);
           if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
           if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) processed\n`);
           const project = data.project as ProjectInitReport | undefined;
           if (project !== undefined) out?.(project.dir === null ? `project: ${project.reason ?? "none"}\n` : `project: ${project.dir} (${project.created.length} created)\n`);
+          out?.("next: jevitate explore --url <url> --goal \"<goal>\" --real (see jevitate explore --help)\n");
           process.exitCode = 0;
         }
       } catch (err) {
-        emitJson(program, fail("E_INIT", String(err instanceof Error ? err.message : err)));
+        emitCommandResult(program, fail("E_INIT", String(err instanceof Error ? err.message : err)), { json: json === true, command: "init" });
       }
     });
 
@@ -1923,7 +1940,7 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option("--json", "emit a JSON envelope")
+    .option("--json", "emit the JSON envelope (default: a human summary)")
     .addHelpText(
       "after",
       [
@@ -2014,6 +2031,9 @@ export function buildProgram(deps: CliDeps): Command {
         ignoreOverflow: string[];
         json?: boolean;
       } & BrowserLaunchFlags & FixtureFlags & EmulationFlags>();
+      // #210: one output rule for every strategy — the envelope with --json, a human summary without.
+      const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
+        emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
 
       // #195: a session file never lands in the repo's .jevitate/ (refused before any run, multi-runs included).
       if (o.saveStorageState !== undefined) {
@@ -2021,7 +2041,7 @@ export function buildProgram(deps: CliDeps): Command {
           assertSessionFileOutsideProject(o.saveStorageState, "--save-storage-state");
         } catch (err) {
           if (!(err instanceof SessionFileInProjectError)) throw err;
-          emitJson(program, fail(err.code, err.message));
+          emitExplore(fail(err.code, err.message));
           return;
         }
       }
@@ -2033,7 +2053,7 @@ export function buildProgram(deps: CliDeps): Command {
         o.secret = resolved.secrets;
       } catch (err) {
         if (!(err instanceof SecretArgError)) throw err;
-        emitJson(program, fail("E_EXPLORE_ARGS", err.message));
+        emitExplore(fail("E_EXPLORE_ARGS", err.message));
         return;
       }
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
@@ -2041,20 +2061,17 @@ export function buildProgram(deps: CliDeps): Command {
         try {
           const plan = resolveMultiRunPlan(o);
           const result = await runExploreMultiRun({ cmd: this, newProgram: () => buildProgram(deps), plan, strategy, ...(o.out === undefined ? {} : { out: o.out }) });
-          emitJson(program, ok(withEngine(result)));
-          process.exitCode = result.exitCode;
+          emitExplore(ok(withEngine(result)), result.exitCode, formatMultiRunHuman);
         } catch (err) {
-          if (err instanceof MultiRunArgsError) emitJson(program, fail(err.code, err.message));
-          else if (err instanceof MultiRunAbortedError) emitJson(program, fail(err.envelope.error.code, err.envelope.error.message));
-          else emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          if (err instanceof MultiRunArgsError) emitExplore(fail(err.code, err.message));
+          else if (err instanceof MultiRunAbortedError) emitExplore(fail(err.envelope.error.code, err.envelope.error.message));
+          else emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
         return;
       }
-      // #120: a killed run prints what this command would have printed — the envelope (always, for
-      // the strategies that only ever emit one) or the bare result JSON — before it exits.
-      setKillSwitchOutput(
-        o.json || o.feature !== undefined || strategy === "adversarial" || strategy === "usability" ? "envelope" : "raw",
-      );
+      // #120: a killed run prints what this command would have printed — the envelope with --json,
+      // else the human summary (#210) — before it exits.
+      setKillSwitchOutput(o.json === true ? "envelope" : "human");
       const conversation = {
         ...(o.replyWaitMs === undefined ? {} : { replyWaitMs: Number(o.replyWaitMs) }),
         ...(o.replyCeilingMs === undefined ? {} : { replyCeilingMs: Number(o.replyCeilingMs) }),
@@ -2068,24 +2085,24 @@ export function buildProgram(deps: CliDeps): Command {
         (conversation.replyMaxChars !== undefined &&
           !(Number.isInteger(conversation.replyMaxChars) && conversation.replyMaxChars >= 20 && conversation.replyMaxChars <= 2000))
       ) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--reply-wait-ms and --reply-ceiling-ms must be positive integers; --reply-max-chars an integer in 20..2000"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--reply-wait-ms and --reply-ceiling-ms must be positive integers; --reply-max-chars an integer in 20..2000"));
         return;
       }
       if (conversation.jobWaitMs !== undefined && !(Number.isInteger(conversation.jobWaitMs) && conversation.jobWaitMs > 0)) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
         return;
       }
       // #154: refused BEFORE any browser opens. 0 is valid: "don't replay" — a hang is then
       // reported unconfirmed (inconclusive), never replayed and never a crash.
       if (o.hangReplays !== undefined && !/^\d+$/.test(o.hangReplays.trim())) {
-        emitJson(program, fail("E_EXPLORE_ARGS", `--hang-replays must be a non-negative integer (0 = don't replay; the hang is reported unconfirmed), got "${o.hangReplays}"`));
+        emitExplore(fail("E_EXPLORE_ARGS", `--hang-replays must be a non-negative integer (0 = don't replay; the hang is reported unconfirmed), got "${o.hangReplays}"`));
         return;
       }
       try {
         validateDenyPatterns(o.deny);
         validateDenyPatterns(o.paid, "--paid");
       } catch (err) {
-        emitJson(program, fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       const browser = browserLaunchFromFlags(o);
@@ -2094,7 +2111,7 @@ export function buildProgram(deps: CliDeps): Command {
       try {
         emulation = emulationFromFlags(o);
       } catch (err) {
-        emitJson(program, fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       const overflow = { checkOverflow: o.checkOverflow ?? false, ignoreSelectors: o.ignoreOverflow };
@@ -2113,7 +2130,7 @@ export function buildProgram(deps: CliDeps): Command {
           );
         } catch (err) {
           if (err instanceof FilingConfigError) {
-            emitJson(program, fail(err.code, err.message));
+            emitExplore(fail(err.code, err.message));
             return;
           }
           if (!(err instanceof TypeError)) throw err;
@@ -2139,7 +2156,7 @@ export function buildProgram(deps: CliDeps): Command {
           });
         } catch (err) {
           if (err instanceof TargetConfigError) {
-            emitJson(program, fail(err.code, err.message));
+            emitExplore(fail(err.code, err.message));
             return;
           }
           if (!(err instanceof TypeError)) throw err;
@@ -2153,11 +2170,11 @@ export function buildProgram(deps: CliDeps): Command {
       // usability strategies) can issue. Refuse it elsewhere rather than
       // silently ignoring a file the user expected to be uploaded.
       if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
         return;
       }
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
-        emitJson(program, fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
+        emitExplore(fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
       }
       // Multi-actor missions (#147): the first --actor is the primary, the rest are observers.
@@ -2166,16 +2183,16 @@ export function buildProgram(deps: CliDeps): Command {
         actors = resolveMissionActors(o.actor);
       } catch (err) {
         if (!(err instanceof MultiRunArgsError)) throw err;
-        emitJson(program, fail(err.code, err.message));
+        emitExplore(fail(err.code, err.message));
         return;
       }
       if (actors !== null) {
         if (o.feature !== undefined || strategy !== "goal") {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--actor is supported only with --strategy goal"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--actor is supported only with --strategy goal"));
           return;
         }
         if (o.storageState !== undefined) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--storage-state cannot be combined with --actor (the first --actor is the primary's session)"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--storage-state cannot be combined with --actor (the first --actor is the primary's session)"));
           return;
         }
       }
@@ -2199,17 +2216,17 @@ export function buildProgram(deps: CliDeps): Command {
             checkActorsAgainstSpec(actors, loaded);
           } catch (err) {
             if (err instanceof MultiRunArgsError) {
-              emitJson(program, fail(err.code, err.message));
+              emitExplore(fail(err.code, err.message));
               return;
             }
             if (!(err instanceof InvariantsFileError)) throw err;
-            emitJson(program, fail(err.code, err.message));
+            emitExplore(fail(err.code, err.message));
             return;
           }
         }
         // #147: captures and cross-actor checks run in the goal loop only — never silently skipped elsewhere.
         if (invariants?.capture !== undefined && (o.feature !== undefined || strategy !== "goal")) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "invariants with capture (cross-actor checks) are supported only with --strategy goal"));
+          emitExplore(fail("E_EXPLORE_ARGS", "invariants with capture (cross-actor checks) are supported only with --strategy goal"));
           return;
         }
       }
@@ -2238,7 +2255,7 @@ export function buildProgram(deps: CliDeps): Command {
           };
         } catch (err) {
           if (err instanceof LogSourceSpecError || err instanceof LogSpecError) {
-            emitJson(program, fail(err.code, err.message));
+            emitExplore(fail(err.code, err.message));
             return;
           }
           throw err;
@@ -2249,7 +2266,7 @@ export function buildProgram(deps: CliDeps): Command {
       let secretFields: SecretField[] = [];
       if (o.secretField.length > 0 || o.totp.length > 0) {
         if (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability")) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal or usability"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal or usability"));
           return;
         }
         try {
@@ -2259,7 +2276,7 @@ export function buildProgram(deps: CliDeps): Command {
           ];
         } catch (err) {
           if (!(err instanceof SecretFieldSpecError)) throw err;
-          emitJson(program, fail(err.code, err.message));
+          emitExplore(fail(err.code, err.message));
           return;
         }
       }
@@ -2267,7 +2284,7 @@ export function buildProgram(deps: CliDeps): Command {
       // Mission fixtures (#140/#144) run around the goal loop and its replays only.
       const fixtureFlagsGiven = o.fixtures !== undefined || o.before !== undefined || o.after !== undefined;
       if (fixtureFlagsGiven && (o.feature !== undefined || strategy !== "goal")) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--fixtures, --before and --after are supported only with --strategy goal"));
         return;
       }
 
@@ -2276,11 +2293,11 @@ export function buildProgram(deps: CliDeps): Command {
       // a distinct, goal-free path that leaves the goal strategy below unchanged.
       if (strategy === "coverage" || strategy === "exploratory") {
         if (!o.url) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--url is required"));
           return;
         }
         if (o.scope !== undefined && o.scope !== "app") {
-          emitJson(program, fail("E_EXPLORE_ARGS", `--scope must be "app" (got ${JSON.stringify(o.scope)})`));
+          emitExplore(fail("E_EXPLORE_ARGS", `--scope must be "app" (got ${JSON.stringify(o.scope)})`));
           return;
         }
         const covAllowlist = resolveExploreAllowlist(o.url, o.allow);
@@ -2292,7 +2309,7 @@ export function buildProgram(deps: CliDeps): Command {
         const covRouteGlobs = [...o.route, ...(o.scope === "app" ? ["/**"] : [])];
         const covStall = stallTimeoutMs(o.stallTimeout);
         if (covStall === null) {
-          emitJson(program, fail("E_EXPLORE_ARGS", `--stall-timeout must be a positive number of seconds (got ${JSON.stringify(o.stallTimeout)})`));
+          emitExplore(fail("E_EXPLORE_ARGS", `--stall-timeout must be a positive number of seconds (got ${JSON.stringify(o.stallTimeout)})`));
           return;
         }
 
@@ -2306,9 +2323,9 @@ export function buildProgram(deps: CliDeps): Command {
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
-            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+            emitExplore(fail("E_AI_SETUP_REQUIRED", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
           }
           return;
         }
@@ -2335,19 +2352,13 @@ export function buildProgram(deps: CliDeps): Command {
             ...withInvariants,
             ...withServerLog,
           });
-          const envelope = ok(result);
-          if (o.json) {
-            emitJson(program, envelope);
-          } else {
-            writeRawResult(program, result);
-          }
-          // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see mission-exit.ts).
-          process.exitCode = result.exitCode;
+          // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
+          emitExplore(ok(result), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
-            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+            emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
         }
         return;
@@ -2358,7 +2369,7 @@ export function buildProgram(deps: CliDeps): Command {
       // Noul). Requires only --url; --goal/--success are goal-strategy inputs.
       if (strategy === "adversarial") {
         if (!o.url) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required for --strategy adversarial"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--url is required for --strategy adversarial"));
           return;
         }
         const advAllowlist = resolveExploreAllowlist(o.url, o.allow);
@@ -2372,9 +2383,9 @@ export function buildProgram(deps: CliDeps): Command {
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
-            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+            emitExplore(fail("E_AI_SETUP_REQUIRED", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
           }
           return;
         }
@@ -2386,7 +2397,7 @@ export function buildProgram(deps: CliDeps): Command {
             requireFormSubmit: o.requireFormSubmit,
           });
         } catch (err) {
-          emitJson(program, fail("E_EXPLORE_ARGS", String(err instanceof Error ? err.message : err)));
+          emitExplore(fail("E_EXPLORE_ARGS", String(err instanceof Error ? err.message : err)));
           return;
         }
         const advBounds: Record<string, number> = {};
@@ -2418,15 +2429,14 @@ export function buildProgram(deps: CliDeps): Command {
             ...withInvariants,
             ...withServerLog,
           });
-          emitJson(program, ok(result));
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
-          // itself broke (inconclusive/crashed) — see mission-exit.ts.
-          process.exitCode = result.exitCode;
+          // itself broke (inconclusive/crashed) — see exit-codes.ts.
+          emitExplore(ok(result), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
-            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+            emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
         }
         return;
@@ -2438,11 +2448,11 @@ export function buildProgram(deps: CliDeps): Command {
       // gates the run (no non-zero exit).
       if (strategy === "usability") {
         if (!o.url || !o.goal) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--url and --goal (the job) are required for --strategy usability"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--url and --goal (the job) are required for --strategy usability"));
           return;
         }
         if (!o.appClass) {
-          emitJson(program, fail("E_UX_ARGS", "--app-class is required for --strategy usability"));
+          emitExplore(fail("E_UX_ARGS", "--app-class is required for --strategy usability"));
           return;
         }
         const uxAllowlist = resolveExploreAllowlist(o.url, o.allow);
@@ -2459,9 +2469,9 @@ export function buildProgram(deps: CliDeps): Command {
           }));
         } catch (err) {
           if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
-            emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+            emitExplore(fail("E_AI_SETUP_REQUIRED", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
           }
           return;
         }
@@ -2493,20 +2503,19 @@ export function buildProgram(deps: CliDeps): Command {
             ...withServerLog,
             ...withInvariants,
           });
-          emitJson(program, ok(result));
           // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
-          process.exitCode = result.exitCode;
+          emitExplore(ok(result), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
-            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+            emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof FixtureNotFoundError) {
-            emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
+            emitExplore(fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
-            emitJson(program, fail("E_UX_ARGS", err.message));
+            emitExplore(fail("E_UX_ARGS", err.message));
           } else if (err instanceof UsabilityInvariantsUnsupportedError) {
-            emitJson(program, fail("E_EXPLORE_ARGS", err.message));
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
         }
         return;
@@ -2518,7 +2527,7 @@ export function buildProgram(deps: CliDeps): Command {
       // untouched when --feature is absent.
       if (o.feature) {
         if (!o.url) {
-          emitJson(program, fail("E_EXPLORE_ARGS", "--url is required with --feature"));
+          emitExplore(fail("E_EXPLORE_ARGS", "--url is required with --feature"));
           return;
         }
         const featAllowlist = resolveExploreAllowlist(o.url, o.allow);
@@ -2527,7 +2536,7 @@ export function buildProgram(deps: CliDeps): Command {
         if (o.maxDecisions !== undefined) featBounds.maxDecisions = Number(o.maxDecisions);
         const featStall = stallTimeoutMs(o.stallTimeout);
         if (featStall === null) {
-          emitJson(program, fail("E_EXPLORE_ARGS", `--stall-timeout must be a positive number of seconds (got ${JSON.stringify(o.stallTimeout)})`));
+          emitExplore(fail("E_EXPLORE_ARGS", `--stall-timeout must be a positive number of seconds (got ${JSON.stringify(o.stallTimeout)})`));
           return;
         }
         try {
@@ -2548,13 +2557,12 @@ export function buildProgram(deps: CliDeps): Command {
             ...withServerLog,
             ...(target?.safety === undefined ? {} : { safety: target.safety }),
           });
-          emitJson(program, ok(result));
-          process.exitCode = result.exitCode;
+          emitExplore(ok(result), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
-            emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+            emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else {
-            emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+            emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
         }
         return;
@@ -2563,18 +2571,18 @@ export function buildProgram(deps: CliDeps): Command {
       // --success may be omitted for a find-out goal (#130d): the run is then verified by a grounded
       // `report` answer (#101) instead of an independent page/network check.
       if (!o.url || !o.goal) {
-        emitJson(program, fail("E_EXPLORE_ARGS", "--url and --goal are required"));
+        emitExplore(fail("E_EXPLORE_ARGS", "--url and --goal are required"));
         return;
       }
       let successChecks: SuccessCheck[];
       try {
         successChecks = o.success.map(parseSuccessSpec);
       } catch (err) {
-        emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
+        emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
       if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
-        emitJson(program, fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+        emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
         return;
       }
       const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
@@ -2595,7 +2603,7 @@ export function buildProgram(deps: CliDeps): Command {
         checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success, ...invariantSetupTexts(invariants) }, fx);
       } catch (err) {
         if (!(err instanceof FixtureSpecError || err instanceof UnboundSetupRefError)) throw err;
-        emitJson(program, fail(err.code, err.message));
+        emitExplore(fail(err.code, err.message));
         return;
       }
       const bounds: Record<string, number> = {};
@@ -2609,9 +2617,9 @@ export function buildProgram(deps: CliDeps): Command {
         ({ judge, gen, usage } = await buildExploreGateways(deps, { real: o.real ?? false, fakeAi: o.fakeAi ?? false }));
       } catch (err) {
         if (err instanceof MissingCredentialError || err instanceof GatewaySelectionError) {
-          emitJson(program, fail("E_AI_SETUP_REQUIRED", err.message));
+          emitExplore(fail("E_AI_SETUP_REQUIRED", err.message));
         } else {
-          emitJson(program, fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
+          emitExplore(fail("E_EXPLORE_SETUP", String(err instanceof Error ? err.message : err)));
         }
         return;
       }
@@ -2636,8 +2644,7 @@ export function buildProgram(deps: CliDeps): Command {
             throw err;
           }
           await fx.restore();
-          emitJson(program, ok(withEngine(fixtureSetupFailedResult(err, fx))));
-          process.exitCode = 2;
+          emitExplore(ok(withEngine(fixtureSetupFailedResult(err, fx))), EXIT_CODES.inconclusive);
           return;
         }
       }
@@ -2672,21 +2679,15 @@ export function buildProgram(deps: CliDeps): Command {
           ...withServerLog,
           ...(fx === undefined ? {} : { fixtures: fx }),
         });
-        const envelope = ok(result);
-        if (o.json) {
-          emitJson(program, envelope);
-        } else {
-          writeRawResult(program, result);
-        }
         // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
-        process.exitCode = result.exitCode;
+        emitExplore(ok(result), result.exitCode);
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
-          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
         } else if (err instanceof FixtureNotFoundError) {
-          emitJson(program, fail("E_EXPLORE_FIXTURE", err.message));
+          emitExplore(fail("E_EXPLORE_FIXTURE", err.message));
         } else {
-          emitJson(program, fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
         }
       } finally {
         // Every exit path restores the fixture state (a no-op when the mission already did).
@@ -2696,7 +2697,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
   // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
-  // 4 intermittent (fired on some but not all replays — never reported as fixed).
+  // 4 intermittent (fired on some but not all replays — never reported as fixed) · 64 usage error.
   withEmulationFlags(
     withFixtureFlags(
       withBrowserLaunchFlags(
@@ -2737,7 +2738,7 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option("--json", "emit a JSON envelope")
+    .option("--json", "emit the JSON envelope (default: a human summary)")
     .action(async function (this: Command, positional?: string) {
       const o = this.opts<
         {
@@ -2756,6 +2757,8 @@ export function buildProgram(deps: CliDeps): Command {
           FixtureFlags &
           EmulationFlags
       >();
+      const emitVerify = (envelope: JsonEnvelope<unknown>, exitCode?: number): void =>
+        emitCommandResult(program, envelope, { json: o.json === true, command: "verify-fix", human: formatVerifyFixHuman, ...(exitCode === undefined ? {} : { exitCode }) });
       // #195: `--secret env:VAR`, as on explore.
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
@@ -2763,7 +2766,7 @@ export function buildProgram(deps: CliDeps): Command {
         o.secret = resolved.secrets;
       } catch (err) {
         if (!(err instanceof SecretArgError)) throw err;
-        emitJson(program, fail("E_VERIFY_FIX_ARGS", err.message));
+        emitVerify(fail("E_VERIFY_FIX_ARGS", err.message));
         return;
       }
       let verifyFixEmulation: EmulationSpec | undefined;
@@ -2775,8 +2778,7 @@ export function buildProgram(deps: CliDeps): Command {
           throw new Error(`two different fingerprints given (${positional} and --fingerprint ${o.fingerprint})`);
         }
       } catch (err) {
-        emitJson(program, fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
-        process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
+        emitVerify(fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {
@@ -2798,17 +2800,15 @@ export function buildProgram(deps: CliDeps): Command {
           ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });
-        emitJson(program, ok(withEngine(report)));
-        process.exitCode = report.exitCode;
+        emitVerify(ok(withEngine(report)), report.exitCode);
       } catch (err) {
         if (err instanceof VerifyFixInputError || err instanceof TargetConfigError || err instanceof LedgerError) {
-          emitJson(program, fail(err.code, err.message));
+          emitVerify(fail(err.code, err.message));
         } else if (err instanceof UnauthorizedExploreTargetError) {
-          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          emitVerify(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
         } else {
-          emitJson(program, fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
+          emitVerify(fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
         }
-        process.exitCode = VERIFY_FIX_EXIT_CODES.inconclusive;
       }
     });
 
@@ -3417,8 +3417,9 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           program.configureOutput().writeOut?.(`${JSON.stringify(data)}\n`);
         }
-        // Every claimed mission ran (whatever its own outcome); 1 only when one could not run at all.
-        process.exitCode = report.ran.some((m) => m.status === "failed") ? 1 : 0;
+        // Every claimed mission ran (whatever its own outcome); 2 only when one could not run at all —
+        // it proves nothing, so never 1 (defects) — exit-codes.ts.
+        process.exitCode = report.ran.some((m) => m.status === "failed") ? EXIT_CODES.inconclusive : EXIT_CODES.ok;
       };
       try {
         if (!o.watch) {
@@ -3661,8 +3662,21 @@ export function buildProgram(deps: CliDeps): Command {
   registerReportCommands(program, { missionTargetsDir: resolveMissionTargetsDir(deps) });
   registerLogsCommands(program, deps);
   registerInvariantsCommands(program);
+  useUsageExitCode(program);
 
   return program;
+}
+
+/**
+ * #210: a commander parse error (unknown option, missing argument or required option, bad choice)
+ * is a usage error — exit 64 like every command's own argument errors, never 1 (defects found).
+ * Wraps each command's `error()`, which every commander parse error goes through.
+ */
+function useUsageExitCode(cmd: Command): void {
+  const original = cmd.error.bind(cmd);
+  cmd.error = (message: string, errorOptions?: { code?: string; exitCode?: number }): never =>
+    original(message, { ...errorOptions, exitCode: errorOptions?.exitCode ?? EXIT_CODES.usage });
+  for (const sub of cmd.commands) useUsageExitCode(sub);
 }
 
 /** The commands that write run output under `.jevitate/logs` — pruned before, when auto-prune is on. */

@@ -109,9 +109,9 @@ describe("verify-fix — CLI surface", () => {
       const program = buildProgram({ profiles: {} as unknown as ProfileManager });
       program.exitOverride();
       program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: () => undefined });
-      await program.parseAsync(["node", "jevitate", "verify-fix", "--result", join(dir, "nope.json"), "--fingerprint", "0".repeat(16)]);
+      await program.parseAsync(["node", "jevitate", "verify-fix", "--result", join(dir, "nope.json"), "--fingerprint", "0".repeat(16), "--json"]);
       expect(JSON.parse(lines.join(""))).toMatchObject({ ok: false, error: { code: "E_VERIFY_FIX_INPUT" } });
-      expect(process.exitCode).toBe(2);
+      expect(process.exitCode).toBe(64);
       process.exitCode = 0;
     } finally {
       await rm(dir, { recursive: true, force: true });

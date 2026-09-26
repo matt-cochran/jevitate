@@ -118,7 +118,7 @@ describe("--save-storage-state never writes into the repo's .jevitate/ (#195)", 
       const target = join(dir, ".jevitate", "sessions", "admin.json");
       for (const argv of [
         ["explore", "--url", URL, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--save-storage-state", target, "--json"],
-        ["explore", "--strategy", "coverage", "--url", URL, "--fake-ai", "--repeat", "2", "--save-storage-state", target],
+        ["explore", "--strategy", "coverage", "--url", URL, "--fake-ai", "--repeat", "2", "--save-storage-state", target, "--json"],
       ]) {
         const { program, lines, opens } = capture();
         await program.parseAsync(argv, { from: "user" });

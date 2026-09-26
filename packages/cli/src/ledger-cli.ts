@@ -5,14 +5,17 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { withEngine } from "./engine.js";
 import { LedgerError, ledgerAdd, ledgerList, runLedgerVerify } from "./ledger-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
-import { VERIFY_FIX_EXIT_CODES, VerifyFixInputError } from "./verify-fix-api.js";
+import { VerifyFixInputError } from "./verify-fix-api.js";
+import { emitEnvelope, formatLedgerAddHuman, formatLedgerListHuman, formatLedgerVerifyHuman } from "./cli-output.js";
 
 /**
  * `jevitate ledger add|list|verify` (#195 part 6) — registered by `program.ts`, which supplies the
  * browser wiring. See `ledger-api.ts` for what an entry holds (and never holds).
  *
- * Exit codes: `add`/`list` 0 ok · 2 refused. `verify` 0 every entry fixed · 1 any still reproduces ·
- * 4 any intermittent · 2 any inconclusive (or the ledger/arguments were unusable).
+ * Exit codes (exit-codes.ts): `add`/`list` 0 ok · 64 refused input (bad fingerprint, missing entry,
+ * a secret in the material) · 2 an unexpected failure. `verify` 0 every entry fixed · 1 any still
+ * reproduces · 4 any intermittent · 2 any inconclusive · 64 the ledger/arguments were unusable.
+ * Without `--json`, a human summary (#210).
  */
 
 export interface LedgerCliDeps {
@@ -22,20 +25,24 @@ export interface LedgerCliDeps {
   readonly browserLaunch?: (flags: object) => BrowserLaunchOptions | undefined;
 }
 
-const INPUT_EXIT = VERIFY_FIX_EXIT_CODES.inconclusive;
-
-function emit(program: Command, envelope: JsonEnvelope<unknown>, exitCode: number): void {
-  program.configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = exitCode;
+interface Out<T> {
+  readonly json: boolean;
+  readonly command: string;
+  readonly human?: (data: T) => string;
 }
 
-function refuse(program: Command, err: unknown): void {
+function emit<T>(program: Command, envelope: JsonEnvelope<T>, out: Out<T>, exitCode?: number): void {
+  emitEnvelope(program, envelope, { ...out, ...(exitCode === undefined ? {} : { exitCode }) });
+}
+
+/** A refusal's exit code is its class (exit-codes.ts): 64 for unusable input, 2 for an unexpected failure. */
+function refuse(program: Command, err: unknown, out: Out<never>): void {
   if (err instanceof LedgerError || err instanceof VerifyFixInputError || err instanceof TargetConfigError) {
-    emit(program, fail(err.code, err.message), INPUT_EXIT);
+    emit(program, fail(err.code, err.message), out);
   } else if (err instanceof UnauthorizedExploreTargetError) {
-    emit(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message), INPUT_EXIT);
+    emit(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message), out);
   } else {
-    emit(program, fail("E_LEDGER", err instanceof Error ? err.message : String(err)), INPUT_EXIT);
+    emit(program, fail("E_LEDGER", err instanceof Error ? err.message : String(err)), out);
   }
 }
 
@@ -55,9 +62,10 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .option("--ticket <id>", "the tracker ticket the finding was filed as")
     .option("--dir <path>", DIR_HELP)
     .option("--secret <value>", "refuse the entry if its material contains this value (repeatable)", collect, [] as string[])
-    .option("--json", "emit a JSON envelope (the default output)")
+    .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(function (this: Command, result: string, fingerprint: string) {
-      const o = this.opts<{ ticket?: string; dir?: string; secret: string[] }>();
+      const o = this.opts<{ ticket?: string; dir?: string; secret: string[]; json?: boolean }>();
+      const out = { json: o.json === true, command: "ledger add", human: formatLedgerAddHuman };
       try {
         const added = ledgerAdd({
           resultPath: result,
@@ -66,9 +74,9 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
           ...(o.ticket === undefined ? {} : { ticket: o.ticket }),
           ...(o.dir === undefined ? {} : { regressionsDir: o.dir }),
         });
-        emit(program, ok(added), 0);
+        emit(program, ok(added), out);
       } catch (err) {
-        refuse(program, err);
+        refuse(program, err, out);
       }
     });
 
@@ -76,13 +84,14 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .command("list")
     .description("list the ledger's entries (fingerprint, kind, title, ticket, when added)")
     .option("--dir <path>", DIR_HELP)
-    .option("--json", "emit a JSON envelope (the default output)")
+    .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(function (this: Command) {
-      const o = this.opts<{ dir?: string }>();
+      const o = this.opts<{ dir?: string; json?: boolean }>();
+      const out = { json: o.json === true, command: "ledger list", human: formatLedgerListHuman };
       try {
-        emit(program, ok({ entries: ledgerList(o.dir) }), 0);
+        emit(program, ok({ entries: ledgerList(o.dir) }), out);
       } catch (err) {
-        refuse(program, err);
+        refuse(program, err, out);
       }
     });
 
@@ -97,9 +106,10 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .option("--storage-state <file>", "the session to replay an authenticated target with (entries never store one)")
     .option("--replays <n>", "fresh-context replays per entry that confirm a fix (default 3)")
     .option("--allow-log-cmd", "re-checking a server-log entry whose source is cmd:<command> needs this too", false)
-    .option("--json", "emit a JSON envelope (the default output)")
+    .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(async function (this: Command, fingerprints: string[]) {
-      const o = this.opts<{ ticket?: string; dir?: string; storageState?: string; replays?: string; allowLogCmd?: boolean }>();
+      const o = this.opts<{ ticket?: string; dir?: string; storageState?: string; replays?: string; allowLogCmd?: boolean; json?: boolean }>();
+      const out = { json: o.json === true, command: "ledger verify", human: formatLedgerVerifyHuman };
       try {
         const browser = deps.browserLaunch?.(o);
         const result = await runLedgerVerify({
@@ -113,9 +123,9 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
           ...(browser === undefined ? {} : { browser }),
         });
-        emit(program, ok(withEngine(result)), result.exitCode);
+        emit(program, ok(withEngine(result)), out, result.exitCode);
       } catch (err) {
-        refuse(program, err);
+        refuse(program, err, out);
       }
     });
 }
