@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir as osHomedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /**
  * Where jevitate keeps things (0.2.0 layout):
@@ -188,4 +188,32 @@ export function initProjectDir(cwd: string, opts: { readonly dryRun?: boolean } 
     }
   }
   return { dir, created };
+}
+
+/** A session file (cookies/tokens) would be written inside an app repo's `.jevitate/` (#195). */
+export class SessionFileInProjectError extends Error {
+  readonly code = "E_EXPLORE_ARGS" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionFileInProjectError";
+  }
+}
+
+/**
+ * The repo's `.jevitate/` never holds secrets or storage states (they live in `~/.jevitate/` or
+ * outside the repo): refuses `file` when it resolves inside a `.jevitate/` directory other than the
+ * per-user one. Decided from the path itself (any `.jevitate` ancestor), so it holds wherever the
+ * command runs from and whether or not the directory exists yet. `what` names the option.
+ */
+export function assertSessionFileOutsideProject(file: string, what: string, deps: LayoutDeps = {}): void {
+  const abs = resolve((deps.cwd ?? (() => process.cwd()))(), file);
+  const home = homeDataRoot(deps);
+  for (let dir = dirname(abs); ; dir = dirname(dir)) {
+    if (basename(dir) === ".jevitate" && dir !== home) {
+      throw new SessionFileInProjectError(
+        `${what} ${abs} is inside the repo's ${dir}/, which never holds storage states or secrets (it is shared with the app's code); write it under ${home}/ or outside the repo`,
+      );
+    }
+    if (dirname(dir) === dir) return;
+  }
 }

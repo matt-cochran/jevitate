@@ -68,7 +68,16 @@ import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
 import { LogsConfigError, loadLogsRetention, pruneLogs } from "./logs-retention.js";
-import { initProjectDir, logsDirFor, logsRoot, projectDataDir, resultDirsFor, type ProjectInitReport } from "./project-dir.js";
+import {
+  SessionFileInProjectError,
+  assertSessionFileOutsideProject,
+  initProjectDir,
+  logsDirFor,
+  logsRoot,
+  projectDataDir,
+  resultDirsFor,
+  type ProjectInitReport,
+} from "./project-dir.js";
 import { sitePolicyKey, withSiteGate } from "./site-gate-cli.js";
 import { runRegressionCapture, runRegressionRun, RegressionNotFoundError } from "./regression-api.js";
 import {
@@ -1986,6 +1995,16 @@ export function buildProgram(deps: CliDeps): Command {
         json?: boolean;
       } & BrowserLaunchFlags & FixtureFlags & EmulationFlags>();
 
+      // #195: a session file never lands in the repo's .jevitate/ (refused before any run, multi-runs included).
+      if (o.saveStorageState !== undefined) {
+        try {
+          assertSessionFileOutsideProject(o.saveStorageState, "--save-storage-state");
+        } catch (err) {
+          if (!(err instanceof SessionFileInProjectError)) throw err;
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+      }
       const strategy = o.strategy ?? "goal";
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
       if (wantsMultiRun(o)) {

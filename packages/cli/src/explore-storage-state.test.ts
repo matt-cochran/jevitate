@@ -110,3 +110,27 @@ describe("--save-storage-state (#82)", () => {
     expect(help).toContain("stale after one authenticated run refreshes it");
   });
 });
+
+describe("--save-storage-state never writes into the repo's .jevitate/ (#195)", () => {
+  it("refuses a path inside an in-repo .jevitate/ before any browser opens, naming it and ~/.jevitate/", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-repo-"));
+    try {
+      const target = join(dir, ".jevitate", "sessions", "admin.json");
+      for (const argv of [
+        ["explore", "--url", URL, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--save-storage-state", target, "--json"],
+        ["explore", "--strategy", "coverage", "--url", URL, "--fake-ai", "--repeat", "2", "--save-storage-state", target],
+      ]) {
+        const { program, lines, opens } = capture();
+        await program.parseAsync(argv, { from: "user" });
+        const env = JSON.parse(lines.join("").trim().split("\n").pop() ?? "{}") as { ok: boolean; error?: { code: string; message: string } };
+        expect(env.ok).toBe(false);
+        expect(env.error?.code).toBe("E_EXPLORE_ARGS");
+        expect(env.error?.message).toContain(`--save-storage-state ${target} is inside the repo's ${join(dir, ".jevitate")}/`);
+        expect(env.error?.message).toMatch(/\.jevitate\/ or outside the repo$/);
+        expect(opens).toEqual([]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -10,6 +10,7 @@ import {
   type SuiteExploreOptionName,
   type SuiteExploreOptions,
 } from "./suite-explore-options.js";
+import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 
 /**
  * The `jevitate check --suite <file.json>` schema (#137). Validated in full BEFORE anything runs:
@@ -303,8 +304,18 @@ function readOption(r: Reader, obj: Json, key: SuiteExploreOptionName, path: str
       if (spec.oneOf !== undefined && !spec.oneOf.includes(s)) r.fail(at, `must be ${spec.oneOf.map((o) => JSON.stringify(o)).join(" | ")}`);
       return s;
     }
-    case "path":
-      return r.resolvePath(r.string(obj, key, path));
+    case "path": {
+      const file = r.resolvePath(r.string(obj, key, path));
+      if (key === "saveStorageState") {
+        try {
+          assertSessionFileOutsideProject(file, "saveStorageState");
+        } catch (e) {
+          if (!(e instanceof SessionFileInProjectError)) throw e;
+          r.fail(at, e.message);
+        }
+      }
+      return file;
+    }
     case "boolean":
       if (typeof v !== "boolean") r.fail(at, "must be a boolean");
       return v;

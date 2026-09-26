@@ -169,6 +169,9 @@ boolean, and a number is a JSON number.
   `explore --persona` for the RBAC diff). An item with `actor`, `persona` or `personas` cannot also
   set its own `storageState`.
 - Journey and `verifyFix` items take `storageState` too (a path, or `null`).
+- `saveStorageState` (like `explore --save-storage-state`) is refused when it resolves inside a
+  repo's `.jevitate/`, which never holds sessions or secrets: write it under `~/.jevitate/` or
+  outside the repo.
 - Not per item, with the reason: the browser launch flags (`--browser-*`, one launch for the whole
   check: pass them to `jevitate check`), `--real`/`--fake-ai` (the suite's `ai`), `--out`/`--json`
   (the check's own outputs), `--file-issues`/`--issue-repo`/`--jevitate-repo` (a CI gate reports

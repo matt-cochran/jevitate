@@ -312,6 +312,13 @@ describe("a suite never carries a literal secret (#195)", () => {
 });
 
 describe("suite validation stays path-precise (#195)", () => {
+  it("refuses a saveStorageState inside the repo's .jevitate/ at validation, naming the item's path", () => {
+    const msg = /^.*suite\.json: \$\.targets\[0\]\.missions\[0\]\.saveStorageState: saveStorageState .*\/\.jevitate\/state\.json is inside the repo's .*\/\.jevitate\/, which never holds storage states/;
+    expect(() => suiteOf(item("feature", { saveStorageState: ".jevitate/state.json" }))).toThrow(msg);
+    expect(() => suiteOf({ saveStorageState: "../app/.jevitate/logs/s.json", ...item("feature", {}) })).toThrow(/\$\.targets\[0\]\.saveStorageState: .*inside the repo's/);
+    expect(() => suiteOf(item("feature", { saveStorageState: "sessions/state.json" }))).not.toThrow();
+  });
+
   it("names the path of a bad option value, and suggests the camelCase name for a flag spelling", () => {
     expect(() => suiteOf(item("feature", { stallTimeout: -1 }))).toThrow("$.targets[0].missions[0].stallTimeout: must be a positive number");
     expect(() => suiteOf(item("feature", { deny: ["/(/"] }))).toThrow(/\$\.targets\[0\]\.missions\[0\]\.deny: deny "\/\(\/": /);
