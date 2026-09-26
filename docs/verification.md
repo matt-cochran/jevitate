@@ -10,6 +10,8 @@ to it and the step to replay up to. Three commands use it:
 | `jevitate verify-fix --result <result.json> --fingerprint <fp>` | does this finding still happen? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent |
 | `jevitate regression capture --from <recording.json> --result <result.json> --fingerprint <fp> --id <id>` | commit this failure as a standalone regression | 0 committed · non-zero refused (with the reason) |
 | `jevitate regression run <id>` | does the committed regression still fail? | 0 fixed · 1 reproduces |
+| `jevitate ledger add <result.json> <fp> [--ticket X]` | keep what is needed to re-check this finding later | 0 stored · non-zero refused (with the reason) |
+| `jevitate ledger verify [fp...]` / `jevitate verify-fix <fp>` | is every finding in the ledger (or this one) still fixed? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent |
 
 `verify-fix` works for every finding kind: hard signals (HTTP 5xx, uncaught exceptions, console
 errors, failed requests), hangs, invariant violations and backend-log defects. In CI,
@@ -45,6 +47,43 @@ declare the rule it breaks as an [invariant](./invariants.md) (the [demo](./demo
 (exit 1) while the bug is there, `fixed` (exit 0) once it is gone. Pass `--storage-state` to
 either command for an authenticated app, and `--fixtures` to capture when the failing run started
 from [fixtures](./fixtures.md).
+
+## Keeping findings verifiable: the ledger
+
+`verify-fix --result` needs the result file that contained the defect. Run output under
+`.jevitate/logs/` is deleted by retention, but checking months later that a fix still holds needs the
+same repro material. The ledger stores that material, keyed by fingerprint, in the committed
+regressions store:
+
+```bash
+jevitate ledger add .jevitate/logs/<date>/feature-<stamp>.result.json <fp> --ticket JEV-123
+# → .jevitate/regressions/ledger/<fp>.json  (commit it with the fix)
+
+jevitate verify-fix <fp>                 # one finding, from the ledger (no --result needed)
+jevitate ledger verify                   # every entry; --ticket JEV-123 or <fp>... to narrow it
+jevitate ledger list                     # what is in the ledger
+```
+
+Each entry is a small, self-contained result that `verify-fix` replays like the original. It
+contains only what the replay needs:
+
+- the finding, with its own Recording when it has one, or else the run's Recording;
+- the run's scope (`seedUrl` and `allowlist`);
+- the declared invariant spec, for an invariant defect;
+- the fixture spec, the hashes of its `--before`/`--after` hooks, and its non-secret outputs;
+- the names of the controls that sent a write, for hang-replay safety.
+
+An entry never contains a storage state, a storage-state path, an actor's session, the transcript,
+page text, screenshots or usage. To verify an authenticated target, pass `--storage-state` to
+`verify-fix` or `ledger verify`, or set the target's session in `~/.jevitate/targets.json`. Pass
+`--secret <value>` (repeatable) to `ledger add` to refuse any entry that would contain that value.
+`--dir` (for `ledger`) or `--regressions-dir` (for `verify-fix`) selects a regressions directory
+other than the repo's `.jevitate/regressions`.
+
+`ledger verify` exits with the worst verdict across the entries it checked, in this order:
+`still-reproduces` (1), then `intermittent` (4), then `inconclusive` (2). It exits 0 only when every
+entry is `fixed`. An entry that cannot be replayed, for example because its session is missing,
+counts as `inconclusive` and never as fixed.
 
 ## Reproducing a finding: `verify-fix`
 
