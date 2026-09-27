@@ -7,6 +7,11 @@ Starting a run logged in, driving login and MFA forms without exposing secrets, 
 `--secret <value>` **only redacts**: the value is kept out of every model call,
 transcript, Recording and issue draft, but it is never typed into a field.
 
+A page that shows the value (a profile page showing your email, in its text or in a field) is
+fine: page text and field values are redacted to `«redacted»` as the page is read, before any
+model sees them, and the run carries on. A typed value that happens to equal it is recorded
+`{ redacted: true }`. A find-out whose answer is the secret says it cannot disclose it.
+
 Prefer `--secret env:VAR`: the value is read from the environment variable `VAR`, so it
 never appears in the process list or your shell history (the same `env:` binding
 `--secret-field` uses), and it is redacted exactly like a literal. An unset or empty

@@ -41,6 +41,11 @@ export interface PerceiveOptions {
   readonly maxCandidates?: number;
   /** #192: keep a long list's options the goal names past its per-list cap (see `SnapshotOptions`). */
   readonly mentioned?: (name: string) => boolean;
+  /**
+   * #219: the run's registered secret values — the snapshot's page content is redacted of them as
+   * it is read (see `SnapshotOptions.secrets`). Default none.
+   */
+  readonly secrets?: readonly string[];
   /** Ceiling on the render + settle wait (ms). Default `RENDER_WAIT_MS`; 0 disables waiting. */
   readonly renderWaitMs?: number;
   /** Quiet window for "settled" (ms). Default `SETTLE_QUIET_MS` (500). */
@@ -110,6 +115,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   const snapOpts = {
     ...(opts.maxCandidates === undefined ? {} : { maxCandidates: opts.maxCandidates }),
     ...(opts.mentioned === undefined ? {} : { mentioned: opts.mentioned }),
+    ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
   };
   const hangProbeMs = opts.hangProbeMs ?? HANG_PROBE_MS;
   // Half the ceiling by default: a request that started a little AFTER this perception began (the

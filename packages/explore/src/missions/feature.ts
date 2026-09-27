@@ -318,6 +318,7 @@ async function runFeatureFrontier(
   const snapshotNow = async (): Promise<Snapshot> => {
     const p = await perceive(sessions.page, {
       maxCandidates: bounds.maxCandidates,
+      ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
       ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
       ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
     });

@@ -635,6 +635,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const perceiveOpts = {
     maxCandidates: bounds.maxCandidates,
     mentioned: (name: string) => name.trim().length >= 2 && goalText.includes(name.trim().toLowerCase()),
+    // #219: page content is redacted of every registered secret as it is perceived.
+    secrets,
     ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
     ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
     ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
@@ -1043,8 +1045,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
       // #207: a form field's current value is page content too (grounded as such, never as page text).
-      const visibleText = await readPageText(page);
-      observed.add(snap.url, visibleText, controlFields(snap.controls), await readPageHeadings(page));
+      const visibleText = await readPageText(page, secrets);
+      observed.add(snap.url, visibleText, controlFields(snap.controls), await readPageHeadings(page, secrets));
       noteReplyText(snap.url, visibleText);
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded
@@ -1221,7 +1223,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               () => false,
             );
           } else {
-            const pageText = withoutAuthored(await readPageText(page), conversation.sent);
+            const pageText = withoutAuthored(await readPageText(page, secrets), conversation.sent);
             const judged = await judgeGoalCompletion(cfg.judge, {
               goal: cfg.goal,
               url: snap.url,
@@ -1324,7 +1326,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           if (awaitingReply && lastTurn !== null && busyWaitedMs < replyWaitMs) {
             const t0 = now();
             const listen = replyWaitMs - busyWaitedMs;
-            const reply = await waitForReply(page, { ...lastTurn, timeoutMs: listen, ceilingMs: listen });
+            const reply = await waitForReply(page, { secrets, ...lastTurn, timeoutMs: listen, ceilingMs: listen });
             busyWaitedMs += now() - t0;
             if (reply.received) {
               conversation.latestReply = reply.text;
@@ -1334,7 +1336,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               history.push(`waited for the reply → reply: ${quote(reply.text, 300)}`);
             }
           }
-          noteReplyText(snap.url, await readPageText(page));
+          noteReplyText(snap.url, await readPageText(page, secrets));
         }
         const replyPages = replyGoal ? replies.pages() : null;
         const verdict: AnswerVerdict =
@@ -1412,7 +1414,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // listening, bounded by what is left of the reply wait, and records the reply if it lands.
           const t0 = now();
           const listen = Math.min(replyWaitMs - busyWaitedMs, 20_000);
-          const reply = await waitForReply(page, { ...lastTurn, timeoutMs: listen, ceilingMs: listen });
+          const reply = await waitForReply(page, { secrets, ...lastTurn, timeoutMs: listen, ceilingMs: listen });
           busyWaitedMs += now() - t0;
           if (reply.received) {
             conversation.latestReply = reply.text;
@@ -1769,7 +1771,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           continue;
         }
         if (op === "send") {
-          const baseline = await readPageText(page);
+          const baseline = await readPageText(page, secrets);
           const before = new Set(keys.keys());
           const r = await act(cfg.actor, { op: "send", control, value: message, candidates: snap.controls });
           if (!r.ok) {
@@ -1787,7 +1789,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           unsent.submitted();
           conversation.sent.push(message);
           preSend ??= baseline;
-          const reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
+          const reply = await waitForReply(page, { secrets, baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
           if (reply.received) {
             conversation.latestReply = reply.text;
             replies.add(snap.url, reply.text);
@@ -1963,7 +1965,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           lastActedOp = decision.op;
           continue;
         }
-        const baseline = turn ? await readPageText(page) : "";
+        const baseline = turn ? await readPageText(page, secrets) : "";
         sideEffects.beginClick(keyOf(control), control.name || control.summary, safePath(snap.url), now());
         const r = await act(cfg.actor, { op: "click", control });
         let reply: ReplyResult | undefined;
@@ -1989,7 +1991,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             message = submits ? pendingTexts.join("\n") : control.name;
             conversation.sent.push(message);
             preSend ??= baseline;
-            reply = await waitForReply(page, { baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
+            reply = await waitForReply(page, { secrets, baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
             if (reply.received) {
               conversation.latestReply = reply.text;
               replies.add(snap.url, reply.text);
