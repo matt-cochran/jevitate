@@ -7,11 +7,15 @@ to it and the step to replay up to. Three commands use it:
 
 | Command | Answers | Exit codes |
 | --- | --- | --- |
-| `jevitate verify-fix --result <result.json> --fingerprint <fp>` | does this finding still happen? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent |
+| `jevitate verify-fix --result <result.json> --fingerprint <fp>` | does this finding still happen? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent · 64 unusable input |
 | `jevitate regression capture --from <recording.json> --result <result.json> --fingerprint <fp> --id <id>` | commit this failure as a standalone regression | 0 committed · non-zero refused (with the reason) |
 | `jevitate regression run <id>` | does the committed regression still fail? | 0 fixed · 1 reproduces |
-| `jevitate ledger add <result.json> <fp> [--ticket X]` | keep what is needed to re-check this finding later | 0 stored · non-zero refused (with the reason) |
-| `jevitate ledger verify [fp...]` / `jevitate verify-fix <fp>` | is every finding in the ledger (or this one) still fixed? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent |
+| `jevitate ledger add <result.json> <fp> [--ticket X]` | keep what is needed to re-check this finding later | 0 stored · 64 refused (with the reason) |
+| `jevitate ledger verify [fp...]` / `jevitate verify-fix <fp>` | is every finding in the ledger (or this one) still fixed? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent · 64 unusable input |
+
+Every command's exit codes are in [one table](./outcomes.md#exit-codes). Without `--json` these
+commands print a human summary (the verdict, the fingerprint, why, and a `next:` step); with
+`--json`, the JSON envelope.
 
 `verify-fix` works for every finding kind: hard signals (HTTP 5xx, uncaught exceptions, console
 errors, failed requests), hangs, invariant violations and backend-log defects. In CI,
@@ -98,6 +102,7 @@ Recording step to replay up to. To check a fix, replay the defect:
 jevitate verify-fix --result .jevitate/logs/<date>/adversarial-<stamp>.result.json --fingerprint <fp> --replays 3
 # exit 0 fixed (signal absent on every replay) · 1 still reproduces · 2 inconclusive (replay could
 # not reach the step) · 4 intermittent (fired on some but not all replays — never reported as fixed)
+# · 64 unusable input (no fingerprint, unreadable result)
 ```
 
 A single clean replay is not evidence of a fix (#74): an intermittent signal can simply not fire

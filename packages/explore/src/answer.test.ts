@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ObservedPages, goalAsksForReply, groundAnswer, pagesContext } from "./answer.js";
+import { NO_ANSWER_REASON, ObservedPages, answerNotFoundReason, controlFields, goalAsksForReply, groundAnswer, pagesContext } from "./answer.js";
 
 const pages = [
   { url: "http://app.test/settings", text: "Settings\nPlan: Pro\nDesign Partner pricing: book one interview per month." },
@@ -114,4 +114,100 @@ describe("goalAsksForReply (#200) — code-side, conservative", () => {
     "Answer the onboarding survey and submit it.",
     "Reply-to address: find out what it is set to in Settings.",
   ])("not a goal about a reply: %s", (g) => expect(goalAsksForReply(g)).toBe(false));
+});
+
+describe("#207 — a form control's current value grounds an answer, recorded as such", () => {
+  const profile = [
+    {
+      url: "http://app.test/demo/profile",
+      text: "Profile\nDisplay name\nEmail\nBio\nSave",
+      fields: [
+        { label: "Display name", value: "Ada Lovelace" },
+        { label: "Email", value: "ada@example.test" },
+      ],
+    },
+  ];
+
+  it("accepts a quote of a control's value — evidence source control-value, naming the control", () => {
+    const v = groundAnswer(
+      { answer: "The saved email is ada@example.test", claims: [{ claim: "The saved email is ada@example.test", quote: "ada@example.test" }] },
+      profile,
+    );
+    expect(v.accept).toBe(true);
+    expect(v.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-value", control: "Email", url: "http://app.test/demo/profile" });
+  });
+
+  it("accepts the value as the generator saw it (`Email: …`) or as a control summary shows it (`value=\"…\"`)", () => {
+    for (const quote of ["Email: ada@example.test", 'value="ada@example.test"']) {
+      const v = groundAnswer({ answer: "ada@example.test", claims: [{ claim: "The email is ada@example.test", quote }] }, profile);
+      expect(v.accept, quote).toBe(true);
+      expect(v.answer?.evidence[0]?.source).toBe("control-value");
+    }
+  });
+
+  it("page text still grounds as page text", () => {
+    const v = groundAnswer({ answer: "A profile page", claims: [{ claim: "the page is the Profile", quote: "Profile" }] }, profile);
+    expect(v.accept).toBe(true);
+    expect(v.answer?.evidence[0]?.source).toBe("page-text");
+  });
+
+  it("rejects a value no control holds, and a quote of only a control's label", () => {
+    const other = groundAnswer({ answer: "bob@example.test", claims: [{ claim: "The email is bob@example.test", quote: "bob@example.test" }] }, profile);
+    expect(other.accept).toBe(false);
+    expect(!other.accept && other.reason).toMatch(/quote not found on any observed page/);
+    const labelOnly = groundAnswer(
+      { answer: "It is set", claims: [{ claim: "Display name is set", quote: "Display name:" }] },
+      [{ url: "http://app.test/p", text: "Settings", fields: [{ label: "Display name", value: "Ada" }] }],
+    );
+    expect(labelOnly.accept).toBe(false);
+  });
+
+  it("figures in a control-value claim must be in the value", () => {
+    const pages = [{ url: "http://app.test/s", text: "Settings", fields: [{ label: "Seats", value: "12" }] }];
+    expect(groundAnswer({ answer: "12 seats", claims: [{ claim: "12 seats", quote: "12" }] }, pages).accept).toBe(false); // too short a quote
+    expect(groundAnswer({ answer: "12 seats", claims: [{ claim: "12 seats", quote: "Seats: 12" }] }, pages).accept).toBe(true);
+    expect(groundAnswer({ answer: "15 seats", claims: [{ claim: "15 seats", quote: "Seats: 12" }] }, pages).accept).toBe(false);
+  });
+
+  it("ObservedPages keeps controls' values redacted; pagesContext shows them as FORM FIELD VALUES", () => {
+    const o = new ObservedPages(["ada@example.test"]);
+    o.add("http://app.test/p", "", [{ label: "Email", value: "ada@example.test" }]);
+    o.add("http://app.test/q", "Q", [{ label: "Name", value: "Ada" }]);
+    const ps = o.pages();
+    expect(ps).toHaveLength(2); // a page with no visible text but a field value is still observed
+    expect(JSON.stringify(ps)).not.toContain("ada@example.test");
+    expect(pagesContext(ps)).toContain("FORM FIELD VALUES:\nName: Ada");
+  });
+
+  it("controlFields keeps value-bearing controls only (never a button's label-value, never an empty value)", () => {
+    expect(
+      controlFields([
+        { name: "Email", role: "textbox", tag: "input", value: "ada@example.test" },
+        { name: "Bio", role: "textbox", tag: "textarea", value: "" },
+        { name: "Save", role: "button", tag: "input", value: "Save" },
+        { name: "Password", role: "textbox", tag: "input" },
+      ]),
+    ).toEqual([{ label: "Email", value: "ada@example.test" }]);
+  });
+});
+
+describe("#207 — no answer", () => {
+  it("an answer that only says there is none ('null') is no answer, not an uncited one", () => {
+    for (const answer of ["null", "None", "unknown", "not found."]) {
+      const v = groundAnswer({ answer, claims: [] }, pages);
+      expect(!v.accept && v.reason, answer).toBe(NO_ANSWER_REASON);
+    }
+  });
+
+  it("the end reason names the pages seen, first seen first, deduped and bounded", () => {
+    const o = new ObservedPages();
+    o.add("http://app.test/packs", "Packs");
+    o.add("http://app.test/pricing?tier=pro", "Pricing");
+    o.add("http://app.test/packs", "Packs, scrolled");
+    expect(answerNotFoundReason(o.pages())).toBe("answer not found (pages seen: /packs, /pricing?tier=pro)");
+    const many = new ObservedPages();
+    for (let i = 0; i < 10; i++) many.add(`http://app.test/p${i}`, `page ${i}`);
+    expect(answerNotFoundReason(many.pages())).toMatch(/^answer not found \(pages seen: \/p0, .*\/p7, \+2 more\)$/);
+    expect(answerNotFoundReason([])).toBe("answer not found (no page text was observed)");
+  });
 });

@@ -100,6 +100,15 @@ export interface FeatureCoverage {
    * that into `missionOutcome: "inconclusive"`, never a fabricated `"clean"`.
    */
   inScopeActionsExercised: number;
+  /**
+   * #209: of those, the actions on a control RELEVANT to the feature — one whose name/label/testId/
+   * role shares a word with the feature text (`relevance > 0`). Zero means every control exercised
+   * was unrelated to the named capability (all `relevance=0`): the run proved nothing about it
+   * either, and `runFeatureCliMission` reports it `inconclusive` like the chrome-only case.
+   */
+  relevantActionsExercised: number;
+  /** #209: the feature words relevance was judged against (empty: the feature text had none). */
+  featureWords: string[];
 }
 
 export interface FeatureRunResult {
@@ -329,6 +338,7 @@ async function runFeatureFrontier(
   let transitionsExercised = 0;
   let pathsDiscovered = 1; // the seed state counts as the first path
   let inScopeActionsExercised = 0;
+  let relevantActionsExercised = 0;
 
   // Ranking inputs (ticket #78): feature words drive lexical relevance; the
   // chrome tracker accumulates cross-page control repetition as it's observed.
@@ -351,6 +361,8 @@ async function runFeatureFrontier(
       transitionsExercised,
       boundaryEdges: [...boundaryEdgeSet],
       inScopeActionsExercised,
+      relevantActionsExercised,
+      featureWords: [...words],
     },
     recordings: [...leaves.entries()].filter(([fp]) => !extended.has(fp)).map(([, r]) => r),
     hangs: [...hangs.values()],
@@ -635,7 +647,11 @@ async function runFeatureFrontier(
         continue;
       }
 
-      if (!itemWasChrome) inScopeActionsExercised += 1;
+      if (!itemWasChrome) {
+        inScopeActionsExercised += 1;
+        // #209: relevance is the ranking's own lexical score (no chrome penalty on a non-chrome item).
+        if (itemScore > 0) relevantActionsExercised += 1;
+      }
 
       if (!visited.has(newFingerprint)) {
         visited.add(newFingerprint);

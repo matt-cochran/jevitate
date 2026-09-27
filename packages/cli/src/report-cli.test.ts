@@ -40,9 +40,26 @@ function http503(fp: string, occurrences = 1) {
   };
 }
 
+/** #211: strategy comes from content, never the file name — this fixture's stem still picks it for us (test-only). */
+const STEM_STRATEGY: ReadonlyArray<readonly [string, string]> = [
+  ["explore-", "goal"],
+  ["adversarial-", "adversarial"],
+  ["coverage-", "coverage"],
+  ["feature-", "feature"],
+  ["usability-", "usability"],
+];
+
 function writeResult(stem: string, missionOutcome: string, result: Record<string, unknown>): string {
   const path = join(results, `${stem}.result.json`);
-  writeFileSync(path, JSON.stringify({ missionOutcome, exitCode: 1, result: { target: { seedUrl: `${ORIGIN}/settings`, allowlist: [ORIGIN] }, ...result } }));
+  const strategy = STEM_STRATEGY.find(([p]) => stem.startsWith(p))?.[1];
+  writeFileSync(
+    path,
+    JSON.stringify({
+      missionOutcome,
+      exitCode: 1,
+      result: { target: { seedUrl: `${ORIGIN}/settings`, allowlist: [ORIGIN] }, ...(strategy === undefined ? {} : { strategy }), ...result },
+    }),
+  );
   return path;
 }
 
@@ -236,7 +253,7 @@ describe("jevitate diff and --baseline (#138)", () => {
   it("an unknown run reference is a typed refusal", async () => {
     seed();
     const { out, code } = await cli(["diff", "nope", "adversarial-2026-09-22T10-00-00-000Z", "--dir", results]);
-    expect(code).toBe(1);
+    expect(code).toBe(64);
     expect(JSON.parse(out)).toMatchObject({ ok: false, error: { code: "E_REPORT_INPUT" } });
   });
 });

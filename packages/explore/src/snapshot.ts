@@ -46,6 +46,13 @@ export interface Control {
   /** Model-facing one-liner (role/name/state). Never a raw secret value. */
   readonly summary: string;
   /**
+   * The control's current value (#207) — exactly the one `summary` shows as `value="…"`: present
+   * only for a non-secret value-bearing control (never a password / one-time-code field, and
+   * cleared by `maskSecretFields` for a bound field). A form field's value is page content a
+   * find-out answer may rest on. Absent/null when there is none.
+   */
+  readonly value?: string | null;
+  /**
    * The form the control belongs to (`form#<id>` or `form@<n>`, the form's position in the
    * document), or null when it sits in no `<form>`. Absent on controls built outside `snapshot`.
    */
@@ -572,6 +579,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         enabled: facts.enabled,
         ...(facts.options === null ? {} : { options: facts.options }),
         summary: summarize(facts),
+        ...(facts.value === null || facts.value === "" ? {} : { value: facts.value }),
         form: facts.form,
         container: facts.container,
         scope: facts.scope,

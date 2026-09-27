@@ -1,4 +1,4 @@
-import { MISSION_EXIT_CODES, type MissionOutcome } from "@jevitate/domain";
+import { MISSION_EXIT_CODES, outcomeExitCode, type MissionOutcome } from "@jevitate/domain";
 import type { GoalBasedOutcome } from "@jevitate/explore";
 
 /**
@@ -17,19 +17,12 @@ export function missionExitCode(outcome: MissionOutcome): number {
   return MISSION_EXIT_CODES[outcome];
 }
 
-/** The goal mission keeps its assertion-based codes and adds the broken-run / hang codes. */
+/**
+ * The goal mission's own outcome → exit code. The mapping itself lives in ONE place —
+ * `outcomeExitCode`/`GOAL_OUTCOME_FOLD` in `@jevitate/domain` (`mission-outcome.ts`) — so the CLI,
+ * MCP and the result schema can never disagree: `succeeded` 0 · `failed`/`exhausted`/`blocked`/
+ * `defects-found` 1 · `inconclusive`/`crashed` 2 · `hang` 3 · `intermittent` 4.
+ */
 export function goalExitCode(outcome: GoalBasedOutcome): number {
-  switch (outcome) {
-    case "succeeded":
-      return 0;
-    case "exhausted":
-    case "blocked":
-    case "defects-found": // an app-declared invariant (#86) was violated
-      return 1;
-    case "inconclusive":
-    case "crashed":
-    case "hang":
-    case "intermittent":
-      return MISSION_EXIT_CODES[outcome];
-  }
+  return outcomeExitCode(outcome);
 }

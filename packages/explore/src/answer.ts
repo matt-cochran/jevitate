@@ -7,6 +7,11 @@ import { redactContext, redactUrl } from "./redact.js";
  * run observed, as claims each quoting the page verbatim; then INDEPENDENT CODE grounds it — every
  * claim's quote must be on a page the run saw, and every figure the answer states must come from a
  * grounded quote. An ungrounded answer is rejected, never recorded as the run's result.
+ *
+ * #207: a form field's current value (an `<input value="…">`) is page content too, but not in the
+ * page's visible text (`innerText` never includes it). Each observed page also keeps its controls'
+ * non-secret current values; a quote not in the page text grounds on one of them — and its evidence
+ * says so (`source: "control-value"`, naming the control), never passing it off as page text.
  */
 
 /** Bound on the observed text handed to the answer generator. */
@@ -17,11 +22,40 @@ const MAX_OBSERVED_PAGES = 30;
 const OBSERVED_PAGE_CHARS = 20_000;
 /** A quote shorter than this (non-space chars) proves nothing. */
 const MIN_QUOTE_CHARS = 3;
+/** Control values kept per observed page (#207). */
+const MAX_OBSERVED_FIELDS = 40;
+/** Bound on each kept control value / label. */
+const OBSERVED_FIELD_CHARS = 500;
 
-/** One observed page: its (redacted) URL and visible text. */
+/** A form control's current value as observed (#207): the control's label and what it holds. */
+export interface ObservedField {
+  readonly label: string;
+  readonly value: string;
+}
+
+/** One observed page: its (redacted) URL, visible text, and its controls' current values. */
 export interface ObservedPage {
   readonly url: string;
   readonly text: string;
+  /** Non-secret current values of the page's form controls (#207); absent when none. */
+  readonly fields?: readonly ObservedField[];
+}
+
+/**
+ * The current values a page's controls hold (#207), as grounding sources: only controls whose value
+ * the snapshot exposes (`Control.value` — never a password / one-time-code / bound secret field),
+ * labelled by their accessible name. Buttons are excluded: their "value" is their label, already text.
+ */
+export function controlFields(
+  controls: ReadonlyArray<{ readonly name: string; readonly role: string; readonly tag: string; readonly value?: string | null }>,
+): ObservedField[] {
+  const out: ObservedField[] = [];
+  for (const c of controls) {
+    const value = (c.value ?? "").trim();
+    if (value === "" || c.role === "button" || c.role === "link") continue;
+    out.push({ label: c.name.trim() || c.role || c.tag, value });
+  }
+  return out;
 }
 
 /**
@@ -32,13 +66,19 @@ export class ObservedPages {
   readonly #pages: ObservedPage[] = [];
   constructor(private readonly secrets: readonly string[] = []) {}
 
-  add(url: string, text: string): void {
-    const page = {
+  add(url: string, text: string, fields: readonly ObservedField[] = []): void {
+    const kept = fields.slice(0, MAX_OBSERVED_FIELDS).map((f) => ({
+      label: redactContext(f.label, this.secrets).slice(0, OBSERVED_FIELD_CHARS),
+      value: redactContext(f.value, this.secrets).slice(0, OBSERVED_FIELD_CHARS),
+    }));
+    const page: ObservedPage = {
       url: redactContext(redactUrl(url), this.secrets),
       text: redactContext(text, this.secrets).slice(0, OBSERVED_PAGE_CHARS),
+      ...(kept.length === 0 ? {} : { fields: kept }),
     };
-    if (page.text.trim() === "") return;
-    const i = this.#pages.findIndex((p) => p.url === page.url && p.text === page.text);
+    if (page.text.trim() === "" && kept.length === 0) return;
+    const same = (p: ObservedPage): boolean => JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []);
+    const i = this.#pages.findIndex((p) => p.url === page.url && p.text === page.text && same(p));
     if (i >= 0) this.#pages.splice(i, 1);
     this.#pages.push(page);
     if (this.#pages.length > MAX_OBSERVED_PAGES) this.#pages.shift();
@@ -57,6 +97,13 @@ export interface AnswerEvidence {
   /** The observed page the quote was found on; `null` when it was not found (ungrounded). */
   readonly url: string | null;
   readonly grounded: boolean;
+  /**
+   * What the quote was found in (#207): the page's visible text, or a form control's current value
+   * (`control` names it). Absent when the quote was found nowhere.
+   */
+  readonly source?: "page-text" | "control-value";
+  /** For `source: "control-value"`: the control whose current value the quote is. */
+  readonly control?: string;
   /** Why the claim is not grounded. */
   readonly why?: string;
 }
@@ -147,24 +194,59 @@ function contentWords(s: string): string[] {
   return (fold(s).match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !STOPWORDS.has(w));
 }
 
+/**
+ * Where a quote is observed: first in a page's visible text; else (#207) in a form control's current
+ * value — the quote must be (part of) the value itself, or the value as the answer generator saw it
+ * (`<label>: <value>`) while containing the whole value. A quote of only a control's LABEL is not a
+ * value quote (a label is the control's name, not what it holds).
+ */
+function locateQuote(
+  q: string,
+  pages: readonly ObservedPage[],
+): { readonly url: string; readonly source: "page-text" | "control-value"; readonly control?: string } | null {
+  const page = pages.find((p) => fold(p.text).includes(q));
+  if (page !== undefined) return { url: page.url, source: "page-text" };
+  // A quote copied from a control summary: `value="ada@example.test"`.
+  const v = q.replace(/^value\s*=\s*["'`]?/, "");
+  for (const p of pages) {
+    for (const f of p.fields ?? []) {
+      const value = fold(f.value);
+      if (value === "") continue;
+      const line = fold(`${f.label}: ${f.value}`);
+      if (value.includes(v) || (q.includes(value) && line.includes(q))) return { url: p.url, source: "control-value", control: f.label };
+    }
+  }
+  return null;
+}
+
 /** Grounds one claim against the observed pages. */
 function groundClaim(claim: string, quote: string, pages: readonly ObservedPage[], given: ReadonlySet<string>): AnswerEvidence {
   const q = bareQuote(quote);
   const base = { claim, quote };
   if (q.replace(/\s/g, "").length < MIN_QUOTE_CHARS) return { ...base, url: null, grounded: false, why: "no quote" };
-  const page = pages.find((p) => fold(p.text).includes(q));
-  if (page === undefined) return { ...base, url: null, grounded: false, why: "quote not found on any observed page" };
+  const found = locateQuote(q, pages);
+  if (found === null) return { ...base, url: null, grounded: false, why: "quote not found on any observed page" };
+  const page = { url: found.url };
+  const where = found.control === undefined ? { source: found.source } : { source: found.source, control: found.control };
   const quoted = new Set(numbersIn(q));
   const missing = figuresIn(claim).filter((f) => !quoted.has(f.value) && !given.has(f.value));
   if (missing.length > 0) {
-    return { ...base, url: page.url, grounded: false, why: `figure ${describeFigures(missing)} is not in its quote` };
+    return { ...base, url: page.url, grounded: false, ...where, why: `figure ${describeFigures(missing)} is not in its quote` };
   }
   const words = contentWords(claim);
-  if (words.length > 0 && quoted.size === 0 && !words.some((w) => q.includes(w))) {
-    return { ...base, url: page.url, grounded: false, why: "the quote does not say what the claim says" };
+  // A control-value quote is checked against the value together with its label ("Email" + the address).
+  const said = found.control === undefined ? q : `${fold(found.control)} ${q}`;
+  if (words.length > 0 && quoted.size === 0 && !words.some((w) => said.includes(w))) {
+    return { ...base, url: page.url, grounded: false, ...where, why: "the quote does not say what the claim says" };
   }
-  return { ...base, url: page.url, grounded: true };
+  return { ...base, url: page.url, grounded: true, ...where };
 }
+
+/** An "answer" that only says there is none — the generator's `null` rendered as text (#207). */
+const NO_ANSWER_TEXT = /^(?:null|none|n\/a|unknown|undefined|not (?:found|shown|available|stated)|no answer(?: found)?)\.?$/i;
+
+/** The reason a report found no answer on the pages seen. */
+export const NO_ANSWER_REASON = "no answer was found on the pages seen";
 
 /**
  * Independent code's verdict on a reported answer: accepted only when there is an answer, it states
@@ -178,7 +260,7 @@ export function groundAnswer(
   opts: { readonly goal?: string } = {},
 ): AnswerVerdict {
   const text = (proposed.answer ?? "").trim();
-  if (text === "") return { accept: false, reason: "no answer was found on the pages seen", answer: null };
+  if (text === "" || (NO_ANSWER_TEXT.test(text) && proposed.claims.length === 0)) return { accept: false, reason: NO_ANSWER_REASON, answer: null };
   const given = new Set(numbersIn(opts.goal ?? ""));
   const evidence = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given));
   const answer: RunAnswer = { text, evidence };
@@ -220,7 +302,12 @@ export function goalAsksForReply(goal: string): boolean {
 export function pagesContext(pages: readonly ObservedPage[], limit = ANSWER_PAGES_CHARS): string {
   let out = "";
   for (const p of pages) {
-    const block = `URL: ${p.url}\n${p.text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim()}\n\n`;
+    // #207: the page's form controls' current values, marked as such (quotable like page text).
+    const fields =
+      p.fields === undefined || p.fields.length === 0
+        ? ""
+        : `FORM FIELD VALUES:\n${p.fields.map((f) => `${f.label}: ${f.value.replace(/\s+/g, " ")}`).join("\n")}\n`;
+    const block = `URL: ${p.url}\n${p.text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim()}\n${fields}\n`;
     if (out.length + block.length > limit) {
       out += block.slice(0, Math.max(0, limit - out.length));
       break;
@@ -252,4 +339,30 @@ export async function reportAnswer(
     history: input.history.slice(-20).map((h) => redactContext(h, secrets)),
   });
   return groundAnswer(res.output, input.pages, { goal: input.goal });
+}
+
+/** Paths named in an "answer not found" reason (the rest are counted). */
+const NOT_FOUND_PATHS = 8;
+
+/**
+ * The end reason of a run whose report found no answer (#207): "answer not found (pages seen: …)" —
+ * the observed pages' paths in the order first seen, so an unanswerable find-out says what was
+ * searched instead of a generic "no progress" / "blocked".
+ */
+export function answerNotFoundReason(pages: readonly ObservedPage[]): string {
+  const paths: string[] = [];
+  for (const p of [...pages].reverse()) {
+    let path: string;
+    try {
+      const u = new URL(p.url);
+      path = `${u.pathname}${u.search}`;
+    } catch {
+      path = p.url;
+    }
+    if (!paths.includes(path)) paths.push(path);
+  }
+  if (paths.length === 0) return "answer not found (no page text was observed)";
+  const shown = paths.slice(0, NOT_FOUND_PATHS).join(", ");
+  const more = paths.length > NOT_FOUND_PATHS ? `, +${paths.length - NOT_FOUND_PATHS} more` : "";
+  return `answer not found (pages seen: ${shown}${more})`;
 }

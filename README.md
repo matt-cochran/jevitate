@@ -181,8 +181,11 @@ Recording are flushed step by step.
 | `hang` | 3 | the app hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
-Goal runs also report their own `outcome` (`succeeded`, `exhausted`, `blocked`, …). Every value is
-in [docs/outcomes.md](./docs/outcomes.md).
+A usage or input error (a bad flag, an unreadable suite, an unknown id) exits `64`, never `1`.
+Goal runs also report their own `outcome` (`succeeded`, `failed`, `exhausted`, `blocked`, …). Every value, and
+the [exit codes for every command](./docs/outcomes.md#exit-codes), is in
+[docs/outcomes.md](./docs/outcomes.md). Without `--json`, commands print a human summary; with
+`--json`, the JSON envelope.
 
 ## Authenticated missions
 

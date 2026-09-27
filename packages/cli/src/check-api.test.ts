@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { UsageTracker } from "@jevitate/ai-core";
 import { FsJourneyStore } from "@jevitate/journey";
 import { BudgetMeter, affectedBy, runCheck, type CheckGateways, type CheckRunners } from "./check-api.js";
@@ -39,7 +39,15 @@ function featureRunner(script: Array<{ spend: number; defects?: unknown[]; advis
     const transcript = Array.from({ length: spend }, (_, k) => ({ step: k, op: "click" }));
     const missionOutcome = s.outcome ?? ((s.defects?.length ?? 0) > 0 ? "defects-found" : "clean");
     const resultPath = join(o.outDir ?? dir, `feature-2026-09-24T10-00-0${i}-000Z.result.json`);
-    const result = { target: { seedUrl: o.seedUrl, allowlist: ["https://shop.example"] }, transcript, defects: s.defects ?? [], advisories: s.advisories ?? [], hangs: [] };
+    // #211: strategy comes from content, never the file name — a fake runner must set it like the real one does.
+    const result = {
+      strategy: "feature",
+      target: { seedUrl: o.seedUrl, allowlist: ["https://shop.example"] },
+      transcript,
+      defects: s.defects ?? [],
+      advisories: s.advisories ?? [],
+      hangs: [],
+    };
     writeFileSync(resultPath, JSON.stringify({ missionOutcome, exitCode: 0, result }));
     return { ...result, resultPath, missionOutcome, exitCode: 0 };
   }) as unknown as CheckRunners["feature"];
@@ -397,7 +405,8 @@ describe("check suites: viewport/device and the exploratory strategy (surface-wi
     const coverage = (async (o: { strategy?: string; emulation?: unknown; outDir?: string }) => {
       coverageSeen.push({ ...(o.strategy === undefined ? {} : { strategy: o.strategy }), emulation: o.emulation });
       const resultPath = join(o.outDir ?? dir, "coverage-2026-09-24T10-00-00-000Z.result.json");
-      const result = { target: { seedUrl: URL0, allowlist: ["https://shop.example"] }, transcript: [], defects: [], hangs: [] };
+      // #211: strategy comes from content, never the file name.
+      const result = { strategy: o.strategy ?? "coverage", target: { seedUrl: URL0, allowlist: ["https://shop.example"] }, transcript: [], defects: [], hangs: [] };
       writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result }));
       return { ...result, resultPath, missionOutcome: "clean", exitCode: 0 };
     }) as unknown as CheckRunners["coverage"];
@@ -411,5 +420,96 @@ describe("check suites: viewport/device and the exploratory strategy (surface-wi
     await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { feature, coverage }, gateways: async () => gw, aiMode: "fake" });
     expect(featureSeen).toEqual([{ viewport: { width: 1280, height: 800 } }]);
     expect(coverageSeen).toEqual([{ strategy: "exploratory", emulation: { device: "iPhone 13" } }]);
+  });
+});
+
+describe("#211: a verifyFix item's strategy comes from its result's content, never its file name", () => {
+  it("a renamed result file gives the same verdict as the original — FAILED (exit 1), never an ERROR from a lost identity", async () => {
+    const resultsDir = join(dir, "baseline");
+    mkdirSync(resultsDir, { recursive: true });
+    const fp = "b8b841bad287ceb7";
+    // A real adversarial result's content (schemaVersion-era shape, `strategy` set): renaming the
+    // file must not change how it is read.
+    const content = JSON.stringify({
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: {
+        strategy: "adversarial",
+        target: { seedUrl: URL0, allowlist: ["https://shop.example"] },
+        defects: [invariantDefect(fp)],
+        hangs: [],
+        advisories: [],
+      },
+    });
+    const original = join(resultsDir, "adversarial-2026-09-20T10-00-00-000Z.result.json");
+    const renamed = join(resultsDir, "renamed.result.json");
+    writeFileSync(original, content);
+    writeFileSync(renamed, content);
+
+    // A fake replay that always reports the defect still reproduces, whatever `resultPath` names.
+    const verifyFix = (async () => ({
+      fingerprint: fp,
+      verdict: "still-reproduces",
+      observedFingerprints: [fp],
+      replay: { outcome: "completed" },
+      reason: "the defect reproduced",
+      exitCode: 1,
+    })) as unknown as CheckRunners["verifyFix"];
+
+    for (const resultPath of [original, renamed]) {
+      const s = suite(0, {}, { verifyFix: [{ name: "vf", result: resultPath, fingerprint: fp }] });
+      const r = await runCheck({ suite: s, outDir: join(dir, `out-${basename(resultPath)}`), journeysDir: dir, runners: { verifyFix } });
+      expect(r.items[0]).toMatchObject({ verdict: "failed", status: "ran" });
+      expect(r).toMatchObject({ verdict: "fail", exitCode: 1 });
+      expect(r.summary.gatingFindings).toBe(1);
+    }
+  });
+});
+
+describe("#214: `check` never gates on an advisory defect (a Jev judgment alone)", () => {
+  const flagged = {
+    fingerprint: "a1b2c3d4e5f60718",
+    kind: "judgment-flagged-state",
+    stateFingerprint: "s1",
+    url: `${URL0}?saved=1`,
+    title: "judgment flagged defect",
+    advisory: true,
+  };
+  function coverageRunner(extra: unknown[] = [], missionOutcome = "clean"): CheckRunners["coverage"] {
+    return (async (o: { strategy?: string; outDir?: string }) => {
+      const resultPath = join(o.outDir ?? dir, "coverage-2026-09-26T10-00-00-000Z.result.json");
+      const result = {
+        strategy: o.strategy ?? "coverage",
+        target: { seedUrl: URL0, allowlist: ["https://shop.example"] },
+        transcript: [{ step: 0, op: "click" }],
+        defects: [flagged, ...extra],
+        coverage: { defects: [{ ...flagged, reason: "judgment flagged defect", recording: { version: "1", site: URL0, pages: [] } }] },
+        hangs: [],
+      };
+      const exitCode = missionOutcome === "defects-found" ? 1 : 0;
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome, exitCode, result }));
+      return { ...result, resultPath, missionOutcome, exitCode };
+    }) as unknown as CheckRunners["coverage"];
+  }
+  const run = (coverage: CheckRunners["coverage"], extra: Record<string, unknown> = {}) => {
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage: new UsageTracker() };
+    const s = suite(0, extra, { missions: [{ name: "cov", strategy: "coverage" }] });
+    return runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { coverage }, gateways: async () => gw, aiMode: "fake" });
+  };
+
+  it("a coverage run whose only defect is judgment-flagged passes: listed as an advisory finding, not gating", async () => {
+    const r = await run(coverageRunner());
+    expect(r).toMatchObject({ verdict: "pass", exitCode: 0 });
+    expect(r.items[0]).toMatchObject({ verdict: "passed", gating: [] });
+    expect(r.findings.some((f) => f.severity === "advisory")).toBe(true);
+    expect(r.findings.some((f) => f.severity === "hard")).toBe(false);
+  });
+
+  it("an advisory defect of any kind is not gating; a hard-signal defect beside it still gates", async () => {
+    const advisory5xx = { fingerprint: "0f0e0d0c0b0a0908", kind: "http-5xx", route: "/app", url: URL0, title: "PUT /api → 500", advisory: true };
+    expect(await run(coverageRunner([advisory5xx]))).toMatchObject({ verdict: "pass", exitCode: 0 });
+    const hard5xx = { ...advisory5xx, fingerprint: "1f1e1d1c1b1a1918", advisory: undefined };
+    rmSync(join(dir, "out"), { recursive: true, force: true });
+    expect(await run(coverageRunner([hard5xx], "defects-found"))).toMatchObject({ verdict: "fail", exitCode: 1 });
   });
 });

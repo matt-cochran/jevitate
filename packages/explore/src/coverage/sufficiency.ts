@@ -47,6 +47,14 @@ export interface CoverageSufficiency {
   readonly shortfalls: string[];
 }
 
+/**
+ * The shortfall of a run that only followed global navigation (#209: with the hint on how to reach
+ * `clean`). "Global navigation" is page chrome: a link inside `<nav>`/`<header>`/`<footer>`, or one
+ * repeated on 2+ pages — a link in a page's own body is in-page coverage.
+ */
+export const ONLY_GLOBAL_NAVIGATION =
+  "no non-nav (in-page) control was exercised — only global navigation (links in <nav>/<header>/<footer>, or repeated on every page); to reach clean, start --url on a page with its own controls or content links, or widen the scope with --route";
+
 /** Accumulates a coverage run's action outcomes and reports whether they meet the thresholds. */
 export function assessCoverageSufficiency(
   counts: { readonly actions: number; readonly failedActions: number; readonly nonNavActionsExercised: number },
@@ -61,11 +69,11 @@ export function assessCoverageSufficiency(
   // flagged just because 0 >= 0.
   if (failedActions > 0 && failedActionRatio >= thresholds.maxFailedActionRatio) {
     shortfalls.push(
-      `${failedActions}/${actions} actions failed (${pct(failedActionRatio)}), at or above the ${pct(thresholds.maxFailedActionRatio)} threshold`,
+      `${failedActions}/${actions} actions failed (${pct(failedActionRatio)}), at or above the ${pct(thresholds.maxFailedActionRatio)} threshold — the failing controls are in the transcript (actOk: false); to reach clean they must act (or be withheld with --deny)`,
     );
   }
   if (thresholds.requireNonNavControl && actions > 0 && nonNavActionsExercised === 0) {
-    shortfalls.push("no non-nav (in-page) control was exercised — only global navigation");
+    shortfalls.push(ONLY_GLOBAL_NAVIGATION);
   }
   return {
     actions,

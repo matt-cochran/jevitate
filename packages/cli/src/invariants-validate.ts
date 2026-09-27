@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { resolveExploreAllowlist } from "./explore-api.js";
 import { InvariantsFileError, loadInvariantFiles, type LoadInvariantsOptions } from "./invariants-file.js";
+import { EXIT_CODES } from "./exit-codes.js";
 
 /**
  * `jevitate invariants validate <file…>` (#195): lints declared-invariant files WITHOUT a browser —
@@ -77,7 +78,7 @@ export function registerInvariantsCommands(program: Command): void {
     .action(function (this: Command, files: string[]) {
       const o = this.opts<{ url?: string; allow: string[]; observer: string[]; json?: boolean }>();
       if (o.url === undefined && o.allow.length > 0) {
-        emit(program, fail("E_INVARIANTS_ARGS", "--allow needs --url (relative probe paths resolve against it)"), 1);
+        emit(program, fail("E_INVARIANTS_ARGS", "--allow needs --url (relative probe paths resolve against it)"), EXIT_CODES.usage);
         return;
       }
       // Without --url nothing is authorized: the loader refuses every probe/deniedAs origin itself.
@@ -86,7 +87,7 @@ export function registerInvariantsCommands(program: Command): void {
           ? { observers: o.observer }
           : { allowlist: resolveExploreAllowlist(o.url, o.allow), baseUrl: o.url, observers: o.observer };
       const result = validateInvariantFiles(files, opts);
-      const exitCode = result.valid ? 0 : 1;
+      const exitCode = result.valid ? EXIT_CODES.ok : EXIT_CODES.defects;
       if (o.json === true) {
         emit(program, ok(result), exitCode);
         return;

@@ -55,6 +55,8 @@ describe("mission result ids (#117)", () => {
     expect(parseResultOutcome("succeeded")).toEqual({ outcome: "clean", goalOutcome: "succeeded" });
     expect(parseResultOutcome("exhausted")).toEqual({ outcome: "defects-found", goalOutcome: "exhausted" });
     expect(parseResultOutcome("blocked")).toEqual({ outcome: "defects-found", goalOutcome: "blocked" });
+    // #209: a success check that failed after the model said done.
+    expect(parseResultOutcome("failed")).toEqual({ outcome: "defects-found", goalOutcome: "failed" });
     expect(parseResultOutcome("toString")).toBeNull();
     expect(parseResultOutcome("bogus")).toBeNull();
   });

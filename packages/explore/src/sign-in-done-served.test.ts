@@ -115,7 +115,7 @@ describe("sign-in done recognition (#188)", () => {
       const last = r.transcript.at(-1);
       expect(last?.op).toBe("done");
       expect(last?.strategy).toBe("goal-check");
-      expect(last?.reason).toMatch(/goal already met — stopped instead of "blocked": verified by sign-in-signals/);
+      expect(last?.reason).toMatch(/goal already met — stopped instead of "blocked": goal verified by sign-in-signals/);
       expect(last?.judgments?.goalIsSignIn).toEqual({ value: true, probability: 0.95 });
       expect(r.transcript.some((e) => e.reason === "model blocked")).toBe(false);
 

@@ -17,7 +17,7 @@ import { runCoverageMission, runExploration } from "./explore-api.js";
  *  - On a starved host, the goal run's click timeouts are `environment-degraded` (advisory) and the
  *    run — every step of it starved — is `inconclusive` (degraded-environment), never a pass/fail.
  *  - On a calm host, the coverage frontier that emptied only because its actions timed out is
- *    `insufficient-exploration`, never `exhausted` (and never `clean`).
+ *    `insufficient-coverage` (#209: one name — it was `insufficient-exploration`), never `exhausted` (and never `clean`).
  *  - Both results carry `hostHealth` and validate against the unified result schema.
  */
 const PAGE = `<!doctype html><html><head><style>
@@ -100,7 +100,7 @@ describe("a starved host is told apart from app findings (#203)", () => {
   );
 
   it(
-    "coverage on a calm host: a frontier drained by timed-out actions is insufficient-exploration, never exhausted",
+    "coverage on a calm host: a frontier drained by timed-out actions is insufficient-coverage, never exhausted",
     async () => {
       const outDir = await mkdtemp(join(tmpdir(), "jev-host-drained-"));
       try {
@@ -112,9 +112,10 @@ describe("a starved host is told apart from app findings (#203)", () => {
           outDir,
           hostHealth: fakeHost(CALM),
         });
-        expect(r.outcome).toBe("insufficient-exploration");
+        // #209: renamed from `insufficient-exploration` — one outcome, one name.
+        expect(r.outcome).toBe("insufficient-coverage");
         expect(r.missionOutcome).toBe("inconclusive");
-        expect(r.failure?.kind).toBe("insufficient-exploration");
+        expect(r.failure?.kind).toBe("insufficient-coverage");
         expect(r.coverage.timedOutActions).toBe(2);
         expect(r.coverage.transitionsExercised).toBe(0);
         // A calm host: the timeouts are the page's own, not the environment's.

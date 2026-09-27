@@ -302,7 +302,7 @@ export class HostHealthSampler {
 /**
  * The run-level verdict rule (#203): a run most of whose steps ran on a starved host proved nothing,
  * so an outcome that would read as a pass or an app-level "could not" (`clean`, a goal's
- * `exhausted`/`blocked`) becomes `inconclusive` with reason `degraded-environment`. A confirmed
+ * `exhausted`/`blocked`/`failed`) becomes `inconclusive` with reason `degraded-environment`. A confirmed
  * defect, a `succeeded` goal (a positive proof holds whatever the host), a crash or an already
  * inconclusive run keep their outcome.
  */
@@ -310,7 +310,8 @@ export function degradedEnvironmentOutcome<O extends string>(
   outcome: O,
   health: HostHealthSummary,
 ): { readonly outcome: O | "inconclusive"; readonly failure?: { kind: "degraded-environment"; message: string } } {
-  const overridable = outcome === "clean" || outcome === "exhausted" || outcome === "blocked";
+  // #209: a goal's `failed` (a check missed after the model's done) is a miss a starved host can cause too.
+  const overridable = outcome === "clean" || outcome === "exhausted" || outcome === "blocked" || outcome === "failed";
   if (!health.degraded || !overridable) return { outcome };
   const causes = health.starvation.length === 0 ? "" : `: ${health.starvation.join("; ")}`;
   return {

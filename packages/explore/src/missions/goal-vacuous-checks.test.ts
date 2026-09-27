@@ -102,8 +102,17 @@ describe("#202 — a success check satisfied before any action is vacuous", () =
       expect(result.assertionPassed).toBe(false);
       expect(result.checks[0]?.passed).toBe(false);
       expect(result.checks[0]?.detail).toMatch(/^vacuous: held on the seed page at step 0, before any action/);
+      // #209: the passing detail is no longer appended — "…; held on the final page" read as a pass.
+      expect(result.checks[0]?.detail).not.toContain("held on the final page");
       expect(result.warnings).toContain("check 'visible:testId=list' held at step 0, before any action — it cannot verify the goal");
       expect(result.reason).toContain("cannot verify the goal");
+      // #209: was `blocked` (exit 1, the same as an app blocker) — a vacuous check proves nothing
+      // either way, so the run is `inconclusive`, naming the check.
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("vacuous-check");
+      expect(result.failure?.message).toContain("'visible:testId=list'");
+      // …and the transcript never said the goal was verified by it.
+      expect(result.transcript.some((e) => (e.reason ?? "").includes("goal verified by success-condition"))).toBe(false);
     },
     120_000,
   );
@@ -152,6 +161,9 @@ describe("#202 — a success check satisfied before any action is vacuous", () =
       expect(result.outcome).not.toBe("succeeded");
       expect(result.checks[0]?.passed).toBe(false);
       expect(result.checks[0]?.detail).toMatch(/^vacuous: matched only by request\(s\) sent before the run's first action/);
+      // #209: only vacuous checks failed — the run proved nothing: inconclusive, not blocked.
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("vacuous-check");
       expect(result.warnings?.some((w) => w.startsWith("check 'requestMade:GET /api/items' held at step 0, before any action — it cannot verify the goal"))).toBe(
         true,
       );

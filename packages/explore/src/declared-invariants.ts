@@ -95,6 +95,16 @@ export interface InvariantAction {
   readonly control: string | null;
   /** The page URL the action was taken on. */
   readonly url: string;
+  /**
+   * The mission's own real step index for this action (the mission's transcript/recording step
+   * count), when the caller tracks one — e.g. `transcript.nextStep` (adversarial), the transcript
+   * entry's own `step` (goal-based), or the replayed recording step index (verify-fix). Evidence
+   * cites THIS step, never the monitor's internal action tally (#212 item 4): the monitor only
+   * hears about a subset of steps (the ones its `when` gates apply to), so its own count runs well
+   * behind the mission's real step index and mislabels evidence ("step 13" for what the mission
+   * itself recorded as step 30). Falls back to the internal tally when a caller omits it.
+   */
+  readonly step?: number;
 }
 
 /** #147: which actors a cross-actor violation is between, and the captured resource it is about. */
@@ -396,8 +406,10 @@ export class InvariantMonitor {
   /** #195: `never.response` invariants, and the matching responses seen since each was last checked. */
   readonly #responseNevers: ReadonlyArray<{ readonly id: string; readonly spec: NeverResponse }>;
   readonly #responseHits = new Map<string, { hits: Array<Omit<NeverResponseHit, "step">>; total: number }>();
-  /** #195: real actions checked so far (a response's step) and how the current one reads in evidence. */
+  /** #195: real actions checked so far (a response's step, when the caller never threads its own) and how the current one reads in evidence. */
   #actions = 0;
+  /** #212 item 4: the mission's OWN step index for the last action checked, when the caller threads one (`InvariantAction.step`) — evidence cites this, never `#actions` alone. */
+  #lastStep: number | undefined;
   #stepLabel = "page load";
   /** #195: in-flight requests a `never.response` names (awaited, bounded, at run end), and the last checked page. */
   readonly #responseInFlight = new Set<Request>();
@@ -605,6 +617,7 @@ export class InvariantMonitor {
     // #195: the responses a `never.response` drains now happened during this action (or the page load).
     if (action !== null && action.op !== null) {
       this.#actions += 1;
+      this.#lastStep = action.step ?? this.#actions;
       this.#stepLabel = action.control === null ? action.op : `${action.op} ${JSON.stringify(this.#redact(action.control))}`;
     } else if (this.#actions > 0) this.#stepLabel = "no action";
     for (const c of applicable) {
@@ -993,7 +1006,7 @@ export class InvariantMonitor {
     const seen = this.#responseHits.get(decl.id);
     this.#responseHits.delete(decl.id);
     if (seen === undefined || seen.total === 0) return "held";
-    const step = this.#actions;
+    const step = this.#lastStep ?? this.#actions;
     const responses = seen.hits.map((h) => ({ ...h, step }));
     const evidence = responses.map((h) => `${h.method} ${h.url} → ${h.status} (step ${step}: ${this.#stepLabel})`);
     const expression = `never response ${spec.method === undefined ? "" : `${spec.method.toUpperCase()} `}${spec.url} = ${String(spec.status)}`;

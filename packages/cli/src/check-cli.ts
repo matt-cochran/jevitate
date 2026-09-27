@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { MissingCredentialError, formatUsageLine } from "@jevitate/ai-core";
 import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
+import { emitEnvelope } from "./cli-output.js";
 import { CheckAiSetupError, CheckPreflightError, runCheck, type CheckGateways, type CheckRunners } from "./check-api.js";
 import { SuiteError, loadSuite } from "./check-suite.js";
 import { ReportInputError, defaultResultDirs } from "./report-api.js";
@@ -11,8 +12,9 @@ import { TargetConfigError, loadTargetsFile } from "./target-config.js";
  * `jevitate check --suite <file.json>` (#137). Registered by `program.ts`; its model gateways and
  * browser wiring come in through `CheckCliDeps` so this file never builds a gateway itself.
  *
- * Exit codes: 0 pass · 1 a gating (hard, or new vs `--baseline`) finding · 2 no gating finding but
- * an item errored, the budget was exceeded, or the suite/preflight was refused.
+ * Exit codes (exit-codes.ts): 0 pass · 1 a gating (hard, or new vs `--baseline`) finding · 2 no
+ * gating finding but an item errored, the budget was exceeded, or the check itself failed · 64 the
+ * suite, preflight, targets file or AI setup was refused (a usage/input error: nothing ran).
  */
 
 export interface CheckCliDeps {
@@ -30,9 +32,9 @@ export interface CheckCliDeps {
   readonly runners?: Partial<CheckRunners>;
 }
 
-function emit(program: Command, envelope: JsonEnvelope<unknown>, exitCode: number): void {
-  program.configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = exitCode;
+/** #210: the envelope with --json; a refusal without it is an `error <CODE>: …` line (exit-codes.ts class). */
+function emit(program: Command, envelope: JsonEnvelope<unknown>, json: boolean, exitCode?: number): void {
+  emitEnvelope(program, envelope, { json, command: "check", ...(exitCode === undefined ? {} : { exitCode }) });
 }
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
@@ -97,7 +99,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(browser === undefined ? {} : { browser }),
           ...(deps.runners === undefined ? {} : { runners: deps.runners }),
         });
-        if (o.json) emit(program, ok(result), result.exitCode);
+        if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
           const out = program.configureOutput().writeOut;
           for (const i of result.items) {
@@ -106,6 +108,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           if (result.usage !== undefined) out?.(`COST    ${formatUsageLine(result.usage)}\n`);
           if (result.budget.exceeded !== undefined) out?.(`BUDGET  ${result.budget.exceeded}\n`);
           out?.(`${result.verdict.toUpperCase()}: ${result.summary.gatingFindings} gating finding(s) · ${result.jsonPath}\n`);
+          out?.(result.summary.gatingFindings > 0 ? "next: jevitate report (the findings by fingerprint) · jevitate verify-fix <fp> after a fix\n" : "next: jevitate report\n");
           process.exitCode = result.exitCode;
         }
       } catch (err) {
@@ -116,11 +119,11 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           err instanceof ReportInputError ||
           err instanceof TargetConfigError
         ) {
-          emit(program, fail(err.code, err.message), 2);
+          emit(program, fail(err.code, err.message), o.json === true);
         } else if (err instanceof MissingCredentialError || (err instanceof Error && err.name === "GatewaySelectionError")) {
-          emit(program, fail("E_AI_SETUP_REQUIRED", err.message), 2);
+          emit(program, fail("E_AI_SETUP_REQUIRED", err.message), o.json === true);
         } else {
-          emit(program, fail("E_CHECK", err instanceof Error ? err.message : String(err)), 2);
+          emit(program, fail("E_CHECK", err instanceof Error ? err.message : String(err)), o.json === true);
         }
       }
     });

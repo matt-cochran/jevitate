@@ -82,8 +82,11 @@ describe("goal-based mission — independent oracle adjudicates (Task 10, guardr
       );
 
       expect(result.assertionPassed).toBe(false); // still on /login
-      expect(result.outcome).toBe("blocked"); // NOT succeeded despite model done
-      // A `blocked` run carries no engine failure, but always says why it did not succeed.
+      // #209: was `blocked` — the model said done (three times, each rejected) and the independent
+      // check failed: that is `failed`, never `blocked` (which means the loop gave up).
+      expect(result.outcome).toBe("failed"); // NOT succeeded despite model done
+      expect(result.failure?.kind).toBe("success-check-failed");
+      // It carries no engine failure, but always says why it did not succeed.
       expect(result.reason).toMatch(/success check failed: .+ did not hold on the final page/);
       expect(result.finalUrl).toContain("/login");
     },
@@ -132,7 +135,9 @@ describe("goal-based mission — independent oracle adjudicates (Task 10, guardr
         // The click never reached a server: a reload reverts it, so the final, full check
         // (which DOES include reloadThen) fails.
         expect(result.assertionPassed).toBe(false);
-        expect(result.outcome).toBe("blocked");
+        // #209: was `blocked` — the model's done was accepted in-run, then the reloadThen check failed.
+        expect(result.outcome).toBe("failed");
+        expect(result.failure?.kind).toBe("success-check-failed");
         // The final verdict must override the in-run `completed` grounding — the two must never
         // disagree.
         expect(result.run.outcome.status).toBe("incomplete");

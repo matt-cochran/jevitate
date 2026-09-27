@@ -7,7 +7,8 @@ parse any run without knowing which strategy produced it.
 
 The same object appears in three places:
 
-- as `data` in `jevitate explore --json` output, or the whole output without `--json`;
+- as `data` in `jevitate explore --json` output, for every strategy (without `--json`, `explore`
+  prints a human summary instead, never JSON: see [output](./outcomes.md#output---json-or-a-human-summary));
 - as `result` in the persisted `<stem>.result.json`, next to `missionOutcome` and `exitCode`;
 - in the MCP `get_mission_result` response.
 
@@ -25,9 +26,9 @@ fields the same way:
 |---|---|---|
 | `schemaVersion` | `1` | Increases whenever any field in this table changes incompatibly. |
 | `strategy` | string | The strategy that produced the result. |
-| `missionOutcome` | string | The verdict. It is one of the [mission outcomes](./outcomes.md), except that a goal run keeps its own `succeeded`, `exhausted` and `blocked`. |
+| `missionOutcome` | string | The verdict. It is one of the [mission outcomes](./outcomes.md), except that a goal run keeps its own `succeeded`, `failed`, `exhausted` and `blocked` (each folds onto `clean` or `defects-found`; see [outcomes](./outcomes.md)). |
 | `exitCode` | number | The process exit code for `missionOutcome`. This is the value to compare across strategies. |
-| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects. Each one has a `fingerprint` (16 hex characters) and a `kind`. A defect the strategy reports without gating on it (a usability run's `server-log` defect) has `advisory: true`. |
+| `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects — and a coverage/exploratory run's frontier defects (`horizontal-overflow`, `judgment-flagged-state`), which are also listed with their repro Recording in `coverage.defects`. Each one has a `fingerprint` (16 hex characters) and a `kind`. Every strategy records an HTTP 5xx from the app's own origins as an `http-5xx` defect with the same fingerprint (endpoint pattern + status), whichever strategy found it; a 5xx from a third-party origin is not the app's defect. A defect the strategy reports without gating on it has `advisory: true`: a usability run's `server-log` or `http-5xx` defect, and every `judgment-flagged-state` (Jev's opinion alone, #214). An advisory defect never sets `missionOutcome`/`exitCode`, and `check` never gates on it (unless the suite sets `gateAdvisory`). |
 | `hangs` | array | Every hang finding, each with its `fingerprint` and reproduction. |
 | `recordingPaths` | string[] | Every Recording the run wrote: one for goal, adversarial and usability runs, one per path for coverage and feature runs. It can be empty when a frontier run found no path. |
 | `transcriptPath` | string | The run's decision transcript. |
@@ -35,7 +36,7 @@ fields the same way:
 | `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
-| `failure` | object | Present only when the run broke. It says why the run ended `crashed` or `inconclusive`. |
+| `failure` | object | Present when the run broke, proved nothing, or (goal) failed a check after the model's `done`. `failure.kind` says why the run ended `crashed` or `inconclusive` (e.g. `insufficient-coverage`, `vacuous-check`, `job-incomplete`, `degraded-environment`) or `failed` (`success-check-failed`), and `failure.message` names the cause. |
 | `hostHealth` | object | The host's health over the run (#203): peak load per core, minimum free memory, peak driver event-loop lag, the slowest render, how many steps ran on a starved host. See [a starved host](./outcomes.md#a-starved-host-hosthealth-environmentdegraded). Additive: older results do not have it. |
 | `environmentDegraded` | array | Hangs, click timeouts and no-progress stops met while the host was starved: advisory (`advisory: true`), never a defect or hang, never failing the run. |
 
@@ -62,6 +63,12 @@ These fields are still written in 0.2.0 and will be removed in the next minor re
 |---|---|
 | `serverLogDefects` | the entries in `defects` with `kind: "server-log"` |
 | `recordingPath` (goal, adversarial, usability) | `recordingPaths[0]` |
+| `usage.usd` | `usage.totalUsd` |
+| `usage.jevPriceSource` | `usage.priceSource` (also covers generation calls, not just Jev's) |
 
-Before this schema, a coverage, adversarial, feature or usability run listed its `server-log`
+Before this schema, a goal, coverage, adversarial, feature or usability run listed its `server-log`
 defects only in `serverLogDefects`. Readers that only looked at `defects` missed them.
+`serverLogDefects` (like the `server-log` entries it duplicates in `defects`) is present on EVERY
+strategy's result, but only when that run actually checked server logs (`--log-source`/`logSource`)
+AND found a matching defect — it is absent, not "missing", on a run with no log source configured or
+no match. A result with neither is not evidence that a strategy stopped writing it.
