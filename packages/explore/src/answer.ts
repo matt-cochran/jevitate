@@ -39,7 +39,19 @@ export interface ObservedPage {
   readonly text: string;
   /** Non-secret current values of the page's form controls (#207); absent when none. */
   readonly fields?: readonly ObservedField[];
+  /** #216: the page's main heading (first `<h1>`) and document `<title>`; absent when none. */
+  readonly heading?: string;
+  readonly title?: string;
 }
+
+/** #216: a page's main heading and document title, as read from the page. */
+export interface PageHeadings {
+  readonly heading?: string;
+  readonly title?: string;
+}
+
+/** Bound on a kept heading / title. */
+const HEADING_CHARS = 200;
 
 /**
  * The current values a page's controls hold (#207), as grounding sources: only controls whose value
@@ -66,18 +78,24 @@ export class ObservedPages {
   readonly #pages: ObservedPage[] = [];
   constructor(private readonly secrets: readonly string[] = []) {}
 
-  add(url: string, text: string, fields: readonly ObservedField[] = []): void {
+  add(url: string, text: string, fields: readonly ObservedField[] = [], headings: PageHeadings = {}): void {
     const kept = fields.slice(0, MAX_OBSERVED_FIELDS).map((f) => ({
       label: redactContext(f.label, this.secrets).slice(0, OBSERVED_FIELD_CHARS),
       value: redactContext(f.value, this.secrets).slice(0, OBSERVED_FIELD_CHARS),
     }));
+    const clip = (h: string | undefined): string => redactContext((h ?? "").replace(/\s+/g, " ").trim(), this.secrets).slice(0, HEADING_CHARS);
+    const heading = clip(headings.heading);
+    const title = clip(headings.title);
     const page: ObservedPage = {
       url: redactContext(redactUrl(url), this.secrets),
       text: redactContext(text, this.secrets).slice(0, OBSERVED_PAGE_CHARS),
       ...(kept.length === 0 ? {} : { fields: kept }),
+      ...(heading === "" ? {} : { heading }),
+      ...(title === "" ? {} : { title }),
     };
     if (page.text.trim() === "" && kept.length === 0) return;
-    const same = (p: ObservedPage): boolean => JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []);
+    const same = (p: ObservedPage): boolean =>
+      JSON.stringify(p.fields ?? []) === JSON.stringify(page.fields ?? []) && p.heading === page.heading && p.title === page.title;
     const i = this.#pages.findIndex((p) => p.url === page.url && p.text === page.text && same(p));
     if (i >= 0) this.#pages.splice(i, 1);
     this.#pages.push(page);
@@ -318,8 +336,25 @@ export function pagesContext(pages: readonly ObservedPage[], limit = ANSWER_PAGE
 }
 
 /**
+ * #216: the retry hint for a `null` answer — the current page's main heading and/or document title,
+ * or `null` when it has neither (then there is nothing to retry with).
+ */
+export function headingHint(page: ObservedPage | undefined): string | null {
+  if (page === undefined) return null;
+  const parts: string[] = [];
+  if (page.heading !== undefined) parts.push(`The current page's main heading is "${page.heading}".`);
+  if (page.title !== undefined && page.title !== page.heading) parts.push(`Its document title is "${page.title}".`);
+  if (parts.length === 0) return null;
+  return `${parts.join(" ")} That heading/title is the title or name of the item or page shown: if the goal asks for it, answer with it and quote it verbatim from \`pages\`.`;
+}
+
+/**
  * Proposes the answer to a find-out goal from the observed pages (`goal.answer`), then grounds it.
  * The generator's answer is a proposal; `groundAnswer` is the verdict.
+ *
+ * #216: when the generator says there is no answer while the current page has a main heading or a
+ * document title, it is asked ONCE more with that heading as a hint (gpt-4o-mini answered `null` to
+ * "the title of this item" over an h1). The retry's answer is grounded exactly like the first.
  */
 export async function reportAnswer(
   gen: GenerationPort,
@@ -332,13 +367,19 @@ export async function reportAnswer(
   },
 ): Promise<AnswerVerdict> {
   const secrets = input.secrets ?? [];
-  const res = await gen.generate("goal.answer", {
+  const ask = {
     goal: redactContext(input.goal, secrets),
     url: redactContext(redactUrl(input.url), secrets),
     pages: pagesContext(input.pages),
     history: input.history.slice(-20).map((h) => redactContext(h, secrets)),
-  });
-  return groundAnswer(res.output, input.pages, { goal: input.goal });
+  };
+  const res = await gen.generate("goal.answer", ask);
+  const verdict = groundAnswer(res.output, input.pages, { goal: input.goal });
+  if (verdict.accept || verdict.answer !== null || verdict.reason !== NO_ANSWER_REASON) return verdict;
+  const hint = headingHint(input.pages[0]);
+  if (hint === null) return verdict;
+  const retry = await gen.generate("goal.answer", { ...ask, hint: redactContext(hint, secrets) });
+  return groundAnswer(retry.output, input.pages, { goal: input.goal });
 }
 
 /** Paths named in an "answer not found" reason (the rest are counted). */

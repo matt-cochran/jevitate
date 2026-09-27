@@ -273,6 +273,18 @@ export async function readPageText(page: Page): Promise<string> {
   return page.evaluate(bodyText).catch(() => "");
 }
 
+/** BROWSER CODE — the page's main heading (its first `<h1>`) and document title. */
+function headings(): { heading: string; title: string } {
+  if (typeof document === "undefined") return { heading: "", title: "" };
+  const h1 = document.querySelector("h1");
+  return { heading: (h1 as HTMLElement | null)?.innerText ?? h1?.textContent ?? "", title: document.title ?? "" };
+}
+
+/** #216: the page's main heading and document title (empty when unreadable — never a throw). */
+export async function readPageHeadings(page: Page): Promise<{ heading: string; title: string }> {
+  return page.evaluate(headings).catch(() => ({ heading: "", title: "" }));
+}
+
 /**
  * Waits for the conversational reply to a message just sent: new page text (not the echoed message,
  * not busy text) that then holds still for the quiet window with no request in flight and no busy
