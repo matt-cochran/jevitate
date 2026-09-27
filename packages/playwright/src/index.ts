@@ -7,3 +7,4 @@ export * from "./select-resource-signals.js";
 export * from "./linux-resource-signals.js";
 export * from "./darwin-resource-signals.js";
 export * from "./win32-resource-signals.js";
+export * from "./page-liveness.js";

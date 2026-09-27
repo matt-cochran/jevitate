@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import type { GenerationPort } from "@jevitate/ai-core";
 import type { MissionFailure } from "@jevitate/domain";
+import { pageLostReason } from "@jevitate/playwright";
 
 /**
  * The mission-side half of "a mission's outcome is a typed result, never a throw":
@@ -87,6 +88,8 @@ export interface CrashSignals {
   readonly pageCrashed: boolean;
   readonly pageClosed: boolean;
   readonly browserDisconnected: boolean;
+  /** #220: the page's liveness watchdog closed it — the page process stopped answering — and why. */
+  readonly unresponsive?: string;
 }
 
 /**
@@ -97,8 +100,10 @@ export class CrashWatch {
   #pageCrashed = false;
   #pageClosed = false;
   #browserDisconnected = false;
+  readonly #page: Page;
 
   constructor(page: Page) {
+    this.#page = page;
     page.on("crash", () => {
       this.#pageCrashed = true;
     });
@@ -116,8 +121,14 @@ export class CrashWatch {
       pageCrashed: this.#pageCrashed,
       pageClosed: this.#pageClosed,
       browserDisconnected: this.#browserDisconnected,
+      ...unresponsiveSignal(this.#page),
     };
   }
+}
+
+function unresponsiveSignal(page: Page): { unresponsive?: string } {
+  const reason = pageLostReason(page);
+  return reason === undefined ? {} : { unresponsive: reason };
 }
 
 /**
@@ -128,6 +139,11 @@ export class CrashWatch {
 export function describeFailure(e: unknown, signals: CrashSignals): MissionFailure {
   const message = messageOf(e);
   const stack = e instanceof Error && e.stack !== undefined ? e.stack : undefined;
+  // #220: the liveness watchdog closed a page that stopped answering — the run ended rather than
+  // idle (a `stalled` stop), and the reason says why, not the generic "page closed" it surfaced as.
+  if (signals.unresponsive !== undefined && !signals.pageCrashed && !signals.browserDisconnected) {
+    return { kind: "stalled", message: `${signals.unresponsive} (${message})`, ...(stack === undefined ? {} : { stack }) };
+  }
   const kind: MissionFailure["kind"] = signals.pageCrashed
     ? "page-crash"
     : signals.browserDisconnected

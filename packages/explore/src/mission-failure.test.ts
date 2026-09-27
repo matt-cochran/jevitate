@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
+import { describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
 
 /**
  * #128 — the pure rule for "the start URL simply could not be loaded": neither a defect in the app
@@ -40,5 +40,21 @@ describe("describeUnreachable — a plain-words cause, never fabricated without 
 
   it("recognises a bare ECONNREFUSED with no net:: prefix", () => {
     expect(describeUnreachable("connect ECONNREFUSED 127.0.0.1:5999")).toBe("connection refused");
+  });
+});
+
+describe("describeFailure — a page the liveness watchdog closed (#220)", () => {
+  const base = { pageCrashed: false, pageClosed: true, browserDisconnected: false };
+  it("is a typed `stalled` failure carrying the watchdog's reason, not a generic page-closed", () => {
+    const f = describeFailure(new Error("locator.elementHandles: Target page, context or browser has been closed"), {
+      ...base,
+      unresponsive: "the page process stopped responding: no answer for 60s",
+    });
+    expect(f.kind).toBe("stalled");
+    expect(f.message).toMatch(/^the page process stopped responding: no answer for 60s \(locator\.elementHandles/);
+  });
+  it("a real crash still wins over the watchdog's reason", () => {
+    expect(describeFailure(new Error("Target crashed"), { ...base, pageCrashed: true, unresponsive: "x" }).kind).toBe("page-crash");
+    expect(describeFailure(new Error("closed"), base).kind).toBe("page-closed");
   });
 });

@@ -2091,7 +2091,15 @@ export function buildProgram(deps: CliDeps): Command {
       if (wantsMultiRun(o)) {
         try {
           const plan = resolveMultiRunPlan(o);
-          const result = await runExploreMultiRun({ cmd: this, newProgram: () => buildProgram(deps), plan, strategy, ...(o.out === undefined ? {} : { out: o.out }) });
+          const result = await runExploreMultiRun({
+            cmd: this,
+            newProgram: () => buildProgram(deps),
+            plan,
+            strategy,
+            ...(o.out === undefined ? {} : { out: o.out }),
+            // #220: a killed multi-run prints ITS partial summary, by this command's own output rule.
+            killOutput: (partial) => (o.json === true ? `${JSON.stringify(ok(withEngine(partial)))}\n` : formatMultiRunHuman(partial)),
+          });
           emitExplore(ok(withEngine(result)), result.exitCode, formatMultiRunHuman);
         } catch (err) {
           if (err instanceof MultiRunArgsError) emitExplore(fail(err.code, err.message));

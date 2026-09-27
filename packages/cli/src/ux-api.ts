@@ -847,6 +847,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // #159: see RunExplorationOptions.saveStorageState / runExploration's own doc comment.
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
+    // #220: the killed run's partial result carries the unified schema's common fields too.
+    strategy: "usability",
+    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
     hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,

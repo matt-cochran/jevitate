@@ -1,6 +1,7 @@
 import { chromium, type BrowserContext, type BrowserContextOptions, type Page } from "playwright";
 import type { BrowserPort, BrowserSession, OpenOptions } from "./browser-port.js";
-import { BrowserPool, type BrowserPoolOptions, type ContextLease } from "./browser-pool.js";
+import { BrowserPool, DEFAULT_OPEN_TIMEOUT_MS, withOpenDeadline, type BrowserPoolOptions, type ContextLease } from "./browser-pool.js";
+import { PageLivenessWatchdog, pageUnresponsiveMsFromEnv } from "./page-liveness.js";
 import { createResourceSignals } from "./select-resource-signals.js";
 import { emulationContextOptions, resolveEmulation } from "./emulation.js";
 
@@ -151,6 +152,14 @@ export interface PlaywrightBrowserPortDeps {
   readonly platform?: NodeJS.Platform;
   /** Defaults to the process-wide `sharedBrowserPool()`. */
   readonly pool?: PlaywrightBrowserPool;
+  /**
+   * #220: every session's page is watched by a `PageLivenessWatchdog`; a page that answers nothing
+   * for `unresponsiveMs` (default `JEVITATE_PAGE_UNRESPONSIVE_MS`, else 60s) is closed with the
+   * reason, so the run ends instead of hanging. `false` turns the watchdog off.
+   */
+  readonly liveness?: { readonly unresponsiveMs?: number } | false;
+  /** #220: bound on opening the session's first page (default 60s). */
+  readonly openTimeoutMs?: number;
 }
 
 /**
@@ -165,8 +174,12 @@ export class PlaywrightBrowserPort implements BrowserPort {
   readonly #launchPersistent: LaunchPersistentContext;
   readonly #platform: NodeJS.Platform;
   readonly #pool: PlaywrightBrowserPool | undefined;
+  readonly #liveness: { readonly unresponsiveMs?: number } | false;
+  readonly #openTimeoutMs: number;
 
   constructor(deps: PlaywrightBrowserPortDeps = {}) {
+    this.#liveness = deps.liveness ?? {};
+    this.#openTimeoutMs = deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
     this.#launch = deps.launch ?? ((options) => chromium.launch(options));
     this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, options));
     this.#platform = deps.platform ?? process.platform;
@@ -203,12 +216,19 @@ export class PlaywrightBrowserPort implements BrowserPort {
     );
     let page: Page;
     try {
-      page = await lease.context.newPage();
+      page = await withOpenDeadline(
+        lease.context.newPage(),
+        this.#openTimeoutMs,
+        `opening a page did not finish within ${this.#openTimeoutMs}ms: the browser is not answering`,
+        (late) => {
+          late.close().catch(() => undefined);
+        },
+      );
     } catch (err) {
       await lease.release().catch(() => undefined);
       throw err;
     }
-    return pooledSession(lease, page);
+    return pooledSession(lease, page, this.#watch(page));
   }
 
   async #openPersistent(opts: OpenOptions, dir: string, emulation: ReturnType<typeof resolveEmulation>): Promise<BrowserSession> {
@@ -229,6 +249,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
       throw explainLaunchFailure(err, opts);
     }
     const page = context.pages()[0] ?? (await context.newPage());
+    const watchdog = this.#watch(page);
     return {
       page,
       admission: undefined,
@@ -245,13 +266,20 @@ export class PlaywrightBrowserPort implements BrowserPort {
         return JSON.stringify(await context.storageState());
       },
       async close() {
+        watchdog?.stop();
         await context.close();
       },
     };
   }
+
+  /** #220: the session page's liveness watchdog (undefined when turned off). */
+  #watch(page: Page): PageLivenessWatchdog | undefined {
+    if (this.#liveness === false) return undefined;
+    return new PageLivenessWatchdog(page, { unresponsiveMs: this.#liveness.unresponsiveMs ?? pageUnresponsiveMsFromEnv() });
+  }
 }
 
-function pooledSession(lease: ContextLease<BrowserContext>, page: Page): BrowserSession {
+function pooledSession(lease: ContextLease<BrowserContext>, page: Page, watchdog: PageLivenessWatchdog | undefined): BrowserSession {
   const context = lease.context;
   /** After a browser crash every session operation surfaces the crash, not a vague "target closed". */
   const alive = (): void => {
@@ -277,6 +305,7 @@ function pooledSession(lease: ContextLease<BrowserContext>, page: Page): Browser
       return JSON.stringify(await context.storageState());
     },
     async close() {
+      watchdog?.stop();
       await lease.release();
     },
   };

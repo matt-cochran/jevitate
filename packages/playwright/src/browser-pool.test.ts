@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   AdmissionTimeoutError,
   BrowserCrashedError,
+  BrowserOpenTimeoutError,
   BrowserPool,
   DEFAULT_PRESSURE_THRESHOLDS,
   admissionViolation,
@@ -336,5 +337,30 @@ describe("BrowserPool", () => {
 
   test("invalid maxContexts is rejected up front", () => {
     expect(() => new BrowserPool({ signals: scripted([calm]), maxContexts: 0 })).toThrow(RangeError);
+  });
+
+  test("a newContext that never settles (a browser not answering) fails the acquire with BrowserOpenTimeoutError and frees the slot (#220)", async () => {
+    const l = launcher();
+    const pool = new BrowserPool<FakeContext, { tag: string }>({ signals: scripted([calm]), maxContexts: 1, openTimeoutMs: 30 });
+    try {
+      const first = await pool.acquire("k", l.launch, opts);
+      await first.release();
+      const browser = l.browsers[0]!;
+      let late: FakeContext | undefined;
+      let settle: ((c: FakeContext) => void) | undefined;
+      browser.newContext = () =>
+        new Promise<FakeContext>((resolve) => {
+          settle = resolve;
+        });
+      await expect(pool.acquire("k", l.launch, opts)).rejects.toBeInstanceOf(BrowserOpenTimeoutError);
+      expect(pool.inUse).toBe(0);
+      // A context that shows up after the deadline is closed, never leaked.
+      late = new FakeContext();
+      settle?.(late);
+      await new Promise((r) => setImmediate(r));
+      expect(late.closed).toBe(true);
+    } finally {
+      await pool.close();
+    }
   });
 });
