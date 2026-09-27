@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { Command } from "commander";
+import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { resolveExploreAllowlist } from "./explore-api.js";
 import { InvariantsFileError, loadInvariantFiles, type LoadInvariantsOptions } from "./invariants-file.js";
@@ -59,9 +61,21 @@ export function validateInvariantFiles(files: readonly string[], opts: LoadInvar
   return { valid, files: results, merge, ...(needsOrigins ? { hint: ORIGIN_HINT } : {}) };
 }
 
+/** The envelope (success, or a refusal with --json); a refusal without --json is a human stderr line (#218). */
 function emit(program: Command, envelope: JsonEnvelope<unknown>, exitCode: number): void {
-  program.configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = exitCode;
+  emitJsonOrRefusal(program, envelope, exitCode);
+}
+
+/** The first file that cannot be read at all, with why — unusable input, refused before validating (#218). */
+function unreadableFile(files: readonly string[]): string | undefined {
+  for (const file of files) {
+    try {
+      readFileSync(file, "utf8");
+    } catch (e) {
+      return `cannot read invariants file ${file}: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
+    }
+  }
+  return undefined;
 }
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
@@ -70,7 +84,7 @@ export function registerInvariantsCommands(program: Command): void {
   const invariants = program.command("invariants").description("declared-invariant files (`explore --invariants`)");
   invariants
     .command("validate <files...>")
-    .description("validate invariant files without a browser (the same pre-browser check `explore --invariants` runs); exit 1 when any is invalid")
+    .description("validate invariant files without a browser (the same pre-browser check `explore --invariants` runs); exit 1 when any is invalid, 64 when one cannot be read")
     .option("--url <url>", "the run's start URL: relative probe/deniedAs paths resolve against it, and its origin is authorized")
     .option("--allow <origin>", "authorized origin (repeatable; needs --url); REPLACES the URL's own origin, as `explore --allow`", collect, [] as string[])
     .option("--observer <name>", "a registered observer actor a probe `as:` / `deniedAs.actor` may name (repeatable; `explore --actor` minus the primary)", collect, [] as string[])
@@ -79,6 +93,12 @@ export function registerInvariantsCommands(program: Command): void {
       const o = this.opts<{ url?: string; allow: string[]; observer: string[]; json?: boolean }>();
       if (o.url === undefined && o.allow.length > 0) {
         emit(program, fail("E_INVARIANTS_ARGS", "--allow needs --url (relative probe paths resolve against it)"), EXIT_CODES.usage);
+        return;
+      }
+      // #218: a file that cannot be read is unusable input (64, like every command), not an invalid one (1).
+      const unreadable = unreadableFile(files);
+      if (unreadable !== undefined) {
+        emit(program, fail("E_INVARIANTS_INPUT", unreadable), EXIT_CODES.usage);
         return;
       }
       // Without --url nothing is authorized: the loader refuses every probe/deniedAs origin itself.

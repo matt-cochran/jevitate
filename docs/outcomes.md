@@ -10,11 +10,11 @@ command's codes only as a reminder; this is the reference.
 | Exit | Class | Meaning |
 |---|---|---|
 | `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
-| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`) |
+| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
 | `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error. It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
-| `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_TARGET_CONFIG`, …), an unknown id, missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist |
+| `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
 | `130` / `143` | killed | SIGINT / SIGTERM; the partial result is still written (see [operations](./operations.md)) |
 
 `64` is `EX_USAGE` from `sysexits.h`. It is deliberately not `5`, so a future outcome code never
@@ -24,10 +24,11 @@ other error is `2`.
 
 ### Output: `--json` or a human summary
 
-Every command that takes `--json` follows one rule:
+Every command follows one rule:
 
 - With `--json`, stdout is exactly one line: the `{v, ok, data}` envelope, or `{v, ok: false, error:
-  {code, message}}`. This is the machine contract.
+  {code, message}}`. This is the machine contract. A command line refused while it is parsed (an
+  unknown flag, a bad number) still prints the envelope, with the command's `E_<COMMAND>_ARGS` code.
 - Without `--json`, a success prints a short human summary on stdout: the verdict, key counts, each
   defect or hang with its fingerprint, where the result file is, and a `next:` line (for example
   `jevitate verify-fix <fp>` or `jevitate report`). A refusal prints `error <CODE>: <message>` on

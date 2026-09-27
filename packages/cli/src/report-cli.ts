@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
-import { exitCodeForEnvelope } from "./exit-codes.js";
+import { emitJsonOrRefusal } from "./cli-refusal.js";
 import {
   ReportInputError,
   buildReport,
@@ -27,9 +27,9 @@ export interface ReportCliDeps {
   readonly baselinesDir?: string;
 }
 
+/** The envelope (success, or a refusal with --json); a refusal without --json is a human stderr line (#218). */
 function emit(program: Command, envelope: JsonEnvelope<unknown>, exitCode?: number): void {
-  program.configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = exitCode ?? exitCodeForEnvelope(envelope);
+  emitJsonOrRefusal(program, envelope, exitCode);
 }
 
 function failure(program: Command, err: unknown, code: string): void {
@@ -130,7 +130,7 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .action(async function (this: Command, name: string) {
       try {
         const tag = readBaseline(name, deps.baselinesDir);
-        if (tag === null) emit(program, fail("E_BASELINE", `no baseline tag named ${JSON.stringify(name)}`));
+        if (tag === null) emit(program, fail("E_BASELINE_NOT_FOUND", `no baseline tag named ${JSON.stringify(name)}`));
         else emit(program, ok({ name: tag.name, createdAt: tag.createdAt, sources: tag.sources, runs: tag.runs.map(summarizeRun) }), 0);
       } catch (err) {
         failure(program, err, "E_BASELINE");

@@ -9,6 +9,7 @@ import type { InvariantSpec } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import {
+  assertAuthorizedExploreTarget,
   matchGlob,
   parseSecretField,
   resolveCoverageThresholds,
@@ -51,7 +52,7 @@ import {
 } from "./explore-api.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { runUsabilityMission } from "./ux-api.js";
-import { runVerifyFix } from "./verify-fix-api.js";
+import { findFinding, parsePersistedMission, runVerifyFix } from "./verify-fix-api.js";
 import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -657,17 +658,31 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     } catch (e) {
       throw new CheckPreflightError(`target ${t.name}: goal ${g.name}: ${errorMessage(e)}`);
     }
-    if (g.url !== undefined && !allowlist.includes(new URL(g.url).origin)) {
-      throw new CheckPreflightError(`target ${t.name}: goal ${g.name}: ${g.url} is not on the target's allowlist`);
+    // #218: the URL the goal actually starts at (its own, else the target's) — an `allow` list
+    // REPLACES the target URL's own origin, so the target URL itself may be off it.
+    const goalUrl = g.url ?? t.url;
+    if (!allowlist.includes(new URL(goalUrl).origin)) {
+      throw new CheckPreflightError(`target ${t.name}: goal ${g.name}: ${goalUrl} is not on the target's allowlist`);
     }
   }
-  for (const m of t.missions) {
-    if (m.url !== undefined && !allowlist.includes(new URL(m.url).origin)) {
-      throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${m.url} is not on the target's allowlist`);
+  const sweep = t.missions.length === 0 && t.goals.length === 0 && invariants !== undefined ? [invariantSweep()] : [];
+  for (const m of [...t.missions, ...sweep]) {
+    const missionUrl = m.url ?? t.url;
+    if (!allowlist.includes(new URL(missionUrl).origin)) {
+      throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${missionUrl} is not on the target's allowlist`);
     }
   }
   for (const v of t.verifyFix) {
     if (!existsSync(v.result)) throw new CheckPreflightError(`target ${t.name}: verify-fix ${v.name}: result not found: ${v.result}`);
+    // #218: the same lookup `verify-fix` does, up front — a fingerprint the result does not hold
+    // (or a result it cannot use) is a suite error, refused before anything runs, never an ERROR item.
+    try {
+      const mission = parsePersistedMission(JSON.parse(readFileSync(v.result, "utf8")));
+      if (findFinding(mission, v.fingerprint) === undefined) throw new Error(`no finding with fingerprint ${v.fingerprint} in ${v.result}`);
+      assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
+    } catch (e) {
+      throw new CheckPreflightError(`target ${t.name}: verify-fix ${v.name}: ${errorMessage(e)}`);
+    }
   }
   const journeys = new Map<string, Journey>();
   if (t.journeys.length > 0) {
