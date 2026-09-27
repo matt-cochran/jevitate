@@ -55,7 +55,8 @@ stand-ins, and `--feature` needs no gateway flag at all. Goal and usability runs
 ## Outcomes are typed and honest
 
 Every run ends in a typed outcome with an exit code: `clean` 0, `defects-found` 1,
-`inconclusive`/`crashed` 2, `hang` 3, `intermittent` 4. A run that could not do its work is never
+`inconclusive`/`crashed` 2, `hang` 3, `intermittent` 4, and a usage error 64
+([every command's codes](./outcomes.md#exit-codes)). A run that could not do its work is never
 reported as clean. For example, an adversarial run that exercised too little of its target is
 `inconclusive`, and so is a run whose start URL redirected to a login page. See
 [outcomes.md](./outcomes.md).

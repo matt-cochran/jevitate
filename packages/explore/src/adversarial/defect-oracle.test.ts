@@ -77,6 +77,30 @@ describe("PageSignalCollector", () => {
     expect(signals.some((s) => s.kind === "http-5xx" && s.status === 500)).toBe(true);
   });
 
+  test("#208: with the run's allowlist, a THIRD-PARTY 5xx is not a signal — a first-party one still is", async () => {
+    const tp = createServer((_req, res) => {
+      res.writeHead(503, { "access-control-allow-origin": "*" }).end("down");
+    });
+    await new Promise<void>((resolve) => tp.listen(0, "127.0.0.1", resolve));
+    const tpPort = (tp.address() as AddressInfo).port;
+    try {
+      const scoped = new PageSignalCollector(page, Date.now, [abortOrigin]);
+      const unscoped = new PageSignalCollector(page);
+      await page.goto(`${abortOrigin}/`);
+      // Another host (localhost vs 127.0.0.1) is another site: a third party (#194).
+      await page.evaluate((u) => fetch(u, { method: "POST", mode: "no-cors", body: "x" }).catch(() => undefined), `http://localhost:${tpPort}/beacon`);
+      // The app's own host on another port is first-party.
+      await page.evaluate((u) => fetch(u, { mode: "no-cors" }).catch(() => undefined), `http://127.0.0.1:${tpPort}/api`);
+      await page.waitForTimeout(100);
+      const scopedSignals = scoped.drain().filter((s) => s.kind === "http-5xx");
+      expect(scopedSignals.map((s) => s.url)).toEqual([`http://127.0.0.1:${tpPort}/api`]);
+      // Without an allowlist every origin counts (the pre-#208 behaviour).
+      expect(unscoped.drain().filter((s) => s.kind === "http-5xx")).toHaveLength(2);
+    } finally {
+      await new Promise<void>((resolve) => tp.close(() => resolve()));
+    }
+  });
+
   test("drain() clears the buffer — signals are never double-counted", async () => {
     const collector = new PageSignalCollector(page);
     await page.evaluate(() => console.error("only-once"));

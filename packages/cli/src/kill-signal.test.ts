@@ -350,7 +350,8 @@ describe("kill-signal — the killed run's result describes the run (#120, #112)
 
   it.each([
     ["envelope", (line: string) => expect(JSON.parse(line)).toMatchObject({ v: 1, ok: true, data: { outcome: "inconclusive", engine } })],
-    ["raw", (line: string) => expect(JSON.parse(line)).toMatchObject({ outcome: "inconclusive", engine })],
+    // #210: without --json a killed run prints the human summary (verdict first, never raw JSON).
+    ["human", (line: string) => expect(line).toMatch(/^INCONCLUSIVE: /)],
   ] as const)("prints the %s result to stdout before exiting", async (mode, check) => {
     const { deps, handlers, calls } = fakeDeps();
     const order: string[] = [];

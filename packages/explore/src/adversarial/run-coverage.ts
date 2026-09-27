@@ -59,7 +59,17 @@ export interface AdversarialCoverage {
    * this (hidden/duplicated across steps, disabled, secret-like, out-of-scope links) — this ratio is
    * never expected to equal a single step's `controlCount` (#121).
    */
-  readonly controls: { readonly total: number; readonly exercised: number; readonly ratio: number };
+  readonly controls: {
+    readonly total: number;
+    readonly exercised: number;
+    readonly ratio: number;
+    /**
+     * #209: of `total`, the target controls the safety policy refused (paid, destructive, session-ending
+     * or `--deny`'d) — never exercisable in this run. Present when any was refused; the coverage
+     * shortfall then names them and how to permit them.
+     */
+    readonly refused?: number;
+  };
   /**
    * `blocked` (#155): submit attempts that never reached the server — never a submit. `blockedBy`
    * (#193, present when any was blocked) says why: the browser's native validation, a submit
@@ -92,6 +102,8 @@ export class CoverageTracker {
   /** route|formKey|why -> how many attempts were blocked that way, and the first message. */
   readonly #blocked = new Map<string, { form: string; why: SubmitBlock; count: number; message?: string }>();
   readonly #strategies = new Map<string, { applied: number; foundNothing: number }>();
+  /** #209: target controls the safety policy refused — key → accessible name and why. */
+  readonly #refused = new Map<string, { readonly name: string; readonly risk: string }>();
   #actions = 0;
 
   constructor(inScope: (url: string) => boolean) {
@@ -151,6 +163,27 @@ export class CoverageTracker {
     this.#blocked.set(key, { form, why, count: (cur?.count ?? 0) + 1, message: cur?.message ?? message });
   }
 
+  /**
+   * #209: the safety policy refused this target control (`risk`: paid, destructive, session-end,
+   * denied). It still counts toward `controls.total` — the target HAS it — but the shortfall names
+   * the refusal instead of reading as a run that merely did not get to it.
+   */
+  refused(url: string, control: Control, risk: string): void {
+    if (!this.#inScope(url)) return;
+    const key = controlKey(control);
+    if (!this.#refused.has(key)) this.#refused.set(key, { name: control.name.replace(/\s+/g, " ").trim(), risk });
+  }
+
+  /**
+   * #209: every target control seen so far was refused by the safety policy (and none was exercised):
+   * the run can exercise nothing on this target, so hunting on (scrolling, re-planning) proves nothing.
+   */
+  everyTargetRefused(): boolean {
+    if (this.#controls.size === 0 || this.#exercised.size > 0) return false;
+    for (const k of this.#controls) if (!this.#refused.has(k)) return false;
+    return true;
+  }
+
   /** A strategy's turn: it applied (planned something) or found nothing to do. */
   strategy(name: string, applied: boolean): void {
     const s = this.#strategies.get(name) ?? { applied: 0, foundNothing: 0 };
@@ -176,9 +209,10 @@ export class CoverageTracker {
     const shortfalls: string[] = [];
     if (total === 0) shortfalls.push("the target offered no control to exercise");
     else if (exercised === 0) shortfalls.push("no target control was exercised");
+    const refusedTargets = [...this.#refused].filter(([k]) => this.#controls.has(k) && !this.#exercised.has(k)).map(([, v]) => v);
     if (total > 0 && ratio < thresholds.minControlRatio) {
       shortfalls.push(
-        `${exercised}/${total} target controls exercised (${pct(ratio)}), below the ${pct(thresholds.minControlRatio)} threshold`,
+        `${exercised}/${total} target controls exercised (${pct(ratio)}), below the ${pct(thresholds.minControlRatio)} threshold${refusalNote(refusedTargets, total)}`,
       );
     }
     if (thresholds.requireFormSubmit && forms.found > 0 && forms.submitted === 0) {
@@ -197,7 +231,7 @@ export class CoverageTracker {
       shortfalls.push(forms.blocked > 0 ? `form submitted 0 times (${why.join("; ")})` : `no form was submitted (${forms.found} found)`);
     }
     return {
-      controls: { total, exercised, ratio },
+      controls: { total, exercised, ratio, ...(refusedTargets.length === 0 ? {} : { refused: refusedTargets.length }) },
       forms,
       actionsOnTarget: this.#actions,
       strategies: Object.fromEntries([...this.#strategies].map(([k, v]) => [k, { ...v }])),
@@ -207,6 +241,29 @@ export class CoverageTracker {
       shortfalls,
     };
   }
+}
+
+/**
+ * #209: why the target's controls were not exercised, when the safety policy refused them — named, with
+ * how to permit them: `--allow-destructive` for paid / destructive / session-ending controls, removing
+ * the `--deny` pattern for a denied one, and `--paid`/`--deny` to reclassify a misjudged control.
+ */
+function refusalNote(refused: ReadonlyArray<{ readonly name: string; readonly risk: string }>, total: number): string {
+  if (refused.length === 0) return "";
+  const byRisk = new Map<string, string[]>();
+  for (const r of refused) byRisk.set(r.risk, [...(byRisk.get(r.risk) ?? []), r.name]);
+  const groups = [...byRisk].map(([risk, names]) => {
+    const counts = new Map<string, number>();
+    for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+    const listed = [...counts].slice(0, 5).map(([n, c]) => `"${n}"${c > 1 ? ` x${c}` : ""}`);
+    return `${risk}: ${listed.join(", ")}${counts.size > 5 ? ", …" : ""}`;
+  });
+  const all = refused.length === total ? (total === 1 ? "the only one" : `all ${total}`) : `${refused.length}`;
+  const hints: string[] = [];
+  if (refused.some((r) => r.risk !== "denied")) hints.push("pass --allow-destructive to let the run click paid/destructive controls");
+  if (refused.some((r) => r.risk === "denied")) hints.push("remove the --deny pattern that matches them");
+  hints.push("or reclassify a misjudged control with --paid/--deny");
+  return ` — ${all} refused by the safety policy (${groups.join("; ")}); to exercise them, ${hints.join(", ")}`;
 }
 
 function pct(r: number): string {

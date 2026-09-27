@@ -29,7 +29,7 @@ import {
   type TranscriptEntry,
   type TranscriptListener,
 } from "../index.js";
-import type { MissionFailure } from "@jevitate/domain";
+import { contentHash, type MissionFailure } from "@jevitate/domain";
 import type { SettleConfig, TimingConfig } from "../settle-config.js";
 import { outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
@@ -87,6 +87,14 @@ function isUnactionableFailure(reason: string | undefined): boolean {
  */
 
 export interface DefectRecord {
+  /**
+   * #209: the defect's own 16-hex fingerprint and kind, so it takes its place in the result's unified
+   * `defects` list (#195) like every other strategy's: a horizontal overflow keeps the overflow
+   * finding's fingerprint (`horizontal-overflow`); a state the advisory judgment flagged is
+   * `judgment-flagged-state`, keyed by the state's fingerprint.
+   */
+  readonly fingerprint: string;
+  readonly kind: "horizontal-overflow" | "judgment-flagged-state";
   readonly stateFingerprint: string;
   readonly url: string;
   readonly reason: string;
@@ -94,6 +102,12 @@ export interface DefectRecord {
   readonly recording: Recording;
   /** Present for a horizontal-overflow hard signal (#149): the structured finding `reason` summarizes. */
   readonly overflow?: OverflowFinding;
+  /**
+   * #214: `true` on a `judgment-flagged-state` — a model's opinion alone, never an independent oracle's
+   * verdict (guardrail #4). Reported (with its repro Recording, so `verify-fix` can replay it) but it
+   * never sets the mission outcome or exit code on its own. Absent on a hard-signal defect.
+   */
+  readonly advisory?: true;
 }
 
 /** One transition whose result landed outside the mission's target scope (#89) — recorded, never
@@ -123,7 +137,7 @@ export interface CoverageReport {
   readonly defects: DefectRecord[];
   /** Actions the frontier attempted that did not land (gate refusal, action failure) — #75. */
   readonly failedActions: number;
-  /** Of those, the ones that failed on a TIMEOUT (#203) — a frontier drained by these is `insufficient-exploration`. */
+  /** Of those, the ones that failed on a TIMEOUT (#203) — a frontier drained by these is `insufficient-coverage`. */
   readonly timedOutActions: number;
   /** What the run exercised vs. its thresholds, and whether silence here may read as `clean` (#75,
    *  mirroring the adversarial coverage thresholds from #69). */
@@ -139,9 +153,9 @@ export interface InductionRunResult {
    *  bounced to a login page) — the run never got to test what it was asked to (#82) — or, mid-run,
    *  the frontier could not return to the seed after a departure (#114). */
   /** `stalled`: no step completed within the stall watchdog's bound (#114). */
-  /** `insufficient-exploration` (#203): the frontier emptied because its actions TIMED OUT (each one
+  /** `insufficient-coverage` (#203; one name since #209 — was `insufficient-exploration`): the frontier emptied because its actions TIMED OUT (each one
    *  blacklisted its control), not because its states ran out — never reported as `exhausted`. */
-  readonly outcome: "exhausted" | "insufficient-exploration" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
+  readonly outcome: "exhausted" | "insufficient-coverage" | "cap" | "crashed" | "hang" | "scope-unreachable" | "stalled" | "budget";
   /** Hangs met while exploring (deduped by fingerprint), each with its fresh-context reproduction. */
   readonly hangs: HangFinding[];
   /** Why the run crashed/could not reach its target/stalled — present for `crashed`, `scope-unreachable` and `stalled`. */
@@ -436,6 +450,8 @@ async function runInductionFrontier(
     if (finding === null || seenOverflow.has(finding.fingerprint)) return;
     seenOverflow.add(finding.fingerprint);
     defects.push({
+      fingerprint: finding.fingerprint,
+      kind: "horizontal-overflow",
       stateFingerprint: stateFp,
       url,
       reason: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
@@ -448,6 +464,8 @@ async function runInductionFrontier(
   let failedActions = 0;
   let timedOutActions = 0;
   let nonNavActionsExercised = 0;
+  /** #209: exercised links to another page — global navigation only if chrome (see `report`). */
+  const crossPageLinks: Control[] = [];
   const sufficiencyThresholds = resolveCoverageSufficiencyThresholds(params.sufficiencyThresholds);
 
   // Scope containment (#89, reusing #64's implementation): the frontier is scoped to the seed's
@@ -471,7 +489,18 @@ async function runInductionFrontier(
     defects,
     failedActions,
     timedOutActions,
-    sufficiency: assessCoverageSufficiency({ actions, failedActions, nonNavActionsExercised }, sufficiencyThresholds),
+    sufficiency: assessCoverageSufficiency(
+      {
+        actions,
+        failedActions,
+        // #209: a link to another page counts as global navigation only when it is page CHROME — in a
+        // `<nav>`/`<header>`/`<footer>` landmark, or repeated on 2+ pages (judged over the whole run,
+        // so a header link met before its second page still counts as chrome). A link in the page's
+        // own body (a small app whose pages link to each other in their content) is in-page coverage.
+        nonNavActionsExercised: nonNavActionsExercised + crossPageLinks.filter((c) => (c.landmark ?? null) === null && !chrome.isChrome(c)).length,
+      },
+      sufficiencyThresholds,
+    ),
     scope: { routeGlobs, outOfScopeTransitions, departures: departures.slice(0, MAX_LISTED_DEPARTURES) },
   });
 
@@ -712,6 +741,7 @@ async function runInductionFrontier(
 
       frontier.markExercised(controlIdentity(liveControl));
       if (!isNavControl(liveControl, decidedOn.url)) nonNavActionsExercised += 1;
+      else crossPageLinks.push(liveControl);
 
       snap = await guard(takeSnapshot());
       observe(snap);
@@ -889,10 +919,13 @@ async function runInductionFrontier(
       });
       if (flagged) {
         defects.push({
+          fingerprint: contentHash(`judgment-flagged-state|${newFingerprint}`).slice(0, 16),
+          kind: "judgment-flagged-state",
           stateFingerprint: newFingerprint,
           url: snap.url,
           reason: "judgment flagged defect",
           recording: branch,
+          advisory: true,
         });
         currentFingerprint = newFingerprint;
         continue; // recorded, but a flagged state is never expanded
@@ -911,9 +944,9 @@ async function runInductionFrontier(
     // frontier ended on timeouts, so "exhausted" would claim coverage the run never had.
     if (timedOutActions > 0 && timedOutActions >= transitionsExercised) {
       return {
-        outcome: "insufficient-exploration",
+        outcome: "insufficient-coverage",
         failure: {
-          kind: "insufficient-exploration",
+          kind: "insufficient-coverage",
           message: `the frontier ended because ${timedOutActions} action(s) timed out (vs ${transitionsExercised} transition(s) exercised, ${visited.size} state(s) visited), not because its states ran out`,
         },
         coverage: report(true),

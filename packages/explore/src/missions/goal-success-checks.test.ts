@@ -122,11 +122,19 @@ describe("goal mission — a save that shows success but persists nothing FAILS 
     async () => {
       const result = await save("broken", [VALUE_ON_PAGE, PERSISTED]);
       expect(result.assertionPassed).toBe(false);
-      expect(result.outcome).toBe("blocked");
+      // #209: was `blocked` — but the model said done and an independent check then failed: that is
+      // `failed` (blocked means the loop gave up), with the failing check named in `failure`.
+      expect(result.outcome).toBe("failed");
+      expect(result.failure?.kind).toBe("success-check-failed");
+      expect(result.failure?.message).toContain("'reloadThen:valueEquals:testId=last|Litmus' did not hold after a reload");
       expect(result.checks).toEqual([
         { check: "valueEquals:testId=last|Litmus", passed: true, detail: "held on the final page" },
         { check: "reloadThen:valueEquals:testId=last|Litmus", passed: false, detail: "did not hold after a reload" },
       ]);
+      // #209: the transcript never claims "goal verified" while the reloadThen check is still pending.
+      const doneEntry = result.transcript.find((e) => (e.reason ?? "").startsWith("done accepted"));
+      expect(doneEntry?.reason).toMatch(/^done accepted provisionally: .*'reloadThen:valueEquals:testId=last\|Litmus' is judged after the run/);
+      expect(result.transcript.some((e) => (e.reason ?? "").includes("goal verified by success-condition"))).toBe(false);
       expect(puts).toBe(0);
     },
     120_000,

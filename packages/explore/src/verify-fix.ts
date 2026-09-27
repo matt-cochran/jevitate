@@ -353,7 +353,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     await settle();
     await session.page.waitForTimeout(10);
     // The original run already found the invariant applicable to this step: re-check exactly it.
-    const checked = await monitor.after(session.actor, { ...stepAction(params.recording, index), url: actedOn }, { only: inv.id, force: true });
+    const checked = await monitor.after(session.actor, { ...stepAction(params.recording, index), url: actedOn, step: index }, { only: inv.id, force: true });
     const observed = checked.violations.map((v) => v.fingerprint);
     const replay: VerifyFixResult["replay"] = { outcome: "completed" };
     if (checked.violations.length > 0) {

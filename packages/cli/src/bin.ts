@@ -3,6 +3,7 @@ import { ProfileManager } from "@jevitate/daemon";
 import { buildProgram } from "./program.js";
 import { resolveDataDir } from "./data-dir.js";
 import { installMissionKillSwitch } from "./kill-signal.js";
+import { EXIT_CODES } from "./exit-codes.js";
 
 // Crash-safe SIGTERM/SIGINT (#94): installed FIRST, before anything else — in particular before any
 // browser can have launched. Playwright installs its own SIGTERM/SIGINT handler on a browser it
@@ -18,5 +19,6 @@ const dbPath = resolveDataDir(["db.sqlite"]);
 const program = buildProgram({ profiles, dbPath, logs: { autoPrune: true } });
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(`${String(err)}\n`);
-  process.exitCode = 1;
+  // An unexpected error: the command could not finish, so it proves nothing (exit-codes.ts).
+  process.exitCode = EXIT_CODES.inconclusive;
 });

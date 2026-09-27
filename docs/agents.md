@@ -79,8 +79,9 @@ http(s) origin — the queued-mission form of a second `explore --allow`); the t
 `successAssertion`), `coverage` and `adversarial` (an optional in-scope `route` glob), and
 `feature` (a `feature` name, optional `route`). A usability review needs an app class the request
 cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven missions stay queued
-(reported as `skipped`) and only feature missions run. The exit code is 1 only when a mission could
-not run at all; each mission's own outcome is in its result. A drain killed mid-mission records
+(reported as `skipped`) and only feature missions run. The exit code is 2 only when a mission could
+not run at all; each mission's own outcome is in its result
+([exit codes](./outcomes.md#exit-codes)). A drain killed mid-mission records
 that mission `done` with its partial `inconclusive` result, never leaves it `running`. A drain that
 dies without that chance (SIGKILL, out of memory, a reboot) is caught by the next drain: a mission
 whose drain process is gone (on the same host), or that has run for more than 12 hours (claimed on

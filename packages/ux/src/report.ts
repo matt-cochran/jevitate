@@ -127,8 +127,8 @@ export interface UxReport {
   readonly coverage: Coverage;
   /** The cutoff applied to `findings`. */
   readonly minConfidence: number;
-  /** The per-route cap applied to `findings` (issue #198 interim) — see `suppressed` reason `per-page-cap`. */
-  readonly maxFindingsPerRoute: number;
+  /** The per-page cap applied to `findings` (issue #198 interim) — see `suppressed` reason `per-page-cap`. */
+  readonly maxFindingsPerPage: number;
   /** The quality grades shown in `findings` (others are suppressed as quality-policy). */
   readonly qualityShown: readonly string[];
   /** #133: did the quality grade hide anything? False by default (every grade shown). */
@@ -239,7 +239,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
       heuristicAppendix: [],
       coverage: EMPTY_COVERAGE,
       minConfidence,
-      maxFindingsPerRoute,
+      maxFindingsPerPage: maxFindingsPerRoute,
       qualityShown: [...policy.show],
       qualityFiltered: policyFilters(policy),
       qualityDistribution: {},
@@ -351,7 +351,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
     heuristicAppendix,
     coverage: outcome.coverage,
     minConfidence,
-    maxFindingsPerRoute,
+    maxFindingsPerPage: maxFindingsPerRoute,
     qualityShown: [...policy.show],
     qualityFiltered: filtered,
     qualityDistribution,

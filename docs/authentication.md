@@ -19,10 +19,17 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
 ```
 
 - **Start logged in (preferred).** Save a Playwright storageState once, for example
-  with `npx playwright codegen --save-storage=auth.json https://app.example.test/login`,
-  and pass `--storage-state auth.json`. The file holds live session cookies and
+  with `npx playwright codegen --save-storage=~/.jevitate/auth.json https://app.example.test/login`,
+  and pass `--storage-state ~/.jevitate/auth.json`. The file holds live session cookies and
   localStorage. It goes only to the browser, and artifacts record its path, never
-  its contents. `jevitate record` does not write a storageState.
+  its contents. `jevitate record` does not write a storageState. Save it under
+  `~/.jevitate/` (or anywhere outside the repo), never at a repo-relative path: `jevitate init`
+  only writes a `.gitignore` inside the repo's `.jevitate/` (protecting what jevitate itself
+  writes there), and a bare `auth.json` (or `auth/*.json`) at the repo root is not covered by
+  it or by anything else — nothing stops it from being committed. This is the same reasoning
+  `--save-storage-state` enforces in code (#195): it refuses a path that resolves inside a
+  repo's `.jevitate/`, since that directory is partly committed (Journeys, regressions,
+  baselines) and never the right place for live cookies.
 - **Rotating refresh tokens.** When the app rotates its refresh token on every use,
   a saved state goes stale after the first run that refreshes it. Pass
   `--save-storage-state <file>` (it may be the `--storage-state` file itself) to write the

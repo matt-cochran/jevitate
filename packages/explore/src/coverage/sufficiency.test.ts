@@ -30,7 +30,8 @@ describe("assessCoverageSufficiency (#75, mirroring the adversarial coverage thr
   test("only global nav exercised (no non-nav control) is insufficient even with zero failures", () => {
     const r = assessCoverageSufficiency({ actions: 3, failedActions: 0, nonNavActionsExercised: 0 }, T);
     expect(r.sufficient).toBe(false);
-    expect(r.shortfalls).toContain("no non-nav (in-page) control was exercised — only global navigation");
+    // #209: the shortfall now ends with a hint on how to reach clean.
+    expect(r.shortfalls.some((x) => x.startsWith("no non-nav (in-page) control was exercised — only global navigation"))).toBe(true);
   });
 
   test("under the failure threshold with a non-nav control exercised is sufficient", () => {

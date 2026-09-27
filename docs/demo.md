@@ -30,7 +30,8 @@ The findings are the same, because models never decide them.
 
 ## Prerequisites
 
-- Node.js 20+, pnpm 9, `git`, and `jq` (used only to trim the JSON output).
+- Node.js 20+, pnpm 9, `git`, and `jq` (used only to trim the `--json` output; without `--json`
+  each command prints a human summary instead).
 - A few hundred MB of disk space for dependencies and Chromium. On a fresh Linux machine, use
   `playwright install --with-deps chromium` to also install Chromium's system libraries.
 
@@ -67,7 +68,7 @@ pnpm --filter @jevitate/example-site demo
 ```bash
 # 1. Try to break the profile form (~45 s). Exit code 1: defects found.
 jevitate explore --strategy adversarial --url http://127.0.0.1:5190/demo/profile \
-  --invariants apps/example-site/demo-invariants.json --fake-ai --out demo-runs \
+  --invariants apps/example-site/demo-invariants.json --fake-ai --out demo-runs --json \
   | jq '.data | {outcome, defects: [.defects[] | {kind, title, fingerprint}]}'
 
 # 2. Pick up the run's result, its Recording and the two fingerprints.
@@ -77,7 +78,7 @@ FP_500=$(jq -r '[.result.defects[] | select(.kind == "http-5xx")][0].fingerprint
 FP_INV=$(jq -r '[.result.defects[] | select(.kind == "invariant")][0].fingerprint' "$RESULT")
 
 # 3. Reproduce the 500 in fresh sessions. Exit code 1: still reproduces.
-jevitate verify-fix --result "$RESULT" --fingerprint "$FP_500" | jq '.data | {verdict, reason}'
+jevitate verify-fix --result "$RESULT" --fingerprint "$FP_500" --json | jq '.data | {verdict, reason}'
 
 # 4. Commit the broken rule as a regression, then run it. Exit code 1: reproduces.
 jevitate regression capture --from "$RECORDING" --result "$RESULT" --fingerprint "$FP_INV" \
@@ -96,7 +97,7 @@ Back in **terminal 2**:
 ```bash
 # 5. The same regression and re-check now pass. Exit code 0: fixed.
 jevitate regression run saved-means-stored --dir demo-regressions
-jevitate verify-fix --result "$RESULT" --fingerprint "$FP_500" | jq '.data | {verdict, reason}'
+jevitate verify-fix --result "$RESULT" --fingerprint "$FP_500" --json | jq '.data | {verdict, reason}'
 ```
 
 To run it again from scratch: `rm -rf demo-runs demo-regressions` (both are git-ignored).
@@ -107,7 +108,7 @@ Recorded from a real run of the commands above (engine `0.1.0`, commit `098cdeb`
 in file names will differ). Fingerprints are stable for the same URL.
 
 ```text
-$ jevitate explore --strategy adversarial ... | jq ...
+$ jevitate explore --strategy adversarial ... --json | jq ...
 {
   "outcome": "defects-found",
   "defects": [
@@ -116,7 +117,7 @@ $ jevitate explore --strategy adversarial ... | jq ...
   ]
 }
 
-$ jevitate verify-fix ... | jq ...
+$ jevitate verify-fix ... --json | jq ...
 { "verdict": "still-reproduces",
   "reason": "the defect's fingerprint fired on all 3/3 replay(s) that ran (the original run observed it 3 time(s))" }
 
@@ -130,7 +131,7 @@ $ jevitate regression run saved-means-stored --dir demo-regressions
 $ jevitate regression run saved-means-stored --dir demo-regressions
 {"id":"saved-means-stored","verdict":"fixed","reason":"the defect's fingerprint was absent on all 3/3 replay(s) that ran"}
 
-$ jevitate verify-fix ... | jq ...
+$ jevitate verify-fix ... --json | jq ...
 { "verdict": "fixed",
   "reason": "the defect's fingerprint was absent on all 3/3 replay(s) that ran (the original run observed it 3 time(s))" }
 ```

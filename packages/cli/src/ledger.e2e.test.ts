@@ -183,6 +183,6 @@ describe("jevitate ledger (#195 part 6, served fixture)", () => {
     expect(r.env.ok).toBe(false);
     expect(r.env.error?.code).toBe("E_LEDGER_NOT_FOUND");
     expect(r.env.error?.message).toMatch(/jevitate ledger add/);
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(64);
   });
 });

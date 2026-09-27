@@ -156,7 +156,7 @@ describe("jevitate check — served suite (#137)", () => {
   );
 
   it(
-    "#195: a per-item explore option takes effect — the same sweep with deny on Import passes where the open one fails",
+    "#195: a per-item explore option takes effect — the same sweep with deny on Import never clicks it, and (#209) is honestly inconclusive instead of failing",
     async () => {
       await writeFile(
         join(dir, "credits.json"),
@@ -200,10 +200,16 @@ describe("jevitate check — served suite (#137)", () => {
       process.exitCode = undefined;
       const env = JSON.parse(lines.join("")) as { ok: boolean; data: CheckResult };
       expect(env.ok).toBe(true);
+      // The open sweep clicks Import and violates the invariant. The guarded sweep never clicks Import
+      // (its own deny), so it exercised nothing relevant to the feature: #209 makes that inconclusive
+      // (an item error), never a pass that proved nothing.
       expect(env.data.items.map((i) => [i.name, i.verdict])).toEqual([
         ["open", "failed"],
-        ["guarded", "passed"],
+        ["guarded", "error"],
       ]);
+      const guardedItem = env.data.items[1] as { error?: { type?: string; message?: string } };
+      expect(guardedItem.error?.type).toBe("inconclusive");
+      expect(guardedItem.error?.message).toMatch(/no control relevant to "invariants" was exercised/);
       // The guarded run's safety policy refused Import by the item's own deny; it clicked Refresh only.
       type Step = { op: string | null; target: string; actOk: boolean; reason?: string };
       const transcripts = await Promise.all(
