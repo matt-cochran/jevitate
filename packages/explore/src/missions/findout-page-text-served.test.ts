@@ -34,11 +34,15 @@ const PAGES: Record<string, string> = {
 <button type="button">Acknowledge</button></body></html>`,
   "/items/item-1": `<!doctype html><html><body><h1>Quarterly roadmap review</h1>
 <p>Owner: tenant b</p><a href="/items">All items</a></body></html>`,
+  "/tenancy/items/item-1": `<!doctype html><html><head><title>Item · Example</title></head><body>
+<nav><a href="/tenancy/items">Items</a></nav><h1>Tenant B roadmap</h1>
+<p>Owner: tenant b</p><p>Status: open</p></body></html>`,
   "/profile": `<!doctype html><html><body><h1>Profile</h1>
 <form onsubmit="return false"><label>Display name <input name="displayName" value="Ada Lovelace"></label>
 <label>Email <input name="email" type="email" value="ada@example.test"></label>
 <label>Password <input name="password" type="password" value="hunter2-secret"></label>
 <button type="submit">Save</button></form></body></html>`,
+  "/packs-bare": `<!doctype html><html><body><p>Nothing to see here.</p><button type="button">Refresh</button></body></html>`,
   "/packs": `<!doctype html><html><body><h1>Credit packs</h1><p>Choose how many packs you need.</p>
 <button type="button">3 packs</button></body></html>`,
 };
@@ -111,6 +115,27 @@ class PageReadingGen implements GenerationPort {
   }
 }
 
+/**
+ * #216: gpt-4o-mini's behaviour on "the title of this item" over an h1 — `null` when asked plainly,
+ * the heading once the page's main heading is hinted. Deterministic; records every ask's `hint`.
+ */
+class TitleBlindGen implements GenerationPort {
+  readonly hints: (string | undefined)[] = [];
+  readonly #fallback = new FakeGenerationGateway();
+  async generate<K extends GenTaskKind>(kind: K, input: GenInput<K>): Promise<GenerationResult<K>> {
+    if (kind !== "goal.answer") return this.#fallback.generate(kind, input);
+    const hint = (input as { hint?: string }).hint;
+    this.hints.push(hint);
+    const heading = hint === undefined ? undefined : /main heading is "([^"]+)"/.exec(hint)?.[1];
+    const output =
+      heading === undefined ? { answer: "null", claims: [] } : { answer: heading, claims: [{ claim: `The item is titled ${heading}`, quote: heading }] };
+    return {
+      output,
+      provenance: { adapter: "fake", model: "title-blind", promptVersion: "3", latencyMs: 0, responseHash: "x" },
+    } as unknown as GenerationResult<K>;
+  }
+}
+
 async function run(path: string, goal: string, judge: JudgmentPort, gen: GenerationPort): Promise<GoalBasedResult> {
   return withSession(
     "findout-page-text-",
@@ -167,6 +192,39 @@ describe("#207 — a find-out goal answers from page text and form values; an ab
       expect(report?.reason).toMatch(/report accepted/);
       // The model was told why its `blocked` did not end the run.
       expect(r.transcript.every((e) => !/model blocked/.test(e.reason ?? ""))).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "#216 'title of this item': a generator that answers null is retried ONCE with the page's h1 / <title> hint, and the heading grounds",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new TitleBlindGen();
+      const r = await run("/tenancy/items/item-1", "Find out the title of this item", judge, gen);
+
+      expect(r.outcome).toBe("succeeded");
+      expect(r.run.answer?.text).toBe("Tenant B roadmap");
+      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "page-text" });
+      // First ask plain; the single retry carries the main heading and the document title.
+      expect(gen.hints).toHaveLength(2);
+      expect(gen.hints[0]).toBeUndefined();
+      expect(gen.hints[1]).toContain('main heading is "Tenant B roadmap"');
+      expect(gen.hints[1]).toContain('document title is "Item · Example"');
+    },
+    90_000,
+  );
+
+  it(
+    "#216 no heading, no title: a null answer is not retried",
+    async () => {
+      const judge = new ReadingJudge(() => "blocked");
+      const gen = new TitleBlindGen();
+      const r = await run("/packs-bare", "Find out the title of this item", judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(gen.hints.every((h) => h === undefined)).toBe(true);
+      expect(gen.hints).toHaveLength(1);
     },
     90_000,
   );

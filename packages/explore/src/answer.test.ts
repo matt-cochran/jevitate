@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_ANSWER_REASON, ObservedPages, answerNotFoundReason, controlFields, goalAsksForReply, groundAnswer, pagesContext } from "./answer.js";
+import { NO_ANSWER_REASON, ObservedPages, answerNotFoundReason, controlFields, goalAsksForReply, groundAnswer, headingHint, pagesContext } from "./answer.js";
 
 const pages = [
   { url: "http://app.test/settings", text: "Settings\nPlan: Pro\nDesign Partner pricing: book one interview per month." },
@@ -209,5 +209,18 @@ describe("#207 — no answer", () => {
     for (let i = 0; i < 10; i++) many.add(`http://app.test/p${i}`, `page ${i}`);
     expect(answerNotFoundReason(many.pages())).toMatch(/^answer not found \(pages seen: \/p0, .*\/p7, \+2 more\)$/);
     expect(answerNotFoundReason([])).toBe("answer not found (no page text was observed)");
+  });
+});
+
+describe("#216 — the heading hint for a null answer", () => {
+  it("keeps a page's h1 and <title> (redacted, whitespace folded) and hints them; none → no hint", () => {
+    const observed = new ObservedPages(["s3cr3t-token"]);
+    observed.add("http://app.test/items/1", "Tenant B roadmap\nOwner: b", [], { heading: "  Tenant B\n roadmap ", title: "Item s3cr3t-token" });
+    const [page] = observed.pages();
+    expect(page?.heading).toBe("Tenant B roadmap");
+    expect(page?.title).not.toContain("s3cr3t-token");
+    expect(headingHint(page)).toContain('main heading is "Tenant B roadmap"');
+    expect(headingHint({ url: "http://app.test/", text: "x" })).toBeNull();
+    expect(headingHint(undefined)).toBeNull();
   });
 });

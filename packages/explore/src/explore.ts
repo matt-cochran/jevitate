@@ -66,6 +66,7 @@ import {
   isSubmitControl,
   lastQuestion,
   newPageText,
+  readPageHeadings,
   readPageText,
   repetitiveTurns,
   sameMessage,
@@ -1043,7 +1044,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // #207: a form field's current value is page content too (grounded as such, never as page text).
       const visibleText = await readPageText(page);
-      observed.add(snap.url, visibleText, controlFields(snap.controls));
+      observed.add(snap.url, visibleText, controlFields(snap.controls), await readPageHeadings(page));
       noteReplyText(snap.url, visibleText);
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded

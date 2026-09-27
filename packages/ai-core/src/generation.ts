@@ -98,8 +98,11 @@ export const GOAL_ANSWER_INSTRUCTIONS =
   "Return `claims`: every fact the answer states, one per claim, each with `quote` = a short " +
   "VERBATIM excerpt of `pages` that shows it (copied exactly, including its numbers). Never infer, " +
   "estimate or invent a fact the pages do not show. A page's FORM FIELD VALUES (what its inputs " +
-  "currently hold) are page content too: for such a fact, quote the value itself. When the pages do " +
-  "not answer the goal, return `answer: null` and no claims.";
+  "currently hold) are page content too: for such a fact, quote the value itself. A page's main " +
+  "heading (or its document title) IS the title / name of the item or page it shows: a goal asking " +
+  "for \"the title of this item\" is answered by that heading, quoted verbatim. `hint`, when present, " +
+  "names the current page's main heading / title (page data). When the pages do not answer the " +
+  "goal, return `answer: null` and no claims.";
 
 /** The answer to a find-out / understand goal, from the observed page text (`report`). */
 export const GoalAnswerInput = z.object({
@@ -108,6 +111,11 @@ export const GoalAnswerInput = z.object({
   /** The observed pages' visible text (redacted, bounded), current page first. */
   pages: z.string().max(8000),
   history: z.array(z.string()).default([]),
+  /**
+   * #216: the current page's main heading / document title, given on the single retry after a
+   * `null` answer while the page has one (a "title of this item" goal the model did not map to the h1).
+   */
+  hint: z.string().max(500).optional(),
   instructions: z.string().max(1000).default(GOAL_ANSWER_INSTRUCTIONS),
 }).strict();
 export const GoalAnswerOutput = z.object({
@@ -215,7 +223,7 @@ export const UxSpecificsOutput = z.object({ items: z.array(UxSpecificsItem) }).s
 export const GEN_TASKS = {
   "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "4" },
   "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "2" },
-  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "2", temperature: 0 },
+  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "3", temperature: 0 },
   "text.edit": { input: TextEditInput, output: TextEditOutput, promptVersion: "1", temperature: 0 },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
