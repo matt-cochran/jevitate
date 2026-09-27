@@ -29,11 +29,13 @@ function redactAnswer(a: TranscriptAnswer, secrets: readonly string[]): Transcri
   return {
     text: r(a.text),
     accepted: a.accepted,
+    ...(a.withheld === true ? { withheld: true as const } : {}),
     evidence: a.evidence.map((e) => ({
       ...e,
       claim: r(e.claim),
       quote: r(e.quote),
       url: e.url === null ? null : r(redactUrl(e.url)),
+      ...(e.control === undefined ? {} : { control: r(e.control) }),
       ...(e.why === undefined ? {} : { why: r(e.why) }),
     })),
   };

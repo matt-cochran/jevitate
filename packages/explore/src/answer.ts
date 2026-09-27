@@ -1,5 +1,5 @@
 import type { GenerationPort } from "@jevitate/ai-core";
-import { redactContext, redactUrl } from "./redact.js";
+import { REDACTION_MASK, redactContext, redactText, redactUrl } from "./redact.js";
 
 /**
  * The `report` op (#101): a find-out / understand goal ("find out which plan you are on…") ends with
@@ -112,7 +112,16 @@ export interface AnswerEvidence {
 export interface RunAnswer {
   readonly text: string;
   readonly evidence: readonly AnswerEvidence[];
+  /**
+   * #219: the answer rests on a registered secret (the page shows it, but it was redacted before any
+   * model saw it): the answer says it cannot be disclosed instead of stating it. Absent otherwise.
+   */
+  readonly withheld?: true;
 }
+
+/** #219: what an answer whose grounds are a registered secret says in place of the value. */
+export const WITHHELD_ANSWER_NOTE =
+  "the answer is a registered secret value (--secret); the page shows it, but jevitate cannot disclose it";
 
 export type AnswerVerdict =
   | { readonly accept: true; readonly answer: RunAnswer }
@@ -274,6 +283,12 @@ export function groundAnswer(
   if (invented.length > 0) {
     return { accept: false, reason: `the answer states ${describeFigures(invented)}, which no observed page shows`, answer };
   }
+  // #219: grounded on (or stating) a redacted value — the true answer is a registered secret. The
+  // answer never quotes or matches the secret itself: it says it cannot be disclosed.
+  const mask = fold(REDACTION_MASK);
+  if (fold(text).includes(mask) || evidence.some((e) => fold(e.quote).includes(mask))) {
+    return { accept: true, answer: { ...answer, text: `${WITHHELD_ANSWER_NOTE} (${text})`, withheld: true } };
+  }
   return { accept: true, answer };
 }
 
@@ -338,7 +353,14 @@ export async function reportAnswer(
     pages: pagesContext(input.pages),
     history: input.history.slice(-20).map((h) => redactContext(h, secrets)),
   });
-  return groundAnswer(res.output, input.pages, { goal: input.goal });
+  // #219: the generator's proposal is scrubbed like page content before grounding or keeping it — a
+  // model may still state a secret-shaped value (a plausible email that IS the registered one).
+  const r = (v: string): string => redactText(v, secrets);
+  const proposed = {
+    answer: res.output.answer === null ? null : r(res.output.answer),
+    claims: res.output.claims.map((c) => ({ claim: r(c.claim), quote: r(c.quote) })),
+  };
+  return groundAnswer(proposed, input.pages, { goal: input.goal });
 }
 
 /** Paths named in an "answer not found" reason (the rest are counted). */

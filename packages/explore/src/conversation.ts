@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import type { Control } from "./snapshot.js";
 import { monitorFor } from "./page-monitor.js";
 import { visibleBusyIndicator } from "./hang.js";
+import { redactPageText } from "./redact.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -268,9 +269,12 @@ function bodyText(): string {
   return typeof document !== "undefined" && document.body ? document.body.innerText : "";
 }
 
-/** The page's visible text (empty when unreadable — never a throw). */
-export async function readPageText(page: Page): Promise<string> {
-  return page.evaluate(bodyText).catch(() => "");
+/**
+ * The page's visible text (empty when unreadable — never a throw), redacted of the run's registered
+ * `secrets` as it is read (#219, `redactPageText`).
+ */
+export async function readPageText(page: Page, secrets: readonly string[] = []): Promise<string> {
+  return redactPageText(await page.evaluate(bodyText).catch(() => ""), secrets);
 }
 
 /**
@@ -290,6 +294,8 @@ export async function waitForReply(
   opts: {
     readonly baseline: string;
     readonly sent: string;
+    /** #219: registered secrets — the page text is read redacted (`baseline` must be read the same way). */
+    readonly secrets?: readonly string[];
     /** Idle patience (ms): give up after this long with no sign of activity. Default `REPLY_WAIT_MS`. */
     readonly timeoutMs?: number;
     /** Hard ceiling (ms), however busy the page stays. Default `REPLY_CEILING_MS` (never below `timeoutMs`). */
@@ -302,6 +308,9 @@ export async function waitForReply(
   const ceilingMs = Math.max(idleMs, opts.ceilingMs ?? REPLY_CEILING_MS);
   const quietMs = opts.quietMs ?? REPLY_QUIET_MS;
   const pollMs = opts.pollMs ?? 250;
+  const secrets = opts.secrets ?? [];
+  // The page text is read redacted, so the sent message is compared in the same (redacted) form.
+  const sent = redactPageText(opts.sent, secrets);
   const monitor = monitorFor(page);
   const started = Date.now();
   const remaining = (): number => ceilingMs - (Date.now() - started);
@@ -317,8 +326,8 @@ export async function waitForReply(
   });
   for (;;) {
     if (remaining() <= 0) return result(false, "ceiling");
-    const text = await readPageText(page);
-    const fresh = newTurnText(opts.baseline, text, opts.sent);
+    const text = await readPageText(page, secrets);
+    const fresh = newTurnText(opts.baseline, text, sent);
     const t = Date.now();
     if (fresh !== latest) {
       latest = fresh;
@@ -335,8 +344,8 @@ export async function waitForReply(
     if (isReply(latest) && busy === null) {
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.
       await monitor.waitSettled({ quietMs, ceilingMs: Math.max(1, Math.min(remaining(), 15_000)) }).catch(() => undefined);
-      const againText = await readPageText(page);
-      const again = newTurnText(opts.baseline, againText, opts.sent);
+      const againText = await readPageText(page, secrets);
+      const again = newTurnText(opts.baseline, againText, sent);
       const stillBusy =
         (await page.evaluate(visibleBusyIndicator).catch(() => null)) ??
         (pendingStatusShown(opts.baseline, againText) ? "pending status" : null);
