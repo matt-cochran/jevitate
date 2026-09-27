@@ -471,8 +471,13 @@ describe("mcp-api get_mission_result / verify_fix — every strategy's stem and 
     const dir = mkdtempSync(join(tmpdir(), "jev-mcp-results-"));
     const ux = mkdtempSync(join(tmpdir(), "jev-mcp-ux-"));
     const { writeMissionResult } = await import("./mission-journal.js");
-    writeMissionResult(join(dir, "explore-2026-09-24T15-24-50-561Z.json"), "succeeded", 0, { outcome: "succeeded" });
-    writeMissionResult(join(dir, "explore-2026-09-24T15-24-50-562Z.json"), "exhausted", 1, { outcome: "exhausted" });
+    // #217: missionOutcome is canonical; the goal's own ending is the result's goalOutcome.
+    writeMissionResult(join(dir, "explore-2026-09-24T15-24-50-561Z.json"), "clean", 0, { strategy: "goal", missionOutcome: "clean", goalOutcome: "succeeded", outcome: "succeeded" });
+    writeMissionResult(join(dir, "explore-2026-09-24T15-24-50-562Z.json"), "defects-found", 1, { strategy: "goal", missionOutcome: "defects-found", goalOutcome: "failed", outcome: "failed", stop: "done" });
+    // A pre-#217 result (the goal's word in missionOutcome) still reads, folded the same way.
+    writeMissionResult(join(dir, "explore-2026-09-24T15-24-50-563Z.json"), "exhausted", 1, { outcome: "exhausted" });
+    // A goalOutcome that does not fold onto missionOutcome is corrupt, never a pass.
+    writeMissionResult(join(dir, "explore-2026-09-24T15-24-50-564Z.json"), "clean", 0, { strategy: "goal", missionOutcome: "clean", goalOutcome: "blocked" });
     writeMissionResult(join(dir, "feature-2026-09-24T15-24-50-561Z.json"), "clean", 0, {});
     writeMissionResult(join(ux, "usability-2026-09-24T15-24-50-561Z.recording.json"), "inconclusive", 143, { stop: "terminated" });
     const deps = { ...baseDeps, recordingsDir: dir, uxReportsDir: ux };
@@ -483,7 +488,15 @@ describe("mcp-api get_mission_result / verify_fix — every strategy's stem and 
     });
     expect(await call(deps, "get_mission_result", { id: "explore-2026-09-24T15-24-50-562Z" })).toMatchObject({
       isError: false,
+      body: { status: "defects-found", goalOutcome: "failed", exitCode: 1 },
+    });
+    expect(await call(deps, "get_mission_result", { id: "explore-2026-09-24T15-24-50-563Z" })).toMatchObject({
+      isError: false,
       body: { status: "defects-found", goalOutcome: "exhausted", exitCode: 1 },
+    });
+    expect(await call(deps, "get_mission_result", { id: "explore-2026-09-24T15-24-50-564Z" })).toMatchObject({
+      isError: true,
+      body: { error: "corrupt_result" },
     });
     expect(await call(deps, "get_mission_result", { id: "feature-2026-09-24T15-24-50-561Z" })).toMatchObject({
       isError: false,
@@ -545,7 +558,7 @@ describe("mcp-api get_mission_result / verify_fix — every strategy's stem and 
 
     const { writeMissionResult } = await import("./mission-journal.js");
     writeMissionResult(join(recordingsDir, "explore-2026-09-24T00-00-02-000Z.json"), "succeeded", 0, { outcome: "succeeded" });
-    await queue.update({ ...queued, status: "done", resultId: "explore-2026-09-24T00-00-02-000Z", missionOutcome: "succeeded", exitCode: 0 });
+    await queue.update({ ...queued, status: "done", resultId: "explore-2026-09-24T00-00-02-000Z", missionOutcome: "clean", goalOutcome: "succeeded", exitCode: 0 });
     expect(await call(deps, "get_mission_result", { id: MISSION_ID })).toMatchObject({
       isError: false,
       body: { id: MISSION_ID, missionId: MISSION_ID, resultId: "explore-2026-09-24T00-00-02-000Z", status: "clean" },

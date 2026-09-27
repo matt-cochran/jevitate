@@ -229,11 +229,12 @@ export function extractRunFindings(data: unknown): RunFinding[] {
 }
 
 /**
- * A run's outcome for voting: the goal strategy's own `outcome` (succeeded / exhausted / blocked /
- * …), else the canonical `missionOutcome` (adversarial's `outcome` already is one).
+ * A run's outcome for voting: the goal strategy's own ending (`goalOutcome`, #217: succeeded / failed /
+ * exhausted / blocked / …), else the canonical `missionOutcome` (adversarial's `outcome` already is one).
  */
 export function runOutcomeOf(strategy: string, data: unknown): string {
   if (!isRecord(data)) return "crashed";
+  if (strategy === "goal" && typeof data.goalOutcome === "string") return data.goalOutcome;
   if (strategy === "goal" && typeof data.outcome === "string") return data.outcome;
   if (typeof data.missionOutcome === "string") return data.missionOutcome;
   if (typeof data.outcome === "string") return data.outcome;
@@ -281,6 +282,8 @@ export interface RunSummary {
   /** The run's envelope, as written next to its artifacts. */
   readonly envelopePath?: string;
   readonly error?: { readonly code: string; readonly message: string };
+  /** #220: why the run ended the way it did, when its result says (a crash's failure, a stop reason). */
+  readonly reason?: string;
   /** The run's model usage (#163), as its envelope reported it. */
   readonly usage?: UsageCounts;
 }
@@ -304,8 +307,14 @@ export interface AggregatedFinding {
 export interface CellResult {
   readonly persona: string | null;
   readonly storageStatePath?: string;
-  /** The agreed outcome, or `intermittent` when no outcome reached k runs (or tied). */
+  /**
+   * The agreed outcome; else `intermittent` when the finished runs reached different VERDICTS — or
+   * `inconclusive` (#220) when they did not agree because a run broke (crashed/inconclusive: a lost
+   * browser proves nothing about the app) or runs are still missing. `reason` then says which.
+   */
   readonly outcome: string;
+  /** #220: why the outcome is `inconclusive` (which runs broke, or how many are missing). */
+  readonly reason?: string;
   readonly exitCode: number;
   /** How many runs ended in each outcome. */
   readonly outcomes: Readonly<Record<string, number>>;
@@ -326,15 +335,45 @@ function exitCodeFor(outcome: string, runs: readonly RunSummary[]): number {
   return runs.find((r) => r.outcome === outcome)?.exitCode ?? MISSION_EXIT_CODES.inconclusive;
 }
 
-/** Votes one persona's (or the mission's) N runs: findings, outcome, requests and controls. */
-export function voteRuns(runs: readonly RunSummary[], k: number, persona: Persona | null = null): CellResult {
-  const n = runs.length;
+/** Outcomes that mean the run itself broke — it proves nothing about the app, so it never makes a vote `intermittent`. */
+const BROKEN_RUN_OUTCOMES: ReadonlySet<string> = new Set(["crashed", "inconclusive"]);
+
+function isBrokenRunSummary(r: RunSummary): boolean {
+  return !r.ok || BROKEN_RUN_OUTCOMES.has(r.outcome);
+}
+
+/**
+ * The vote's outcome (#141, #220): the most common outcome when ≥ k runs reached it (and it is not
+ * tied); otherwise `inconclusive` when runs are still missing or a run broke (with the reason), and
+ * `intermittent` only when every run finished with a real verdict and they disagree.
+ */
+function voteOutcome(runs: readonly RunSummary[], k: number, planned: number): { outcome: string; reason?: string } {
   const outcomes: Record<string, number> = {};
   for (const r of runs) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
   const ranked = Object.entries(outcomes).sort((a, b) => b[1] - a[1]);
   const top = ranked[0];
   const tied = ranked[1] !== undefined && top !== undefined && ranked[1][1] === top[1];
-  const outcome = top !== undefined && top[1] >= k && !tied ? top[0] : "intermittent";
+  if (top !== undefined && top[1] >= k && !tied) return { outcome: top[0] };
+  const broken = runs.filter(isBrokenRunSummary);
+  if (broken.length > 0) {
+    const which = broken.map((r) => `run ${r.index} ${r.outcome}${r.reason === undefined ? "" : ` (${r.reason})`}`).join("; ");
+    return { outcome: "inconclusive", reason: `no outcome reached ${k} of ${runs.length} run(s) because a run broke: ${which}` };
+  }
+  if (runs.length < planned) {
+    return { outcome: "inconclusive", reason: `only ${runs.length} of ${planned} run(s) finished; no outcome reached ${k} yet` };
+  }
+  return { outcome: "intermittent" };
+}
+
+/**
+ * Votes one persona's (or the mission's) runs: findings, outcome, requests and controls. `planned`
+ * is how many runs the plan has (default: the runs given) — fewer finished never reads `intermittent`.
+ */
+export function voteRuns(runs: readonly RunSummary[], k: number, persona: Persona | null = null, planned: number = runs.length): CellResult {
+  const n = runs.length;
+  const outcomes: Record<string, number> = {};
+  for (const r of runs) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
+  const { outcome, reason } = voteOutcome(runs, k, planned);
 
   const byId = new Map<string, { f: RunFinding; runs: number[] }>();
   for (const r of runs) {
@@ -380,7 +419,8 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
     persona: persona?.name ?? null,
     ...(persona === null ? {} : { storageStatePath: persona.storageState }),
     outcome,
-    exitCode: exitCodeFor(outcome, runs),
+    ...(reason === undefined ? {} : { reason }),
+    exitCode: reason === undefined ? exitCodeFor(outcome, runs) : MISSION_EXIT_CODES.inconclusive,
     outcomes,
     runs,
     findings: all.filter((f) => f.status === "agreed"),
@@ -510,8 +550,15 @@ export interface MultiRunResult {
   readonly strategy: string;
   readonly repeat: number;
   readonly minAgreement: number;
-  /** Without personas: the agreed outcome. With personas: every persona's, when they agree; else `mixed`. */
+  /**
+   * Without personas: the agreed outcome. With personas: every persona's, when they agree; else
+   * `mixed`. While runs are pending (`complete: false`, or a killed multi-run) it is `inconclusive` (#220).
+   */
   readonly outcome: string;
+  /** #220: why the outcome is `inconclusive` (runs pending or interrupted, or a run broke). */
+  readonly reason?: string;
+  /** #220: the multi-run was stopped by this signal; the run in flight is recorded as interrupted. */
+  readonly interrupted?: { readonly signal: string };
   /** Without personas: the agreed outcome's code. With personas: the highest persona code. */
   readonly exitCode: number;
   /** Agreed findings (with personas: each tagged by persona). */
@@ -533,12 +580,26 @@ export interface MultiRunResult {
   readonly usage: UsageAggregate;
 }
 
+/** A run a signal interrupted (#220): the killed mission's partial result, when one was armed. */
+export interface InterruptedRun {
+  readonly signal: string;
+  readonly exitCode: number;
+  /** The killed mission's partial result (absent when the signal landed before it was armed). */
+  readonly partial?: Record<string, unknown>;
+}
+
 export interface RunMultiRunOptions {
   readonly plan: MultiRunPlan;
   readonly strategy: string;
   /** The multi-run directory: `<persona>/run-<i>/` per run plus `multi-run.result.json`. */
   readonly outDir: string;
   readonly runOnce: RunOnce;
+  /**
+   * #220: armed for the whole multi-run. `onKill` must be called SYNCHRONOUSLY on a kill signal: it
+   * records the run in flight as interrupted, rewrites the aggregate (incomplete, `inconclusive`)
+   * and returns it. Returns the disarm function.
+   */
+  readonly armKill?: (onKill: (interrupted: InterruptedRun) => MultiRunResult) => () => void;
 }
 
 function readTranscript(data: Record<string, unknown>): unknown {
@@ -551,18 +612,37 @@ function readTranscript(data: Record<string, unknown>): unknown {
   }
 }
 
+/** Why a run ended (#220): its crash's failure, else its own `reason`/`failure` — never invented. */
+function runReasonOf(data: Record<string, unknown>): string | undefined {
+  const failureText = (f: unknown): string | undefined =>
+    isRecord(f) && typeof f.message === "string" ? `${typeof f.kind === "string" ? `${f.kind}: ` : ""}${f.message}` : undefined;
+  return (isRecord(data.crash) ? failureText(data.crash.failure) : undefined) ?? failureText(data.failure) ?? (typeof data.reason === "string" ? data.reason : undefined);
+}
+
 /** Summarizes one run's envelope (the only IO: its transcript file when the result omits it). */
 export function summarizeRun(strategy: string, index: number, envelope: RunEnvelope, envelopePath?: string): RunSummary {
   const base = { index, ...(envelopePath === undefined ? {} : { envelopePath }) };
   if (!envelope.ok) {
-    return { ...base, ok: false, outcome: "crashed", exitCode: MISSION_EXIT_CODES.crashed, findings: [], requests: {}, controls: [], error: envelope.error };
+    return {
+      ...base,
+      ok: false,
+      outcome: "crashed",
+      exitCode: MISSION_EXIT_CODES.crashed,
+      findings: [],
+      requests: {},
+      controls: [],
+      error: envelope.error,
+      reason: `${envelope.error.code}: ${envelope.error.message}`,
+    };
   }
   const data = isRecord(envelope.data) ? envelope.data : {};
   const resultPath = typeof data.resultPath === "string" ? data.resultPath : typeof data.reportPath === "string" ? data.reportPath : undefined;
   const usage = usageCountsFrom(data.usage);
+  const reason = runReasonOf(data);
   return {
     ...base,
     ok: true,
+    ...(reason === undefined ? {} : { reason }),
     outcome: runOutcomeOf(strategy, data),
     exitCode: typeof data.exitCode === "number" ? data.exitCode : MISSION_EXIT_CODES.inconclusive,
     findings: extractRunFindings(data),
@@ -590,14 +670,21 @@ export function aggregateCells(
     fs.map((f) => (c.persona === null ? f : { ...f, persona: c.persona }));
   const personas = plan.personas !== null;
   const outcomes = new Set(cells.map((c) => c.outcome));
-  const outcome = !personas ? (cells[0]?.outcome ?? "intermittent") : outcomes.size === 1 ? [...outcomes][0]! : "mixed";
+  const voted = !personas ? (cells[0]?.outcome ?? "inconclusive") : outcomes.size === 1 ? [...outcomes][0]! : "mixed";
+  // #220: a multi-run with runs still pending proves nothing yet — never `intermittent`.
+  const finished = cells.reduce((n, c) => n + c.runs.length, 0);
+  const planned = plan.repeat * (plan.personas?.length ?? 1);
+  const cellReason = cells.find((c) => c.reason !== undefined)?.reason;
+  const outcome = complete ? voted : "inconclusive";
+  const reason = complete ? (voted === "inconclusive" ? cellReason : undefined) : `incomplete: ${finished} of ${planned} run(s) finished`;
   return {
     kind: "multi-run",
     strategy,
     repeat: plan.repeat,
     minAgreement: plan.minAgreement,
     outcome,
-    exitCode: cells.reduce((m, c) => Math.max(m, c.exitCode), 0),
+    ...(reason === undefined ? {} : { reason }),
+    exitCode: complete ? cells.reduce((m, c) => Math.max(m, c.exitCode), 0) : MISSION_EXIT_CODES.inconclusive,
     findings: cells.flatMap((c) => withPersona(c, c.findings)),
     flaky: cells.flatMap((c) => withPersona(c, c.flaky)),
     cells,
@@ -618,20 +705,59 @@ export async function runMultiRun(opts: RunMultiRunOptions): Promise<MultiRunRes
   const resultPath = join(outDir, "multi-run.result.json");
   const groups: ReadonlyArray<Persona | null> = plan.personas ?? [null];
   const cells: CellResult[] = [];
-  for (const p of groups) {
-    const runs: RunSummary[] = [];
-    for (let i = 1; i <= plan.repeat; i++) {
-      const runDir = join(outDir, p === null ? "" : p.name, `run-${i}`);
-      mkdirSync(runDir, { recursive: true });
-      // Strictly one at a time: the next run starts only after this one fully ended.
-      const envelope = await opts.runOnce({ ...(p === null ? {} : { storageState: p.storageState }), outDir: runDir });
+  // #220: what a kill signal needs to write the partial aggregate synchronously.
+  let current: { persona: Persona | null; runs: RunSummary[]; index: number; runDir: string } | undefined;
+  const onKill = (interrupted: InterruptedRun): MultiRunResult => {
+    const partialCells = [...cells];
+    const planned = plan.repeat * (plan.personas?.length ?? 1);
+    const finished = cells.reduce((n, c) => n + c.runs.length, 0) + (current?.runs.length ?? 0);
+    const during =
+      current === undefined ? "" : ` during run ${current.index}${current.persona === null ? "" : ` (persona ${current.persona.name})`}`;
+    if (current !== undefined) {
+      const { persona, runs, index, runDir } = current;
+      const envelope: RunEnvelope =
+        interrupted.partial === undefined
+          ? { ok: true, data: { outcome: "inconclusive", missionOutcome: "inconclusive", exitCode: interrupted.exitCode, reason: `interrupted by ${interrupted.signal} before the mission started` } }
+          : { ok: true, data: interrupted.partial };
       const envelopePath = join(runDir, "run.envelope.json");
-      writeJson(envelopePath, envelope);
-      runs.push(summarizeRun(strategy, i, envelope, envelopePath));
-      const partial = [...cells, voteRuns(runs, plan.minAgreement, p)];
-      writeJson(resultPath, aggregateCells(strategy, plan, partial, resultPath, false));
+      try {
+        writeJson(envelopePath, envelope);
+      } catch {
+        // Best-effort: the aggregate below still records the interrupted run.
+      }
+      partialCells.push(voteRuns([...runs, summarizeRun(strategy, index, envelope, envelopePath)], plan.minAgreement, persona, plan.repeat));
     }
-    cells.push(voteRuns(runs, plan.minAgreement, p));
+    const base = aggregateCells(strategy, plan, partialCells, resultPath, false);
+    const result: MultiRunResult = {
+      ...base,
+      reason: `interrupted by ${interrupted.signal}${during}; ${finished} of ${planned} run(s) finished`,
+      interrupted: { signal: interrupted.signal },
+      exitCode: interrupted.exitCode,
+    };
+    writeJson(resultPath, result);
+    return result;
+  };
+  const disarm = opts.armKill?.(onKill);
+  try {
+    for (const p of groups) {
+      const runs: RunSummary[] = [];
+      for (let i = 1; i <= plan.repeat; i++) {
+        const runDir = join(outDir, p === null ? "" : p.name, `run-${i}`);
+        mkdirSync(runDir, { recursive: true });
+        current = { persona: p, runs, index: i, runDir };
+        // Strictly one at a time: the next run starts only after this one fully ended.
+        const envelope = await opts.runOnce({ ...(p === null ? {} : { storageState: p.storageState }), outDir: runDir });
+        const envelopePath = join(runDir, "run.envelope.json");
+        writeJson(envelopePath, envelope);
+        runs.push(summarizeRun(strategy, i, envelope, envelopePath));
+        current = undefined;
+        const partial = [...cells, voteRuns(runs, plan.minAgreement, p, plan.repeat)];
+        writeJson(resultPath, aggregateCells(strategy, plan, partial, resultPath, false));
+      }
+      cells.push(voteRuns(runs, plan.minAgreement, p, plan.repeat));
+    }
+  } finally {
+    disarm?.();
   }
   const result = aggregateCells(strategy, plan, cells, resultPath, true);
   writeJson(resultPath, result);

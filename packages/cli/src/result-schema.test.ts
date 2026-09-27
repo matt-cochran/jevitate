@@ -22,6 +22,7 @@ import {
 } from "./explore-api.js";
 import { runUsabilityMission, type RunUsabilityMissionResult } from "./ux-api.js";
 import { buildProgram } from "./program.js";
+import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "@jevitate/domain";
 import {
   MISSION_RESULT_SCHEMA_VERSION,
   MissionResultSchema,
@@ -144,8 +145,78 @@ function assertServerLogDefectInDefects(result: { defects: ReadonlyArray<{ kind:
   expect((result.serverLogDefects ?? []).map((d) => d.fingerprint)).toEqual(serverLogOnes.map((d) => d.fingerprint));
 }
 
+/** Answers every decision with the same candidate action (`done`, `blocked`, `wait`, `click:0`, …). */
+function always(value: string): JudgmentPort {
+  return {
+    async systemOne() {
+      return { action: { kind: "choice", value, confidence: 0.9 } };
+    },
+  };
+}
+
 const url = (): string => `${origin}/settings`;
 const out = async (name: string): Promise<string> => mkdtemp(join(dir, `${name}-`));
+
+describe("#217 — a goal result's missionOutcome is canonical; its own ending is goalOutcome", () => {
+  const minimal = (over: Record<string, unknown>): Record<string, unknown> => ({
+    schemaVersion: 1,
+    strategy: "goal",
+    exitCode: 0,
+    defects: [],
+    hangs: [],
+    recordingPaths: [],
+    transcriptPath: "/t.json",
+    resultPath: "/r.result.json",
+    target: { seedUrl: "http://x.test/", allowlist: [] },
+    engine: { version: "0", commit: "c", builtAt: "b" },
+    ...over,
+  });
+
+  it("every goal ending: goalOutcome + its canonical fold parse; the goal word in missionOutcome never does", () => {
+    for (const g of GOAL_OUTCOMES) {
+      expect(MissionResultSchema.safeParse(minimal({ missionOutcome: foldGoalOutcome(g), goalOutcome: g })).success, g).toBe(true);
+      if (!(MISSION_OUTCOMES as readonly string[]).includes(g)) {
+        expect(MissionResultSchema.safeParse(minimal({ missionOutcome: g, goalOutcome: g })).success, `${g} as missionOutcome`).toBe(false);
+      }
+    }
+    // goalOutcome is on every goal result, on no other, and must fold onto missionOutcome.
+    expect(MissionResultSchema.safeParse(minimal({ missionOutcome: "clean" })).success).toBe(false);
+    expect(MissionResultSchema.safeParse(minimal({ strategy: "coverage", missionOutcome: "clean", goalOutcome: "succeeded" })).success).toBe(false);
+    expect(MissionResultSchema.safeParse(minimal({ missionOutcome: "clean", goalOutcome: "failed" })).success).toBe(false);
+  });
+
+  const endings: ReadonlyArray<[string, () => JudgmentPort, string, string, string, number?]> = [
+    // [goalOutcome, judge, success check, missionOutcome, stop, maxActions]
+    ["succeeded", clickThenDone, "textIncludes:[data-testid=status]|saved", "clean", "done"],
+    // The model keeps saying done; code rejects it each time: failed, and the loop's stop is `done`.
+    ["failed", () => always("done"), "textIncludes:[data-testid=status]|never", "defects-found", "done"],
+    ["blocked", () => always("blocked"), "textIncludes:[data-testid=status]|never", "defects-found", "blocked"],
+    ["exhausted", () => always("click:0"), "textIncludes:[data-testid=status]|never", "defects-found", "exhausted", 1],
+  ];
+  for (const [goalOutcome, judge, check, missionOutcome, stop, maxActions] of endings) {
+    it(
+      `goal ${goalOutcome}: missionOutcome ${missionOutcome}, goalOutcome ${goalOutcome}, stop ${stop} — returned and persisted`,
+      async () => {
+        const r = await runExploration({
+          url: url(),
+          goal: "save the settings",
+          allowlist: [origin],
+          judge: judge(),
+          gen: new FakeGenerationGateway({}),
+          successChecks: [parseSuccessSpec(check)],
+          bounds: { maxActions: maxActions ?? 2, maxDecisions: 3 },
+          outDir: await out(`goal-${goalOutcome}`),
+        });
+        const core = assertConforms(r, "goal");
+        expect(MISSION_OUTCOMES).toContain(core.missionOutcome);
+        expect([core.missionOutcome, core.goalOutcome, r.outcome, r.stop]).toEqual([missionOutcome, goalOutcome, goalOutcome, stop]);
+        const file = JSON.parse(readFileSync(r.resultPath, "utf8")) as { missionOutcome: string; result: { goalOutcome: string } };
+        expect([file.missionOutcome, file.result.goalOutcome]).toEqual([missionOutcome, goalOutcome]);
+      },
+      180_000,
+    );
+  }
+});
 
 describe("one result schema across strategies (#195 part 5)", () => {
   it(

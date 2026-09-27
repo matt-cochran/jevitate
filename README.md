@@ -50,10 +50,11 @@ jevitate explore --strategy adversarial --url http://localhost:3000/settings --f
 ```
 
 It double-submits, feeds empty, boundary, long, unicode and invalid values, cancels and reloads
-mid-edit, and acts while a save is still pending. It then prints a JSON result: `outcome`
-(`clean`, `defects-found`, `inconclusive`, …), each defect with its evidence and fingerprint, and
-the paths of its Recording, transcript and ready-to-file issue drafts (under
-`.jevitate/logs/<date>/`, see [where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things)). The exit code is the outcome ([table below](#mission-outcomes-and-exit-codes)).
+mid-edit, and acts while a save is still pending. It then prints a short summary: the outcome
+(`clean`, `defects-found`, `inconclusive`, …), each defect with its fingerprint, the result file
+and a `next:` step. The full result (each defect's evidence, the paths of its Recording, transcript
+and ready-to-file issue drafts) is written under `.jevitate/logs/<date>/` (see [where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things));
+add `--json` to print it as a JSON envelope instead. The exit code is the outcome ([table below](#mission-outcomes-and-exit-codes)).
 
 - Jevitate only visits the `--url`'s origin. Add `--allow <origin>` for each origin the app needs
   (include the app's own origin too, since `--allow` replaces the default).

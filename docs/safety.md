@@ -106,7 +106,9 @@ built-in verb (`Preview*`, `Recalculate*`, …).
 
 - Outbound model payloads pass a redaction guard that fails closed. `--secret` values, bound
   `--secret-field` values, TOTP seeds, fixture secret outputs and probe tokens are scrubbed from
-  transcripts, Recordings, issue drafts and log evidence.
+  transcripts, Recordings, issue drafts and log evidence. Page text and field values are
+  redacted as the page is read, so a page that displays a secret never reaches a model and never
+  ends the run.
 - Code, not the model, types a bound secret into a field. The model sees `«secret:VAR»`.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.

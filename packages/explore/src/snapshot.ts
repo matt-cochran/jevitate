@@ -4,7 +4,7 @@ import type { TargetDescriptor } from "@jevitate/recording";
 import { contentHash } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
-import { redactUrl } from "./redact.js";
+import { redactControl, redactUrl } from "./redact.js";
 
 /**
  * perceive: turn a live `Page` into an indexed table of interactive controls,
@@ -129,6 +129,12 @@ export interface SnapshotOptions {
   readonly listOptionCap?: number;
   /** Does the run's goal (or recent history) name this control? Such an option is always kept. */
   readonly mentioned?: (name: string) => boolean;
+  /**
+   * #219: the run's registered secret values. Every control's page content (name, summary, value,
+   * scope, href) is scrubbed of them as it is read (`redactControl`), so no consumer of the
+   * snapshot ever holds a secret the page merely displays. Default none.
+   */
+  readonly secrets?: readonly string[];
 }
 
 /** Options kept per long list before only the goal-named ones are (#192). */
@@ -568,7 +574,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
       // computeDescriptor validates against the live page and throws if nothing
       // resolves uniquely — an un-describable control is dropped, never guessed.
       const computed = await computeDescriptor(page, handle);
-      controls.push({
+      const control: Control = {
         index: controls.length,
         descriptor: computed.descriptor,
         stability: computed.stability,
@@ -595,7 +601,8 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         landmark: facts.landmark,
         ...(facts.richText ? { richText: true } : {}),
         ...(facts.clippedOffscreen ? { clippedOffscreen: true } : {}),
-      });
+      };
+      controls.push(redactControl(control, opts?.secrets ?? []));
       keptFacts.push(facts);
     } catch {
       // not describable / detached mid-read — skip it.

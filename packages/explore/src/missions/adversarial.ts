@@ -506,6 +506,8 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   const timings: PageTiming[] = [];
   const perceiveOpts = {
     maxCandidates: bounds.maxCandidates,
+    // #219: page content is redacted of every registered secret as it is perceived.
+    secrets,
     ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
     ...(params.hangProbeMs === undefined ? {} : { hangProbeMs: params.hangProbeMs }),
     ...(params.requestBoundMs === undefined ? {} : { requestBoundMs: params.requestBoundMs }),

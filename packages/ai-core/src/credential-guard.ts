@@ -26,13 +26,22 @@ export function assertNoOutboundCredential(
   }
 }
 
+/** The default sink a `SecretLeakError` names: a payload bound for a model. */
+export const SECRET_IN_MODEL_PAYLOAD = "an outbound model payload";
+
 export class SecretLeakError extends Error {
   readonly code = "E_SECRET_LEAK" as const;
-  constructor(readonly index: number) {
+  /**
+   * `where` names what carried the value (#219) — "an outbound model payload" by default; a sink
+   * that is not a model payload (the Recording, a result file) names itself, so a refusal never
+   * misattributes its source.
+   */
+  constructor(
+    readonly index: number,
+    readonly where: string = SECRET_IN_MODEL_PAYLOAD,
+  ) {
     // NOTE: never include the value (or its length) in the message.
-    super(
-      `a registered secret value appeared in an outbound model payload — refused (floor #6, never-to-model)`,
-    );
+    super(`a registered secret value appeared in ${where} — refused (floor #6, never-to-model)`);
     this.name = "SecretLeakError";
   }
 }
@@ -53,14 +62,18 @@ export class SecretLeakError extends Error {
  * match everything and is never a real secret). A secret is matched raw AND
  * in its `encodeURIComponent` form (`secretForms`).
  */
-export function assertNoSecretInPayload(payload: unknown, secrets: readonly string[]): void {
+export function assertNoSecretInPayload(
+  payload: unknown,
+  secrets: readonly string[],
+  where: string = SECRET_IN_MODEL_PAYLOAD,
+): void {
   if (secrets.length === 0) return;
   const haystack = typeof payload === "string" ? payload : JSON.stringify(payload);
   for (let i = 0; i < secrets.length; i++) {
     const s = secrets[i];
     if (!s || s.length === 0) continue;
     for (const form of secretForms(s)) {
-      if (haystack.includes(form)) throw new SecretLeakError(i);
+      if (haystack.includes(form)) throw new SecretLeakError(i, where);
     }
   }
 }

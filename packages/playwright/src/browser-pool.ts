@@ -65,6 +65,12 @@ export const DEFAULT_CONTEXT_MEMORY_BYTES = 400 * 1024 * 1024;
 export const DEFAULT_ADMISSION_TIMEOUT_MS = 5 * 60 * 1000;
 /** Bound on one context close; past it the slot is freed and the stuck close is reported. */
 export const DEFAULT_CLOSE_TIMEOUT_MS = 10_000;
+/**
+ * Bound on opening one context (`newContext`) — and, in the Playwright port, its first page (#220).
+ * A browser that never answers (wedged, or starved on a loaded host) must fail the session, not
+ * hang it: Playwright's `newContext`/`newPage` have no timeout of their own.
+ */
+export const DEFAULT_OPEN_TIMEOUT_MS = 60_000;
 
 export interface BrowserPoolOptions {
   readonly signals: ResourceSignals;
@@ -85,6 +91,8 @@ export interface BrowserPoolOptions {
    * hung context can never drain the pool.
    */
   readonly closeTimeoutMs?: number;
+  /** Bound on `newContext` (#220); past it acquisition fails with `BrowserOpenTimeoutError`. */
+  readonly openTimeoutMs?: number;
   readonly availableParallelism?: () => number;
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<unknown>;
@@ -108,6 +116,41 @@ export class BrowserCrashedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "BrowserCrashedError";
+  }
+}
+
+/** Opening a context (or its page) did not finish within the open bound (#220): the browser is not answering. */
+export class BrowserOpenTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserOpenTimeoutError";
+  }
+}
+
+/**
+ * Awaits `work` for at most `ms`; past that rejects with `BrowserOpenTimeoutError(message)`, and a
+ * result that arrives late is handed to `onLate` (to be disposed of) instead of leaking.
+ */
+export async function withOpenDeadline<T>(work: Promise<T>, ms: number, message: string, onLate: (late: T) => void): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new BrowserOpenTimeoutError(message));
+    }, ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  work.then(
+    (late) => {
+      if (timedOut) onLate(late);
+    },
+    () => undefined,
+  );
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -181,6 +224,7 @@ export class BrowserPool<C extends PooledContext, O> {
   readonly #backoffMaxMs: number;
   readonly #idleCloseMs: number;
   readonly #closeTimeoutMs: number;
+  readonly #openTimeoutMs: number;
   readonly #cores: () => number;
   readonly #now: () => number;
   readonly #sleep: (ms: number) => Promise<unknown>;
@@ -201,6 +245,7 @@ export class BrowserPool<C extends PooledContext, O> {
     this.#backoffMaxMs = opts.backoffMaxMs ?? 5_000;
     this.#idleCloseMs = opts.idleCloseMs ?? 1_000;
     this.#closeTimeoutMs = opts.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+    this.#openTimeoutMs = opts.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
     this.#cores = opts.availableParallelism ?? availableParallelism;
     this.#now = opts.now ?? Date.now;
     this.#sleep = opts.sleep ?? ((ms) => sleep(ms));
@@ -237,7 +282,14 @@ export class BrowserPool<C extends PooledContext, O> {
       }
       entry.leases.add(state);
       const browser = await entry.browser;
-      state.context = await browser.newContext(options);
+      state.context = await withOpenDeadline(
+        browser.newContext(options),
+        this.#openTimeoutMs,
+        `opening a browser context (${launchKey}) did not finish within ${this.#openTimeoutMs}ms: the browser is not answering`,
+        (late) => {
+          late.close().catch(() => undefined);
+        },
+      );
     } catch (err) {
       if (entry !== undefined) this.#detach(launchKey, entry, state);
       this.#freeSlot();

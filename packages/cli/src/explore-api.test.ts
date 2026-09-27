@@ -367,12 +367,17 @@ describe("explore command — argument + setup refusals (no browser)", () => {
 
   it("adversarial: refuses a --min-control-coverage outside 0..1 before any browser opens", async () => {
     const { program, lines } = newProgram();
-    await program.parseAsync(
-      ["explore", "--strategy", "adversarial", "--url", "http://127.0.0.1:3000/login", "--fake-ai", "--min-control-coverage", "2", "--json"],
-      { from: "user" },
-    );
+    program.configureOutput({ writeErr: () => undefined });
+    program.commands.forEach((c) => c.exitOverride());
+    // #218: parsed at parse time (cli-args.ts ratioArg) — a usage error (64), the envelope still printed under --json.
+    await expect(
+      program.parseAsync(
+        ["explore", "--strategy", "adversarial", "--url", "http://127.0.0.1:3000/login", "--fake-ai", "--min-control-coverage", "2", "--json"],
+        { from: "user" },
+      ),
+    ).rejects.toMatchObject({ exitCode: 64 });
     const parsed = JSON.parse(lines.join(""));
-    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("between 0 and 1") } });
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("from 0 to 1") } });
   });
 
   it("refuses a --success-when other than held|final before any browser opens (#80)", async () => {

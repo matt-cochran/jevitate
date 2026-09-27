@@ -238,8 +238,8 @@ describe("check gating (#137)", () => {
     const goal = (async (o: { goal: string; outDir?: string }) => {
       goals.push(o.goal);
       const resultPath = join(o.outDir ?? dir, `explore-2026-09-24T10-00-00-000Z.result.json`);
-      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "succeeded", exitCode: 0, result: { outcome: "succeeded", checks: [], target: { seedUrl: URL0 } } }));
-      return { outcome: "succeeded", actions: 2, resultPath };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "goal", missionOutcome: "clean", goalOutcome: "succeeded", outcome: "succeeded", checks: [], target: { seedUrl: URL0 } } }));
+      return { missionOutcome: "clean", goalOutcome: "succeeded", outcome: "succeeded", actions: 2, resultPath };
     }) as unknown as CheckRunners["goal"];
     const s = suite(0, {}, {
       goals: [
@@ -255,6 +255,29 @@ describe("check gating (#137)", () => {
     ]);
     expect(r.exitCode).toBe(0);
     expect(junit(r.junitPath)).toContain('<skipped message="not affected by --changed-routes"/>');
+  });
+
+  it("#217: a goal item reports the canonical verdict as its outcome and the goal's own ending beside it", async () => {
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const goal = (async (o: { goal: string; outDir?: string }) => {
+      const resultPath = join(o.outDir ?? dir, `explore-2026-09-24T10-00-00-000Z.result.json`);
+      const result = {
+        strategy: "goal",
+        missionOutcome: "defects-found",
+        goalOutcome: "failed",
+        outcome: "failed",
+        stop: "done",
+        checks: [{ check: "urlIncludes:/done", passed: false, detail: "url was /cart" }],
+        target: { seedUrl: URL0 },
+      };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "defects-found", exitCode: 1, result }));
+      return { ...result, actions: 2, resultPath };
+    }) as unknown as CheckRunners["goal"];
+    const s = suite(0, {}, { goals: [{ name: "cart", goal: "check out", success: ["urlIncludes:/done"] }] });
+    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "fake" });
+    expect(r.items.map((i) => [i.name, i.status, i.outcome, i.goalOutcome, i.verdict])).toEqual([["cart", "ran", "defects-found", "failed", "failed"]]);
+    expect(r.exitCode).toBe(1);
   });
 });
 
@@ -290,8 +313,8 @@ describe("a target's session reaches every item (#170)", () => {
     const goal = (async (o: Record<string, unknown> & { outDir?: string }) => {
       goalCalls.push(o);
       const resultPath = join(o.outDir ?? dir, "explore-2026-09-24T10-00-00-000Z.result.json");
-      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "succeeded", exitCode: 0, result: { outcome: "succeeded", checks: [], target: { seedUrl: URL0 } } }));
-      return { outcome: "succeeded", actions: 1, resultPath };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "goal", missionOutcome: "clean", goalOutcome: "succeeded", outcome: "succeeded", checks: [], target: { seedUrl: URL0 } } }));
+      return { missionOutcome: "clean", goalOutcome: "succeeded", outcome: "succeeded", actions: 1, resultPath };
     }) as unknown as CheckRunners["goal"];
     const fetched: string[] = [];
     const realFetch = globalThis.fetch;

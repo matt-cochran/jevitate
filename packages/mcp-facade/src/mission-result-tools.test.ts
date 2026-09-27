@@ -50,7 +50,19 @@ describe("mission result ids (#117)", () => {
     expect(() => missionResultFileName("../x")).toThrow();
   });
 
-  it("folds a goal run's own outcome onto the canonical one, keeping the goal's word", () => {
+  it("#217: reads the canonical missionOutcome and a goal run's goalOutcome beside it", () => {
+    expect(parseResultOutcome("clean", "succeeded")).toEqual({ outcome: "clean", goalOutcome: "succeeded" });
+    expect(parseResultOutcome("defects-found", "failed")).toEqual({ outcome: "defects-found", goalOutcome: "failed" });
+    expect(parseResultOutcome("defects-found", "exhausted")).toEqual({ outcome: "defects-found", goalOutcome: "exhausted" });
+    expect(parseResultOutcome("defects-found", "blocked")).toEqual({ outcome: "defects-found", goalOutcome: "blocked" });
+    expect(parseResultOutcome("crashed", "crashed")).toEqual({ outcome: "crashed", goalOutcome: "crashed" });
+    // A goalOutcome that does not fold onto missionOutcome is corrupt — never guessed at.
+    expect(parseResultOutcome("clean", "failed")).toBeNull();
+    expect(parseResultOutcome("clean", "bogus")).toBeNull();
+    expect(parseResultOutcome("succeeded", "succeeded")).toBeNull();
+  });
+
+  it("folds a pre-#217 goal result's own word in missionOutcome onto the canonical one, keeping the goal's word", () => {
     expect(parseResultOutcome("clean")).toEqual({ outcome: "clean" });
     expect(parseResultOutcome("succeeded")).toEqual({ outcome: "clean", goalOutcome: "succeeded" });
     expect(parseResultOutcome("exhausted")).toEqual({ outcome: "defects-found", goalOutcome: "exhausted" });

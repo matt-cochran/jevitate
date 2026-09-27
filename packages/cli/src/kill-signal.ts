@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, writeSync } from "node:fs";
 import type { UsageCounts, UsageLedger } from "@jevitate/ai-core";
 import type { TranscriptEntry } from "@jevitate/explore";
-import type { HostHealthSummary } from "@jevitate/domain";
+import { MISSION_RESULT_SCHEMA_VERSION, type HostHealthSummary, type ResultStrategy } from "@jevitate/domain";
 import { closeSharedBrowserPool } from "@jevitate/playwright";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { ok } from "./envelope.js";
@@ -41,6 +41,13 @@ import { writeKillSnapshot } from "./storage-state-snapshot.js";
  */
 
 export interface KillableMission {
+  /**
+   * #220: the strategy running (the unified result schema's `strategy`) and the scope it was
+   * authorized for (`target`) — so a killed run's partial result carries the same common fields as
+   * every other result. Optional only for library/test callers that arm a bare mission.
+   */
+  readonly strategy?: ResultStrategy;
+  readonly target?: { readonly seedUrl: string; readonly allowlist: readonly string[]; readonly storageStatePath?: string };
   /**
    * The mission's identity path — the same path handed to `MissionJournal` (a Recording path, or a
    * report path for the usability strategy; the journal treats both identically).
@@ -88,7 +95,7 @@ export interface KillableMission {
 export type KillSwitchOutput = "envelope" | "human" | "none";
 
 const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } as const;
-type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
+export type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
 
 /** The seams a test fakes: nothing here touches the real process/filesystem/browser pool. */
 export interface KillSwitchDeps {
@@ -137,11 +144,25 @@ const realDeps: KillSwitchDeps = {
 
 type KilledListener = (killed: { resultPath: string; exitCode: number }) => void;
 
+/** One mission a signal killed: its partial result and where it was written (when the write succeeded). */
+export interface KilledMission {
+  readonly partial: Record<string, unknown>;
+  readonly resultPath?: string;
+}
+
+/**
+ * #220: an orchestrator that owns stdout for the whole command (a `--repeat`/`--persona` multi-run)
+ * reports a kill ITSELF: told the signal and every killed mission's partial result, it writes its
+ * own partial aggregate SYNCHRONOUSLY and returns what to print — instead of each run's own envelope.
+ */
+export type KillSummary = (killed: { signal: KillSignal; exitCode: number; missions: readonly KilledMission[] }) => string | undefined;
+
 let installed = false;
 /** Every armed mission, in arming order, with the kill listener scoped to the context that ran it. */
 const armed = new Map<KillableMission, KilledListener | undefined>();
 let terminating = false;
 let output: KillSwitchOutput = "none";
+let summary: KillSummary | undefined;
 /** Process-wide listeners: told about every killed mission. */
 const killedListeners = new Set<KilledListener>();
 /** The listener for missions armed inside `runWithMissionKillListener` (e.g. one queue-drain item). */
@@ -171,16 +192,25 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
   const report = safely(mission.partialReport);
   const hostHealth = safely(mission.hostHealth);
   return {
+    // #220: the unified result schema's common fields (a kill is always the canonical `inconclusive`).
+    schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
+    ...(mission.strategy === undefined ? {} : { strategy: mission.strategy }),
     outcome: "inconclusive",
     missionOutcome: "inconclusive",
+    // #217: a goal run's own ending travels as `goalOutcome` (a kill is the shared `inconclusive`).
+    ...(mission.strategy === "goal" ? { goalOutcome: "inconclusive" } : {}),
     reason: `interrupted by ${signal} after ${steps} step${steps === 1 ? "" : "s"}`,
     stop: "terminated",
     signal,
     steps,
     exitCode: code,
+    defects: [],
+    hangs: [],
+    recordingPaths: [mission.recordingPath],
     recordingPath: mission.recordingPath,
     transcriptPath,
     resultPath: resultPathFor(mission.recordingPath),
+    ...(mission.target === undefined ? {} : { target: { ...mission.target, allowlist: [...mission.target.allowlist] } }),
     transcript,
     ...(engine === undefined ? {} : { engine }),
     ...(usage === undefined ? {} : { usage }),
@@ -210,6 +240,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     return;
   }
   terminating = true;
+  const killed: KilledMission[] = [];
   for (const [mission, scoped] of [...armed]) {
     let partial: Record<string, unknown> | undefined;
     let resultPath: string | undefined;
@@ -245,9 +276,10 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
         }
       }
     }
+    if (partial !== undefined) killed.push({ partial, ...(resultPath === undefined ? {} : { resultPath }) });
     // A `--json` caller gets its envelope even from a killed run (#120) — one line per mission,
-    // written synchronously, before the exit below.
-    if (partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
+    // written synchronously, before the exit below. An orchestrator's summary (#220) replaces them.
+    if (summary === undefined && partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
       try {
         deps.writeStdout(output === "envelope" ? `${JSON.stringify(ok(partial))}\n` : formatMissionHuman(partial));
       } catch {
@@ -256,6 +288,16 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     }
   }
   armed.clear();
+  // #220: the orchestrator's own partial aggregate — even when no mission was armed (killed between
+  // two runs of a multi-run) — written and printed synchronously, like everything above.
+  if (summary !== undefined) {
+    try {
+      const text = summary({ signal, exitCode: code, missions: killed });
+      if (text !== undefined && deps.writeStdout !== undefined) deps.writeStdout(text);
+    } catch {
+      // Best-effort, like the flush: a failed summary must never keep the process from exiting.
+    }
+  }
   deps.closeBrowsers().catch(() => {
     // Best-effort: a failed teardown must never keep the process from having honored the signal.
   });
@@ -325,6 +367,17 @@ export function setKillSwitchOutput(mode: KillSwitchOutput): void {
 }
 
 /**
+ * #220: installs the kill summary of an orchestrator that owns the command's stdout (a multi-run):
+ * on SIGTERM/SIGINT it replaces the per-mission output. Returns the function that removes it.
+ */
+export function setKillSummary(fn: KillSummary): () => void {
+  summary = fn;
+  return () => {
+    if (summary === fn) summary = undefined;
+  };
+}
+
+/**
  * Registers a process-wide SYNCHRONOUS listener told where EVERY killed mission's partial result was
  * written, just before the process exits. A runner that owns one specific mission should use
  * `runWithMissionKillListener` instead, so it never records another mission's result. Returns the
@@ -343,5 +396,6 @@ export function __resetKillSwitchForTests(): void {
   armed.clear();
   terminating = false;
   output = "none";
+  summary = undefined;
   killedListeners.clear();
 }
