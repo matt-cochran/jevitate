@@ -124,6 +124,9 @@ export function formatMultiRunHuman(result: unknown): string {
   const lines = [
     `${(str(result.outcome) ?? "unknown").toUpperCase()}: ${str(result.strategy) ?? "explore"} ×${String(result.repeat ?? "?")} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`,
   ];
+  // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
+  const reason = str(result.reason);
+  if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
   for (const f of findings) {
     lines.push(`${tag("FINDING")}${[str(f.fingerprint) ?? "(no fingerprint)", str(f.kind) ?? "", str(f.stability) ?? "", str(f.title) ?? ""].filter((p) => p !== "").join("  ")}`);
   }

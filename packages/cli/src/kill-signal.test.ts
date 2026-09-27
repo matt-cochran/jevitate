@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "@jevitate/explore";
 import { UsageTracker } from "@jevitate/ai-core";
+import { MissionResultSchema, PersistedMissionResultSchema } from "@jevitate/domain";
 import {
   armMissionKillSwitch,
   armedMissionCount,
   onMissionKilled,
   runWithMissionKillListener,
   setKillSwitchOutput,
+  setKillSummary,
   __resetKillSwitchForTests,
   type KillSwitchDeps,
 } from "./kill-signal.js";
@@ -468,5 +470,51 @@ describe("kill-signal — several missions in one process (shared browser pool)"
     await Promise.resolve();
     expect(calls.writeResult.map(([path]) => path)).toEqual(["/out/b.json"]);
     expect(calls.exit).toEqual([143]);
+  });
+});
+
+describe("kill-signal — the killed partial is a unified result; an orchestrator reports the kill itself (#220)", () => {
+  it("the partial carries strategy, canonical missionOutcome and every common field: it parses as a MissionResult", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    deps.engine = () => ({ version: "0.0.0", commit: "abc1234", builtAt: "2026-01-01T00:00:00.000Z" });
+    armMissionKillSwitch(
+      { recordingPath: "/tmp/explore-s.json", strategy: "goal", target: { seedUrl: "http://x.test/", allowlist: ["http://x.test"] } },
+      deps,
+    );
+    handlers.SIGINT?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([130]));
+    const [, missionOutcome, exitCode, result] = calls.writeResult[0]!;
+    const parsed = MissionResultSchema.parse(result);
+    expect(parsed).toMatchObject({ strategy: "goal", missionOutcome: "inconclusive", exitCode: 130, recordingPaths: ["/tmp/explore-s.json"] });
+    expect(PersistedMissionResultSchema.safeParse({ missionOutcome, exitCode, result }).success).toBe(true);
+  });
+
+  it("with a kill summary installed: it is told every killed mission, its text replaces the per-mission output, and it runs even with no mission armed", async () => {
+    const { deps, handlers, calls } = fakeDeps();
+    const out: string[] = [];
+    deps.writeStdout = (t) => out.push(t);
+    setKillSwitchOutput("envelope");
+    const seen: Array<{ signal: string; exitCode: number; missions: number }> = [];
+    const remove = setKillSummary(({ signal, exitCode, missions }) => {
+      seen.push({ signal, exitCode, missions: missions.length });
+      return `SUMMARY ${missions.map((m) => String(m.partial.missionOutcome)).join(",")}\n`;
+    });
+    armMissionKillSwitch({ recordingPath: "/tmp/run-2.json", strategy: "goal" }, deps);
+    handlers.SIGINT?.();
+    await vi.waitFor(() => expect(calls.exit).toEqual([130]));
+    expect(seen).toEqual([{ signal: "SIGINT", exitCode: 130, missions: 1 }]);
+    expect(out).toEqual(["SUMMARY inconclusive\n"]); // not the run's own envelope
+    remove();
+
+    // Between two runs (nothing armed): the summary still reports the orchestrator's partial.
+    __resetKillSwitchForTests();
+    const second = fakeDeps();
+    const out2: string[] = [];
+    second.deps.writeStdout = (t) => out2.push(t);
+    setKillSummary(({ missions }) => `BETWEEN ${missions.length}\n`);
+    armMissionKillSwitch({ recordingPath: "/tmp/r.json" }, second.deps)(); // installs, then disarms
+    second.handlers.SIGTERM?.();
+    await vi.waitFor(() => expect(second.calls.exit).toEqual([143]));
+    expect(out2).toEqual(["BETWEEN 0\n"]);
   });
 });

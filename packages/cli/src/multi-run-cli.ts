@@ -4,6 +4,7 @@ import { logsDirFor } from "./project-dir.js";
 import { resolveDataDir } from "./data-dir.js";
 import { artifactStamp } from "./mission-journal.js";
 import { runMultiRun, type MultiRunPlan, type MultiRunResult, type RunEnvelope } from "./multi-run.js";
+import { setKillSummary } from "./kill-signal.js";
 
 /**
  * The `explore --repeat/--persona` CLI glue (#141/#143): each run is the SAME `explore` command,
@@ -76,6 +77,12 @@ export interface ExploreMultiRunArgs {
   /** `--out`: the multi-run directory (default `~/.jevitate/multi-runs/multi-<stamp>`). */
   readonly out?: string;
   readonly nowIso?: () => string;
+  /**
+   * #220: what a SIGTERM/SIGINT prints for the whole multi-run (the command's own output rule: the
+   * envelope with --json, else the human summary) — instead of the killed run's own envelope.
+   * Absent: a kill prints the multi-run nothing (a library caller that owns stdout).
+   */
+  readonly killOutput?: (partial: MultiRunResult) => string;
 }
 
 export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<MultiRunResult> {
@@ -87,6 +94,13 @@ export async function runExploreMultiRun(args: ExploreMultiRunArgs): Promise<Mul
     plan,
     strategy: args.strategy,
     outDir,
+    // #220: a kill writes (and prints) the multi-run's partial aggregate — the interrupted run
+    // included — synchronously, then the process exits 130/143 like a single run.
+    armKill: (onKill) =>
+      setKillSummary(({ signal, exitCode, missions }) => {
+        const partial = onKill({ signal, exitCode, ...(missions[0] === undefined ? {} : { partial: missions[0].partial }) });
+        return args.killOutput?.(partial);
+      }),
     runOnce: async ({ storageState, outDir: runDir }) => {
       const lines: string[] = [];
       const child = args.newProgram();

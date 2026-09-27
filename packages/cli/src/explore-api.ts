@@ -605,6 +605,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // synchronously on SIGTERM/SIGINT (it cannot await a live capture — see kill-signal.ts).
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
+    // #220: the killed run's partial result carries the unified schema's common fields too.
+    strategy: "goal",
+    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}) },
     recordingPath: journal.recordingPath,
     hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
@@ -1118,6 +1121,9 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // #159: see runExploration's own doc comment on the equivalent lines.
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
+    // #220: the killed run's partial result carries the unified schema's common fields too.
+    strategy: opts.strategy ?? "coverage",
+    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
     hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
@@ -1454,6 +1460,9 @@ export async function runAdversarialCliMission(
   // #159: see runExploration's own doc comment on the equivalent lines.
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
+    // #220: the killed run's partial result carries the unified schema's common fields too.
+    strategy: "adversarial",
+    target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
     hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
@@ -1722,6 +1731,9 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   // #159: see runExploration's own doc comment on the equivalent lines.
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
   const disarmKillSwitch = armMissionKillSwitch({
+    // #220: the killed run's partial result carries the unified schema's common fields too.
+    strategy: "feature",
+    target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
     hostHealth: () => health.summary(),
     transcriptPath: journal.transcriptPath,
