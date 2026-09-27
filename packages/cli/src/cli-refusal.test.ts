@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
@@ -138,11 +138,15 @@ interface Refusals {
   readonly cases: ReadonlyArray<readonly string[]>;
 }
 
+/** #221: names that try to leave their root (each must be refused, never joined into a path). */
+const TRAVERSAL = (): string[] => ["../x", "a/../../x", join(dir, "outside-root"), "..\\x", "..", "x\u0000y", "a".repeat(200)];
+
 /** Every leaf command, by path: its refusal paths, or why it has none beyond commander's own parse errors. */
 const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: string }>> => ({
   init: { exempt: "no file, id or number input: it detects and writes" },
-  "profile create": { exempt: "creates a profile directory; no input to refuse" },
-  "profile status": { exempt: "reports a missing profile as a status (exit 0), not a refusal" },
+  // #221: a name is one safe path segment — never a path out of the profiles root.
+  "profile create": { cases: TRAVERSAL().map((n) => [n]) },
+  "profile status": { cases: TRAVERSAL().map((n) => [n]) },
   "site policy get": { exempt: "reports an unset policy as a status (exit 0), not a refusal" },
   "site policy set": { cases: [["x", "--file", missing, "--db", join(dir, "site.sqlite")]] },
   "site simulate": { base: ["x", "--script", validScript, "--db", join(dir, "site.sqlite")], cases: [["x", "--script", missing]] },
@@ -179,8 +183,11 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
     cases: [["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--id", "a", "--name", "a", "--fake-ai", "--storage-state", missing]],
   },
   record: { cases: [["--url", "not-a-url"]] },
-  "regression capture": { base: ["--from", missing, "--id", "x", "--dir", join(dir, "regressions")], cases: [["--from", missing, "--id", "x", "--dir", join(dir, "regressions")]] },
-  "regression run": { base: ["nope", "--dir", join(dir, "regressions")], cases: [["nope", "--dir", join(dir, "regressions")]] },
+  "regression capture": {
+    base: ["--from", missing, "--id", "x", "--dir", join(dir, "regressions")],
+    cases: [["--from", missing, "--id", "x", "--dir", join(dir, "regressions")], ...TRAVERSAL().map((n) => ["--from", validRecording, "--id", n, "--dir", join(dir, "regressions")])],
+  },
+  "regression run": { base: ["nope", "--dir", join(dir, "regressions")], cases: [["nope", "--dir", join(dir, "regressions")], ...TRAVERSAL().map((n) => [n, "--dir", join(dir, "regressions")])] },
   "mission target add": { cases: [["x"]] },
   "mission target update": { cases: [["nope", "--clear-auth"]] },
   "mission target list": { exempt: "a listing" },
@@ -255,6 +262,14 @@ describe("#218: every command refuses unusable input with 64 and a human error (
     const registered = commands.map(commandPath);
     expect(registered.filter((p) => !declared.includes(p)), "commands with no REFUSALS entry").toEqual([]);
     expect(declared.filter((p) => !registered.includes(p)), "stale REFUSALS entries").toEqual([]);
+  });
+
+  it("#221: a traversal profile name or regression id creates nothing outside its root", async () => {
+    for (const argv of [["profile", "create", "../x"], ["profile", "create", "a/../../x"], ["profile", "create", join(dir, "outside-root")]]) {
+      expect((await run(argv)).code, argv.join(" ")).toBe(64);
+    }
+    expect(existsSync(join(dir, "x"))).toBe(false);
+    expect(existsSync(join(dir, "outside-root"))).toBe(false);
   });
 
   it("every numeric option is parsed at parse time (a cli-args.ts argParser) or validated before anything runs", () => {

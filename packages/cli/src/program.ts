@@ -61,7 +61,7 @@ import {
 } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
-import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { UnsafeNameError, assertSafeName, safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
@@ -562,6 +562,21 @@ function emitCommandResult<T>(program: Command, envelope: JsonEnvelope<T>, opts:
   if (envelope.ok) emitUsageLine(program, envelope.data);
 }
 
+/**
+ * #221: a user-supplied name that becomes a path (a profile name, a regression id) must be one safe
+ * segment (`assertSafeName`, @jevitate/domain). Refuses it (E_INVALID_NAME, exit 64) and returns true.
+ */
+function refuseUnsafeName(program: Command, name: string, what: string): boolean {
+  try {
+    assertSafeName(name, what);
+    return false;
+  } catch (err) {
+    if (!(err instanceof UnsafeNameError)) throw err;
+    emitJson(program, fail(err.code, err.message));
+    return true;
+  }
+}
+
 /** A non-`--json` result: printed as bare JSON on stdout, with the cost summary line on stderr. */
 function writeRawResult(program: Command, result: unknown): void {
   program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
@@ -724,6 +739,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string) {
       const { json } = this.opts<{ json?: boolean }>();
+      if (refuseUnsafeName(program, name, "profile name")) return;
       try {
         const status = await deps.profiles.create(name);
         const envelope = ok(status);
@@ -743,6 +759,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string) {
       const { json } = this.opts<{ json?: boolean }>();
+      if (refuseUnsafeName(program, name, "profile name")) return;
       try {
         const status = await deps.profiles.status(name);
         const envelope = ok(status);
@@ -3062,6 +3079,7 @@ export function buildProgram(deps: CliDeps): Command {
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
       const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = flags;
+      if (refuseUnsafeName(program, id, "regression id")) return;
       // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
       for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
         if (path !== undefined && !existsSync(path)) {
@@ -3161,6 +3179,7 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
+      if (refuseUnsafeName(program, id, "regression id")) return;
       const regressionsDir = resolveRegressionsDir(dir);
       // #218: an unknown id is a usage error (64), refused before anything opens.
       if (!existsSync(join(regressionsDir, `${id}.recording.json`))) {
