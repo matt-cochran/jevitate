@@ -61,3 +61,26 @@ describe("record — append RecordedStep -> replayable Recording (Task 8)", () =
     120_000,
   );
 });
+
+describe("RunRecorder — a plain value holding a registered secret (#219)", () => {
+  it("is recorded redacted (fill, select, editText, upload), so finish never rejects the Recording", () => {
+    const secret = "test@example.test";
+    const rec = new RunRecorder("http://x", undefined, [secret]);
+    const d = { role: "textbox", name: "Email" };
+    rec.navigate("http://x/profile", 0);
+    rec.fill(d, secret, 1);
+    rec.fill(d, `mail ${encodeURIComponent(secret)}`, 2);
+    rec.select({ role: "combobox", name: "Who" }, secret, 3);
+    rec.fill(d, "plain", 4);
+    const out = rec.finish();
+    const steps = out.pages.flatMap((p) => p.steps.map((s) => s.step));
+    const values = steps.flatMap((s) => (s.kind === "fill" || s.kind === "select" ? [s.value] : []));
+    expect(values).toEqual([
+      { redacted: true, length: secret.length },
+      { redacted: true, length: `mail ${encodeURIComponent(secret)}`.length },
+      { redacted: true, length: secret.length },
+      { redacted: false, value: "plain" },
+    ]);
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+});

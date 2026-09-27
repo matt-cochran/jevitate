@@ -11,7 +11,7 @@ import {
   type TextEdit,
   type ValueOrVar,
 } from "@jevitate/recording";
-import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
+import { assertNoSecretInPayload, redactText, redactUrl, secretForms } from "@jevitate/ai-core";
 import type { PageTiming } from "./timing.js";
 
 /**
@@ -131,6 +131,18 @@ export class RunRecorder {
     return redactText(toPath(url), this.#secrets);
   }
 
+  /**
+   * #219: a plain value that contains a registered secret (an engine- or model-authored value that
+   * happens to equal it — the adversarial "valid email" colliding with a `--secret` address, a value
+   * copied off a page that displays it) is recorded `{ redacted: true }` instead of in the clear, so
+   * the Recording never carries the secret and the run is not lost to the fail-closed `finish` proof.
+   */
+  #value(value: string | ValueOrVar): ValueOrVar {
+    if (typeof value !== "string") return value;
+    const holds = this.#secrets.some((s) => s.trim().length > 0 && secretForms(s).some((f) => value.includes(f)));
+    return holds ? { redacted: true, length: value.length } : { redacted: false, value };
+  }
+
   #target(d: TargetDescriptor): TargetDescriptor {
     return redactDescriptor(d, this.#secrets);
   }
@@ -216,7 +228,7 @@ export class RunRecorder {
   fill(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
     const descriptor = this.#target(rawDescriptor);
-    const v: ValueOrVar = typeof value === "string" ? { redacted: false, value } : value;
+    const v = this.#value(value);
     this.#append({ kind: "fill", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
 
@@ -246,7 +258,7 @@ export class RunRecorder {
         target: { ...descriptor },
         anchor: { ...edit.anchor },
         action: edit.action,
-        ...(edit.value === undefined ? {} : { value: { redacted: false, value: edit.value } }),
+        ...(edit.value === undefined ? {} : { value: this.#value(edit.value) }),
         ...(edit.format === undefined ? {} : { format: edit.format }),
         expect: { kind: "count", target: { ...descriptor }, min: 0 },
       },
@@ -259,7 +271,7 @@ export class RunRecorder {
   select(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
     const descriptor = this.#target(rawDescriptor);
-    const v: ValueOrVar = typeof value === "string" ? { redacted: false, value } : value;
+    const v = this.#value(value);
     this.#append({ kind: "select", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
 
@@ -273,7 +285,7 @@ export class RunRecorder {
   upload(rawDescriptor: TargetDescriptor, file: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
     const descriptor = this.#target(rawDescriptor);
-    const f: ValueOrVar = typeof file === "string" ? { redacted: false, value: file } : file;
+    const f = this.#value(file);
     // Provisional postcondition: the input is still attached — NOT `visible`,
     // because file inputs are routinely visually hidden behind a styled label.
     const attached: Assertion = { kind: "count", target: { ...descriptor }, min: 1 };
@@ -340,7 +352,7 @@ export class RunRecorder {
       ...(opts?.retro ? { retro: redactText(opts.retro, this.#secrets) } : {}),
     };
     const parsed = RecordingSchema.parse(recording);
-    assertNoSecretInPayload(parsed, this.#secrets);
+    assertNoSecretInPayload(parsed, this.#secrets, "the Recording");
     return parsed;
   }
 }

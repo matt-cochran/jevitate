@@ -105,12 +105,14 @@ test("mcp --print-config <bogus> is a fail envelope", async () => {
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });
   const lines: string[] = [];
-  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  const errs: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: (s) => errs.push(s) });
   program.exitOverride();
   await program.parseAsync(["mcp", "--print-config", "emacs"], { from: "user" });
-  const parsed = JSON.parse(lines.join(""));
-  expect(parsed.ok).toBe(false);
-  expect(parsed.error.code).toBe("E_MCP_PRINT_CONFIG");
+  // #218: `mcp` has no --json — a refusal is a human line on stderr, never an envelope on stdout.
+  expect(lines.join("")).toBe("");
+  expect(errs.join("")).toMatch(/^error E_MCP_PRINT_CONFIG: /);
+  expect(process.exitCode).toBe(64);
 });
 
 test("ui --port --no-open --inbox-dir calls the injected startUiServer with the resolved deps", async () => {
@@ -484,7 +486,7 @@ test("recording promote sets value:{var:...} at the targeted fill step", async (
   expect(parsed.pages[0].steps[0].variableName).toBe("username");
 });
 
-test("recording promote on a click step returns a fail envelope and sets exit code 64", async () => {
+test("recording promote on a click step is refused (a human error line) and sets exit code 64", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -499,15 +501,17 @@ test("recording promote on a click step returns a fail envelope and sets exit co
     await writeFile(recPath, JSON.stringify(rec));
 
     const lines: string[] = [];
+    const errs: string[] = [];
     const program = buildProgram({ profiles });
-    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: (s) => errs.push(s) });
     program.exitOverride();
     await program.parseAsync(
       ["recording", "promote", recPath, "--page", "0", "--step", "0", "--var", "x"],
       { from: "user" }
     );
-    const parsed = JSON.parse(lines.join(""));
-    expect(parsed).toMatchObject({ v: 1, ok: false });
+    // #218: `recording promote` has no --json — its refusal is a human line on stderr.
+    expect(lines.join("")).toBe("");
+    expect(errs.join("")).toMatch(/^error E_[A-Z_]+: /);
     expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
@@ -795,12 +799,15 @@ test.each(["-1", "abc", "1.5", ""])("explore --hang-replays %j is refused before
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });
   const lines: string[] = [];
-  program.configureOutput({ writeOut: (s) => lines.push(s) });
-  await program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--hang-replays", n, "--json"], { from: "user" });
+  program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: () => undefined });
+  program.commands.forEach((c) => c.exitOverride());
+  // #218: parsed at parse time (cli-args.ts) — a usage error (64) with the command's own envelope code.
+  await expect(program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--hang-replays", n, "--json"], { from: "user" })).rejects.toMatchObject({ exitCode: 64 });
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(false);
   expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
-  expect(parsed.error.message).toContain("--hang-replays must be a non-negative integer");
+  expect(parsed.error.message).toContain("--hang-replays");
+  expect(parsed.error.message).toContain("must be a non-negative integer");
 });
 
 // === viewport/device emulation (#149) — CLI validation refuses before any browser opens ===

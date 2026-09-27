@@ -10,11 +10,11 @@ command's codes only as a reminder; this is the reference.
 | Exit | Class | Meaning |
 |---|---|---|
 | `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
-| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`) |
+| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
 | `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error. It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
-| `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_TARGET_CONFIG`, …), an unknown id, missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist |
+| `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
 | `130` / `143` | killed | SIGINT / SIGTERM; the partial result is still written (see [operations](./operations.md)) |
 
 `64` is `EX_USAGE` from `sysexits.h`. It is deliberately not `5`, so a future outcome code never
@@ -24,10 +24,11 @@ other error is `2`.
 
 ### Output: `--json` or a human summary
 
-Every command that takes `--json` follows one rule:
+Every command follows one rule:
 
 - With `--json`, stdout is exactly one line: the `{v, ok, data}` envelope, or `{v, ok: false, error:
-  {code, message}}`. This is the machine contract.
+  {code, message}}`. This is the machine contract. A command line refused while it is parsed (an
+  unknown flag, a bad number) still prints the envelope, with the command's `E_<COMMAND>_ARGS` code.
 - Without `--json`, a success prints a short human summary on stdout: the verdict, key counts, each
   defect or hang with its fingerprint, where the result file is, and a `next:` line (for example
   `jevitate verify-fix <fp>` or `jevitate report`). A refusal prints `error <CODE>: <message>` on
@@ -52,8 +53,8 @@ clean.
 
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
-`explore-<stamp>` (a goal run; its own `succeeded`/`failed`/`exhausted`/`blocked` comes back as
-`goalOutcome`, folded onto `clean`/`defects-found`), `coverage-`, `adversarial-`, `feature-` or
+`explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own
+`succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `adversarial-`, `feature-` or
 `usability-<stamp>` — or a `queue_exploration` `missionId`.
 
 ### Every `outcome`, `stop` and `missionOutcome` value
@@ -61,40 +62,43 @@ finished run; a broken run comes back as an error result. Its `id` is a result s
 The table above is the canonical `MissionOutcome` — every mission's typed verdict and the
 process exit code it maps to (`missionExitCode()`, `packages/domain/src/mission-outcome.ts`).
 Every mission's result also carries a `missionOutcome: MissionOutcome` (and `exitCode`) field —
-the canonical, exit-coded verdict from that table — so a caller that only cares "did this run
-prove something clean, or not" never needs to interpret a mission-specific `outcome`/`stop`
-below. Those mission-specific fields exist for diagnosis: why the run stopped, in that mission's
-own terms.
+the canonical, exit-coded verdict from that table, on every strategy, a goal run included — so a
+caller that only cares "did this run prove something clean, or not" never needs to interpret a
+mission-specific `outcome`/`goalOutcome`/`stop` below. Those mission-specific fields exist for
+diagnosis: why the run stopped, in that mission's own terms.
 
-**Goal mission (`--goal`) — its own `outcome: GoalBasedOutcome`.** Each goal-only value folds onto a
-canonical outcome, and so onto its exit code, in ONE place (`GOAL_OUTCOME_FOLD` / `outcomeExitCode()`,
-`packages/domain/src/mission-outcome.ts`; the CLI's `goalExitCode()` and MCP `get_mission_result` both
-read it):
+**Goal mission (`--goal`) — its own `goalOutcome: GoalBasedOutcome`** (also in `outcome`), carried
+beside the canonical `missionOutcome`, never in its place. Each goal-only value folds onto a
+canonical outcome — the result's `missionOutcome` — and so onto its exit code, in ONE place
+(`GOAL_OUTCOME_FOLD` / `outcomeExitCode()`, `packages/domain/src/mission-outcome.ts`; the CLI's
+`goalExitCode()`, the result schema and MCP `get_mission_result` all read it). For example, a goal
+whose success check did not hold is `missionOutcome: "defects-found"`, `goalOutcome: "failed"`, exit 1:
 
-| `outcome` | Folds onto | Exit code | Meaning |
+| `goalOutcome` | `missionOutcome` | Exit code | Meaning |
 |---|---|---|---|
 | `succeeded` | `clean` | 0 | every independent success check held |
 | `failed` | `defects-found` | 1 | the model said `done` (or kept proposing it until code stopped accepting proposals), but an independent success check did not hold — `failure.kind: "success-check-failed"`, the check named in `failure.message` |
 | `exhausted` | `defects-found` | 1 | the action/decision budget ran out before the checks held |
 | `blocked` | `defects-found` | 1 | the loop stopped without the goal met and without claiming it: the model gave up (e.g. no matching control), or no progress was possible |
-| `defects-found` | — | 1 | a defect was found: an HTTP 5xx from the app, a violated declared invariant, or a `--log-defect` match. It overrides the endings above, even when the success checks held: the checks' own verdict stays in `assertionPassed` and `checks`, and `reason` names the defect (`PUT /api/profile → 500`). A broken run or a hang keeps its own outcome, and the defect is still listed in `defects`. |
-| `inconclusive` | — | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
-| `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
-| `hang` | 3 | the app under test hung, and it reproduced on replay |
-| `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+| `defects-found` | `defects-found` | 1 | a defect was found: an HTTP 5xx from the app, a violated declared invariant, or a `--log-defect` match. It overrides the endings above, even when the success checks held: the checks' own verdict stays in `assertionPassed` and `checks`, and `reason` names the defect (`PUT /api/profile → 500`). A broken run or a hang keeps its own outcome, and the defect is still listed in `defects`. |
+| `inconclusive` | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
+| `crashed` | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
+| `hang` | `hang` | 3 | the app under test hung, and it reproduced on replay |
+| `intermittent` | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
 **Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
-the `outcome` above; not separately exit-coded):
+the `goalOutcome` above; not separately exit-coded):
 
 | `stop` | Meaning |
 |---|---|
-| `done` | the model proposed the goal complete and code accepted the proposal (the transcript says "done accepted provisionally" when a check — a `reloadThen`, or one holding since before any action — is still left to the final verdict, which may still fail it: outcome `failed`) |
+| `done` | the loop ended on the model's `done`: code accepted the proposal (the transcript says "done accepted provisionally" when a check — a `reloadThen`, or one holding since before any action — is still left to the final verdict, which may still fail it: `goalOutcome: "failed"`), or code rejected it repeatedly until it stopped taking proposals (`goalOutcome: "failed"`) |
 | `blocked` | the model decided it could not proceed |
 | `exhausted` | the action or decision budget ran out |
 | `no-progress` | the same state repeated with no forward movement (the no-progress detector) |
 | `hang` | the app under test hung |
 | `inconclusive` | a required decision round-trip stayed unavailable |
 | `crashed` | the engine failed |
+| `budget` | a declared mission spend budget was crossed (`inconclusive`) |
 
 **Adversarial mission (`--strategy adversarial`) — `stop: AdversarialStop`**, why the hunt
 ended (its own top-level `outcome` is already the canonical `MissionOutcome` from the table
@@ -102,8 +106,8 @@ above, so it needs no separate exit-code mapping):
 
 | `stop` | Meaning |
 |---|---|
-| `step-budget` | the max-actions budget ran out |
-| `action-budget` | the max-decisions budget ran out |
+| `step-budget` | the strategy-step budget (`--max-decisions`) ran out |
+| `action-budget` | the executed-action budget (`--max-actions`) ran out |
 | `time-budget` | the mission's time budget ran out |
 | `strategies-exhausted` | every misuse strategy was tried with nothing left to do |
 | `targets-refused` | every target control on the page was refused by the safety policy (paid, destructive, session-ending or `--deny`'d) and none could be exercised, so the hunt stopped at once — `inconclusive`, `failure.kind: "insufficient-coverage"`, its message naming the refused controls and how to permit them (`--allow-destructive`; remove the `--deny`; reclassify with `--paid`/`--deny`) |

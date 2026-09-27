@@ -178,6 +178,28 @@ describe("human output: never raw JSON without --json (#210)", () => {
   });
 });
 
+describe("#217 — a goal result's human summary", () => {
+  it("heads with the canonical verdict, then the goal's own ending and the stop that ended its loop", () => {
+    const text = formatMissionHuman({
+      strategy: "goal",
+      missionOutcome: "defects-found",
+      goalOutcome: "failed",
+      outcome: "failed",
+      stop: "done",
+      exitCode: 1,
+      target: { seedUrl: "http://app.test/cart", allowlist: [] },
+      defects: [],
+      hangs: [],
+      failure: { kind: "success-check-failed", message: "the model said done, but success check 'urlIncludes:/done' did not hold" },
+      resultPath: "/runs/explore-1.result.json",
+    });
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("DEFECTS-FOUND: goal http://app.test/cart · 0 defect(s) · 0 hang(s)");
+    expect(lines[1]).toMatch(/^GOAL\s+failed \(stop: done\)$/);
+    expect(text).not.toContain("OUTCOME");
+  });
+});
+
 /** Every strategy follows the same rule, against a real browser and the example site. */
 describe("explore output shape is the same for every strategy (#210)", () => {
   let site: { url: string; close(): Promise<void> };

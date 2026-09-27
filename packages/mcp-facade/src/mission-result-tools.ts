@@ -1,4 +1,4 @@
-import { GOAL_OUTCOME_FOLD, MISSION_EXIT_CODES, MISSION_OUTCOMES, isBrokenRun, type MissionOutcome } from "@jevitate/domain";
+import { GOAL_OUTCOME_FOLD, MISSION_EXIT_CODES, MISSION_OUTCOMES, foldGoalOutcome, isBrokenRun, isGoalOutcome, type MissionOutcome } from "@jevitate/domain";
 
 /**
  * The MCP surface for a mission's TYPED result. A mission never answers with a throw: every
@@ -26,20 +26,29 @@ export function parseMissionOutcome(value: unknown): MissionOutcome | null {
 }
 
 /**
- * A goal run (`explore-<stamp>`) persists its OWN outcome (`succeeded`/`failed`/`exhausted`/`blocked`,
- * or a shared one) as its result's `missionOutcome` (#117). Folded onto the canonical outcome by the
- * domain's single mapping (`GOAL_OUTCOME_FOLD`, the same the CLI exits with): `succeeded` → clean (0);
- * `failed`/`exhausted`/`blocked` — the goal's success check did not hold — → defects-found (1). The
- * goal's own word is kept as `goalOutcome`.
+ * A persisted result's verdict (#217): `missionOutcome` is ALWAYS canonical, and a goal run
+ * (`explore-<stamp>`) carries its own ending beside it as the result's `goalOutcome`
+ * (`succeeded`/`failed`/`exhausted`/`blocked`, or a shared outcome) — returned as `goalOutcome` next to
+ * the status. A `goalOutcome` that does not fold onto `missionOutcome` by the domain's single mapping
+ * (`GOAL_OUTCOME_FOLD`) is a corrupt result (null), never guessed at.
+ *
+ * Results written before #217 held the goal's own word in `missionOutcome`; those are still read,
+ * folded by the same mapping (`succeeded` → clean; `failed`/`exhausted`/`blocked` → defects-found).
  */
-const GOAL_OUTCOMES: Readonly<Record<string, MissionOutcome>> = GOAL_OUTCOME_FOLD;
+const LEGACY_GOAL_OUTCOMES: Readonly<Record<string, MissionOutcome>> = GOAL_OUTCOME_FOLD;
 
-/** Narrows a persisted result's `missionOutcome` (canonical, or a goal run's own) to a status, or null. */
-export function parseResultOutcome(value: unknown): { outcome: MissionOutcome; goalOutcome?: string } | null {
-  const canonical = parseMissionOutcome(value);
-  if (canonical !== null) return { outcome: canonical };
-  if (typeof value === "string" && Object.hasOwn(GOAL_OUTCOMES, value)) {
-    return { outcome: GOAL_OUTCOMES[value]!, goalOutcome: value };
+/** Narrows a persisted result's `missionOutcome` (+ a goal run's `goalOutcome`) to a status, or null. */
+export function parseResultOutcome(
+  missionOutcome: unknown,
+  goalOutcome?: unknown,
+): { outcome: MissionOutcome; goalOutcome?: string } | null {
+  const canonical = parseMissionOutcome(missionOutcome);
+  if (canonical !== null) {
+    if (goalOutcome === undefined) return { outcome: canonical };
+    return isGoalOutcome(goalOutcome) && foldGoalOutcome(goalOutcome) === canonical ? { outcome: canonical, goalOutcome } : null;
+  }
+  if (goalOutcome === undefined && typeof missionOutcome === "string" && Object.hasOwn(LEGACY_GOAL_OUTCOMES, missionOutcome)) {
+    return { outcome: LEGACY_GOAL_OUTCOMES[missionOutcome]!, goalOutcome: missionOutcome };
   }
   return null;
 }

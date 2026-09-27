@@ -25,7 +25,7 @@ import { resolveDataDir } from "./data-dir.js";
 import { loadLocalCredentials } from "./credentials-file.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
 import { resolveUsagePricing } from "./usage-config.js";
-import { exitCodeForEnvelope } from "./exit-codes.js";
+import { emitJsonOrRefusal } from "./cli-refusal.js";
 
 /**
  * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
@@ -285,8 +285,7 @@ function redactCredentials(message: string, store: { read(k: CredentialKey): str
   return out;
 }
 
+/** The envelope (success, or a refusal with --json); a refusal without --json is a human stderr line (#218). */
 function emitJsonLine(program: Command, envelope: JsonEnvelope<unknown>): void {
-  const writeOut = program.configureOutput().writeOut;
-  writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = exitCodeForEnvelope(envelope);
+  emitJsonOrRefusal(program, envelope);
 }

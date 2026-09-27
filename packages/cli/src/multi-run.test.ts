@@ -259,3 +259,74 @@ describe("multi-run usage (#163)", () => {
     }
   });
 });
+
+describe("a broken or interrupted run is never `intermittent` (#220)", () => {
+  it("a disagreement caused by a crashed run (a lost browser) is inconclusive with the reason; real verdicts that disagree stay intermittent", () => {
+    const cell = voteRuns([run(1, "blocked", []), run(2, "crashed", [], { exitCode: 2, reason: "page-crash: Target crashed" })], 2);
+    expect(cell.outcome).toBe("inconclusive");
+    expect(cell.exitCode).toBe(2);
+    expect(cell.reason).toContain("run 2 crashed (page-crash: Target crashed)");
+    const failedEnvelope = summarizeRun("goal", 2, { ok: false, error: { code: "E_EXPLORE_RUN", message: "browserContext.newPage: Target crashed" } });
+    expect(voteRuns([run(1, "blocked", []), failedEnvelope], 2)).toMatchObject({ outcome: "inconclusive", exitCode: 2 });
+    expect(voteRuns([run(1, "blocked", []), run(2, "succeeded", [])], 2).outcome).toBe("intermittent");
+  });
+
+  it("fewer runs than planned never read intermittent: the partial aggregate is inconclusive until the multi-run completes", async () => {
+    expect(voteRuns([run(1, "blocked", [])], 2, null, 2)).toMatchObject({ outcome: "inconclusive", reason: expect.stringContaining("only 1 of 2") });
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-partial-"));
+    try {
+      let seenPartial: { outcome: string; exitCode: number; complete: boolean; reason?: string } | undefined;
+      await runMultiRun({
+        plan: { repeat: 2, minAgreement: 2, personas: null },
+        strategy: "goal",
+        outDir: dir,
+        runOnce: async ({ outDir }): Promise<RunEnvelope> => {
+          if (outDir.endsWith("run-2")) seenPartial = JSON.parse(readFileSync(join(dir, "multi-run.result.json"), "utf8"));
+          return { ok: true, data: { outcome: "blocked", exitCode: 1 } };
+        },
+      });
+      expect(seenPartial).toMatchObject({ outcome: "inconclusive", exitCode: 2, complete: false, reason: "incomplete: 1 of 2 run(s) finished" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a kill mid-run: the run in flight is recorded as interrupted and the aggregate is rewritten, synchronously", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-kill-"));
+    try {
+      let onKill: ((i: { signal: string; exitCode: number; partial?: Record<string, unknown> }) => unknown) | undefined;
+      let killed: ReturnType<NonNullable<typeof onKill>> | undefined;
+      let disarmed = false;
+      await runMultiRun({
+        plan: { repeat: 2, minAgreement: 2, personas: null },
+        strategy: "goal",
+        outDir: dir,
+        armKill: (fn) => {
+          onKill = fn;
+          return () => {
+            disarmed = true;
+          };
+        },
+        runOnce: async ({ outDir }): Promise<RunEnvelope> => {
+          if (outDir.endsWith("run-2")) {
+            killed = onKill?.({ signal: "SIGINT", exitCode: 130, partial: { outcome: "inconclusive", missionOutcome: "inconclusive", exitCode: 130, reason: "interrupted by SIGINT after 0 steps" } });
+          }
+          return { ok: true, data: { outcome: "blocked", exitCode: 1 } };
+        },
+      });
+      expect(disarmed).toBe(true);
+      expect(killed).toMatchObject({
+        outcome: "inconclusive",
+        exitCode: 130,
+        complete: false,
+        interrupted: { signal: "SIGINT" },
+        reason: "interrupted by SIGINT during run 2; 1 of 2 run(s) finished",
+      });
+      const cell = (killed as { cells: Array<{ runs: Array<{ outcome: string; reason?: string }> }> }).cells[0]!;
+      expect(cell.runs.map((r) => r.outcome)).toEqual(["blocked", "inconclusive"]);
+      expect(cell.runs[1]!.reason).toBe("interrupted by SIGINT after 0 steps");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

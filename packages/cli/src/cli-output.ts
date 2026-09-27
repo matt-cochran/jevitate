@@ -91,8 +91,14 @@ export function formatMissionHuman(result: unknown): string {
   const advisory = defects.length - gating.length;
   if (advisory > 0) counts.push(`${advisory} advisory`);
   lines.push(`${outcome.toUpperCase()}: ${strategy}${target === undefined ? "" : ` ${target}`} · ${counts.join(" · ")}`);
+  // #217: the headline is always the canonical verdict; a goal run's own ending (and the stop that
+  // ended its loop) follows it — never in its place.
+  const goal = str(result.goalOutcome);
   const own = str(result.outcome);
-  if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
+  if (goal !== undefined) {
+    const stop = str(result.stop);
+    lines.push(`${tag("GOAL")}${goal}${stop === undefined ? "" : ` (stop: ${stop})`}`);
+  } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
@@ -100,13 +106,32 @@ export function formatMissionHuman(result: unknown): string {
   } else if (str(result.reason) !== undefined) {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }
-  const answer = str(result.answer);
+  const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
   const resultPath = str(result.resultPath);
   if (resultPath !== undefined) lines.push(`${tag("RESULT")}${resultPath}`);
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * #216: a find-out's answer is `{ text, evidence }` — its text plus where it came from (the page's
+ * text or a form field's value, and the page), from the grounded evidence.
+ */
+function answerLine(answer: unknown): string | undefined {
+  if (!isRecord(answer)) return str(answer);
+  const text = str(answer.text);
+  if (text === undefined) return undefined;
+  const sources: string[] = [];
+  for (const e of arr(answer.evidence).filter(isRecord)) {
+    const control = str(e.control);
+    const where = e.source === "control-value" ? (control === undefined ? "a form field" : `form field "${control}"`) : "page text";
+    const path = str(e.url)?.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
+    const source = path === undefined ? where : `${where} on ${path === "" ? "/" : path}`;
+    if (!sources.includes(source)) sources.push(source);
+  }
+  return sources.length === 0 ? text : `${text}  (from ${sources.join("; ")})`;
 }
 
 function nextHint(fingerprint: string | undefined, resultPath: string | undefined): string {
@@ -124,6 +149,9 @@ export function formatMultiRunHuman(result: unknown): string {
   const lines = [
     `${(str(result.outcome) ?? "unknown").toUpperCase()}: ${str(result.strategy) ?? "explore"} ×${String(result.repeat ?? "?")} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`,
   ];
+  // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
+  const reason = str(result.reason);
+  if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
   for (const f of findings) {
     lines.push(`${tag("FINDING")}${[str(f.fingerprint) ?? "(no fingerprint)", str(f.kind) ?? "", str(f.stability) ?? "", str(f.title) ?? ""].filter((p) => p !== "").join("  ")}`);
   }

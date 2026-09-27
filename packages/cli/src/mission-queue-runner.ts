@@ -43,7 +43,10 @@ import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js
 /** What a strategy runner hands back: enough to link the queue record to the persisted result. */
 export interface QueuedMissionRun {
   readonly resultPath: string;
+  /** The canonical outcome (#217). */
   readonly missionOutcome: string;
+  /** #217: a goal run's own ending, beside the canonical `missionOutcome`. */
+  readonly goalOutcome?: string;
   readonly exitCode: number;
 }
 
@@ -62,6 +65,7 @@ export interface DrainedMission {
   readonly status: "done" | "failed";
   readonly resultId?: string;
   readonly missionOutcome?: string;
+  readonly goalOutcome?: string;
   readonly exitCode?: number;
   readonly error?: string;
 }
@@ -168,6 +172,7 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
         finishedAtIso: now(),
         resultId,
         missionOutcome: run.missionOutcome,
+        ...(run.goalOutcome === undefined ? {} : { goalOutcome: run.goalOutcome }),
         exitCode: run.exitCode,
       });
       drained = {
@@ -176,6 +181,7 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
         status: "done",
         resultId,
         missionOutcome: run.missionOutcome,
+        ...(run.goalOutcome === undefined ? {} : { goalOutcome: run.goalOutcome }),
         exitCode: run.exitCode,
       };
     } catch (err) {
@@ -480,7 +486,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...(auth.secretFields.length === 0 ? {} : { secretFields: auth.secretFields }),
         ...(fx === undefined ? {} : { fixtures: fx }),
       });
-      return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
+      return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, goalOutcome: r.goalOutcome, exitCode: r.exitCode };
     } finally {
       await fx?.restore();
     }

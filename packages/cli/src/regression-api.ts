@@ -1,3 +1,4 @@
+import { safeChildPath } from "@jevitate/domain";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Actor } from "@jevitate/screenplay";
@@ -175,6 +176,8 @@ export type RunRegressionCaptureResult =
   | { skipped: "flaky"; rate: number };
 
 export async function runRegressionCapture(opts: RunRegressionCaptureOptions): Promise<RunRegressionCaptureResult> {
+  // #221: the id names the committed files — one safe segment inside the regressions dir, never a path.
+  safeChildPath(opts.regressionsDir, opts.id, { what: "regression id", suffix: ".recording.json" });
   const raw = JSON.parse(await readFile(opts.failingRecordingPath, "utf8"));
   const recording = RecordingSchema.parse(raw);
   const attempts = opts.attempts ?? 3;
@@ -408,8 +411,9 @@ export interface RegressionRunReport {
  * established it (`replayAndCheckNetwork` / `verifyFix`'s invariant re-check) — never duplicated.
  */
 export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<RegressionRunReport> {
-  const recordingPath = join(opts.regressionsDir, `${opts.id}.recording.json`);
-  const metaPath = join(opts.regressionsDir, `${opts.id}.meta.json`);
+  // #221: one safe segment inside the regressions dir, never a path.
+  const recordingPath = safeChildPath(opts.regressionsDir, opts.id, { what: "regression id", suffix: ".recording.json" });
+  const metaPath = safeChildPath(opts.regressionsDir, opts.id, { what: "regression id", suffix: ".meta.json" });
   let recording: Recording;
   let meta: RegressionMeta;
   try {
