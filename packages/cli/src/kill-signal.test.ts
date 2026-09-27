@@ -485,7 +485,7 @@ describe("kill-signal — the killed partial is a unified result; an orchestrato
     await vi.waitFor(() => expect(calls.exit).toEqual([130]));
     const [, missionOutcome, exitCode, result] = calls.writeResult[0]!;
     const parsed = MissionResultSchema.parse(result);
-    expect(parsed).toMatchObject({ strategy: "goal", missionOutcome: "inconclusive", exitCode: 130, recordingPaths: ["/tmp/explore-s.json"] });
+    expect(parsed).toMatchObject({ strategy: "goal", missionOutcome: "inconclusive", goalOutcome: "inconclusive", exitCode: 130, recordingPaths: ["/tmp/explore-s.json"] });
     expect(PersistedMissionResultSchema.safeParse({ missionOutcome, exitCode, result }).success).toBe(true);
   });
 

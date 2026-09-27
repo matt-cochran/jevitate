@@ -197,6 +197,8 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
     ...(mission.strategy === undefined ? {} : { strategy: mission.strategy }),
     outcome: "inconclusive",
     missionOutcome: "inconclusive",
+    // #217: a goal run's own ending travels as `goalOutcome` (a kill is the shared `inconclusive`).
+    ...(mission.strategy === "goal" ? { goalOutcome: "inconclusive" } : {}),
     reason: `interrupted by ${signal} after ${steps} step${steps === 1 ? "" : "s"}`,
     stop: "terminated",
     signal,
