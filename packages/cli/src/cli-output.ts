@@ -91,8 +91,14 @@ export function formatMissionHuman(result: unknown): string {
   const advisory = defects.length - gating.length;
   if (advisory > 0) counts.push(`${advisory} advisory`);
   lines.push(`${outcome.toUpperCase()}: ${strategy}${target === undefined ? "" : ` ${target}`} · ${counts.join(" · ")}`);
+  // #217: the headline is always the canonical verdict; a goal run's own ending (and the stop that
+  // ended its loop) follows it — never in its place.
+  const goal = str(result.goalOutcome);
   const own = str(result.outcome);
-  if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
+  if (goal !== undefined) {
+    const stop = str(result.stop);
+    lines.push(`${tag("GOAL")}${goal}${stop === undefined ? "" : ` (stop: ${stop})`}`);
+  } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {

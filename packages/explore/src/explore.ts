@@ -328,8 +328,8 @@ export interface ExploreRun {
    */
   readonly blockingCause?: string;
   /**
-   * #209: the run ended `blocked` because the model kept proposing `done` and code rejected every
-   * proposal (the success condition never held) — the model claimed the goal, it did not give up.
+   * #209: the run ended (stop `done`, #217) because the model kept proposing `done` and code rejected
+   * every proposal (the success condition never held) — the model claimed the goal, it did not give up.
    */
   readonly doneRejected?: true;
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
@@ -1307,7 +1307,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (doneRejections >= MAX_DONE_REJECTIONS) {
           incomplete = `the model proposed done ${doneRejections} times, but ${verdict.reason}`;
           endedOnRejectedDone = true;
-          stop = "blocked";
+          // #217: the loop ended on the model's `done` (code rejected it) — the stop says so; it
+          // never reads `blocked` (the model did not give up). The outcome stays incomplete.
+          stop = "done";
           break;
         }
         continue;
@@ -2099,7 +2101,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     outcome: finalOutcome,
     ...(answer !== undefined && finalOutcome.status === "completed" ? { answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
-    ...(endedOnRejectedDone && stop === "blocked" ? { doneRejected: true as const } : {}),
+    ...(endedOnRejectedDone && stop === "done" ? { doneRejected: true as const } : {}),
     ...(stop === "crashed" && failure !== undefined
       ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }
       : {}),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GOAL_ONLY_OUTCOMES, MISSION_OUTCOMES } from "./mission-outcome.js";
+import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outcome.js";
 
 /**
  * The ONE result schema every explore strategy's result follows (#195 part 5) — what `jevitate
@@ -10,9 +10,12 @@ import { GOAL_ONLY_OUTCOMES, MISSION_OUTCOMES } from "./mission-outcome.js";
  *  - `schemaVersion` — bumped on any breaking change to the fields below.
  *  - `strategy` — which strategy produced it (`goal`, `coverage`, `exploratory`, `adversarial`,
  *    `feature`, `usability`).
- *  - `missionOutcome` / `exitCode` — the verdict (a goal run keeps its own vocabulary:
- *    `succeeded`/`failed`/`exhausted`/`blocked` besides the shared `MissionOutcome`s); `exitCode` is the
- *    portable one.
+ *  - `missionOutcome` / `exitCode` — the portable verdict, ALWAYS one of the canonical
+ *    `MissionOutcome`s (clean, defects-found, hang, intermittent, inconclusive, crashed) on every
+ *    strategy (#217).
+ *  - `goalOutcome` — a goal run's own ending (`succeeded`/`failed`/`exhausted`/`blocked`, or a shared
+ *    outcome it ended with directly), present on every goal result and on no other; it folds onto
+ *    `missionOutcome` by the domain's single mapping (`GOAL_OUTCOME_FOLD`). Additive (schemaVersion 1).
  *  - `defects` — EVERY defect the run found, whatever oracle found it: hard-signal defects,
  *    declared-invariant defects and `server-log` defects alike, each with its `fingerprint` and
  *    `kind`. A defect a strategy reports but never gates on (a usability run's `server-log`
@@ -45,8 +48,13 @@ export const MISSION_RESULT_SCHEMA_VERSION = 1 as const;
 export const RESULT_STRATEGIES = ["goal", "coverage", "exploratory", "adversarial", "feature", "usability"] as const;
 export type ResultStrategy = (typeof RESULT_STRATEGIES)[number];
 
-export const RESULT_MISSION_OUTCOMES = [...MISSION_OUTCOMES, ...GOAL_ONLY_OUTCOMES] as const;
+/** #217: the canonical outcomes only — a goal run's own ending is `goalOutcome`, never `missionOutcome`. */
+export const RESULT_MISSION_OUTCOMES = MISSION_OUTCOMES;
 export type ResultMissionOutcome = (typeof RESULT_MISSION_OUTCOMES)[number];
+
+/** A goal run's own ending (#217), carried beside the canonical `missionOutcome`. */
+export const RESULT_GOAL_OUTCOMES = GOAL_OUTCOMES;
+export type ResultGoalOutcome = (typeof RESULT_GOAL_OUTCOMES)[number];
 
 const fingerprint = z.string().regex(/^[0-9a-f]{16}$/, "a 16-hex fingerprint");
 
@@ -140,24 +148,35 @@ export const EnvironmentDegradedSchema = z.looseObject({
 export type EnvironmentDegraded = z.infer<typeof EnvironmentDegradedSchema>;
 
 /** The common fields of every strategy's result (strategy-specific fields pass through). */
-export const MissionResultSchema = z.looseObject({
-  schemaVersion: z.literal(MISSION_RESULT_SCHEMA_VERSION),
-  strategy: z.enum(RESULT_STRATEGIES),
-  missionOutcome: z.enum(RESULT_MISSION_OUTCOMES),
-  exitCode: z.number().int().nonnegative(),
-  defects: z.array(ResultDefectSchema),
-  hangs: z.array(ResultHangSchema),
-  recordingPaths: z.array(z.string().min(1)),
-  transcriptPath: z.string().min(1),
-  resultPath: z.string().min(1),
-  target: ResultTargetSchema,
-  engine: ResultEngineSchema,
-  usage: ResultUsageSchema.optional(),
-  failure: z.looseObject({ kind: z.string(), message: z.string() }).optional(),
-  /** #203 — additive: optional so results written before it still parse. */
-  hostHealth: HostHealthSummarySchema.optional(),
-  environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
-});
+export const MissionResultSchema = z
+  .looseObject({
+    schemaVersion: z.literal(MISSION_RESULT_SCHEMA_VERSION),
+    strategy: z.enum(RESULT_STRATEGIES),
+    missionOutcome: z.enum(RESULT_MISSION_OUTCOMES),
+    /** #217 — additive: a goal run's own ending (present on every goal result, on no other). */
+    goalOutcome: z.enum(RESULT_GOAL_OUTCOMES).optional(),
+    exitCode: z.number().int().nonnegative(),
+    defects: z.array(ResultDefectSchema),
+    hangs: z.array(ResultHangSchema),
+    recordingPaths: z.array(z.string().min(1)),
+    transcriptPath: z.string().min(1),
+    resultPath: z.string().min(1),
+    target: ResultTargetSchema,
+    engine: ResultEngineSchema,
+    usage: ResultUsageSchema.optional(),
+    failure: z.looseObject({ kind: z.string(), message: z.string() }).optional(),
+    /** #203 — additive: optional so results written before it still parse. */
+    hostHealth: HostHealthSummarySchema.optional(),
+    environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
+  })
+  .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
+    message: "goalOutcome is present on every goal result and on no other",
+    path: ["goalOutcome"],
+  })
+  .refine((r) => r.goalOutcome === undefined || foldGoalOutcome(r.goalOutcome) === r.missionOutcome, {
+    message: "missionOutcome must be the canonical fold of goalOutcome (GOAL_OUTCOME_FOLD)",
+    path: ["missionOutcome"],
+  });
 export type MissionResult = z.infer<typeof MissionResultSchema>;
 
 /** A persisted `<stem>.result.json`: the verdict beside the result it summarizes. */
@@ -180,6 +199,8 @@ export interface MissionResultCore {
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: ResultStrategy;
   readonly missionOutcome: ResultMissionOutcome;
+  /** #217: a goal run's own ending (goal results only). */
+  readonly goalOutcome?: ResultGoalOutcome;
   readonly exitCode: number;
   readonly defects: ReadonlyArray<{ readonly fingerprint: string; readonly kind: string; readonly advisory?: true }>;
   readonly hangs: ReadonlyArray<{ readonly fingerprint: string; readonly kind: "hang" }>;

@@ -67,7 +67,8 @@ export function combineOutcomes(outcomes: readonly MissionOutcome[]): MissionOut
  * A goal run's (`--goal`) own endings besides the shared `MissionOutcome`s, each folded onto the
  * canonical outcome — and so onto its exit code — HERE, the one place the goal vocabulary maps to
  * the portable verdict (the CLI's `goalExitCode`, MCP `get_mission_result` and the result schema all
- * read it):
+ * read it). #217: a goal result's `missionOutcome` is ALWAYS the folded canonical outcome; the goal's
+ * own ending is carried beside it as `goalOutcome`:
  *
  *  - `succeeded` → `clean` (0): every independent success check held.
  *  - `failed`    → `defects-found` (1): the model said `done`, but an independent success check did
@@ -89,6 +90,18 @@ export const GOAL_OUTCOME_FOLD: Readonly<Record<GoalOnlyOutcome, MissionOutcome>
   exhausted: "defects-found",
   blocked: "defects-found",
 };
+
+/**
+ * Every value a goal run's `goalOutcome` can hold (#217): its own endings plus the shared outcomes a
+ * goal run can end with directly (a hang, a crash, a 5xx `defects-found`, …).
+ */
+export const GOAL_OUTCOMES = [...GOAL_ONLY_OUTCOMES, ...MISSION_OUTCOMES] as const;
+export type GoalOutcome = (typeof GOAL_OUTCOMES)[number];
+
+/** True for a value a goal result's `goalOutcome` may hold. */
+export function isGoalOutcome(value: unknown): value is GoalOutcome {
+  return typeof value === "string" && (GOAL_OUTCOMES as readonly string[]).includes(value);
+}
 
 /** The canonical outcome of a goal run's own ending (a shared `MissionOutcome` folds onto itself). */
 export function foldGoalOutcome(outcome: GoalOnlyOutcome | MissionOutcome): MissionOutcome {

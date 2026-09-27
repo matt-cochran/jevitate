@@ -594,12 +594,14 @@ function stallTimeoutMs(raw: string | undefined): number | undefined | null {
 
 const EXPLORE_OUTCOME_HELP = `
 Outcomes, stop reasons and exit codes:
-  Every result carries a canonical missionOutcome (and exitCode):
+  Every result carries a canonical missionOutcome (and exitCode), whatever the strategy:
     clean 0 · defects-found 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
-  --strategy goal's own "outcome" has its own exit codes instead:
-    succeeded 0 · failed 1 · exhausted 1 · blocked 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
+  --strategy goal also carries its own ending as "goalOutcome" (= its "outcome"), folded onto missionOutcome:
+    succeeded → clean 0 · failed / exhausted / blocked → defects-found 1
+    (defects-found, inconclusive, crashed, hang, intermittent are themselves)
   --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
-    done | blocked | exhausted | no-progress | hang | inconclusive | crashed
+    done | blocked | exhausted | no-progress | hang | inconclusive | crashed | budget
+    (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
     | scope-unreachable | targets-refused | hang | crashed

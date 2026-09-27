@@ -208,7 +208,7 @@ describe("QueuedMissionSchema", () => {
   it("carries the drain lifecycle: running, done with a result id, failed with an error (#117)", () => {
     expect(() => QueuedMissionSchema.parse({ ...queued, status: "running", startedAtIso: "2026-09-20T00:00:01Z" })).not.toThrow();
     expect(() =>
-      QueuedMissionSchema.parse({ ...queued, status: "done", resultId: "explore-2026-09-20T00-00-02-000Z", missionOutcome: "succeeded", exitCode: 0 }),
+      QueuedMissionSchema.parse({ ...queued, status: "done", resultId: "explore-2026-09-20T00-00-02-000Z", missionOutcome: "clean", goalOutcome: "succeeded", exitCode: 0 }),
     ).not.toThrow();
     expect(() => QueuedMissionSchema.parse({ ...queued, status: "failed", error: "unknown or unpromoted mission target" })).not.toThrow();
     expect(() => QueuedMissionSchema.parse({ ...queued, status: "bogus" })).toThrow();

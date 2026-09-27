@@ -52,8 +52,8 @@ clean.
 
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
-`explore-<stamp>` (a goal run; its own `succeeded`/`failed`/`exhausted`/`blocked` comes back as
-`goalOutcome`, folded onto `clean`/`defects-found`), `coverage-`, `adversarial-`, `feature-` or
+`explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own
+`succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `adversarial-`, `feature-` or
 `usability-<stamp>` — or a `queue_exploration` `missionId`.
 
 ### Every `outcome`, `stop` and `missionOutcome` value
@@ -61,40 +61,43 @@ finished run; a broken run comes back as an error result. Its `id` is a result s
 The table above is the canonical `MissionOutcome` — every mission's typed verdict and the
 process exit code it maps to (`missionExitCode()`, `packages/domain/src/mission-outcome.ts`).
 Every mission's result also carries a `missionOutcome: MissionOutcome` (and `exitCode`) field —
-the canonical, exit-coded verdict from that table — so a caller that only cares "did this run
-prove something clean, or not" never needs to interpret a mission-specific `outcome`/`stop`
-below. Those mission-specific fields exist for diagnosis: why the run stopped, in that mission's
-own terms.
+the canonical, exit-coded verdict from that table, on every strategy, a goal run included — so a
+caller that only cares "did this run prove something clean, or not" never needs to interpret a
+mission-specific `outcome`/`goalOutcome`/`stop` below. Those mission-specific fields exist for
+diagnosis: why the run stopped, in that mission's own terms.
 
-**Goal mission (`--goal`) — its own `outcome: GoalBasedOutcome`.** Each goal-only value folds onto a
-canonical outcome, and so onto its exit code, in ONE place (`GOAL_OUTCOME_FOLD` / `outcomeExitCode()`,
-`packages/domain/src/mission-outcome.ts`; the CLI's `goalExitCode()` and MCP `get_mission_result` both
-read it):
+**Goal mission (`--goal`) — its own `goalOutcome: GoalBasedOutcome`** (also in `outcome`), carried
+beside the canonical `missionOutcome`, never in its place. Each goal-only value folds onto a
+canonical outcome — the result's `missionOutcome` — and so onto its exit code, in ONE place
+(`GOAL_OUTCOME_FOLD` / `outcomeExitCode()`, `packages/domain/src/mission-outcome.ts`; the CLI's
+`goalExitCode()`, the result schema and MCP `get_mission_result` all read it). For example, a goal
+whose success check did not hold is `missionOutcome: "defects-found"`, `goalOutcome: "failed"`, exit 1:
 
-| `outcome` | Folds onto | Exit code | Meaning |
+| `goalOutcome` | `missionOutcome` | Exit code | Meaning |
 |---|---|---|---|
 | `succeeded` | `clean` | 0 | every independent success check held |
 | `failed` | `defects-found` | 1 | the model said `done` (or kept proposing it until code stopped accepting proposals), but an independent success check did not hold — `failure.kind: "success-check-failed"`, the check named in `failure.message` |
 | `exhausted` | `defects-found` | 1 | the action/decision budget ran out before the checks held |
 | `blocked` | `defects-found` | 1 | the loop stopped without the goal met and without claiming it: the model gave up (e.g. no matching control), or no progress was possible |
-| `defects-found` | — | 1 | a defect was found: an HTTP 5xx from the app, a violated declared invariant, or a `--log-defect` match. It overrides the endings above, even when the success checks held: the checks' own verdict stays in `assertionPassed` and `checks`, and `reason` names the defect (`PUT /api/profile → 500`). A broken run or a hang keeps its own outcome, and the defect is still listed in `defects`. |
-| `inconclusive` | — | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
-| `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
-| `hang` | 3 | the app under test hung, and it reproduced on replay |
-| `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
+| `defects-found` | `defects-found` | 1 | a defect was found: an HTTP 5xx from the app, a violated declared invariant, or a `--log-defect` match. It overrides the endings above, even when the success checks held: the checks' own verdict stays in `assertionPassed` and `checks`, and `reason` names the defect (`PUT /api/profile → 500`). A broken run or a hang keeps its own outcome, and the defect is still listed in `defects`. |
+| `inconclusive` | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
+| `crashed` | `crashed` | 2 | the engine failed (browser/page crash, unexpected exception) |
+| `hang` | `hang` | 3 | the app under test hung, and it reproduced on replay |
+| `intermittent` | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
 **Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
-the `outcome` above; not separately exit-coded):
+the `goalOutcome` above; not separately exit-coded):
 
 | `stop` | Meaning |
 |---|---|
-| `done` | the model proposed the goal complete and code accepted the proposal (the transcript says "done accepted provisionally" when a check — a `reloadThen`, or one holding since before any action — is still left to the final verdict, which may still fail it: outcome `failed`) |
+| `done` | the loop ended on the model's `done`: code accepted the proposal (the transcript says "done accepted provisionally" when a check — a `reloadThen`, or one holding since before any action — is still left to the final verdict, which may still fail it: `goalOutcome: "failed"`), or code rejected it repeatedly until it stopped taking proposals (`goalOutcome: "failed"`) |
 | `blocked` | the model decided it could not proceed |
 | `exhausted` | the action or decision budget ran out |
 | `no-progress` | the same state repeated with no forward movement (the no-progress detector) |
 | `hang` | the app under test hung |
 | `inconclusive` | a required decision round-trip stayed unavailable |
 | `crashed` | the engine failed |
+| `budget` | a declared mission spend budget was crossed (`inconclusive`) |
 
 **Adversarial mission (`--strategy adversarial`) — `stop: AdversarialStop`**, why the hunt
 ended (its own top-level `outcome` is already the canonical `MissionOutcome` from the table
@@ -102,8 +105,8 @@ above, so it needs no separate exit-code mapping):
 
 | `stop` | Meaning |
 |---|---|
-| `step-budget` | the max-actions budget ran out |
-| `action-budget` | the max-decisions budget ran out |
+| `step-budget` | the strategy-step budget (`--max-decisions`) ran out |
+| `action-budget` | the executed-action budget (`--max-actions`) ran out |
 | `time-budget` | the mission's time budget ran out |
 | `strategies-exhausted` | every misuse strategy was tried with nothing left to do |
 | `targets-refused` | every target control on the page was refused by the safety policy (paid, destructive, session-ending or `--deny`'d) and none could be exercised, so the hunt stopped at once — `inconclusive`, `failure.kind: "insufficient-coverage"`, its message naming the refused controls and how to permit them (`--allow-destructive`; remove the `--deny`; reclassify with `--paid`/`--deny`) |

@@ -94,7 +94,7 @@ export function renderReportMarkdown(input: ReportMarkdownInput): string {
     "| run | mode | target | started | outcome | build |",
     "| --- | --- | --- | --- | --- | --- |",
     ...input.runs.map(
-      (r) => `| \`${r.runId}\` | ${r.mode} | ${r.target ?? ""} | ${r.startedAt ?? ""} | ${r.missionOutcome ?? ""} | ${r.targetBuild ?? ""} |`,
+      (r) => `| \`${r.runId}\` | ${r.mode} | ${r.target ?? ""} | ${r.startedAt ?? ""} | ${r.missionOutcome ?? ""}${r.goalOutcome === undefined ? "" : ` (goal: ${r.goalOutcome})`} | ${r.targetBuild ?? ""} |`,
     ),
     "",
   );
