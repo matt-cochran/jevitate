@@ -229,11 +229,12 @@ export function extractRunFindings(data: unknown): RunFinding[] {
 }
 
 /**
- * A run's outcome for voting: the goal strategy's own `outcome` (succeeded / exhausted / blocked /
- * …), else the canonical `missionOutcome` (adversarial's `outcome` already is one).
+ * A run's outcome for voting: the goal strategy's own ending (`goalOutcome`, #217: succeeded / failed /
+ * exhausted / blocked / …), else the canonical `missionOutcome` (adversarial's `outcome` already is one).
  */
 export function runOutcomeOf(strategy: string, data: unknown): string {
   if (!isRecord(data)) return "crashed";
+  if (strategy === "goal" && typeof data.goalOutcome === "string") return data.goalOutcome;
   if (strategy === "goal" && typeof data.outcome === "string") return data.outcome;
   if (typeof data.missionOutcome === "string") return data.missionOutcome;
   if (typeof data.outcome === "string") return data.outcome;

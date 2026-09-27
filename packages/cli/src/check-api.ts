@@ -178,6 +178,8 @@ export interface CheckItemReport {
   readonly resultPath?: string;
   readonly runId?: string;
   readonly outcome?: string;
+  /** #217: a goal item's own ending (succeeded/failed/exhausted/blocked/…); `outcome` is its canonical verdict. */
+  readonly goalOutcome?: string;
   readonly actions: number;
   readonly durationMs: number;
   /** JUnit verdict after gating. */
@@ -793,6 +795,7 @@ interface Executed {
   readonly status: "ran" | "error";
   readonly resultPath?: string;
   readonly outcome?: string;
+  readonly goalOutcome?: string;
   readonly actions: number;
   readonly error?: { type: string; message: string };
 }
@@ -963,8 +966,9 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...(fx === undefined ? {} : { fixtures: fx }),
       });
       stampResultFile(r.resultPath, stamp);
-      const executed = missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
-      return { ...executed, actions: r.actions };
+      // #217: the canonical verdict gates; the goal's own ending rides beside it.
+      const executed = missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
+      return { ...executed, goalOutcome: r.goalOutcome, actions: r.actions };
     } finally {
       await fx?.restore();
     }
@@ -1231,6 +1235,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       ...(ex.resultPath === undefined ? {} : { resultPath: ex.resultPath }),
       ...(run === undefined ? {} : { runId: run.runId }),
       ...(ex.outcome === undefined ? {} : { outcome: ex.outcome }),
+      ...(ex.goalOutcome === undefined ? {} : { goalOutcome: ex.goalOutcome }),
     };
   });
 

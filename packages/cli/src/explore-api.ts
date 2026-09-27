@@ -58,6 +58,7 @@ import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import {
   combineOutcomes,
+  foldGoalOutcome,
   gatingDefects,
   type FilingConfig,
   type IssueDraft,
@@ -390,8 +391,13 @@ export interface RunExplorationResult {
   /** The result schema's version (#195): the common fields below are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "goal";
-  /** The portable verdict (a goal run's own vocabulary; equal to `outcome`). */
-  readonly missionOutcome: GoalBasedOutcome;
+  /**
+   * The portable verdict — ALWAYS canonical (#217): `goalOutcome` folded by the domain's single
+   * mapping (`GOAL_OUTCOME_FOLD`): succeeded → clean; failed/exhausted/blocked → defects-found.
+   */
+  readonly missionOutcome: MissionOutcome;
+  /** The goal run's own ending (#217): succeeded/failed/exhausted/blocked, or a shared outcome. Equal to `outcome`. */
+  readonly goalOutcome: GoalBasedOutcome;
   readonly outcome: GoalBasedOutcome;
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
@@ -717,7 +723,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const result: RunExplorationResult = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "goal",
-      missionOutcome: goalOutcome,
+      missionOutcome: foldGoalOutcome(goalOutcome),
+      goalOutcome,
       issues,
       timing: mission.run.timing,
       outcome: goalOutcome,
@@ -790,7 +797,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...host.fields,
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
-    writeMissionResult(journal.recordingPath, goalOutcome, result.exitCode, result, runUsage);
+    writeMissionResult(journal.recordingPath, result.missionOutcome, result.exitCode, result, runUsage);
     return result;
   } finally {
     disarmKillSwitch();

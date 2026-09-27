@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { contentHash } from "@jevitate/domain";
+import { GOAL_OUTCOME_FOLD, contentHash, isGoalOutcome } from "@jevitate/domain";
 import {
   findingKey,
   requestIdentity,
@@ -83,7 +83,10 @@ export interface RunRecord {
   readonly engine?: EngineStamp;
   /** The caller-supplied target build id (`jevitate check --target-build`). */
   readonly targetBuild?: string;
+  /** The canonical verdict (#217: a pre-#217 goal result's own word is folded onto it). */
   readonly missionOutcome?: string;
+  /** #217: a goal run's own ending (succeeded/failed/exhausted/blocked/…). */
+  readonly goalOutcome?: string;
   readonly exitCode?: number;
   readonly observations: readonly FindingObservation[];
   /** The run's persisted model `usage` object (#163), as written — summed by `jevitate report`. */
@@ -318,7 +321,8 @@ function flaggedStateObservation(d: Json): FindingObservation | null {
 
 /** A goal run's failed success checks: each is a hard `goal-check` finding. */
 function goalCheckObservations(result: Json, ctx: Ctx): FindingObservation[] {
-  const outcome = str(result.outcome);
+  // #217: the goal's own ending is `goalOutcome` (`outcome` is the same word, on older results too).
+  const outcome = str(result.goalOutcome) ?? str(result.outcome);
   // A run that broke (crashed/inconclusive) proved nothing about its checks: not a finding.
   if (outcome === "crashed" || outcome === "inconclusive" || outcome === undefined || outcome === "succeeded") return [];
   const target = isRecord(result.target) ? result.target : undefined;
@@ -511,6 +515,21 @@ function missionScope(mode: RunMode, result: Json): RunScope | undefined {
 }
 
 /**
+ * A run's canonical verdict and, for a goal run, its own ending (#217). A result written before #217
+ * held the goal's own word in `missionOutcome`: folded here by the domain's single mapping
+ * (`GOAL_OUTCOME_FOLD`), so a report never shows a goal word as the verdict.
+ */
+function runOutcomes(missionOutcome: string | undefined, goalOutcome: unknown): { missionOutcome?: string; goalOutcome?: string } {
+  if (missionOutcome !== undefined && Object.hasOwn(GOAL_OUTCOME_FOLD, missionOutcome)) {
+    return { missionOutcome: GOAL_OUTCOME_FOLD[missionOutcome as keyof typeof GOAL_OUTCOME_FOLD], goalOutcome: missionOutcome };
+  }
+  return {
+    ...(missionOutcome === undefined ? {} : { missionOutcome }),
+    ...(isGoalOutcome(goalOutcome) ? { goalOutcome } : {}),
+  };
+}
+
+/**
  * Reads one persisted mission result (`{missionOutcome, exitCode, result}`) into a `RunRecord`.
  * Returns null for anything that is not one (a Recording, a transcript, an issue draft).
  */
@@ -564,7 +583,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     mode,
     path,
     observations,
-    missionOutcome: str(raw.missionOutcome),
+    ...runOutcomes(str(raw.missionOutcome), result.goalOutcome),
     ...(num(raw.exitCode) === undefined ? {} : { exitCode: num(raw.exitCode) }),
     ...(origin === undefined ? {} : { target: origin }),
     ...(str(suite?.target) === undefined ? {} : { targetName: str(suite?.target) }),

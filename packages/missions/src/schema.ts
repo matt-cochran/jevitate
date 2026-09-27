@@ -236,6 +236,8 @@ export interface QueuedMission extends MissionRequest {
   resultId?: string;
   /** The finished run's canonical outcome and exit code (`done` only). */
   missionOutcome?: string;
+  /** #217: a goal mission's own ending (succeeded/failed/exhausted/blocked/…), beside the canonical outcome. */
+  goalOutcome?: string;
   exitCode?: number;
   /** Why the mission could not run (`failed` only). */
   error?: string;
@@ -258,6 +260,7 @@ export const QueuedMissionSchema: z.ZodType<QueuedMission> = z
     finishedAtIso: z.string().optional(),
     resultId: z.string().regex(SAFE_ID_RE, "invalid result id").optional(),
     missionOutcome: z.string().optional(),
+    goalOutcome: z.string().optional(),
     exitCode: z.number().int().optional(),
     error: z.string().optional(),
   })

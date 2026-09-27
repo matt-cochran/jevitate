@@ -192,6 +192,24 @@ describe("consolidate (#139)", () => {
     expect(ux?.observations[0]).toMatchObject({ severity: "advisory", identity: { category: "advisory", fingerprint: "5e5e5e5e5e5e5e5e" } });
   });
 
+  it("#217: a goal run's verdict is canonical and its own ending is goalOutcome — a pre-#217 goal word is folded", () => {
+    const seedUrl = "https://app.example/cart";
+    const failedCheck = { check: "urlIncludes:/done", passed: false, detail: "url was /cart" };
+    const current = runFromMissionResult("/r/explore-2026-09-24T13-00-00-000Z.result.json", {
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: { strategy: "goal", missionOutcome: "defects-found", goalOutcome: "failed", outcome: "failed", checks: [failedCheck], target: { seedUrl } },
+    });
+    expect([current?.missionOutcome, current?.goalOutcome]).toEqual(["defects-found", "failed"]);
+    expect(current?.observations.map((o) => o.identity.signal)).toEqual(["goal-check:urlIncludes:/done"]);
+    const legacy = runFromMissionResult("/r/explore-2026-09-24T13-00-00-001Z.result.json", {
+      missionOutcome: "blocked",
+      exitCode: 1,
+      result: { outcome: "blocked", checks: [failedCheck], target: { seedUrl } },
+    });
+    expect([legacy?.missionOutcome, legacy?.goalOutcome]).toEqual(["defects-found", "blocked"]);
+  });
+
   it("refuses to read what is not a mission result", () => {
     expect(runFromMissionResult("/r/explore-x.json", { version: "1.0.0", site: "x", pages: [] })).toBeNull();
     expect(runFromMissionResult("/r/unknown-x.result.json", { missionOutcome: "clean", exitCode: 0, result: {} })).toBeNull();

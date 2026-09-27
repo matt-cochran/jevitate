@@ -324,6 +324,8 @@ export interface RunSummary {
   readonly target?: string;
   readonly startedAt?: string;
   readonly missionOutcome?: string;
+  /** #217: a goal run's own ending, beside the canonical `missionOutcome`. */
+  readonly goalOutcome?: string;
   readonly targetBuild?: string;
   readonly engineCommit?: string;
   readonly findings: number;
@@ -354,6 +356,7 @@ export function summarizeRun(r: RunRecord): RunSummary {
     ...(r.target === undefined ? {} : { target: r.target }),
     ...(r.startedAt === undefined ? {} : { startedAt: r.startedAt }),
     ...(r.missionOutcome === undefined ? {} : { missionOutcome: r.missionOutcome }),
+    ...(r.goalOutcome === undefined ? {} : { goalOutcome: r.goalOutcome }),
     ...(r.targetBuild === undefined ? {} : { targetBuild: r.targetBuild }),
     ...(r.engine?.commit === undefined ? {} : { engineCommit: r.engine.commit }),
   };

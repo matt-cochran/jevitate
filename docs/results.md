@@ -26,7 +26,8 @@ fields the same way:
 |---|---|---|
 | `schemaVersion` | `1` | Increases whenever any field in this table changes incompatibly. |
 | `strategy` | string | The strategy that produced the result. |
-| `missionOutcome` | string | The verdict. It is one of the [mission outcomes](./outcomes.md), except that a goal run keeps its own `succeeded`, `failed`, `exhausted` and `blocked` (each folds onto `clean` or `defects-found`; see [outcomes](./outcomes.md)). |
+| `missionOutcome` | string | The verdict: always one of the canonical [mission outcomes](./outcomes.md) (`clean`, `defects-found`, `hang`, `intermittent`, `inconclusive`, `crashed`), on every strategy — a goal run included. |
+| `goalOutcome` | string | Goal runs only (and on every goal run): the goal's own ending — `succeeded`, `failed`, `exhausted`, `blocked`, or a shared outcome it ended with directly (e.g. `defects-found`, `crashed`). It folds onto `missionOutcome` (`succeeded` → `clean`; `failed`/`exhausted`/`blocked` → `defects-found`; see [outcomes](./outcomes.md)). Additive in schema version 1. |
 | `exitCode` | number | The process exit code for `missionOutcome`. This is the value to compare across strategies. |
 | `defects` | array | Every defect the run found, whichever oracle found it: hard signals, declared invariants and `server-log` defects — and a coverage/exploratory run's frontier defects (`horizontal-overflow`, `judgment-flagged-state`), which are also listed with their repro Recording in `coverage.defects`. Each one has a `fingerprint` (16 hex characters) and a `kind`. Every strategy records an HTTP 5xx from the app's own origins as an `http-5xx` defect with the same fingerprint (endpoint pattern + status), whichever strategy found it; a 5xx from a third-party origin is not the app's defect. A defect the strategy reports without gating on it has `advisory: true`: a usability run's `server-log` or `http-5xx` defect, and every `judgment-flagged-state` (Jev's opinion alone, #214). An advisory defect never sets `missionOutcome`/`exitCode`, and `check` never gates on it (unless the suite sets `gateAdvisory`). |
 | `hangs` | array | Every hang finding, each with its `fingerprint` and reproduction. |
@@ -52,7 +53,7 @@ them no meaning across strategies. For example:
 - adversarial runs have `advisories`, `scope` and `coverage`;
 - usability runs have `report`, `reportPath` and `screenshots`.
 
-`outcome` is one of these fields. For a goal run it is the goal outcome, and for a frontier run it
+`outcome` is one of these fields. For a goal run it is the goal outcome (the same as `goalOutcome`), and for a frontier run it
 is the stop reason. It is not the portable verdict: use `missionOutcome` or `exitCode` for that.
 
 ## Deprecated aliases (0.2.0 only)

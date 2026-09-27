@@ -196,6 +196,12 @@ function errorResult(value: unknown): McpToolResult {
  *  SDK error (which can echo request internals verbatim) never surfaces a key
  *  through the MCP result. The message returned to the caller is generic and
  *  key-free; this is belt-and-braces on top of the gateway's outbound guard. */
+/** #217: a persisted goal result's own ending (`result.goalOutcome`), when present. */
+function goalOutcomeOf(file: object): unknown {
+  const result = (file as { result?: unknown }).result;
+  return result !== null && typeof result === "object" && "goalOutcome" in result ? (result as { goalOutcome: unknown }).goalOutcome : undefined;
+}
+
 function redactCredentials(message: string, store: CredentialStore): string {
   let out = message;
   for (const key of ALL_CREDENTIAL_KEYS) {
@@ -398,10 +404,10 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     } catch {
       return errorResult({ error: "corrupt_result", ...ids });
     }
-    // A goal run's own outcome (succeeded/exhausted/blocked) folds onto the canonical one (#117).
+    // #217: `missionOutcome` is canonical; a goal run's own ending rides beside it as `goalOutcome`.
     const parsedOutcome =
       parsed !== null && typeof parsed === "object" && "missionOutcome" in parsed
-        ? parseResultOutcome((parsed as { missionOutcome: unknown }).missionOutcome)
+        ? parseResultOutcome((parsed as { missionOutcome: unknown }).missionOutcome, goalOutcomeOf(parsed))
         : null;
     if (parsedOutcome === null) {
       return errorResult({ error: "corrupt_result", ...ids });
