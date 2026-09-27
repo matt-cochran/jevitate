@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { positiveIntArg } from "./cli-args.js";
 import type { MissionFailure } from "@jevitate/domain";
 import type { SecretField } from "@jevitate/explore";
 import {
@@ -43,7 +44,7 @@ export function withFixtureFlags(cmd: Command): Command {
     .option("--before <cmd>", "operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}")
     .option("--after <cmd>", "operator shell hook run after the mission and every replay (needs --allow-shell-hooks)")
     .option("--allow-shell-hooks", "opt in to running --before/--after (operator commands; never model-chosen)", false)
-    .option("--hook-timeout-ms <ms>", "timeout for each --before/--after hook (default 60000; the process group is killed)");
+    .option("--hook-timeout-ms <ms>", "timeout for each --before/--after hook (default 60000; the process group is killed)", positiveIntArg);
 }
 
 export interface FixtureContext {

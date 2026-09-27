@@ -6,6 +6,7 @@ import { withEngine } from "./engine.js";
 import { LedgerError, ledgerAdd, ledgerList, runLedgerVerify } from "./ledger-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 import { VerifyFixInputError } from "./verify-fix-api.js";
+import { positiveIntArg } from "./cli-args.js";
 import { emitEnvelope, formatLedgerAddHuman, formatLedgerListHuman, formatLedgerVerifyHuman } from "./cli-output.js";
 
 /**
@@ -104,7 +105,7 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .option("--ticket <id>", "only the entries filed as this ticket")
     .option("--dir <path>", DIR_HELP)
     .option("--storage-state <file>", "the session to replay an authenticated target with (entries never store one)")
-    .option("--replays <n>", "fresh-context replays per entry that confirm a fix (default 3)")
+    .option("--replays <n>", "fresh-context replays per entry that confirm a fix (default 3)", positiveIntArg)
     .option("--allow-log-cmd", "re-checking a server-log entry whose source is cmd:<command> needs this too", false)
     .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(async function (this: Command, fingerprints: string[]) {

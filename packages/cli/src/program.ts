@@ -61,7 +61,7 @@ import {
 } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
-import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { UnsafeNameError, assertSafeName, safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
@@ -139,7 +139,9 @@ import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "./sec
 import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js";
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
-import { EXIT_CODES, exitCodeForEnvelope } from "./exit-codes.js";
+import { EXIT_CODES } from "./exit-codes.js";
+import { commandPath, emitJsonOrRefusal, trackActionCommand } from "./cli-refusal.js";
+import { finiteNumberArg, intArg, positiveNumberArg, nonNegativeIntArg, positiveIntArg, ratioArg } from "./cli-args.js";
 import { emitEnvelope, formatInitKeysHuman, formatMissionHuman, formatMultiRunHuman, formatVerifyFixHuman, type EmitOptions } from "./cli-output.js";
 import {
   detectRuntimes,
@@ -546,10 +548,9 @@ function parsePlannedScript(raw: string): PlannedStep[] {
  * hard-exiting, so `exitOverride()` in tests works.
  */
 function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
-  const writeOut = program.configureOutput().writeOut;
-  writeOut?.(`${JSON.stringify(envelope)}\n`);
+  // #218: a refusal without --json is a human `error <CODE>: …` line on stderr (cli-refusal.ts).
+  emitJsonOrRefusal(program, envelope);
   if (envelope.ok) emitUsageLine(program, envelope.data);
-  process.exitCode = exitCodeForEnvelope(envelope);
 }
 
 /**
@@ -559,6 +560,21 @@ function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
 function emitCommandResult<T>(program: Command, envelope: JsonEnvelope<T>, opts: EmitOptions<T>): void {
   emitEnvelope(program, envelope, opts);
   if (envelope.ok) emitUsageLine(program, envelope.data);
+}
+
+/**
+ * #221: a user-supplied name that becomes a path (a profile name, a regression id) must be one safe
+ * segment (`assertSafeName`, @jevitate/domain). Refuses it (E_INVALID_NAME, exit 64) and returns true.
+ */
+function refuseUnsafeName(program: Command, name: string, what: string): boolean {
+  try {
+    assertSafeName(name, what);
+    return false;
+  } catch (err) {
+    if (!(err instanceof UnsafeNameError)) throw err;
+    emitJson(program, fail(err.code, err.message));
+    return true;
+  }
 }
 
 /** A non-`--json` result: printed as bare JSON on stdout, with the cost summary line on stderr. */
@@ -586,7 +602,7 @@ function emitUsageLine(program: Command, data: unknown): void {
  * `MISSION_EXIT_CODES` (@jevitate/domain) and `goalExitCode`/`missionExitCode` (./mission-exit.ts).
  */
 /** `--stall-timeout <seconds>` (#114) → milliseconds; `undefined` when omitted, `null` when not a positive number. */
-function stallTimeoutMs(raw: string | undefined): number | undefined | null {
+function stallTimeoutMs(raw: string | number | undefined): number | undefined | null {
   if (raw === undefined) return undefined;
   const seconds = Number(raw);
   return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
@@ -637,6 +653,8 @@ function versionString(): string {
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
   program.name("jevitate").description("Autonomous browser testing that turns discovered bugs into deterministic regression tests").version(versionString());
+  // #218: the shared refusal path (cli-refusal.ts) needs to know which command is running.
+  trackActionCommand(program);
 
   program
     .command("init")
@@ -723,6 +741,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string) {
       const { json } = this.opts<{ json?: boolean }>();
+      if (refuseUnsafeName(program, name, "profile name")) return;
       try {
         const status = await deps.profiles.create(name);
         const envelope = ok(status);
@@ -742,6 +761,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string) {
       const { json } = this.opts<{ json?: boolean }>();
+      if (refuseUnsafeName(program, name, "profile name")) return;
       try {
         const status = await deps.profiles.status(name);
         const envelope = ok(status);
@@ -924,8 +944,8 @@ export function buildProgram(deps: CliDeps): Command {
 
   recording
     .command("promote <file>")
-    .requiredOption("--page <n>", "page index")
-    .requiredOption("--step <n>", "step index within the page")
+    .requiredOption("--page <n>", "page index", nonNegativeIntArg)
+    .requiredOption("--step <n>", "step index within the page", nonNegativeIntArg)
     .requiredOption("--var <name>", "variable name to bind")
     .action(async function (this: Command, file: string) {
       const { page, step, var: varName } = this.opts<{ page: string; step: string; var: string }>();
@@ -1588,9 +1608,9 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option("--concurrency <n>", "pool size", "1")
-    .option("--iterations <n>", "iterations per actor", "1")
-    .option("--seed <n>", "master RNG seed", "1")
+    .option("--concurrency <n>", "pool size", positiveIntArg, 1)
+    .option("--iterations <n>", "iterations per actor", positiveIntArg, 1)
+    .option("--seed <n>", "master RNG seed", finiteNumberArg, 1)
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
@@ -1777,30 +1797,35 @@ export function buildProgram(deps: CliDeps): Command {
         "never over a good file with a session that already looks lost/logged-out; the last known-good state is used " +
         "instead, or nothing is written if none was ever captured.",
     )
-    .option("--max-actions <n>", "hard cap on executed actions")
-    .option("--max-decisions <n>", "hard cap on model decisions")
+    .option("--max-actions <n>", "hard cap on executed actions", positiveIntArg)
+    .option("--max-decisions <n>", "hard cap on model decisions", positiveIntArg)
     .option(
       "--stall-timeout <seconds>",
       "--strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120)",
+      positiveNumberArg,
     )
     .option(
       "--reply-wait-ms <ms>",
       "conversational pages: how long to keep waiting for a reply while the page shows no sign of working on one " +
         "(goal and usability; default 60000). While a request the message started is in flight, a busy indicator shows, " +
         "or the reply is still growing, the wait continues up to --reply-ceiling-ms",
+      positiveIntArg,
     )
     .option(
       "--reply-ceiling-ms <ms>",
       "conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)",
+      positiveIntArg,
     )
     .option(
       "--reply-max-chars <n>",
       "conversational pages: cap on each generated chat message (goal and usability; default 300)",
+      intArg({ min: 20, max: 2000 }),
     )
     .option(
       "--job-wait-ms <ms>",
       "goal and usability: while the page shows an in-progress status (\"Simulating…\", aria-busy, a job \"is running\"), " +
         "waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000)",
+      positiveIntArg,
     )
     .option(
       "--deny <pattern>",
@@ -1848,7 +1873,7 @@ export function buildProgram(deps: CliDeps): Command {
       "file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only",
     )
     .option("--issue-repo <owner/name>", "the system-under-test repo findings for THIS target are filed to")
-    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)")
+    .option("--hang-replays <n>", "fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)", nonNegativeIntArg)
     .option(
       "--hang-replay-writes",
       "let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed)",
@@ -1859,7 +1884,7 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)")
+    .option("--long-poll-ms <n>", "a request pending this long on an interactive page is a long-poll (default 5000)", nonNegativeIntArg)
     .option(
       "--api-prefix <path>",
       "a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/",
@@ -1876,6 +1901,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--min-control-coverage <ratio>",
       "adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive",
+      ratioArg,
     )
     .option(
       "--no-require-form-submit",
@@ -1919,6 +1945,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
+      nonNegativeIntArg,
     )
     .option(
       "--repeat <n>",
@@ -2016,7 +2043,7 @@ export function buildProgram(deps: CliDeps): Command {
         saveStorageState?: string;
         maxActions?: string;
         maxDecisions?: string;
-        stallTimeout?: string;
+        stallTimeout?: string | number;
         replyWaitMs?: string;
         replyCeilingMs?: string;
         replyMaxChars?: string;
@@ -2716,7 +2743,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--fingerprint <fp>", "the defect/hang fingerprint to verify")
     .option("--regressions-dir <path>", "regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions)")
     .option("--storage-state <file>", "override the storageState the mission ran with")
-    .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)")
+    .option("--replays <n>", "fresh-context replays that confirm a fix (default 3)", positiveIntArg)
     .option(
       "--allow-emulation-override",
       "replay at --viewport/--device even though it differs from the finding's recorded emulation (#149); default: refused (fails closed)",
@@ -2842,7 +2869,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--success <spec>", "independent success assertion, e.g. urlIncludes:/confirmed")
     .option("--id <id>", "journey id (used for the <id>.json filename in the store)")
     .option("--name <name>", "human-readable journey name")
-    .option("--takes <n>", "corroborating takes incl. discovery (default 1)", "1")
+    .option("--takes <n>", "corroborating takes incl. discovery (default 1)", positiveIntArg, 1)
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
@@ -2854,8 +2881,8 @@ export function buildProgram(deps: CliDeps): Command {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
-    .option("--max-actions <n>", "hard cap on executed actions")
-    .option("--max-decisions <n>", "hard cap on model decisions")
+    .option("--max-actions <n>", "hard cap on executed actions", positiveIntArg)
+    .option("--max-decisions <n>", "hard cap on model decisions", positiveIntArg)
     .option("--real", "use live Jev + OpenRouter gateways (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
@@ -3026,7 +3053,7 @@ export function buildProgram(deps: CliDeps): Command {
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
-    .option("--attempts <n>", "reproduction attempts before labeling flaky", "3")
+    .option("--attempts <n>", "reproduction attempts before labeling flaky", positiveIntArg, 3)
     .option("--summary <text>", "optional human-readable bug summary recorded in the meta sidecar")
     .option(
       "--result <file>",
@@ -3054,6 +3081,14 @@ export function buildProgram(deps: CliDeps): Command {
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
       const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = flags;
+      if (refuseUnsafeName(program, id, "regression id")) return;
+      // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
+      for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
+        if (path !== undefined && !existsSync(path)) {
+          emitJson(program, fail("E_REGRESSION_ARGS", `${flag} file not found: ${path}`));
+          return;
+        }
+      }
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
         return;
@@ -3128,7 +3163,7 @@ export function buildProgram(deps: CliDeps): Command {
   withBrowserLaunchFlags(withEmulationFlags(regression.command("run")))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
-    .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)")
+    .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)", positiveIntArg)
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
@@ -3146,7 +3181,14 @@ export function buildProgram(deps: CliDeps): Command {
         emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
+      if (refuseUnsafeName(program, id, "regression id")) return;
       const regressionsDir = resolveRegressionsDir(dir);
+      // #218: an unknown id is a usage error (64), refused before anything opens.
+      if (!existsSync(join(regressionsDir, `${id}.recording.json`))) {
+        const notFound = new RegressionNotFoundError(id, regressionsDir);
+        emitJson(program, fail(notFound.code, notFound.message));
+        return;
+      }
       const opened: Array<() => Promise<void>> = [];
       try {
         const recording = RecordingSchema.parse(JSON.parse(await readFile(join(regressionsDir, `${id}.recording.json`), "utf8")));
@@ -3181,7 +3223,6 @@ export function buildProgram(deps: CliDeps): Command {
         } else {
           emitJson(program, fail("E_REGRESSION_RUN", String(err instanceof Error ? err.message : err)));
         }
-        process.exitCode = 2;
       } finally {
         for (const close of opened) await close();
       }
@@ -3353,7 +3394,7 @@ export function buildProgram(deps: CliDeps): Command {
   )
     .option("--once", "drain the missions queued now, then exit (default)")
     .option("--watch", "keep draining: poll the queue every --interval ms until interrupted")
-    .option("--interval <ms>", "--watch poll interval in ms (default 5000)", "5000")
+    .option("--interval <ms>", "--watch poll interval in ms (default 5000)", positiveIntArg, 5000)
     .option("--dir <path>", "mission queue directory (default: ~/.jevitate/missions/queue)")
     .option("--targets-dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
     .option("--out <dir>", "where results are written (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date> — where `jevitate mcp` reads them)")
@@ -3519,7 +3560,7 @@ export function buildProgram(deps: CliDeps): Command {
   program
     .command("ui")
     .description("start the local HITL approval dashboard (loopback-only HTTP server)")
-    .option("--port <n>", "explicit port (fails on conflict; default 4180, retries on conflict)")
+    .option("--port <n>", "explicit port (fails on conflict; default 4180, retries on conflict)", intArg({ min: 0, max: 65535 }))
     .option("--no-open", "do not open the dashboard URL in the default browser")
     .option("--inbox-dir <path>", "inbox store directory (default: ~/.jevitate/inbox — same dir `jevitate mcp` serves)")
     .action(async function (this: Command) {
@@ -3593,7 +3634,8 @@ export function buildProgram(deps: CliDeps): Command {
       try {
         recording = RecordingSchema.parse(JSON.parse(await readFile(recordingPath, "utf8")));
       } catch (err) {
-        emitJson(program, fail("E_UX_RECORDING", String(err instanceof Error ? err.message : err)));
+        // #218: an unreadable or invalid Recording is unusable input — a usage error (64).
+        emitJson(program, fail("E_UX_INPUT", String(err instanceof Error ? err.message : err)));
         return;
       }
       // #85 item 2 / #134: the artifacts next to the Recording — the live usability run's evidence
@@ -3678,9 +3720,40 @@ export function buildProgram(deps: CliDeps): Command {
  */
 function useUsageExitCode(cmd: Command): void {
   const original = cmd.error.bind(cmd);
-  cmd.error = (message: string, errorOptions?: { code?: string; exitCode?: number }): never =>
-    original(message, { ...errorOptions, exitCode: errorOptions?.exitCode ?? EXIT_CODES.usage });
+  cmd.error = (message: string, errorOptions?: { code?: string; exitCode?: number }): never => {
+    // An argParser's InvalidArgumentError (cli-args.ts) carries commander's generic exit code 1.
+    const exitCode = errorOptions?.code === "commander.invalidArgument" ? EXIT_CODES.usage : (errorOptions?.exitCode ?? EXIT_CODES.usage);
+    // #218: a bad numeric value (cli-args.ts), unknown flag or missing argument under `--json` still
+    // yields the one envelope line a machine caller parses; commander's human line goes to stderr.
+    if (exitCode === EXIT_CODES.usage && rawArgsOf(rootOf(cmd)).includes("--json")) {
+      const envelope = fail(usageParseErrorCode(cmd), message.replace(/^error: /, ""));
+      rootOf(cmd).configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
+    }
+    return original(message, { ...errorOptions, exitCode });
+  };
   for (const sub of cmd.commands) useUsageExitCode(sub);
+}
+
+/**
+ * The envelope code of a command line commander refused while parsing it (a usage error, 64): the
+ * command's own `E_<COMMAND>_ARGS` (`explore` → E_EXPLORE_ARGS, `verify-fix` → E_VERIFY_FIX_ARGS),
+ * the code its in-action argument checks already use; `E_CLI_ARGS` at the root (an unknown command).
+ */
+function usageParseErrorCode(cmd: Command): string {
+  const path = commandPath(cmd);
+  return `E_${path === "" ? "CLI" : path.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ARGS`;
+}
+
+/** The command line as given (commander keeps it on the root; untyped). */
+function rawArgsOf(root: Command): readonly string[] {
+  const raw = (root as unknown as { rawArgs?: unknown }).rawArgs;
+  return Array.isArray(raw) ? (raw as string[]) : [];
+}
+
+function rootOf(cmd: Command): Command {
+  let c = cmd;
+  while (c.parent !== null) c = c.parent;
+  return c;
 }
 
 /** The commands that write run output under `.jevitate/logs` — pruned before, when auto-prune is on. */

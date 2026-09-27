@@ -252,7 +252,7 @@ describe("jevitate diff and --baseline (#138)", () => {
 
   it("an unknown run reference is a typed refusal", async () => {
     seed();
-    const { out, code } = await cli(["diff", "nope", "adversarial-2026-09-22T10-00-00-000Z", "--dir", results]);
+    const { out, code } = await cli(["diff", "nope", "adversarial-2026-09-22T10-00-00-000Z", "--dir", results, "--json"]);
     expect(code).toBe(64);
     expect(JSON.parse(out)).toMatchObject({ ok: false, error: { code: "E_REPORT_INPUT" } });
   });
