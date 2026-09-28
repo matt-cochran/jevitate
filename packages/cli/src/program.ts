@@ -50,6 +50,7 @@ import {
 import { loadLocalCredentials } from "./credentials-file.js";
 import {
   FixtureNotFoundError,
+  ScopeUnderivableError,
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
   parseSecretField,
@@ -1740,7 +1741,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
-      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial/coverage/exploratory beyond the start URL's route",
+      "in-scope route glob (repeatable), e.g. /thread/** — for --feature it replaces the default scope (the start URL's route and everything under it); it widens --strategy adversarial/coverage/exploratory beyond the start URL's route",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2396,6 +2397,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -2474,6 +2478,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -2547,6 +2554,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitExplore(fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
@@ -2600,6 +2610,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }

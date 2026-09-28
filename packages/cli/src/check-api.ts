@@ -13,7 +13,7 @@ import {
   matchGlob,
   parseSecretField,
   resolveCoverageThresholds,
-  scopeGlobs,
+  resolveRouteScope,
   secretFieldSecrets,
   SecretFieldSpecError,
   type CoverageThresholds,
@@ -1003,7 +1003,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         seedUrl: url,
         allowlist: item.t.allowlist,
         capability: m.feature ?? m.name,
-        routeGlobs: m.routes ?? scopeGlobs(url),
+        routeGlobs: resolveRouteScope(url, m.routes).routeGlobs,
         bounds: b,
         ...withStall,
       });

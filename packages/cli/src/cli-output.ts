@@ -99,6 +99,8 @@ export function formatMissionHuman(result: unknown): string {
     const stop = str(result.stop);
     lines.push(`${tag("GOAL")}${goal}${stop === undefined ? "" : ` (stop: ${stop})`}`);
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
+  const scope = scopeLine(result.scope);
+  if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
@@ -113,6 +115,18 @@ export function formatMissionHuman(result: unknown): string {
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * #224: the route scope a run used — its globs, and where they came from when the result says
+ * (`--route`, or derived from the start URL).
+ */
+function scopeLine(scope: unknown): string | undefined {
+  if (!isRecord(scope)) return undefined;
+  const globs = arr(scope.routeGlobs).filter((g): g is string => typeof g === "string");
+  if (globs.length === 0) return undefined;
+  const source = scope.source === "route" ? " (--route)" : scope.source === "start-url" ? " (derived from the start URL; pass --route to change it)" : "";
+  return `${globs.join(", ")}${source}`;
 }
 
 /**
