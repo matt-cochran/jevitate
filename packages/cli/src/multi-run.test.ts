@@ -174,6 +174,31 @@ describe("persona diff (#143)", () => {
     ]);
   });
 
+  it("#213: a persona whose page never loaded on a starved host is not compared — never an access difference", () => {
+    const starved = voteRuns(
+      [
+        run(1, "inconclusive", [], {
+          failureKind: "degraded-environment",
+          reason: "degraded-environment: environment-degraded page load (the start page did not load in time (timed out before any response)) while the host was starved: load 3.50/core > 2 — not an app or access finding",
+        }),
+      ],
+      1,
+      { name: "viewer", storageState: "/s/viewer.json" },
+    );
+    expect(starved.notObserved).toMatch(/host was starved/);
+    const d = diffPersonas([admin, starved]);
+    expect(d).toMatchObject({ requestsOnlyIn: [], statusDiffs: [], controlsOnlyIn: [], rbacCandidates: [], outcomeDiffers: false });
+    expect(d.notCompared).toEqual([{ persona: "viewer", reason: starved.notObserved }]);
+    expect(d.outcomes).toEqual({ admin: "clean", viewer: "inconclusive" });
+    const human = formatMultiRunHuman({ kind: "multi-run", strategy: "goal", repeat: 1, missionOutcome: "inconclusive", cells: [admin, starved], findings: [], flaky: [], diff: d });
+    expect(human).toMatch(/DIFF\s+viewer: not compared — its runs never observed the app \(degraded-environment: .*host was starved/);
+    expect(
+      summarizeRun("goal", 1, { ok: true, data: { outcome: "inconclusive", missionOutcome: "inconclusive", exitCode: 2, failure: { kind: "degraded-environment", message: "m" } } }).failureKind,
+    ).toBe("degraded-environment");
+    // A persona that did load and was refused is still compared (the RBAC diff above is unchanged).
+    expect(diffPersonas([admin, sales]).notCompared).toEqual([]);
+  });
+
   it("identical personas diff to nothing", () => {
     const twin = { ...admin, persona: "admin2" };
     const d = diffPersonas([admin, twin]);

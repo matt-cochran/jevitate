@@ -10,7 +10,7 @@ import {
   type StepTiming,
   type TargetDescriptor,
 } from "@jevitate/recording";
-import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
+import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
@@ -612,6 +612,8 @@ async function runFeatureFrontier(
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
           ...(params.hostHealth === undefined ? {} : { hostHealth: params.hostHealth }),
+          // #230: an app that stopped answering ends the run target-unresponsive, never a hang finding.
+          liveness: { pageUrl: sessions.page.url(), authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist) },
           // Re-detected with the SAME perception bounds the mission used.
           perceive: {
             ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),

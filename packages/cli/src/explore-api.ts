@@ -694,7 +694,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const httpDefects = http5xx.defects(mission.transcript);
     const hardOutcome = applyHttp5xxGoalOutcome(loggedOutcome, httpDefects);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
-    const host = await finishHostHealth(health, hardOutcome);
+    // #213: a starved `failed` goal keeps the check that did not hold in its degraded reason.
+    const host = await finishHostHealth(health, hardOutcome, {
+      ...(hardOutcome === mission.outcome && (mission.failure?.message ?? mission.reason) !== undefined
+        ? { wouldHaveBeen: mission.failure?.message ?? mission.reason }
+        : {}),
+    });
     const goalOutcome: GoalBasedOutcome = host.outcome;
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);

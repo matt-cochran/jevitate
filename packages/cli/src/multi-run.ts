@@ -312,6 +312,8 @@ export interface RunSummary {
   readonly reason?: string;
   /** The run's model usage (#163), as its envelope reported it. */
   readonly usage?: UsageCounts;
+  /** #213: the run's `failure.kind` (or its crash's), when it had one. */
+  readonly failureKind?: string;
   /** #226: a find-out run's answer (`{text, evidence}`), as its result carried it. */
   readonly answer?: unknown;
 }
@@ -363,7 +365,16 @@ export interface CellResult {
   readonly requests: Record<string, number[]>;
   /** Controls seen in ≥ k runs. */
   readonly controls: string[];
+  /**
+   * #213: set when every run ended without observing the app (a starved host, an unreachable or
+   * unresponsive target) — why. Such a persona is left out of the persona diff: its missing requests
+   * and controls are the environment, never an access difference.
+   */
+  readonly notObserved?: string;
 }
+
+/** #213: endings that say nothing about what the app shows a persona — the environment, not access. */
+const ENVIRONMENT_FAILURES: ReadonlySet<string> = new Set(["degraded-environment", "target-unreachable", "target-unresponsive"]);
 
 /** Outcomes that mean the run itself broke — it proves nothing about the app, so it never makes a vote `intermittent`. */
 function isBrokenRunSummary(r: RunSummary): boolean {
@@ -458,6 +469,10 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
     if (v.runs >= k) requests[endpoint] = [...v.statuses].sort((a, b) => a - b);
   }
   const controls = [...controlRuns.entries()].filter(([, c]) => c >= k).map(([c]) => c).sort();
+  const notObserved =
+    n > 0 && runs.every((r) => r.failureKind !== undefined && ENVIRONMENT_FAILURES.has(r.failureKind))
+      ? (runs[0]!.reason ?? runs[0]!.failureKind!)
+      : undefined;
 
   return {
     persona: persona?.name ?? null,
@@ -473,6 +488,7 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
     flaky: all.filter((f) => f.status === "flaky"),
     requests,
     controls,
+    ...(notObserved === undefined ? {} : { notObserved }),
   };
 }
 
@@ -512,6 +528,8 @@ export interface PersonaDiff {
   readonly outcomeDiffers: boolean;
   /** A 401/403 for one persona where another got a 2xx on the same request. */
   readonly rbacCandidates: RbacCandidate[];
+  /** #213: personas left out of the comparison because their runs never observed the app — and why. */
+  readonly notCompared: Array<{ readonly persona: string; readonly reason: string }>;
 }
 
 const is2xx = (s: number): boolean => s >= 200 && s < 300;
@@ -532,7 +550,11 @@ function presence(sets: ReadonlyMap<string, ReadonlySet<string>>): PersonaPresen
 
 /** The persona matrix's diff section (#143): pure, over the per-persona (voted) cells. */
 export function diffPersonas(cells: readonly CellResult[]): PersonaDiff {
-  const named = cells.filter((c): c is CellResult & { persona: string } => c.persona !== null);
+  const personaCells = cells.filter((c): c is CellResult & { persona: string } => c.persona !== null);
+  // #213: a persona whose runs never observed the app (a starved host, a target that did not load)
+  // has no requests or controls to compare — its absence is the environment, not an access difference.
+  const named = personaCells.filter((c) => c.notObserved === undefined);
+  const notCompared = personaCells.flatMap((c) => (c.notObserved === undefined ? [] : [{ persona: c.persona, reason: c.notObserved }]));
   const requestSets = new Map(named.map((c) => [c.persona, new Set(Object.keys(c.requests))] as const));
   const controlSets = new Map(named.map((c) => [c.persona, new Set(c.controls)] as const));
 
@@ -563,15 +585,16 @@ export function diffPersonas(cells: readonly CellResult[]): PersonaDiff {
     }
   }
   const outcomes: Record<string, string> = {};
-  for (const c of named) outcomes[c.persona] = c.missionOutcome;
+  for (const c of personaCells) outcomes[c.persona] = c.missionOutcome;
   return {
     advisory: true,
     requestsOnlyIn: presence(requestSets),
     statusDiffs,
     controlsOnlyIn: presence(controlSets),
     outcomes,
-    outcomeDiffers: new Set(Object.values(outcomes)).size > 1,
+    outcomeDiffers: new Set(named.map((c) => c.missionOutcome)).size > 1,
     rbacCandidates,
+    notCompared,
   };
 }
 
@@ -676,6 +699,12 @@ function runReasonOf(data: Record<string, unknown>): string | undefined {
   return (isRecord(data.crash) ? failureText(data.crash.failure) : undefined) ?? failureText(data.failure) ?? (typeof data.reason === "string" ? data.reason : undefined);
 }
 
+/** #213: the run's `failure.kind` (a crash's own failure first), when its result carries one. */
+function runFailureKindOf(data: Record<string, unknown>): string | undefined {
+  const kindOf = (f: unknown): string | undefined => (isRecord(f) && typeof f.kind === "string" ? f.kind : undefined);
+  return (isRecord(data.crash) ? kindOf(data.crash.failure) : undefined) ?? kindOf(data.failure);
+}
+
 /** Summarizes one run's envelope (the only IO: its transcript file when the result omits it). */
 export function summarizeRun(strategy: string, index: number, envelope: RunEnvelope, envelopePath?: string): RunSummary {
   const base = { index, ...(envelopePath === undefined ? {} : { envelopePath }) };
@@ -697,12 +726,14 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
   const resultPath = typeof data.resultPath === "string" ? data.resultPath : typeof data.reportPath === "string" ? data.reportPath : undefined;
   const usage = usageCountsFrom(data.usage);
   const reason = runReasonOf(data);
+  const failureKind = runFailureKindOf(data);
   const missionOutcome = runMissionOutcomeOf(strategy, data);
   const goalOutcome = strategy === "goal" ? (goalOutcomeOf(data) ?? missionOutcome) : undefined;
   return {
     ...base,
     ok: true,
     ...(reason === undefined ? {} : { reason }),
+    ...(failureKind === undefined ? {} : { failureKind }),
     outcome: goalOutcome ?? missionOutcome,
     missionOutcome,
     ...(goalOutcome === undefined ? {} : { goalOutcome }),
