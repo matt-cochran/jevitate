@@ -65,7 +65,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "program.ts runAdversarialCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
   "program.ts runFeatureCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
   "program.ts runExploreMultiRun": { nowIso: SEAM },
-  "program.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
+  "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
   "program.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
