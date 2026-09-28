@@ -1025,6 +1025,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
             ...exploreCfg,
             missionBrief: brief,
             successChecks: checks,
+            // #225: a `done` whose check failed on a job judged done ends the run — never the whole budget.
+            stopWhenJudgedDone: true,
             ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
             ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
           });
@@ -1121,8 +1123,15 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const checked: MissionOutcome | undefined = adjudication === undefined ? undefined : foldGoalOutcome(adjudication.outcome);
     const jobVerdict: MissionOutcome =
       loopOutcome !== "clean" ? loopOutcome : checked !== undefined ? checked : jobIncomplete === undefined ? "clean" : "inconclusive";
+    // #225/#209: a failed success check is named as such (never "job-incomplete"), as on a goal run.
+    const failedChecks = adjudication?.checks.filter((c) => !c.passed) ?? [];
+    const checkFailure: MissionFailure | undefined =
+      adjudication?.failure ??
+      (failedChecks.length === 0
+        ? undefined
+        : { kind: "success-check-failed", message: `success check ${failedChecks.map((c) => `'${c.check}' ${c.detail}`).join("; ")}` });
     const jobFailure: MissionFailure | undefined =
-      loopOutcome !== "clean" ? undefined : checked === undefined ? jobIncomplete : checked === "clean" ? undefined : (adjudication?.failure ?? jobIncomplete);
+      loopOutcome !== "clean" ? undefined : checked === undefined ? jobIncomplete : checked === "clean" ? undefined : (checkFailure ?? jobIncomplete);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never `clean`.
     const host = await finishHostHealth(health, jobVerdict);
     const runOutcome: MissionOutcome = host.outcome;

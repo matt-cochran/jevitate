@@ -157,7 +157,7 @@ describe("#225 — a usability save job", () => {
   );
 
   it(
-    "--success that does not hold gates it: the model's done is not the verdict — defects-found (1), success-check-failed",
+    "--success that does not hold gates it: the model's done is not the verdict — defects-found (1), success-check-failed, stopped at once",
     async () => {
       const { result } = await review({ success: ["textIncludes:[data-testid=status]|Profile published"] });
       expect(result.goalOutcome).toBe("failed");
@@ -166,6 +166,12 @@ describe("#225 — a usability save job", () => {
       expect(result.missionOutcome).toBe("defects-found");
       expect(result.exitCode).toBe(1);
       expect(result.failure?.kind).toBe("success-check-failed");
+      expect(result.failure?.message).toMatch(/Profile published/);
+      // The job was judged done (the saved bio is on the page): the run stops there — it never spends
+      // the rest of its budget re-proposing `done` against a check that failed.
+      expect(result.stop).toBe("done");
+      expect(result.actions).toBe(2);
+      expect(result.outcome.status === "incomplete" && result.outcome.reason).toMatch(/judged done on this page .*success condition is not met/);
     },
     240_000,
   );

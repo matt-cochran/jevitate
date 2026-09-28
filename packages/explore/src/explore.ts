@@ -236,6 +236,14 @@ export interface ExploreConfig {
    */
   readonly successCheckPending?: () => string | null;
   /**
+   * #225: a `done` rejected by `successCheck` ends the run at once when the job is nonetheless judged
+   * done on the page (the advisory goal judgment / code-observed save grounding, as without a check) —
+   * the failed check is then the result, not a reason to spend the rest of the budget. The outcome
+   * stays incomplete (`doneRejected`); only the independent check decides. Default off (goal runs keep
+   * working toward a check that may still come to hold).
+   */
+  readonly stopWhenJudgedDone?: boolean;
+  /**
    * Idle patience (ms) of a conversational reply wait: how long to keep waiting while the page shows
    * no sign of working on the reply. Default 60s. While it IS working (request in flight, busy
    * indicator, reply still growing) the wait continues up to `replyCeilingMs` (#93).
@@ -1226,7 +1234,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (pending !== null) return `the in-run success checks held, but the final verdict is still pending — ${pending}`;
         return `goal verified by ${o.status === "completed" ? o.verifiedBy : "?"}`;
       };
-      const groundGoal = async (): Promise<{
+      const groundGoal = async (advisoryOnly = false): Promise<{
         verdict: ReturnType<typeof groundDone>;
         judgments: Record<string, { value: boolean; probability: number }> | undefined;
       }> => {
@@ -1237,7 +1245,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let goalIsSave: number | null = null;
         let saved: ReturnType<SaveProgress["signal"]> = null;
         if (unsubmittedLabels.length === 0) {
-          if (cfg.successCheck !== undefined) {
+          if (cfg.successCheck !== undefined && !advisoryOnly) {
             successCheck = await cfg.successCheck().then(
               (v) => v,
               () => false,
@@ -1330,6 +1338,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           outcome = verdict.outcome;
           stop = "done";
           break;
+        }
+        // #225: the model's `done` failed the independent success check, but the job itself is judged
+        // done on this page (the advisory judgment / code-observed save, never the verdict): stop here
+        // rather than spend the rest of the budget — the check's failure is the finding, and the
+        // mission names it (`failed`, success-check-failed).
+        if (cfg.stopWhenJudgedDone === true && cfg.successCheck !== undefined && unsent.pending().size === 0) {
+          const advisory = await groundGoal(true);
+          if (advisory.verdict.accept) {
+            const reason = `the job was judged done on this page (${acceptedBy(advisory.verdict.outcome).replace(/^goal verified by /, "")}), but ${verdict.reason}`;
+            record(false, `done rejected: ${reason} — stopped (the success check decides; it failed)`, {
+              ...(advisory.judgments === undefined ? {} : { judgments: advisory.judgments }),
+            });
+            incomplete = reason;
+            endedOnRejectedDone = true;
+            stop = "done";
+            break;
+          }
         }
         doneRejections += 1;
         history.push(`done rejected: ${verdict.reason} — keep working toward the goal`);

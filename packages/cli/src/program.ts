@@ -2212,6 +2212,20 @@ export function buildProgram(deps: CliDeps): Command {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
         return;
       }
+      // #225: success checks judge a goal / a usability job — every other strategy (and --feature) would
+      // silently ignore them, so they are refused up front, never dropped.
+      if (
+        (o.success.length > 0 || o.successWhen !== undefined || o.allowVacuousChecks === true) &&
+        (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))
+      ) {
+        emitExplore(
+          fail(
+            "E_EXPLORE_ARGS",
+            `--success, --success-when and --allow-vacuous-checks are supported only with --strategy goal or usability (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`,
+          ),
+        );
+        return;
+      }
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitExplore(fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
