@@ -26,7 +26,7 @@ import {
   type TranscriptJudgment,
   type TranscriptListener,
 } from "../transcript.js";
-import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget, tryTriage, type Triage } from "../mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage } from "../mission-failure.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
@@ -193,7 +193,9 @@ export type AdversarialStop =
    * `--deny`'d) and none could be exercised — hunting on would only scroll and re-plan. The run is
    * `inconclusive` (`insufficient-coverage`), its shortfall naming the refusal and how to permit it.
    */
-  | "targets-refused";
+  | "targets-refused"
+  /** #226: the app stopped answering navigation mid-run (e.g. its server froze): `inconclusive`, `failure.kind: "target-unresponsive"`. */
+  | "target-unresponsive";
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
@@ -1585,8 +1587,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     }
     return finish(stop === "budget" ? budgetVerdict() : verdict(), stop);
   } catch (e) {
+    const failure = describeFailure(e, crashWatch.signals());
+    // #226: the app stopped answering (a frozen backend) — the run proves nothing past that point,
+    // but nothing in the engine broke: `inconclusive` with the typed reason, never `crashed`.
+    if (isTargetUnresponsive(failure)) return finish("inconclusive", "target-unresponsive", failure);
     crashHost = await probeHost();
-    return finish("crashed", "crashed", describeFailure(e, crashWatch.signals()));
+    return finish("crashed", "crashed", failure);
   } finally {
     await sessions.closeOwned();
   }

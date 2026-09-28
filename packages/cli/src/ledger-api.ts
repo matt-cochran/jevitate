@@ -312,6 +312,10 @@ export async function runLedgerVerify(opts: RunLedgerVerifyOptions): Promise<Led
   }
   const summary = { fixed: 0, "still-reproduces": 0, intermittent: 0, inconclusive: 0 };
   for (const e of entries) summary[e.verdict] += 1;
+  // #227: nothing chosen (an empty ledger, or fingerprints/ticket matching nothing) verified nothing
+  // — `entries.reduce(..., "fixed")`'s empty-array identity would otherwise read as "FIXED: 0
+  // entries" at exit 0, a false pass. Inconclusive (2): the command proved nothing either way.
+  if (entries.length === 0) return { kind: "ledger-verify", entries, summary, exitCode: VERIFY_FIX_EXIT_CODES.inconclusive };
   const worst = entries.reduce<VerifyFixReport["verdict"]>((w, e) => (VERDICT_SEVERITY[e.verdict] > VERDICT_SEVERITY[w] ? e.verdict : w), "fixed");
   return { kind: "ledger-verify", entries, summary, exitCode: VERIFY_FIX_EXIT_CODES[worst] };
 }

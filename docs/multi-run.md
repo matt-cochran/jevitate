@@ -13,9 +13,13 @@ jevitate explore --strategy adversarial --url http://localhost:3000/settings --f
 
 Runs the same mission N times, one after another. A finding counts only when it recurs in at
 least `--min-agreement` runs (default: a majority). The rest are reported as `flaky`: seen, but
-not counted. The overall outcome is the one at least that many runs agreed on; it is
-`intermittent` when no single outcome reached `--min-agreement` runs, or when the top two are
-tied.
+not counted. The overall verdict (`missionOutcome`) is the canonical outcome at least that many
+runs agreed on (a goal run's own ending is folded first: `succeeded` → `clean`,
+`failed`/`exhausted`/`blocked` → `defects-found`); it is `intermittent` when no single outcome
+reached `--min-agreement` runs, or when the top two are tied, and `inconclusive` when that is
+because a run broke. The human summary leads with that verdict, then each run's own verdict and
+reason, the persona status differences (e.g. `GET /api/invoices: 200 for admin; 404 for viewer`),
+and a find-out's `ANSWER`. See [results](./results.md#multi-run-results---repeat---persona) for the fields.
 
 **On disk.** Every multi-run writes `<outDir>/multi-run.result.json`, rewritten after every run so
 a killed multi-run still leaves the runs it finished. Each run gets its own directory,
@@ -53,7 +57,8 @@ and a top-level `diff` (`PersonaDiff`, `advisory: true` always) carries:
 - `outcomes` (`{persona: outcome}`) and `outcomeDiffers` (`true` when personas didn't all reach the
   same outcome).
 
-The top-level `outcome` is that shared outcome when every persona agreed, else `"mixed"`.
+The top-level `outcome` is that shared outcome when every persona agreed, else `"mixed"`; the
+canonical `missionOutcome` is then the most severe persona's.
 
 ## Multi-actor missions: `--actor` (goal missions)
 

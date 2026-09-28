@@ -50,6 +50,7 @@ import {
 import { loadLocalCredentials } from "./credentials-file.js";
 import {
   FixtureNotFoundError,
+  ScopeUnderivableError,
   UnauthorizedExploreTargetError,
   resolveCoverageThresholds,
   parseSecretField,
@@ -142,7 +143,16 @@ import { setKillSwitchOutput } from "./kill-signal.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { commandPath, emitJsonOrRefusal, trackActionCommand } from "./cli-refusal.js";
 import { finiteNumberArg, intArg, positiveNumberArg, nonNegativeIntArg, positiveIntArg, ratioArg } from "./cli-args.js";
-import { emitEnvelope, formatInitKeysHuman, formatMissionHuman, formatMultiRunHuman, formatVerifyFixHuman, type EmitOptions } from "./cli-output.js";
+import {
+  emitEnvelope,
+  formatInitKeysHuman,
+  formatMissionHuman,
+  formatMultiRunHuman,
+  formatRegressionCaptureHuman,
+  formatRegressionRunHuman,
+  formatVerifyFixHuman,
+  type EmitOptions,
+} from "./cli-output.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -583,6 +593,13 @@ function writeRawResult(program: Command, result: unknown): void {
   emitUsageLine(program, result);
 }
 
+/** A non-`--json` result (#227): the human summary a `cli-output.ts` formatter renders, with the cost summary line on stderr. */
+function writeHumanResult(program: Command, result: unknown, human: (data: unknown) => string): void {
+  const text = human(result);
+  if (text !== "") program.configureOutput().writeOut?.(text);
+  emitUsageLine(program, result);
+}
+
 /**
  * The human cost summary (#163) — on STDERR, so stdout stays exactly the JSON a caller parses:
  * `usage: cost $0.0312 (jev $0.0203 + generation $0.0109) · 398 judgments, …`, flagged
@@ -620,7 +637,7 @@ Outcomes, stop reasons and exit codes:
     (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
-    | scope-unreachable | targets-refused | hang | crashed
+    | scope-unreachable | targets-refused | target-unresponsive | hang | crashed
   --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
     exhausted | insufficient-coverage | cap | scope-unreachable | stalled | crashed | hang
   A run that proved nothing is inconclusive with failure.kind insufficient-coverage (the same word as
@@ -1077,8 +1094,12 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
-          for (const m of metas) {
-            out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}\n`);
+          if (metas.length === 0) {
+            out?.("no journeys yet — record one with `jevitate record` (see jevitate record --help)\n");
+          } else {
+            for (const m of metas) {
+              out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}\n`);
+            }
           }
           process.exitCode = 0;
         }
@@ -1398,8 +1419,12 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
-          for (const s of listing) {
-            out?.(`${s.name}\t${s.gitUrl}\t${s.pinnedCommit}\ttrusted=[${s.trustedJourneys.join(", ")}]\n`);
+          if (listing.length === 0) {
+            out?.("no sources yet — add one with `jevitate source add <name> <gitUrl>`\n");
+          } else {
+            for (const s of listing) {
+              out?.(`${s.name}\t${s.gitUrl}\t${s.pinnedCommit}\ttrusted=[${s.trustedJourneys.join(", ")}]\n`);
+            }
           }
           process.exitCode = 0;
         }
@@ -1710,7 +1735,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--success <spec>",
       [
-        "independent success check (repeatable; every one must hold). Kinds:",
+        "independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds:",
         "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> (case-insensitive) | count:<d>|min=<n>,max=<n>",
         "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
         "| visual state (#148, read and decided by code): style:<d>|<prop><op><value> (computed style of every match;",
@@ -1740,7 +1765,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
-      "in-scope route glob (repeatable), e.g. /thread/** — for --feature, and to widen --strategy adversarial/coverage/exploratory beyond the start URL's route",
+      "in-scope route glob (repeatable), e.g. /thread/** — for --feature it replaces the default scope (the start URL's route and everything under it); it widens --strategy adversarial/coverage/exploratory beyond the start URL's route",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -2212,6 +2237,20 @@ export function buildProgram(deps: CliDeps): Command {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
         return;
       }
+      // #225: success checks judge a goal / a usability job — every other strategy (and --feature) would
+      // silently ignore them, so they are refused up front, never dropped.
+      if (
+        (o.success.length > 0 || o.successWhen !== undefined || o.allowVacuousChecks === true) &&
+        (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))
+      ) {
+        emitExplore(
+          fail(
+            "E_EXPLORE_ARGS",
+            `--success, --success-when and --allow-vacuous-checks are supported only with --strategy goal or usability (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`,
+          ),
+        );
+        return;
+      }
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitExplore(fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
@@ -2396,6 +2435,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -2474,6 +2516,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -2492,6 +2537,23 @@ export function buildProgram(deps: CliDeps): Command {
         }
         if (!o.appClass) {
           emitExplore(fail("E_UX_ARGS", "--app-class is required for --strategy usability"));
+          return;
+        }
+        // #225: --success is never ignored — an independent completion check on the job, parsed and
+        // validated exactly as for --strategy goal (same kinds, same --success-when / vacuous rules).
+        let uxSuccessChecks: SuccessCheck[];
+        try {
+          uxSuccessChecks = o.success.map(parseSuccessSpec);
+        } catch (err) {
+          emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
+          return;
+        }
+        if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
+          emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+          return;
+        }
+        if (uxSuccessChecks.length === 0 && (o.successWhen !== undefined || o.allowVacuousChecks === true)) {
+          emitExplore(fail("E_EXPLORE_ARGS", "--success-when and --allow-vacuous-checks need at least one --success check"));
           return;
         }
         const uxAllowlist = resolveExploreAllowlist(o.url, o.allow);
@@ -2541,12 +2603,19 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withServerLog,
             ...withInvariants,
+            ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
+            ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
+            ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
           });
-          // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
+          // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
+          // broken run or an unavailable analysis is 2.
           emitExplore(ok(result), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else if (err instanceof FixtureNotFoundError) {
             emitExplore(fail("E_EXPLORE_FIXTURE", err.message));
           } else if (err instanceof MinConfidenceError || err instanceof QualityPolicyError || err instanceof MaxFindingsPerRouteError || err instanceof UxConfigError) {
@@ -2600,6 +2669,9 @@ export function buildProgram(deps: CliDeps): Command {
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          } else if (err instanceof ScopeUnderivableError) {
+            // #224: no default route scope from --url — a usage error (64), refused before any browser.
+            emitExplore(fail("E_EXPLORE_ARGS", err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }
@@ -3153,7 +3225,9 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          writeRawResult(program, result);
+          // #227: a human summary (captured/flaky, where the files went, what to run next) — never
+          // the raw result JSON, which used to print unconditionally without --json.
+          writeHumanResult(program, result, formatRegressionCaptureHuman);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -3222,7 +3296,8 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(report)}\n`);
+          // #227: the verdict/reason/next-step summary — never the raw report JSON.
+          program.configureOutput().writeOut?.(formatRegressionRunHuman(report));
         }
         process.exitCode = report.verdict === "reproduces" ? 1 : report.verdict === "fixed" ? 0 : 2;
       } catch (err) {
@@ -3731,13 +3806,19 @@ function useUsageExitCode(cmd: Command): void {
   cmd.error = (message: string, errorOptions?: { code?: string; exitCode?: number }): never => {
     // An argParser's InvalidArgumentError (cli-args.ts) carries commander's generic exit code 1.
     const exitCode = errorOptions?.code === "commander.invalidArgument" ? EXIT_CODES.usage : (errorOptions?.exitCode ?? EXIT_CODES.usage);
+    const bare = message.replace(/^error: /, "");
     // #218: a bad numeric value (cli-args.ts), unknown flag or missing argument under `--json` still
     // yields the one envelope line a machine caller parses; commander's human line goes to stderr.
     if (exitCode === EXIT_CODES.usage && rawArgsOf(rootOf(cmd)).includes("--json")) {
-      const envelope = fail(usageParseErrorCode(cmd), message.replace(/^error: /, ""));
+      const envelope = fail(usageParseErrorCode(cmd), bare);
       rootOf(cmd).configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
     }
-    return original(message, { ...errorOptions, exitCode });
+    // #227: the human stderr line matches every other refusal's `error <CODE>: …` (+ a --help hint) —
+    // never commander's own unlabeled `error: …` text, which used to be the only usage refusal
+    // without a code (the code appeared only under --json).
+    const path = commandPath(cmd);
+    const human = exitCode === EXIT_CODES.usage ? `error ${usageParseErrorCode(cmd)}: ${bare}\nnext: jevitate ${path === "" ? "" : `${path} `}--help` : message;
+    return original(human, { ...errorOptions, exitCode });
   };
   for (const sub of cmd.commands) useUsageExitCode(sub);
 }

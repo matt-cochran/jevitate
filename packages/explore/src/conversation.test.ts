@@ -105,6 +105,21 @@ describe("groundDone — a proposed done is weighed by code", () => {
     expect(groundDone({ unsubmitted: ["Code"], goalMetProbability: 0.3, signIn: signedIn })).toMatchObject({ accept: false });
     expect(groundDone({ unsubmitted: [], successCheck: false, signIn: signedIn })).toMatchObject({ accept: false });
   });
+
+  it("#225: a code-observed save proves a save-only goal — preferred over the judgment, never without the observation, the scope, or over an oracle", () => {
+    const savedOk = { completed: true, goalIsSave: 0.9 };
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.42, save: savedOk })).toEqual({
+      accept: true,
+      outcome: { status: "completed", verifiedBy: "save-signals" },
+    });
+    // Code evidence is named first even when the judgment also clears the threshold.
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.95, save: savedOk })).toMatchObject({ outcome: { verifiedBy: "save-signals" } });
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.42, save: { completed: false, goalIsSave: 0.99 } })).toMatchObject({ accept: false });
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.42, save: { completed: true, goalIsSave: 0.2 } })).toMatchObject({ accept: false });
+    expect(groundDone({ unsubmitted: [], goalMetProbability: null, save: { completed: true, goalIsSave: null } })).toMatchObject({ accept: false });
+    expect(groundDone({ unsubmitted: [], successCheck: false, save: savedOk })).toMatchObject({ accept: false });
+    expect(groundDone({ unsubmitted: ["Message"], goalMetProbability: 0.42, save: savedOk })).toMatchObject({ accept: false });
+  });
 });
 
 describe("messages and options", () => {

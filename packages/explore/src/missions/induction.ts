@@ -36,7 +36,7 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
@@ -968,10 +968,13 @@ async function runInductionFrontier(
   } catch (e) {
     // The watchdog fired (#114): a typed `stalled` stop with everything found so far, never an idle run.
     if (e instanceof StalledError) return ended("stalled", { kind: "stalled", message: e.reason });
-    // Engine failure: a typed `crashed` result with every state path and transcript step so far.
+    // Engine failure: a typed `crashed` result with every state path and transcript step so far —
+    // unless the app stopped answering navigation (#226, a frozen backend): `scope-unreachable`
+    // (inconclusive) with the typed `target-unresponsive` reason, never `crashed`.
+    const failure = describeFailure(e, crashWatch.signals());
     return {
-      outcome: "crashed",
-      failure: describeFailure(e, crashWatch.signals()),
+      outcome: isTargetUnresponsive(failure) ? "scope-unreachable" : "crashed",
+      failure,
       coverage: report(false),
       recordings: [...statePaths.values()],
       transcript: transcript.entries(),

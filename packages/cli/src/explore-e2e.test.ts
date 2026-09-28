@@ -18,6 +18,7 @@ import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
 import { runAdversarialCliMission, runCoverageMission, runFeatureCliMission } from "./explore-api.js";
+import { formatMissionHuman } from "./cli-output.js";
 
 /**
  * P1 acceptance (Task 12): `jevitate explore --url <fixture> --goal ... --success ...`
@@ -484,6 +485,59 @@ describe("runFeatureCliMission — ranked, honest --out (ticket #78)", () => {
         expect(result.usage).toEqual({ judgments: 0, generations: 0, inputTokens: 0, outputTokens: 0, totalUsd: 0, priced: "full", priceSource: ["no model call"] });
         const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as unknown;
         expect(persisted).toMatchObject({ missionOutcome: "clean", exitCode: 0 });
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
+    "#224: with no --route the scope defaults to the start URL's route — the buy buttons count as relevant, the run exhausts, and the result names the derived scope",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-noroute-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/shop`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: [], // the CLI's shape when --route is absent
+          outDir,
+          nowIso: () => "2026-09-23T00:00:00.000Z",
+        });
+
+        expect(result.outcome).toBe("exhausted");
+        expect(result.missionOutcome).toBe("clean");
+        expect(result.failure).toBeUndefined();
+        expect(result.coverage.relevantActionsExercised).toBeGreaterThan(0);
+        const derived = ["/feature-mission/shop", "/feature-mission/shop/", "/feature-mission/shop/**"];
+        expect(result.scope).toEqual({ routeGlobs: derived, source: "start-url" });
+        const persisted = JSON.parse(await readFile(result.resultPath, "utf8")) as { result: { scope: unknown } };
+        expect(persisted.result.scope).toEqual({ routeGlobs: derived, source: "start-url" });
+        expect(formatMissionHuman(result)).toContain("SCOPE   /feature-mission/shop, /feature-mission/shop/, /feature-mission/shop/** (derived from the start URL; pass --route to change it)");
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
+    "#224: an explicit --route is used exactly as given and named as the scope",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-route-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/chrome-only`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: ["/feature-mission/chrome-only"],
+          outDir,
+          nowIso: () => "2026-09-23T00:00:00.000Z",
+        });
+        expect(result.scope).toEqual({ routeGlobs: ["/feature-mission/chrome-only"], source: "route" });
+        expect(result.failure?.message).toContain("route(s) [/feature-mission/chrome-only]");
+        expect(formatMissionHuman(result)).toContain("SCOPE   /feature-mission/chrome-only (--route)");
       } finally {
         await rm(outDir, { recursive: true, force: true });
       }

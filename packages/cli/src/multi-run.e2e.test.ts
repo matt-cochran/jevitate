@@ -114,6 +114,10 @@ describe("explore --repeat (#141)", () => {
         expect(flaky).toMatchObject({ stability: "1/3", seen: 1, of: 3, runs: [2], status: "flaky" });
         const onDisk = JSON.parse(await readFile(join(out, "multi-run.result.json"), "utf8")) as MultiRunResult;
         expect(onDisk.flaky).toEqual(r.flaky);
+        // #226: the #217 contract — the canonical verdict and the engine, in the envelope AND on disk.
+        expect(r.missionOutcome).toBe("clean");
+        expect(onDisk).toMatchObject({ missionOutcome: "clean", exitCode: 0, engine: { version: expect.any(String), commit: expect.any(String) } });
+        expect(cell.runs.map((run) => run.missionOutcome)).toEqual(["clean", "defects-found", "clean"]);
         for (const i of [1, 2, 3]) {
           const perRun = JSON.parse(await readFile(join(out, `run-${i}`, "run.envelope.json"), "utf8")) as { ok: boolean };
           expect(perRun.ok).toBe(true);
@@ -171,6 +175,10 @@ describe("explore --persona (#143)", () => {
         );
         expect(r.diff?.controlsOnlyIn).toContainEqual({ item: 'button "Billing"', presentFor: ["admin"], absentFor: ["sales"] });
         expect(Object.keys(r.diff?.outcomes ?? {})).toEqual(["admin", "sales"]);
+        // #226: canonical verdicts per persona and overall, and the engine on disk.
+        expect(Object.values(r.diff?.outcomes ?? {}).every((o) => ["clean", "defects-found", "inconclusive", "crashed", "hang", "intermittent"].includes(o))).toBe(true);
+        const onDisk = JSON.parse(await readFile(join(dir, "out", "multi-run.result.json"), "utf8")) as MultiRunResult;
+        expect(onDisk).toMatchObject({ missionOutcome: r.missionOutcome, engine: { version: expect.any(String) } });
       } finally {
         process.exitCode = 0;
         await rm(dir, { recursive: true, force: true });
