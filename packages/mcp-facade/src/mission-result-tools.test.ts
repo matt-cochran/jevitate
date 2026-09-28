@@ -8,6 +8,7 @@ describe("mission result ids (#117)", () => {
     for (const id of [
       `explore-${STAMP}`,
       `coverage-${STAMP}`,
+      `exploratory-${STAMP}`,
       `adversarial-${STAMP}`,
       `feature-${STAMP}`,
       `usability-${STAMP}`,
@@ -25,7 +26,7 @@ describe("mission result ids (#117)", () => {
       `usability-${STAMP}.recording.result`,
       `usability-${STAMP}.transcript`,
       `explore-${STAMP}\n`,
-      `exploratory-${STAMP}`,
+      `explorer-${STAMP}`,
       "explore-2026-09-24",
       "549db40a-cd30-4706-b7f5-01ddea8f6d1f",
       "",
