@@ -71,6 +71,24 @@ security bug, and how to report one.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 
+**Runs change the app's state — reset it between runs.** The guardrails above keep a run from
+clicking what it must not; they do not undo what it legitimately did. An adversarial run submits
+boundary and malformed values on purpose, and the ones the app accepts **stay in the app**: a
+display name saved as `\u0000invalid\u0000`, an over-long bio, a duplicated item. The next run —
+any strategy — starts from that state, so its findings (and a `verify-fix` or regression replay)
+can be about the junk an earlier run left, not about the app.
+
+- Point adversarial runs at a disposable account or seeded test data, never at data you keep.
+- Reset state before the runs that must start clean. A goal run does it itself with mission
+  fixtures (`--fixtures`: HTTP `setup`/`restore` steps) or shell hooks (`--before`/`--after` with
+  `--allow-shell-hooks`), which also run around every replay — see [fixtures](./fixtures.md).
+  Fixtures and hooks are goal-only, so after an adversarial run, run the same reset yourself (the
+  script you would pass as `--before`: reseed the database, restore a snapshot, roll the container).
+- `--repeat` on a write goal ("change the display name to Ada") proves the write only in run 1:
+  from run 2 on the value is already there, so a success check on it passes without the run doing
+  anything. Give such a goal `--fixtures` or `--before` so every repeat starts from the same state
+  (see [repeats](./multi-run.md#repeat-and-vote---repeat----min-agreement)).
+
 **gRPC-web/Connect reads.** gRPC-web, Connect and Twirp send every RPC as a POST, including pure
 reads, so the method alone can't tell a read from a write. Code classifies a request as a write
 unless: it isn't `POST`/`PUT`/`PATCH`/`DELETE` (GET/HEAD/OPTIONS are always reads); or it's an

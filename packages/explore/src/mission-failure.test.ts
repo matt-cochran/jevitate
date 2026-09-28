@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
+import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
+import type { BrowserSession } from "@jevitate/playwright";
+import { TargetUnresponsiveError, describeFailure, describeUnreachable, isUnreachableTarget, targetStoppedAnswering, type LivenessAnswer, assertSeedReachable } from "./mission-failure.js";
 
 /**
  * #128 — the pure rule for "the start URL simply could not be loaded": neither a defect in the app
@@ -76,5 +78,63 @@ describe("describeFailure — a navigation the app never answered (#226)", () =>
   });
   it("crash evidence still wins", () => {
     expect(describeFailure(gotoTimeout(), { ...live, pageCrashed: true }).kind).toBe("page-crash");
+  });
+});
+
+describe("targetStoppedAnswering — the app stopped answering vs a slow host (#230)", () => {
+  const probeOf =
+    (answers: Record<string, LivenessAnswer>, seen: string[] = []) =>
+    async (url: string): Promise<LivenessAnswer> => {
+      seen.push(url);
+      return answers[new URL(url).origin] ?? "answered";
+    };
+
+  it("a fresh request that gets no response at all (or is refused) is target-unresponsive, in plain words", async () => {
+    const quiet = await targetStoppedAnswering({ pageUrl: "http://app.test/a?t=secret", probe: probeOf({ "http://app.test": "no-response" }), timeoutMs: 10_000 });
+    expect(quiet).toBe("the app stopped responding on /a (a fresh request for it got no response within 10s)");
+    const refused = await targetStoppedAnswering({ pageUrl: "http://app.test/a", probe: probeOf({ "http://app.test": "refused" }) });
+    expect(refused).toMatch(/connection refused/);
+  });
+
+  it("an app that answers (slowly, or with an error status) is not; a probe that proved nothing is not either", async () => {
+    expect(await targetStoppedAnswering({ pageUrl: "http://app.test/a", probe: probeOf({}) })).toBeNull();
+    expect(await targetStoppedAnswering({ pageUrl: "http://app.test/a", probe: probeOf({ "http://app.test": "unknown" }) })).toBeNull();
+    expect(await targetStoppedAnswering({ pageUrl: "about:blank", probe: probeOf({}) })).toBeNull();
+  });
+
+  it("re-requests the page's own path without its query (never re-sends a token) and never an unauthorized page", async () => {
+    const seen: string[] = [];
+    expect(await targetStoppedAnswering({ pageUrl: "http://app.test/confirm?token=abc#x", probe: probeOf({}, seen) })).toBeNull();
+    expect(seen).toEqual(["http://app.test/confirm"]);
+    const unauthorized = await targetStoppedAnswering({
+      pageUrl: "http://elsewhere.test/a",
+      authorized: (u) => u.startsWith("http://app.test"),
+      probe: probeOf({ "http://elsewhere.test": "no-response" }, seen),
+    });
+    expect(unauthorized).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("describeFailure types a TargetUnresponsiveError as target-unresponsive with no stack", () => {
+    const f = describeFailure(new TargetUnresponsiveError("the app stopped responding on /a (x)"), { pageCrashed: false, pageClosed: false, browserDisconnected: false });
+    expect(f).toEqual({ kind: "target-unresponsive", message: "the app stopped responding on /a (x)" });
+  });
+});
+
+describe("assertSeedReachable — #213: a target that is not running fails fast, in plain words", () => {
+  const actorWith = (probeReachable?: (url: string) => Promise<string | null>) =>
+    CastActor.named("x").whoCan(new BrowseTheWeb({ ...(probeReachable === undefined ? {} : { probeReachable }) } as unknown as BrowserSession, []));
+
+  it("a refused probe throws an unreachable-target error whose description is the probe's own words", async () => {
+    const actor = actorWith(async () => "connection refused — is the app running at http://127.0.0.1:5999?");
+    const err = await assertSeedReachable(actor, "http://127.0.0.1:5999/").then(() => null, (e: Error) => e);
+    expect(err).not.toBeNull();
+    expect(isUnreachableTarget(err!.message)).toBe(true);
+    expect(describeUnreachable(err!.message)).toBe("connection refused — is the app running at http://127.0.0.1:5999?");
+  });
+
+  it("a reachable target, or a session with no probe (a test double), passes", async () => {
+    await expect(assertSeedReachable(actorWith(async () => null), "http://x/")).resolves.toBeUndefined();
+    await expect(assertSeedReachable(actorWith(), "http://x/")).resolves.toBeUndefined();
   });
 });

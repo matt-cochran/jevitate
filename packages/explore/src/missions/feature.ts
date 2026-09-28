@@ -10,7 +10,7 @@ import {
   type StepTiming,
   type TargetDescriptor,
 } from "@jevitate/recording";
-import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
+import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
@@ -34,7 +34,7 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
@@ -383,6 +383,7 @@ async function runFeatureFrontier(
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
+      await guard(assertSeedReachable(sessions.actor, params.seedUrl));
       await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
@@ -612,6 +613,8 @@ async function runFeatureFrontier(
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
           ...(params.hostHealth === undefined ? {} : { hostHealth: params.hostHealth }),
+          // #230: an app that stopped answering ends the run target-unresponsive, never a hang finding.
+          liveness: { pageUrl: sessions.page.url(), authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist) },
           // Re-detected with the SAME perception bounds the mission used.
           perceive: {
             ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),

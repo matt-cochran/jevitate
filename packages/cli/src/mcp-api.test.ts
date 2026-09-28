@@ -516,7 +516,7 @@ describe("mcp-api get_mission_result / verify_fix — every strategy's stem and 
       "../explore-2026-09-24T15-24-50-561Z",
       "usability-2026-09-24T15-24-50-561Z.recording.result",
       "549db40a-cd30-4706-b7f5-01ddea8f6d1f/..",
-      "exploratory-2026-09-24T15-24-50-561Z",
+      "explorer-2026-09-24T15-24-50-561Z",
     ]) {
       expect(await call(deps, "get_mission_result", { id })).toMatchObject({ isError: true, body: { error: "invalid_args" } });
       expect(await call(deps, "verify_fix", { id, fingerprint: "1ad9521b771f3bd4" })).toMatchObject({

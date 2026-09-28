@@ -127,9 +127,11 @@ describe("goal mission — a save that shows success but persists nothing FAILS 
       expect(result.outcome).toBe("failed");
       expect(result.failure?.kind).toBe("success-check-failed");
       expect(result.failure?.message).toContain("'reloadThen:valueEquals:testId=last|Litmus' did not hold after a reload");
+      // #213: a failing valueEquals now names the value it actually read (redacted) — "Lovelace" is
+      // what the unsaved reload shows, proving the save never persisted (not just that it "failed").
       expect(result.checks).toEqual([
         { check: "valueEquals:testId=last|Litmus", passed: true, detail: "held on the final page" },
-        { check: "reloadThen:valueEquals:testId=last|Litmus", passed: false, detail: "did not hold after a reload" },
+        { check: "reloadThen:valueEquals:testId=last|Litmus", passed: false, detail: 'did not hold after a reload (read: "Lovelace")' },
       ]);
       // #209: the transcript never claims "goal verified" while the reloadThen check is still pending.
       const doneEntry = result.transcript.find((e) => (e.reason ?? "").startsWith("done accepted"));

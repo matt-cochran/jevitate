@@ -66,7 +66,8 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(function (this: Command, result: string, fingerprint: string) {
       const o = this.opts<{ ticket?: string; dir?: string; secret: string[]; json?: boolean }>();
-      const out = { json: o.json === true, command: "ledger add", human: formatLedgerAddHuman };
+      // #230: the follow-up hints carry the same --dir the user passed.
+      const out = { json: o.json === true, command: "ledger add", human: (data: unknown) => formatLedgerAddHuman(data as object, { dir: o.dir }) };
       try {
         const added = ledgerAdd({
           resultPath: result,
@@ -88,7 +89,8 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(function (this: Command) {
       const o = this.opts<{ dir?: string; json?: boolean }>();
-      const out = { json: o.json === true, command: "ledger list", human: formatLedgerListHuman };
+      // #230: the follow-up hint carries the same --dir the user passed.
+      const out = { json: o.json === true, command: "ledger list", human: (data: { entries: readonly object[] }) => formatLedgerListHuman(data, { dir: o.dir }) };
       try {
         emit(program, ok({ entries: ledgerList(o.dir) }), out);
       } catch (err) {
@@ -110,7 +112,8 @@ export function registerLedgerCommands(program: Command, deps: LedgerCliDeps, wi
     .option("--json", "emit a JSON envelope (default: a human summary)")
     .action(async function (this: Command, fingerprints: string[]) {
       const o = this.opts<{ ticket?: string; dir?: string; storageState?: string; replays?: string; allowLogCmd?: boolean; json?: boolean }>();
-      const out = { json: o.json === true, command: "ledger verify", human: formatLedgerVerifyHuman };
+      // #230: the follow-up hint carries the same --dir the user passed.
+      const out = { json: o.json === true, command: "ledger verify", human: (data: object) => formatLedgerVerifyHuman(data, { dir: o.dir }) };
       try {
         const browser = deps.browserLaunch?.(o);
         const result = await runLedgerVerify({

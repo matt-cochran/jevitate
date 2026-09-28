@@ -210,6 +210,58 @@ describe("consolidate (#139)", () => {
     expect([legacy?.missionOutcome, legacy?.goalOutcome]).toEqual(["defects-found", "blocked"]);
   });
 
+  it("#213: a goal run stamped `aiMode: \"fake\"` never yields a hard goal-check finding — the fake judge's own ending is not trusted", () => {
+    const seedUrl = "https://app.example/cart";
+    const failedCheck = { check: "urlIncludes:/done", passed: false, detail: "url was /cart" };
+    const fake = runFromMissionResult("/r/explore-2026-09-24T14-00-00-000Z.result.json", {
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: { strategy: "goal", missionOutcome: "defects-found", goalOutcome: "failed", outcome: "failed", checks: [failedCheck], target: { seedUrl }, aiMode: "fake" },
+    });
+    expect(fake?.observations).toEqual([]);
+    // A hard signal the same fake-ai run hit (independent of the judge) still gates: the fake stamp
+    // only suppresses the goal's OWN (judgment-driven) ending, never `defects`/`hangs`/invariants.
+    const withHardSignal = runFromMissionResult("/r/explore-2026-09-24T14-05-00-000Z.result.json", {
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: {
+        strategy: "goal",
+        missionOutcome: "defects-found",
+        goalOutcome: "defects-found",
+        outcome: "defects-found",
+        checks: [],
+        target: { seedUrl },
+        aiMode: "fake",
+        defects: [{ fingerprint: "fp5xx", related: ["fp5xx"], kind: "http-5xx", title: "HTTP 503", route: "/cart", url: seedUrl, signals: [], occurrences: 1, occurrenceSteps: [1] }],
+        hangs: [],
+      },
+    });
+    expect(withHardSignal?.observations.map((o) => [o.identity.category, o.severity])).toEqual([["defect", "hard"]]);
+  });
+
+  // #213: a verify-fix "still-reproduces" record's `source` is the ORIGINAL mission's
+  // `.result.json` — its evidence must be labeled `result`, never `recording` (that's the
+  // Recording file itself, a different artifact entirely).
+  it("#213: a still-reproducing verify-fix's evidence is labeled `result`, not `recording`", () => {
+    const run = runFromMissionResult("/r/verify-fp503.result.json", {
+      mode: "verify-fix",
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: {
+        mode: "verify-fix",
+        verdict: "still-reproduces",
+        fingerprint: "fp503",
+        source: "/r/adversarial-2026-09-24T10-00-00-000Z.result.json",
+        title: "HTTP 503 from /api/items/:id",
+        identity: { category: "defect", signal: "http-5xx", route: "/settings", request: "503 /api/items/:id" },
+      },
+    });
+    expect(run?.observations).toHaveLength(1);
+    const evidence = run?.observations[0]?.evidence[0];
+    expect(evidence).toMatchObject({ result: "/r/adversarial-2026-09-24T10-00-00-000Z.result.json" });
+    expect(evidence).not.toHaveProperty("recording");
+  });
+
   it("refuses to read what is not a mission result", () => {
     expect(runFromMissionResult("/r/explore-x.json", { version: "1.0.0", site: "x", pages: [] })).toBeNull();
     expect(runFromMissionResult("/r/unknown-x.result.json", { missionOutcome: "clean", exitCode: 0, result: {} })).toBeNull();

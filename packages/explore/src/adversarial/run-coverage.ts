@@ -248,7 +248,7 @@ export class CoverageTracker {
  * how to permit them: `--allow-destructive` for paid / destructive / session-ending controls, removing
  * the `--deny` pattern for a denied one, and `--paid`/`--deny` to reclassify a misjudged control.
  */
-function refusalNote(refused: ReadonlyArray<{ readonly name: string; readonly risk: string }>, total: number): string {
+export function refusalNote(refused: ReadonlyArray<{ readonly name: string; readonly risk: string }>, total?: number): string {
   if (refused.length === 0) return "";
   const byRisk = new Map<string, string[]>();
   for (const r of refused) byRisk.set(r.risk, [...(byRisk.get(r.risk) ?? []), r.name]);
@@ -258,12 +258,34 @@ function refusalNote(refused: ReadonlyArray<{ readonly name: string; readonly ri
     const listed = [...counts].slice(0, 5).map(([n, c]) => `"${n}"${c > 1 ? ` x${c}` : ""}`);
     return `${risk}: ${listed.join(", ")}${counts.size > 5 ? ", …" : ""}`;
   });
-  const all = refused.length === total ? (total === 1 ? "the only one" : `all ${total}`) : `${refused.length}`;
+  const all =
+    total === undefined ? `${refused.length} control(s)` : refused.length === total ? (total === 1 ? "the only one" : `all ${total}`) : `${refused.length}`;
   const hints: string[] = [];
   if (refused.some((r) => r.risk !== "denied")) hints.push("pass --allow-destructive to let the run click paid/destructive controls");
   if (refused.some((r) => r.risk === "denied")) hints.push("remove the --deny pattern that matches them");
   hints.push("or reclassify a misjudged control with --paid/--deny");
   return ` — ${all} refused by the safety policy (${groups.join("; ")}); to exercise them, ${hints.join(", ")}`;
+}
+
+/**
+ * #213: the controls a run's safety policy refused, read from its transcript's `safety-policy` steps
+ * (`refused by the safety policy: "<name>" … (<risk>)` / `… matches --deny …`) — one per name, in order.
+ * What a strategy without its own refusal tracking (feature) names in its `insufficient-coverage` reason.
+ */
+export function safetyRefusalsFromTranscript(
+  entries: ReadonlyArray<{ readonly strategy?: string | null; readonly actOk?: boolean; readonly reason?: string | null }>,
+): Array<{ readonly name: string; readonly risk: string }> {
+  const out = new Map<string, string>();
+  for (const e of entries) {
+    if (e.strategy !== "safety-policy" || e.actOk !== false || typeof e.reason !== "string") continue;
+    const m = /^refused by the safety policy: "(.*)" ((?:ends the session|is destructive|may cost money|matches --deny).*)$/.exec(e.reason);
+    if (m === null) continue;
+    const name = m[1] ?? "";
+    const rest = m[2] ?? "";
+    const risk = /matches --deny/.test(rest) ? "denied" : (/\((session-end|destructive|paid)\)/.exec(rest)?.[1] ?? "refused");
+    if (!out.has(name)) out.set(name, risk);
+  }
+  return [...out].map(([name, risk]) => ({ name, risk }));
 }
 
 function pct(r: number): string {

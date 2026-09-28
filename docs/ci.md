@@ -13,6 +13,17 @@ pass or fail:
   hard-signal defect or hang is found.
 - **Advisory findings never fail the gate** (UX findings, 4xx-correlated console errors, Jev
   flags), unless the suite sets `"gateAdvisory": true`.
+- **`ai: "fake"` (`--fake-ai`) never gates a goal or usability item on the model's own judgment**
+  (#213). The fake judge is a deterministic stand-in (it always proposes `done` the instant it is
+  offered), used for a pipeline smoke — not a real model, so it cannot prove a goal was reached
+  or missed. A goal item whose own ending is judgment-driven (`succeeded`/`failed`/`exhausted`/
+  `blocked`) is reported `error`/`inconclusive` ("goal not verified: --fake-ai has no real
+  judgment…"), never a gating FAILED, and contributes no hard `goal-check` finding to the report.
+  A genuine hard signal the same run still hits — an invariant violation, an HTTP 5xx, a hang, a
+  crash — never depended on the judge and gates exactly as it would under `--real`. Usability
+  findings were already advisory-only (never gating) regardless of `ai`. A CI smoke run of
+  `ai: "fake"` against a healthy app therefore exits `0` when it has no goals/missions that need a
+  judgment, or `2` ("no gating finding, but an item errored") when it does — never `1`.
 - **Fail closed:** an item that crashed, was inconclusive or was refused is an error, never a
   pass. So is going over the budget. An item is skipped once the budget is spent, and the skipped
   item counts as an error.
@@ -83,7 +94,8 @@ relative paths resolve against the suite file):
 - `ai`: the gateway for goals and model-driven missions (`coverage`, `exploratory`, `adversarial`,
   `usability`).
   `--real` or `--fake-ai` override it. If a suite needs a model and none is selected, it is refused
-  before anything runs. Journeys, `feature` missions and verify-fix are model-free.
+  before anything runs. Journeys, `feature` missions and verify-fix are model-free. `"fake"` is a
+  pipeline smoke, not a gate on goal/usability outcomes — see above.
 - `storageState`, `secretFields`, `fixtures`: the target's auth and known state. Journeys run from
   the storage state (as `journey run --storage-state`) and with the fixtures; goals get the
   `secretFields` (env-sourced `--secret-field` specs, resolved before anything runs) and the
@@ -170,9 +182,17 @@ boolean, and a number is a JSON number.
 - An item that sets an option that does not apply to it is refused, naming the path
   (`$.targets[0].missions[1].fixture: does not apply to a coverage mission item`), just as
   `explore` refuses the flag. A target default only reaches the items it applies to.
+- **Every problem is reported, not just the first (#213).** A suite with several unrelated
+  mistakes — a typo'd field in one target, a bad budget value, an invalid goal in another target —
+  refuses with every one of them, each on its own path-precise line, joined by `; `. One bad
+  journey/goal/mission/verify-fix item no longer hides the next sibling item's own problem, or the
+  rest of that target's fields; only a target with no `targets` entries at all still short-circuits
+  ("at least one target is required").
 - **No literal secrets.** `secret` takes `env:<VAR>` references only, and `secretFields`/`totp`
   take `<descriptor>=env:<VAR>` bindings only. A literal is refused (and never echoed); the
-  variables are read when the check starts, and an unset one is refused before anything runs.
+  variables are read when the check starts, and an unset one is refused naming its path-precise
+  location (`$.targets[0].goals[0]: secret env:SHOP_PASSWORD: environment variable SHOP_PASSWORD is
+  not set`), before anything runs.
 - `persona`/`personas` run the item once per persona, each from its own storage state, as
   `<item>@<persona>`. Each run is gated on its own (the check does not diff personas; use
   `explore --persona` for the RBAC diff). An item with `actor`, `persona` or `personas` cannot also
@@ -245,10 +265,23 @@ jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baselin
 ```
 
 `--target` takes an origin (or any URL on it), a suite target name, or a registered mission
-target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
-(default: every dated `.jevitate/logs/<date>/` dir, in the project and in `~/.jevitate`, then
-the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
-subdirectories. Each defect lists:
+target; a target no recorded run matches is refused (exit 64) with the known targets listed.
+`--since` takes an ISO date or a run. `--dir` (repeatable) reads the given results directories,
+including their subdirectories.
+
+Without `--dir`, a report reads **the current project's runs only**:
+
+- the project's own `.jevitate/logs/<date>/` dirs (only this project writes there), and
+- every run recorded for this project in the run index, `~/.jevitate/run-index.jsonl` — wherever
+  it was written, so runs sent to an `--out` dir are included. Each persisted result appends one
+  line `{project, path}`; the project is the directory holding the repo's `.jevitate/`, else the
+  git root of the working directory, else the working directory. `JEVITATE_RUN_INDEX=off` stops
+  recording.
+
+With `--target`, a report also reads every dated `.jevitate/logs/<date>/` dir (project and
+`~/.jevitate`) and the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`, filtered to
+that target. `diff` and `baseline tag` look a run id up in this project's sources first, then in
+those dirs. Each defect lists:
 
 - every mode and run that observed it, with occurrence counts;
 - evidence refs (step, screenshot, request, URL, transcript);

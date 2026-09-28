@@ -324,10 +324,11 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
       perceive(session.page, { ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }) }).catch(() => undefined);
     const failedAt = (r: Awaited<ReturnType<RecordingInterpreter["run"]>>): SingleReplayAttempt | null => {
       if (r.outcome === "completed") return null;
+      const errorText = r.outcome === "failed" ? (r.error.split("\n")[0] ?? r.error) : "replay paused for a human hand-back";
       const replay: VerifyFixResult["replay"] =
         r.outcome === "failed"
-          ? { outcome: "failed", at: r.at, error: r.error.split("\n")[0] ?? r.error, ...(r.reason === undefined ? {} : { reason: r.reason }) }
-          : { outcome: "failed", at: r.at, error: "replay paused for a human hand-back" };
+          ? { outcome: "failed", at: r.at, error: errorText, ...(r.reason === undefined ? {} : { reason: r.reason }) }
+          : { outcome: "failed", at: r.at, error: errorText };
       const mismatch = r.outcome === "failed" && r.reason !== undefined;
       return {
         ran: false,
@@ -336,7 +337,8 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
         replay,
         detail: mismatch
           ? `replay stopped at step ${r.at}: ${r.reason} — the recorded path was not reproduced, so this proves nothing`
-          : `replay could not reach the defect's step (failed at step ${r.at}); the invariant was not re-checked`,
+          // #213: show the real cause (e.g. net::ERR_CONNECTION_REFUSED), not just "it failed".
+          : `replay could not reach the defect's step (failed at step ${r.at}: ${errorText}); the invariant was not re-checked`,
         targetMismatch: mismatch,
       };
     };
@@ -454,12 +456,14 @@ async function runOneReplay(params: VerifyFixParams): Promise<SingleReplayAttemp
       return { ran: true, fired: true, observed, replay, detail: "the defect's fingerprint fired again on replay", targetMismatch: false };
     }
     if (replay.outcome === "failed") {
+      // #213: the human REASON must show the real cause (e.g. net::ERR_CONNECTION_REFUSED) — not
+      // just "it failed", which reads as the defect's own step when the target was unreachable.
       return {
         ran: false,
         fired: false,
         observed,
         replay,
-        detail: `replay could not reach the defect's step (failed at step ${replay.at}); absence of the signal proves nothing`,
+        detail: `replay could not reach the defect's step (failed at step ${replay.at}: ${replay.error}); absence of the signal proves nothing`,
         targetMismatch: false,
       };
     }

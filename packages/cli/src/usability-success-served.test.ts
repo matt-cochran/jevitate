@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FakeGenerationGateway, type Answer, type JudgmentPort, type JudgmentState } from "@jevitate/ai-core";
-import { GOAL_MET_QUESTION } from "@jevitate/explore";
+import { GOAL_MET_QUESTION, HostHealthSampler } from "@jevitate/explore";
 import { parseSuccessSpec } from "./explore-api.js";
 import { runUsabilityMission } from "./ux-api.js";
 
@@ -102,7 +102,7 @@ function savedValueJudge(): JudgmentPort & { goalStates: JudgmentState[] } {
   };
 }
 
-async function review(opts: { success?: string[]; allowVacuousChecks?: boolean } = {}) {
+async function review(opts: { success?: string[]; allowVacuousChecks?: boolean; hostHealth?: HostHealthSampler } = {}) {
   const outDir = await mkdtemp(join(tmpdir(), "jev-usability-success-"));
   const judge = savedValueJudge();
   try {
@@ -119,6 +119,7 @@ async function review(opts: { success?: string[]; allowVacuousChecks?: boolean }
       outDir,
       ...(opts.success === undefined ? {} : { successChecks: opts.success.map(parseSuccessSpec) }),
       ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+      ...(opts.hostHealth === undefined ? {} : { hostHealth: opts.hostHealth }),
     });
     return { result, judge };
   } finally {
@@ -188,6 +189,41 @@ describe("#225 — a usability save job", () => {
       const allowed = await review({ success: vacuous, allowVacuousChecks: true });
       expect(allowed.result.goalOutcome).toBe("succeeded");
       expect(allowed.result.missionOutcome).toBe("clean");
+    },
+    240_000,
+  );
+});
+
+/**
+ * #213 item 4 — on a STARVED host (a deterministic fake), a usability job whose completion CODE
+ * verified (its success checks held) stands: `clean`, never downgraded. An ending only the model
+ * judged (a grounded-judgment `done`, no code proof) is still `inconclusive` (degraded-environment).
+ */
+describe("#213 — a code-verified usability job stands on a starved host", () => {
+  const starved = (): HostHealthSampler =>
+    new HostHealthSampler({ probe: async () => ({ sample: null, overThreshold: null, loadPerCore: 3.5 }), eventLoopLagMs: () => 2, intervalMs: 0, attribute: true, cores: 4 });
+
+  it(
+    "--success held: clean (exit 0), whatever the host",
+    async () => {
+      const health = starved();
+      const { result } = await review({ success: ["requestMade:PUT /api/profile", "textIncludes:[data-testid=status]|Saved"], hostHealth: health });
+      expect(result.hostHealth.degraded).toBe(true);
+      expect(result.goalOutcome).toBe("succeeded");
+      expect(result.missionOutcome).toBe("clean");
+      expect(result.exitCode).toBe(0);
+      expect(result.failure).toBeUndefined();
+    },
+    240_000,
+  );
+
+  it(
+    "a done only the model judged (no code proof): inconclusive, degraded-environment",
+    async () => {
+      const { result } = await review({ hostHealth: starved() });
+      expect(result.outcome.status === "completed" && result.outcome.verifiedBy).toBe("grounded-judgment");
+      expect(result.missionOutcome).toBe("inconclusive");
+      expect(result.failure?.kind).toBe("degraded-environment");
     },
     240_000,
   );

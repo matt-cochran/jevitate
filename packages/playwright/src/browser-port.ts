@@ -18,6 +18,13 @@ export interface BrowserSession {
    * it; a test double that never exercises `--save-storage-state` need not.
    */
   captureStorageState?(): Promise<string>;
+  /**
+   * #213: a fast pre-flight check that something is listening at `url`'s origin — a plain-words
+   * reason when it definitely is not (connection refused, host not found), else null. Missions call
+   * it before the first navigation so a target that is not running fails in milliseconds, not after
+   * the 30s navigation timeout. Optional: a test double without it is never probed.
+   */
+  probeReachable?(url: string): Promise<string | null>;
   close(): Promise<void>;
 }
 

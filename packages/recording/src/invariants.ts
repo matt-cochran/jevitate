@@ -73,6 +73,19 @@ export const MAX_INVARIANTS = 64;
 export const MAX_BUDGETS = 8;
 const MAX_EXPRESSION_CHARS = 1_000;
 
+/**
+ * The HTTP methods a `network`/`never.response`/`capture.network` `method` may name (#213: a spec
+ * used to accept anything alphabetic — `"FETCH"` parsed fine and then just never matched a real
+ * request). Case-insensitive; the declared-invariants monitor already `.toUpperCase()`s both sides.
+ */
+export const INVARIANT_HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
+const HTTP_METHOD_MSG = `must be one of ${INVARIANT_HTTP_METHODS.join(", ")} (case-insensitive)`;
+const httpMethodField = (): z.ZodOptional<z.ZodString> =>
+  z
+    .string()
+    .refine((m) => (INVARIANT_HTTP_METHODS as readonly string[]).includes(m.toUpperCase()), HTTP_METHOD_MSG)
+    .optional();
+
 export interface DomObservable {
   /** A CSS selector (shorthand for `target: { css }`). Exactly one of `selector` / `target`. */
   selector?: string;
@@ -777,7 +790,7 @@ const DomObservableSchema = z
 const NetworkObservableSchema = z
   .object({
     url: z.string().min(1),
-    method: z.string().regex(/^[A-Za-z]+$/).optional(),
+    method: httpMethodField(),
     json: JsonPathStringSchema,
     optional: z.boolean().optional(),
   })
@@ -891,7 +904,7 @@ const NeverResponseSchema = z
       z.number().int().min(100).max(599),
       z.string().regex(/^([1-5][0-9]{2}|[1-5][xX]{2})$/, 'status is a code ("403") or a class ("4xx")'),
     ]),
-    method: z.string().regex(/^[A-Za-z]+$/).optional(),
+    method: httpMethodField(),
   })
   .strict();
 
@@ -916,7 +929,7 @@ const CaptureWhenSchema = z
 const CaptureSchema = z
   .object({
     network: z
-      .object({ url: z.string().min(1), method: z.string().regex(/^[A-Za-z]+$/).optional(), json: JsonPathStringSchema })
+      .object({ url: z.string().min(1), method: httpMethodField(), json: JsonPathStringSchema })
       .strict()
       .optional(),
     dom: z
@@ -1142,6 +1155,112 @@ export function formatSpecPath(path: ReadonlyArray<PropertyKey>): string {
   return out === "" ? "(root)" : out;
 }
 
+interface SpecIssue {
+  readonly path: ReadonlyArray<PropertyKey>;
+  readonly message: string;
+}
+
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
+/**
+ * The spec's cross-reference problems (#213: a duplicate invariant id, an unknown observable or
+ * capture, a cross-actor read with no gate, "at least one of invariants or budget") — recomputed
+ * from the RAW input, defensively (every field is duck-typed, never assumed to be the right shape).
+ *
+ * Why this duplicates `InvariantSpecObjectSchema`'s own `superRefine` logic: zod does not run a
+ * `superRefine` once ANY nested field's parse aborts (a wrong type, an unrecognized `.strict()` key,
+ * …) — so a spec with an unrelated type error used to lose every one of these checks along with it,
+ * reporting only the type error and hiding real problems elsewhere in the same file. `raw` has no
+ * such failure mode: it is read defensively here regardless of what else is wrong with the spec, and
+ * `validateInvariantSpec` merges its findings with the schema's own. The schema's `superRefine` is
+ * left as-is for its other direct callers (`parsePersistedMission`, `MissionRequestSchema`).
+ */
+function crossReferenceProblems(raw: unknown): SpecIssue[] {
+  const spec = asRecord(raw);
+  if (spec === undefined) return [];
+  const issues: SpecIssue[] = [];
+  const captureObj = asRecord(spec.capture) ?? {};
+  const observeObj = asRecord(spec.observe) ?? {};
+  const declared = new Set(Object.keys(observeObj));
+  const captures = new Set(Object.keys(captureObj));
+  for (const n of captures) {
+    if (declared.has(n)) issues.push({ path: ["capture", n], message: `${JSON.stringify(n)} is both a capture and an observable` });
+  }
+  const probeOf = (o: unknown): Record<string, unknown> | undefined => {
+    const rec = asRecord(o);
+    return rec === undefined ? undefined : asRecord(rec.probe);
+  };
+  for (const [name, o] of Object.entries(observeObj)) {
+    const probe = probeOf(o);
+    if (probe === undefined) continue;
+    const tpl = typeof probe.get === "string" ? probe.get : typeof probe.head === "string" ? probe.head : "";
+    for (const ref of captureRefs(tpl)) {
+      if (!captures.has(ref)) issues.push({ path: ["observe", name, "probe"], message: `unknown capture ${JSON.stringify(ref)}` });
+    }
+  }
+  const observerObservables = new Set(
+    Object.entries(observeObj)
+      .filter(([, o]) => probeOf(o)?.as !== undefined)
+      .map(([n]) => n),
+  );
+  const invariantsRaw = Array.isArray(spec.invariants) ? spec.invariants : [];
+  const budgetRaw = Array.isArray(spec.budget) ? spec.budget : [];
+  if (invariantsRaw.length === 0 && budgetRaw.length === 0) {
+    issues.push({ path: ["invariants"], message: "at least one of invariants or budget is required" });
+  }
+  const ids = new Set<string>();
+  invariantsRaw.forEach((invRaw, i) => {
+    const inv = asRecord(invRaw);
+    if (inv === undefined) return; // reported by the schema's own type check
+    if (typeof inv.id === "string") {
+      if (ids.has(inv.id)) issues.push({ path: ["invariants", i, "id"], message: `duplicate invariant id ${JSON.stringify(inv.id)}` });
+      ids.add(inv.id);
+    }
+    const gate = invariantGate(inv as { when?: { after?: string } });
+    if (gate !== null && !captures.has(gate)) {
+      issues.push({ path: ["invariants", i, "when", "after"], message: `unknown capture ${JSON.stringify(gate)}` });
+    }
+    const deniedAs = asRecord(inv.deniedAs);
+    if (deniedAs !== undefined && typeof deniedAs.open === "string") {
+      for (const ref of captureRefs(deniedAs.open)) {
+        if (!captures.has(ref)) issues.push({ path: ["invariants", i, "deniedAs", "open"], message: `unknown capture ${JSON.stringify(ref)}` });
+      }
+    }
+    if (typeof inv.require !== "string") return;
+    let ast: ExprNode;
+    try {
+      ast = parseInvariantExpression(inv.require);
+    } catch {
+      return; // reported by the expression's own refinement
+    }
+    for (const name of expressionObservables(ast)) {
+      if (!declared.has(name) && !captures.has(name)) {
+        issues.push({ path: ["invariants", i, "require"], message: `unknown observable ${JSON.stringify(name)}` });
+      }
+      if (observerObservables.has(name) && gate === null) {
+        issues.push({
+          path: ["invariants", i, "when"],
+          message: `${JSON.stringify(name)} is read as another actor: the invariant needs when.after: "capture.<name>"`,
+        });
+      }
+    }
+  });
+  budgetRaw.forEach((bRaw, i) => {
+    const b = asRecord(bRaw);
+    if (b === undefined) return;
+    if (typeof b.observe === "string" && !declared.has(b.observe)) {
+      issues.push({ path: ["budget", i, "observe"], message: `unknown observable ${JSON.stringify(b.observe)}` });
+    }
+    const guard = asRecord(b.guard);
+    if (guard !== undefined && typeof guard.estimate === "string" && !declared.has(guard.estimate)) {
+      issues.push({ path: ["budget", i, "guard", "estimate"], message: `unknown observable ${JSON.stringify(guard.estimate)}` });
+    }
+  });
+  return issues;
+}
+
 /** The origin a probe's URL resolves to (relative paths against `baseUrl`), or null when unparseable. */
 export function probeUrl(probe: ProbeObservable, baseUrl: string): URL | null {
   const raw = probe.get ?? probe.head;
@@ -1232,6 +1351,17 @@ function originOf(s: string): string | null {
   }
 }
 
+/**
+ * The concrete (wildcard-free) origin a `never.response.url` glob begins with, or null when the
+ * glob has no such literal prefix (a bare path, or a wildcarded scheme/host `https://*.x.test/…`
+ * that may still resolve onto an authorized origin at request time — left unchecked here).
+ */
+function literalGlobOrigin(urlGlob: string): string | null {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/[^/*?]+/i.exec(urlGlob);
+  if (m === null) return null;
+  return originOf(m[0]);
+}
+
 export interface ValidateInvariantOptions {
   /** Authorized origins: every probe must resolve onto one. Required when the spec has probes. */
   readonly allowlist?: readonly string[];
@@ -1252,11 +1382,15 @@ export interface ValidateInvariantOptions {
  */
 export function validateInvariantSpec(raw: unknown, opts: ValidateInvariantOptions = {}): InvariantSpec {
   const parsed = InvariantSpecSchema.safeParse(raw);
+  // #213: computed independently of whether the schema parse succeeded — see `crossReferenceProblems`.
+  const crossRef = crossReferenceProblems(raw).map((i) => `${formatSpecPath(i.path)}: ${i.message}`);
   if (!parsed.success) {
-    throw new InvariantSpecError(parsed.error.issues.map((i) => `${formatSpecPath(i.path)}: ${i.message}`));
+    const shapeProblems = parsed.error.issues.map((i) => `${formatSpecPath(i.path)}: ${i.message}`);
+    const extra = crossRef.filter((p) => !shapeProblems.includes(p));
+    throw new InvariantSpecError([...shapeProblems, ...extra]);
   }
   const spec = parsed.data;
-  const problems: string[] = [];
+  const problems: string[] = [...crossRef];
   const allowed = new Set((opts.allowlist ?? []).map(originOf).filter((o): o is string => o !== null));
   const observers = new Set(opts.observers ?? []);
   const urlCaptures = new Set(Object.entries(spec.capture ?? {}).filter(([, c]) => "url" in c).map(([n]) => n));
@@ -1277,6 +1411,25 @@ export function validateInvariantSpec(raw: unknown, opts: ValidateInvariantOptio
     return true;
   };
   spec.invariants.forEach((inv, i) => {
+    if (inv.never !== undefined && "response" in inv.never) {
+      const at = `invariants[${i}].never.response.url`;
+      const url = inv.never.response.url;
+      // A glob starting with "/" is matched path-only against ANY authorized origin's response
+      // (`matchesUrlGlob` in declared-invariants.ts) — always reachable. An absolute glob whose HOST
+      // is a concrete, wildcard-free origin is matched against the full URL, but the listener only
+      // ever tests responses `isAuthorizedExploreTarget` already let through — an unauthorized
+      // literal origin can therefore never fire. A wildcarded origin (`https://*.x.test/...`) is left
+      // alone: it may still resolve onto an authorized origin at request time.
+      if (!url.startsWith("/") && (opts.baseUrl !== undefined || opts.allowlist !== undefined)) {
+        const origin = literalGlobOrigin(url);
+        if (origin !== null && (opts.allowlist === undefined || !allowed.has(origin))) {
+          problems.push(
+            `${at}: origin ${origin} is not an authorized origin — never.response only watches the mission's own ` +
+              `authorized traffic and this rule can never fire (use a leading "/" path glob to match any authorized origin, or add --allow ${origin})`,
+          );
+        }
+      }
+    }
     if (inv.deniedAs === undefined) return;
     const at = `invariants[${i}].deniedAs`;
     checkActor(inv.deniedAs.actor, `${at}.actor`);

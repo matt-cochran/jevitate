@@ -27,7 +27,8 @@ errors, failed requests), hangs, invariant violations and backend-log defects. I
 `regression capture` turns a failing run into two files you can commit, `<id>.recording.json` and
 `<id>.meta.json`, under `--dir` (default the repo's `.jevitate/regressions`). It first replays the failure
 `--attempts` times (default 3) in fresh browser sessions. A failure that does not reproduce every
-time is labelled flaky and is not committed.
+time is labelled flaky and is not committed. `--id` naming an existing regression is refused (64)
+unless `--force` opts in to overwriting it.
 
 What it can use as the failure (the "oracle"):
 
@@ -42,10 +43,13 @@ What it can use as the failure (the "oracle"):
   This Recording is not minimized.
 - **A Recording whose final step's `expect` fails**, with no `--result` at all.
 
-It refuses, with a reason, when the result carries none of these. In particular, the engine's own
-safety refusals are never used as an oracle, and a hard-signal defect such as an HTTP 500 is
-re-checked with `verify-fix` rather than captured. To capture one of those as a regression,
-declare the rule it breaks as an [invariant](./invariants.md) (the [demo](./demo.md) does this).
+It refuses (64), with a reason, when the result carries none of these. In particular, the engine's
+own safety refusals are never used as an oracle, and a `--fingerprint` naming a hard-signal defect
+(HTTP 5xx, a hang, a server-log defect, …) is refused with a pointer to `jevitate ledger add` /
+`jevitate ledger verify` / `jevitate verify-fix` — its oracle is the signal itself, which
+`regression capture` cannot turn into a page/success-check regression. To capture one of those AS a
+regression instead, declare the rule it breaks as an [invariant](./invariants.md) (the
+[demo](./demo.md) does this).
 
 `regression run <id>` replays the committed files and re-evaluates the same oracle: `reproduces`
 (exit 1) while the bug is there, `fixed` (exit 0) once it is gone. Pass `--storage-state` to

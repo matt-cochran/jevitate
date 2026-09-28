@@ -1,3 +1,4 @@
+import { recordRun } from "./run-index.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
@@ -60,6 +61,7 @@ import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import type { CheckSuite, SuiteBudget, SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { loadRunFile, resolveBaseline, scanRuns, summarizeRun, type RunSummary } from "./report-api.js";
+import { GOAL_ONLY_OUTCOMES } from "@jevitate/domain";
 
 /**
  * `jevitate check --suite <file>` (#137): jevitate as a CI regression gate. Runs every suite item
@@ -395,9 +397,16 @@ interface Stamp {
   readonly engine: EngineInfo;
   readonly targetBuild?: string;
   readonly suite: { readonly name: string; readonly target: string; readonly item: string };
+  /**
+   * #213: stamped on a goal result run under `--fake-ai`/`ai:"fake"` — read back by
+   * `@jevitate/findings` to keep the fake judge's OWN "goal not reached" ending out of the hard,
+   * gating `goal-check` findings (a genuine hard signal it observed along the way, e.g. an
+   * invariant violation or a 5xx, still gates: it never depended on the judge).
+   */
+  readonly aiMode?: "real" | "fake";
 }
 
-/** Adds the check's stamp (engine, target build, suite item) to a result the runner already wrote. */
+/** Adds the check's stamp (engine, target build, suite item, ai mode) to a result the runner already wrote. */
 function stampResultFile(path: string, stamp: Stamp): void {
   const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
   if (!isRecord(raw)) return;
@@ -407,6 +416,7 @@ function stampResultFile(path: string, stamp: Stamp): void {
       engine: raw.result.engine ?? stamp.engine,
       suite: stamp.suite,
       ...(stamp.targetBuild === undefined ? {} : { targetBuild: stamp.targetBuild }),
+      ...(stamp.aiMode === undefined ? {} : { aiMode: stamp.aiMode }),
     };
   } else {
     raw.stamp = { engine: stamp.engine, target: stamp.suite.target, item: stamp.suite.item, ...(stamp.targetBuild === undefined ? {} : { targetBuild: stamp.targetBuild }) };
@@ -759,13 +769,13 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
   };
 }
 
-/** The item's setup, a refusal naming the target and item otherwise (before anything runs). */
-function setupOrRefuse(p: PreparedTarget, label: string, run: () => ItemSetup): ItemSetup {
+/** The item's setup, a refusal naming its path-precise location (#213: like every other suite refusal), before anything runs. */
+function setupOrRefuse(label: string, run: () => ItemSetup): ItemSetup {
   try {
     return run();
   } catch (e) {
     const fixtures = e instanceof FixtureSpecError || e instanceof UnboundSetupRefError ? "fixtures: " : "";
-    throw new CheckPreflightError(`target ${p.target.name}: ${label}: ${fixtures}${errorMessage(e)}`);
+    throw new CheckPreflightError(`${label}: ${fixtures}${errorMessage(e)}`);
   }
 }
 
@@ -786,7 +796,7 @@ function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | 
   const out: Planned[] = [];
   const skip = (routes: readonly string[] | undefined): string | undefined =>
     changed === undefined || changed.length === 0 || affectedBy(routes, changed) ? undefined : `not affected by --changed-routes ${changed.join(",")}`;
-  for (const p of prepared) {
+  prepared.forEach((p, ti) => {
     const t = p.target;
     for (const sj of t.journeys) {
       const j = p.journeys.get(sj.id);
@@ -794,19 +804,19 @@ function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | 
       const s = skip(routes);
       out.push({ t: p, kind: "journey", name: sj.id, journey: sj, needsAi: false, ...(s === undefined ? {} : { skipped: s }) });
     }
-    for (const g of t.goals) {
+    t.goals.forEach((g, gi) => {
       const s = skip(g.routes ?? [pathOf(g.url ?? t.url)]);
       const texts = { [`goal ${g.name} url`]: g.url, [`goal ${g.name}`]: g.goal, [`goal ${g.name} success`]: g.success };
-      const setup = setupOrRefuse(p, `goal ${g.name}`, () => itemSetup(p, g, "goal", opts, { url: g.url ?? t.url, texts }));
+      const setup = setupOrRefuse(`$.targets[${ti}].goals[${gi}]`, () => itemSetup(p, g, "goal", opts, { url: g.url ?? t.url, texts }));
       out.push(...perPersona({ t: p, kind: "goal", name: g.name, goal: g, needsAi: true, setup, ...(s === undefined ? {} : { skipped: s }) }));
-    }
+    });
     const missions = t.missions.length === 0 && t.goals.length === 0 && p.invariants !== undefined ? [invariantSweep()] : t.missions;
-    for (const m of missions) {
-      const setup = setupOrRefuse(p, `mission ${m.name}`, () => itemSetup(p, m, m.strategy, opts));
+    missions.forEach((m, mi) => {
+      const setup = setupOrRefuse(`$.targets[${ti}].missions[${mi}]`, () => itemSetup(p, m, m.strategy, opts));
       out.push(...perPersona({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature", setup }));
-    }
+    });
     for (const v of t.verifyFix) out.push({ t: p, kind: "verify-fix", name: v.name, verify: v, needsAi: false });
-  }
+  });
   return out;
 }
 
@@ -941,6 +951,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       },
     };
     await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    recordRun(path); // #213: a bare `report` in this project finds it
     const actions = failed && at !== undefined ? at + 1 : recordingSteps(j);
     return { status: "ran", resultPath: path, outcome: r.outcome, actions };
   }
@@ -986,7 +997,27 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...(setup?.actors === undefined ? {} : { actors: setup.actors }),
         ...(fx === undefined ? {} : { fixtures: fx }),
       });
-      stampResultFile(r.resultPath, stamp);
+      stampResultFile(r.resultPath, { ...stamp, ...(ctx.opts.aiMode === "fake" ? { aiMode: "fake" as const } : {}) });
+      // #213: `--fake-ai`'s judge is a deterministic stand-in (it always proposes `done`) — it
+      // cannot prove a goal was reached OR missed, so the goal's own judgment-driven ending
+      // (`succeeded`/`failed`/`exhausted`/`blocked`: `GOAL_ONLY_OUTCOMES`) is honestly inconclusive
+      // under it, never a gating FAILED. A genuine hard signal the run hit along the way (an
+      // invariant violation, a 5xx, a hang, a crash — `goalOutcome` holding a shared
+      // `MissionOutcome` directly, not a goal-only one) never depended on the judge and still
+      // gates. `succeeded` needs no override: it is the clean case.
+      if (ctx.opts.aiMode === "fake" && (GOAL_ONLY_OUTCOMES as readonly string[]).includes(r.goalOutcome) && r.goalOutcome !== "succeeded") {
+        return {
+          status: "error",
+          resultPath: r.resultPath,
+          outcome: "inconclusive",
+          goalOutcome: r.goalOutcome,
+          actions: r.actions,
+          error: {
+            type: "inconclusive",
+            message: `goal not verified: --fake-ai has no real judgment (the goal ended '${r.goalOutcome}') — use --real to gate on this goal`,
+          },
+        };
+      }
       // #217: the canonical verdict gates; the goal's own ending rides beside it.
       const executed = missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
       return { ...executed, goalOutcome: r.goalOutcome, actions: r.actions };
@@ -1089,14 +1120,23 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       bounds: b,
     });
     const actions = actionsOf({ transcriptPath: r.transcriptPath });
+    // #213: the item points at the PERSISTED result (which carries the UX report), never at the
+    // report file alone — the same kind of path every other strategy's item has.
+    stampResultFile(r.resultPath, stamp);
     if (r.reportPath === null) {
-      return { status: "error", outcome: r.missionOutcome, actions, error: { type: "inconclusive", message: r.analysisUnavailable ?? "usability analysis unavailable" } };
+      return {
+        status: "error",
+        resultPath: r.resultPath,
+        outcome: r.missionOutcome,
+        actions,
+        error: { type: "inconclusive", message: r.analysisUnavailable ?? "usability analysis unavailable" },
+      };
     }
     stampResultFile(r.reportPath, stamp);
     if (BROKEN.has(r.missionOutcome)) {
-      return { status: "error", resultPath: r.reportPath, outcome: r.missionOutcome, actions, error: { type: r.missionOutcome, message: `usability run ${r.missionOutcome}` } };
+      return { status: "error", resultPath: r.resultPath, outcome: r.missionOutcome, actions, error: { type: r.missionOutcome, message: `usability run ${r.missionOutcome}` } };
     }
-    return { status: "ran", resultPath: r.reportPath, outcome: r.missionOutcome, actions };
+    return { status: "ran", resultPath: r.resultPath, outcome: r.missionOutcome, actions };
   }
 
   if (item.kind === "verify-fix" && item.verify !== undefined) {
@@ -1135,6 +1175,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       },
     };
     await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    recordRun(path); // #213: a bare `report` in this project finds it
     if (r.verdict === "inconclusive") {
       return { status: "error", resultPath: path, outcome: r.verdict, actions: 0, error: { type: "inconclusive", message: `verify-fix inconclusive: ${r.reason}` } };
     }

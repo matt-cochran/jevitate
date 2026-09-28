@@ -7,7 +7,7 @@ import { formatBaselineListHuman, formatBaselineShowHuman, formatBaselineTagHuma
 import {
   ReportInputError,
   buildReport,
-  defaultResultDirs,
+  defaultLookupDirs,
   diffRunRefs,
   listBaselines,
   readBaseline,
@@ -46,7 +46,7 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .description("one deduped defect list for a target across every mode and run (markdown + JSON envelope)")
     .option("--target <origin|name>", "the target: an origin (or URL on it), a suite target name, or a registered mission target")
     .option("--since <run|date>", "only runs that started at/after this ISO date or this run")
-    .option("--dir <dir>", "results dir to read (repeatable; default: every dated .jevitate/logs dir, project and ~/.jevitate, then the 0.1.0 recordings and ux-reports dirs)", collect, [] as string[])
+    .option("--dir <dir>", "results dir to read (repeatable). Default: this project's runs — its .jevitate/logs plus every run recorded for it in ~/.jevitate/run-index.jsonl (including --out dirs); with --target, every .jevitate/logs dir (project and ~/.jevitate) and the 0.1.0 recordings/ux-reports dirs too", collect, [] as string[])
     .option("--baseline <run|tag|last>", "add a diff section against a baseline: a run, a `baseline tag`, or `last` (the previous run per target+mode)")
     .option("--out <dir>", "also write report.md and report.json here")
     .option("--json", "emit the JSON envelope instead of markdown")
@@ -85,7 +85,7 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
       const o = this.opts<{ dir: string[]; json?: boolean }>();
       try {
         const r = diffRunRefs(runA, runB, {
-          dirs: o.dir.length > 0 ? o.dir : defaultResultDirs(),
+          dirs: o.dir.length > 0 ? o.dir : defaultLookupDirs(),
           ...(deps.baselinesDir === undefined ? {} : { baselinesDir: deps.baselinesDir }),
         });
         if (o.json) emit(program, ok({ baseline: r.baseline, current: r.current, summary: r.diff.summary, entries: r.diff.entries }), 0);
@@ -107,7 +107,7 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .action(async function (this: Command, name: string, runs: string[]) {
       const o = this.opts<{ dir: string[]; json?: boolean }>();
       try {
-        const dirs = o.dir.length > 0 ? o.dir : defaultResultDirs();
+        const dirs = o.dir.length > 0 ? o.dir : defaultLookupDirs();
         const resolved = resolveRunRefs(runs, { dirs, ...(deps.baselinesDir === undefined ? {} : { baselinesDir: deps.baselinesDir }) });
         const { tag, path } = await tagBaseline({ name, runs: resolved, ...(deps.baselinesDir === undefined ? {} : { dir: deps.baselinesDir }) });
         const data = { name: tag.name, path, createdAt: tag.createdAt, runs: tag.runs.map(summarizeRun) };

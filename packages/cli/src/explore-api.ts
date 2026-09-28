@@ -1,3 +1,4 @@
+import { sessionLostReason } from "./session-check.js";
 import { chmod, writeFile } from "node:fs/promises";
 import { assertSessionFileOutsideProject, logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
@@ -41,6 +42,8 @@ import {
   type FeatureRunResult,
   type MissionRouteScope,
   resolveRouteScope,
+  refusalNote,
+  safetyRefusalsFromTranscript,
   startRouteGlobs,
   type TranscriptEntry,
   type RunAnswer,
@@ -395,6 +398,11 @@ export interface RunExplorationResult {
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "goal";
   /**
+   * #213: the `--storage-state` session was not honoured — the run's first page was a sign-in page, so
+   * whatever it did (the model may sign in by itself), it did not start as that session. A warning.
+   */
+  readonly sessionLost?: { readonly reason: string };
+  /**
    * The portable verdict — ALWAYS canonical (#217): `goalOutcome` folded by the domain's single
    * mapping (`GOAL_OUTCOME_FOLD`): succeeded → clean; failed/exhausted/blocked → defects-found.
    */
@@ -694,7 +702,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     const httpDefects = http5xx.defects(mission.transcript);
     const hardOutcome = applyHttp5xxGoalOutcome(loggedOutcome, httpDefects);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
-    const host = await finishHostHealth(health, hardOutcome);
+    // #213: a starved `failed` goal keeps the check that did not hold in its degraded reason.
+    const host = await finishHostHealth(health, hardOutcome, {
+      ...(hardOutcome === mission.outcome && (mission.failure?.message ?? mission.reason) !== undefined
+        ? { wouldHaveBeen: mission.failure?.message ?? mission.reason }
+        : {}),
+    });
     const goalOutcome: GoalBasedOutcome = host.outcome;
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
@@ -732,6 +745,13 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),
+      ...((): { sessionLost?: { reason: string } } => {
+        const lost = sessionLostReason({
+          target: primaryState === undefined ? {} : { storageStatePath: resolvePath(primaryState) },
+          transcript: serverLogRun?.transcript ?? mission.transcript,
+        });
+        return lost === undefined ? {} : { sessionLost: { reason: lost } };
+      })(),
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
@@ -1038,8 +1058,10 @@ export interface RunCoverageMissionResult {
 
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
-  /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix is `coverage-` for both. */
+  /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix names it (`coverage-`/`exploratory-`, #213). */
   readonly strategy: "coverage" | "exploratory";
+  /** #213: the route scope the frontier was contained to, and where it came from (the #224 field). */
+  readonly scope: MissionRouteScope;
   readonly coverage: CoverageReport;
   readonly outcome: CoverageRunOutcome;
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
@@ -1059,10 +1081,10 @@ export interface RunCoverageMissionResult {
   readonly failure?: MissionFailure;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
   readonly timing: TimingSummary;
-  /** The persisted typed result (`coverage-<stamp>.result.json`). */
+  /** The persisted typed result (`<strategy>-<stamp>.result.json`: `coverage-` or `exploratory-`). */
   readonly resultPath: string;
   readonly recordingPaths: string[];
-  /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
+  /** The shared decision transcript (`<strategy>-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
@@ -1109,7 +1131,10 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   // `MissionJournal` creates `outDir` synchronously (mkdirSync).
-  const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
+  // #213: an exploratory run's files are named for it (`exploratory-*`), not `coverage-*`; every
+  // reader finds a result by its content (#211), never by this prefix.
+  const filePrefix = opts.strategy ?? "coverage";
+  const journal = new MissionJournal(join(outDir, `${filePrefix}-${stamp}.json`));
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
   // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
@@ -1186,7 +1211,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
-      const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
+      const p = join(outDir, `${filePrefix}-${stamp}-state-${i}.json`);
       await writeFile(p, `${JSON.stringify(withEmu(result.recordings[i]!), null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
@@ -1243,6 +1268,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       },
       timing: result.timing,
       strategy: opts.strategy ?? "coverage",
+      // #213: the SCOPE line (#224's field) — the start route plus any --route/--scope app globs.
+      scope: {
+        routeGlobs: [...stampedCoverage.scope.routeGlobs],
+        source: (opts.routeGlobs ?? []).some((g) => g.trim() !== "") ? ("route" as const) : ("start-url" as const),
+      },
       coverage: stampedCoverage,
       // #209: a frontier that emptied having exercised too little to be clean is not `exhausted`
       // (that reads as "fully covered") — it is `insufficient-coverage`, the same word as its
@@ -1802,7 +1832,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
           kind: "insufficient-coverage",
           message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${routeScope.routeGlobs.join(", ")}]${
             routeScope.source === "start-url" ? " (derived from the start URL)" : ""
-          } — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
+          } — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead${refusalNote(safetyRefusalsFromTranscript(result.transcript))}`,
         }
       : irrelevant
         ? {
@@ -1931,9 +1961,17 @@ export interface ExploreCliDeps {
  *   attr:<descriptor>|<name>=<value> | attr:<descriptor>|<name> (present) | attr:<descriptor>|!<name> (absent)
  *   flashed:<descriptor>|class=<cls>|attr=<name>|animation [|withinMs=<n>] — a match GAINED the
  *                                        class / attribute / an animation after the last user input
- * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS
- * selector starting with `[`, `#` or `.` (`[data-testid=x]` is read as `testId=x`). In
- * `textIncludes` / `valueEquals` the LAST `|` separates the descriptor from the text.
+ * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css
+ * (`css=h1`, `label=Display name`, `role=button;name=Save`) — key=value always wins, so a `=` is
+ * never read as CSS or text. With no `=` at all, a descriptor starting with `[`, `#` or `.` is CSS
+ * verbatim (`[data-testid=x]` becomes `testId=x`); any OTHER bare descriptor is read as CSS too, but
+ * only when it is a lowercase-only, syntactically valid CSS selector (#213: `h1`, `main h1`, `body`,
+ * `div.card`, `ul > li` — tag names, combinators, classes, ids, attributes, pseudo-classes; every
+ * character lowercase is what tells a real selector apart from an accessible-name phrase like
+ * `Display name`, which is never guessed at as either CSS or text). Anything that is not a valid
+ * key=value spec and not a lowercase CSS selector is refused with a hint naming the key=value forms
+ * (`css=`, `label=`, `testId=`, `role=`, `text=`) and an example. In `textIncludes` / `valueEquals`
+ * the LAST `|` separates the descriptor from the text.
  */
 export function parseAssertionSpec(spec: string): Assertion {
   const ci = spec.indexOf(":");
@@ -2182,10 +2220,12 @@ function parseDescriptorSpec(s: string): TargetDescriptor {
       (d as Record<string, string>)[k] = v;
     }
   }
-  if (!(d.testId || d.role || d.label || d.text || d.css)) {
-    throw new Error(`descriptor spec ${JSON.stringify(s)} has no usable selector`);
-  }
-  return d;
+  if (d.testId || d.role || d.label || d.text || d.css) return d;
+  // #213: no key=value pair matched — a bare, lowercase, syntactically valid CSS selector (a tag
+  // name or a combination of them) is read as CSS; anything else is refused with a hint, never a
+  // silent guess between CSS and text.
+  if (looksLikeBareCssSelector(raw)) return { css: raw };
+  throw new Error(`descriptor spec ${JSON.stringify(s)} has no usable selector — ${DESCRIPTOR_HINT}`);
 }
 
 /**
@@ -2197,3 +2237,25 @@ export function resolveExploreAllowlist(url: string, allow: readonly string[]): 
   if (allow.length > 0) return [...allow];
   return normalizeAllowlist([url]);
 }
+
+/**
+ * A conservative CSS-selector grammar check for a BARE (no `=`, no leading `[`/`#`/`.`) `--success`
+ * descriptor (#213). It deliberately does not implement the full CSS grammar — its only job is to
+ * tell a genuine selector (`h1`, `main h1`, `body`, `div.card`, `ul > li`) apart from a plain
+ * accessible-name phrase (`Display name`). HTML tag names, classes, ids and pseudo-classes are
+ * conventionally lowercase; requiring the WHOLE string to be lowercase is the disambiguator — a
+ * descriptor with any uppercase letter is never read as CSS, no matter its shape.
+ */
+const CSS_IDENT = "[a-z][a-z0-9-]*";
+const CSS_ATTR = `\\[${CSS_IDENT}(?:[~^$*|]?=(?:"[^"]*"|'[^']*'|${CSS_IDENT}))?\\]`;
+const CSS_PSEUDO = `::?${CSS_IDENT}(?:\\([^()]*\\))?`;
+const CSS_QUALIFIER = `(?:\\.${CSS_IDENT}|#${CSS_IDENT}|${CSS_ATTR}|${CSS_PSEUDO})`;
+const CSS_COMPOUND = `(?:(?:\\*|${CSS_IDENT})${CSS_QUALIFIER}*|${CSS_QUALIFIER}+)`;
+const BARE_CSS_SELECTOR_RE = new RegExp(`^${CSS_COMPOUND}(?:(?:\\s*[>+~]\\s*|\\s+)${CSS_COMPOUND})*$`);
+
+function looksLikeBareCssSelector(raw: string): boolean {
+  return raw !== "" && !/[^\x20-\x7e]/.test(raw) && !/[A-Z]/.test(raw) && BARE_CSS_SELECTOR_RE.test(raw);
+}
+
+const DESCRIPTOR_HINT =
+  'use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, or text=<text> (e.g. "css=h1" or "label=Display name")';

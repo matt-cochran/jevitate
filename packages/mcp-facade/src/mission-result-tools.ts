@@ -55,14 +55,14 @@ export function parseResultOutcome(
 
 /**
  * A mission result id is the artifact stem the CLI wrote — one per strategy (#117):
- * `explore-<stamp>` (goal), `coverage-<stamp>` (coverage/exploratory), `adversarial-<stamp>`,
+ * `explore-<stamp>` (goal), `coverage-<stamp>`, `exploratory-<stamp>` (#213), `adversarial-<stamp>`,
  * `feature-<stamp>`, and a usability review's `usability-<stamp>.recording` (its result sits next to
  * its Recording; the report stem `usability-<stamp>` is accepted as an alias). Only these closed
  * shapes are accepted — no separator, no `..`, nothing caller-shaped — so an id can never become a
  * path traversal.
  */
 const RESULT_ID =
-  /^(?:(?:explore|coverage|adversarial|feature)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z|usability-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:\.recording)?)$/;
+  /^(?:(?:explore|coverage|exploratory|adversarial|feature)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z|usability-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:\.recording)?)$/;
 
 /** A `queue_exploration` missionId: a lowercase RFC 4122 uuid (what `enqueueMission` generates). */
 const QUEUED_MISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

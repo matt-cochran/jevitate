@@ -57,6 +57,12 @@ export interface ObservedPage {
    * links — never a link in the page's content); absent when none.
    */
   readonly controls?: readonly string[];
+  /**
+   * #229: the text of the links in the page's content (a list's / table's / card's entries), in page
+   * order; absent when none. Shown to the answer generator so "the first item" reads as the list's
+   * first entry, not the form label beside it.
+   */
+  readonly contentLinks?: readonly string[];
 }
 
 /** #216: a page's main heading and document title, as read from the page. */
@@ -69,6 +75,8 @@ export interface PageHeadings {
 export interface PageFacts extends PageHeadings {
   readonly status?: number;
   readonly controlNames?: readonly string[];
+  /** #229: the text of the page's content links, in page order. */
+  readonly contentLinks?: readonly string[];
 }
 
 /** Control names kept per observed page (#223). */
@@ -110,10 +118,13 @@ export class ObservedPages {
     const clip = (h: string | undefined): string => redactContext((h ?? "").replace(/\s+/g, " ").trim(), this.secrets).slice(0, HEADING_CHARS);
     const heading = clip(headings.heading);
     const title = clip(headings.title);
-    const names = (headings.controlNames ?? [])
-      .slice(0, MAX_OBSERVED_CONTROLS)
-      .map((n) => redactContext(n.replace(/\s+/g, " ").trim(), this.secrets).slice(0, OBSERVED_FIELD_CHARS))
-      .filter((n) => n !== "");
+    const keep = (xs: readonly string[] | undefined): string[] =>
+      (xs ?? [])
+        .slice(0, MAX_OBSERVED_CONTROLS)
+        .map((n) => redactContext(n.replace(/\s+/g, " ").trim(), this.secrets).slice(0, OBSERVED_FIELD_CHARS))
+        .filter((n) => n !== "");
+    const names = keep(headings.controlNames);
+    const links = keep(headings.contentLinks);
     const status = headings.status;
     const page: ObservedPage = {
       url: redactContext(redactUrl(url), this.secrets),
@@ -123,6 +134,7 @@ export class ObservedPages {
       ...(title === "" ? {} : { title }),
       ...(status === undefined || !Number.isInteger(status) ? {} : { status }),
       ...(names.length === 0 ? {} : { controls: names }),
+      ...(links.length === 0 ? {} : { contentLinks: links }),
     };
     if (page.text.trim() === "" && kept.length === 0) return;
     const same = (p: ObservedPage): boolean =>
@@ -130,7 +142,8 @@ export class ObservedPages {
       p.heading === page.heading &&
       p.title === page.title &&
       p.status === page.status &&
-      JSON.stringify(p.controls ?? []) === JSON.stringify(page.controls ?? []);
+      JSON.stringify(p.controls ?? []) === JSON.stringify(page.controls ?? []) &&
+      JSON.stringify(p.contentLinks ?? []) === JSON.stringify(page.contentLinks ?? []);
     const i = this.#pages.findIndex((p) => p.url === page.url && p.text === page.text && same(p));
     if (i >= 0) this.#pages.splice(i, 1);
     this.#pages.push(page);
@@ -357,8 +370,9 @@ function groundClaim(
   pages: readonly ObservedPage[],
   given: ReadonlySet<string>,
   goal: string,
+  answer: string,
 ): Grounded {
-  const r = groundClaimOn(claim, quote, pages, given, goal);
+  const r = groundClaimOn(claim, quote, pages, given, goal, answer);
   return "evidence" in r ? r : { evidence: r, notAnswer: false };
 }
 
@@ -368,6 +382,7 @@ function groundClaimOn(
   pages: readonly ObservedPage[],
   given: ReadonlySet<string>,
   goal: string,
+  answer: string,
 ): AnswerEvidence | Grounded {
   const q = bareQuote(quote);
   const base = { claim, quote };
@@ -391,6 +406,10 @@ function groundClaimOn(
   if (missing.length > 0) {
     return { ...base, url: page.url, grounded: false, ...where, why: `figure ${describeFigures(missing)} is not in its quote` };
   }
+  // #229: the answer itself stated in the (grounded) quote is what the claim says, however the claim is
+  // worded ("The bio of the profile states what the user does" over the bio's own text).
+  const stated = bareQuote(answer);
+  if (stated.replace(/\s/g, "").length >= MIN_QUOTE_CHARS && q.includes(stated)) return { ...base, url: page.url, grounded: true, ...where };
   const words = contentWords(claim);
   // A control-value quote is checked against the value together with its label ("Email" + the address).
   const said = found.control === undefined ? q : `${fold(found.control)} ${q}`;
@@ -420,7 +439,7 @@ export function groundAnswer(
   const text = (proposed.answer ?? "").trim();
   if (text === "" || (NO_ANSWER_TEXT.test(text) && proposed.claims.length === 0)) return { accept: false, reason: NO_ANSWER_REASON, answer: null };
   const given = new Set(numbersIn(opts.goal ?? ""));
-  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? ""));
+  const grounded_ = proposed.claims.map((c) => groundClaim(c.claim, c.quote, pages, given, opts.goal ?? "", text));
   const evidence = grounded_.map((g) => g.evidence);
   const answer: RunAnswer = { text, evidence };
   if (evidence.length === 0) return { accept: false, reason: "the answer cites no page text", answer };
@@ -465,6 +484,15 @@ export function goalAsksForReply(goal: string): boolean {
   return ANSWER_WORD.test(goal) && COUNTERPART.test(goal);
 }
 
+/**
+ * A page's text as the generator reads it: spaces collapsed, blank lines dropped — but a table row's
+ * cell breaks (`innerText`'s tabs) kept as one tab (#229), so "Key\tName / k_live_1\tProduction key"
+ * still says which cell is the Name. Grounding folds all whitespace, so a quote spanning cells matches.
+ */
+function cells(text: string): string {
+  return text.replace(/[ \t]*\t[ \t]*/g, "\t").replace(/ {2,}/g, " ").replace(/\n{2,}/g, "\n").trim();
+}
+
 /** The observed pages as the generator's `pages` input: current page first, bounded. */
 export function pagesContext(pages: readonly ObservedPage[], limit = ANSWER_PAGES_CHARS): string {
   let out = "";
@@ -475,7 +503,15 @@ export function pagesContext(pages: readonly ObservedPage[], limit = ANSWER_PAGE
         ? ""
         : `FORM FIELD VALUES:\n${p.fields.map((f) => `${f.label}: ${f.value.replace(/\s+/g, " ")}`).join("\n")}\n`;
     const status = p.status !== undefined && p.status >= 400 ? ` (HTTP ${p.status})` : "";
-    const block = `URL: ${p.url}${status}\n${p.text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim()}\n${fields}\n`;
+    // #229: which of the page's words are its controls (a field's label, a button) and which links
+    // are its content (a list's entries, in order) — so "Title Create item" is not read as a title.
+    const listed = (xs: readonly string[]): string => xs.map((x) => `"${x.replace(/\s+/g, " ")}"`).join(", ");
+    const actions =
+      p.controls === undefined || p.controls.length === 0
+        ? ""
+        : `ACTIONS AND LABELS (buttons, form-field labels, navigation — not content): ${listed(p.controls)}\n`;
+    const links = p.contentLinks === undefined || p.contentLinks.length === 0 ? "" : `LINKS IN THE CONTENT (in page order): ${listed(p.contentLinks)}\n`;
+    const block = `URL: ${p.url}${status}\n${cells(p.text)}\n${fields}${actions}${links}\n`;
     if (out.length + block.length > limit) {
       out += block.slice(0, Math.max(0, limit - out.length));
       break;
@@ -485,19 +521,42 @@ export function pagesContext(pages: readonly ObservedPage[], limit = ANSWER_PAGE
   return out;
 }
 
+/** #229: a goal about one entry of a list or several ("the first item", "the 3rd row", "all items"). */
+const LIST_GOAL =
+  /\b(?:first|second|third|fourth|fifth|last|next|previous|top|bottom|\d+(?:st|nd|rd|th)|each|every|all|any|list(?:ed|s)?|how many|which (?:one|of)|among)\b/i;
+/** #229: a goal about the ONE thing a page shows: "this item", "the current page", "this record". */
+const SINGLE_GOAL = /\b(?:this|the current|the open(?:ed)?|the shown|the displayed)\s+([a-z][a-z-]*)\b/i;
+
+/** "item" → ["items"], "entry" → ["entries"], "box" → ["boxes"]: the plural forms a list heading uses. */
+function plurals(noun: string): string[] {
+  const n = noun.toLowerCase();
+  if (/[^aeiou]y$/.test(n)) return [`${n.slice(0, -1)}ies`];
+  if (/(?:s|x|z|ch|sh)$/.test(n)) return [`${n}es`];
+  return [`${n}s`];
+}
+
 /**
- * #216: the retry hint for a `null` answer — the current page's main heading and/or document title,
- * or `null` when it has neither (then there is nothing to retry with).
+ * #216 / #229: the retry hint for a `null` (or not-an-answer) report — the current page's main heading
+ * and/or document title — or `null` when there is none to give. Only for a goal about the ONE thing the
+ * page shows ("the title of this item"), never a list or ordinal goal ("the first item"), never on an
+ * error page, and never when the heading names a list of the goal's things ("Items" for "this item").
+ * The hint is page data: it never says the heading IS the answer.
  */
-export function headingHint(page: ObservedPage | undefined): string | null {
+export function headingHint(page: ObservedPage | undefined, goal: string): string | null {
   if (page === undefined) return null;
   // #223: an error page's heading ("Item not found") is not the title of anything asked about.
   if (errorPageReason(page) !== null) return null;
+  const single = SINGLE_GOAL.exec(goal);
+  if (single === null || LIST_GOAL.test(goal)) return null;
+  const listOf = plurals(single[1]!);
+  const namesList = (h: string | undefined): boolean => h !== undefined && (fold(h).match(/[a-z][a-z'-]*/g) ?? []).some((w) => listOf.includes(w));
+  if (namesList(page.heading) || (page.heading === undefined && namesList(page.title))) return null;
   const parts: string[] = [];
   if (page.heading !== undefined) parts.push(`The current page's main heading is "${page.heading}".`);
   if (page.title !== undefined && page.title !== page.heading) parts.push(`Its document title is "${page.title}".`);
   if (parts.length === 0) return null;
-  return `${parts.join(" ")} That heading/title is the title or name of the item or page shown: if the goal asks for it, answer with it and quote it verbatim from \`pages\`.`;
+  const noun = single[1]!.toLowerCase();
+  return `${parts.join(" ")} On a page that shows one ${noun}, its main heading is that ${noun}'s title or name: if the goal asks for this ${noun}'s title or name, answer with that heading, quoted verbatim from \`pages\`; otherwise it is not the answer.`;
 }
 
 /** #223: the Jev question that may veto an answer code grounded. */
@@ -544,19 +603,56 @@ export async function judgeAnswerFits(
   return a?.kind === "noul" && Number.isFinite(a.probability) ? a.probability : null;
 }
 
+/** #229: why a re-report of an answer vetoed earlier in the run is rejected. */
+export const ALREADY_VETOED_REASON = "the same answer on the same quotes was already vetoed in this run: it does not answer the question";
+
+/**
+ * #229: the (answer, quotes) pairs Jev vetoed during one run. A veto stands for the rest of the run:
+ * re-reporting the same answer on the same quotes is rejected by code, never re-judged (a second,
+ * luckier judgment must not overturn the first "no").
+ */
+export class VetoedAnswers {
+  readonly #keys = new Set<string>();
+  static #key(answer: RunAnswer): string {
+    const quotes = [...new Set(answer.evidence.map((e) => bareQuote(e.quote)))].sort();
+    return JSON.stringify([bareQuote(answer.text), quotes]);
+  }
+  add(answer: RunAnswer): void {
+    this.#keys.add(VetoedAnswers.#key(answer));
+  }
+  has(answer: RunAnswer): boolean {
+    return this.#keys.has(VetoedAnswers.#key(answer));
+  }
+  get size(): number {
+    return this.#keys.size;
+  }
+}
+
 /**
  * #223: Jev's veto over an answer code accepted — only ever turns an accept into a reject (a confident
- * "no"); a failed / missing / unsure judgment leaves code's verdict as it is.
+ * "no"); a failed / missing / unsure judgment leaves code's verdict as it is. #229: an answer vetoed
+ * earlier in the run stays rejected (`vetoes`), without asking Jev again.
  */
 async function vetoed(
   verdict: AnswerVerdict,
   judge: JudgmentPort | undefined,
   input: { readonly goal: string; readonly url: string; readonly secrets: readonly string[] },
+  vetoes: VetoedAnswers,
 ): Promise<AnswerVerdict> {
   // A withheld answer (#219) rests on a value no model may see: Jev cannot judge it, code's verdict stands.
-  if (!verdict.accept || judge === undefined || verdict.answer.withheld === true) return verdict;
+  if (!verdict.accept || verdict.answer.withheld === true) return verdict;
+  if (vetoes.has(verdict.answer)) {
+    return {
+      accept: false,
+      reason: ALREADY_VETOED_REASON,
+      answer: verdict.answer,
+      notAnswer: true,
+    };
+  }
+  if (judge === undefined) return verdict;
   const p = await judgeAnswerFits(judge, { ...input, answer: verdict.answer }).catch(() => null);
   if (p === null || p >= ANSWER_VETO_BELOW) return verdict;
+  vetoes.add(verdict.answer);
   return {
     accept: false,
     reason: `the quoted text is on the page but does not answer the question (Jev vetoed it, p=${p.toFixed(2)})`,
@@ -583,9 +679,12 @@ export async function reportAnswer(
     readonly secrets?: readonly string[];
     /** #223: Jev, asked whether a grounded answer answers the question — it may veto, never approve. */
     readonly judge?: JudgmentPort;
+    /** #229: the run's vetoed answers — a veto stands for the whole run, across reports. */
+    readonly vetoes?: VetoedAnswers;
   },
 ): Promise<AnswerVerdict> {
   const secrets = input.secrets ?? [];
+  const vetoes = input.vetoes ?? new VetoedAnswers();
   const vet = { goal: input.goal, url: input.url, secrets };
   const ask = {
     goal: redactContext(input.goal, secrets),
@@ -601,16 +700,18 @@ export async function reportAnswer(
     claims: out.claims.map((c) => ({ claim: r(c.claim), quote: r(c.quote) })),
   });
   const res = await gen.generate("goal.answer", ask);
-  const verdict = await vetoed(groundAnswer(scrub(res.output), input.pages, { goal: input.goal }), input.judge, vet);
+  const verdict = await vetoed(groundAnswer(scrub(res.output), input.pages, { goal: input.goal }), input.judge, vet, vetoes);
   if (verdict.accept) return verdict;
   // #216 / #223: a `null` answer, or one that does not answer the question, is retried once with the
   // page's main heading / document title as a hint (never an error page's heading).
   const noAnswer = verdict.answer === null && verdict.reason === NO_ANSWER_REASON;
   if (!noAnswer && verdict.notAnswer !== true) return verdict;
-  const hint = headingHint(input.pages[0]);
+  const hint = headingHint(input.pages[0], input.goal);
   if (hint === null) return verdict;
   const retry = await gen.generate("goal.answer", { ...ask, hint: redactContext(hint, secrets) });
-  return vetoed(groundAnswer(scrub(retry.output), input.pages, { goal: input.goal }), input.judge, vet);
+  const retried = await vetoed(groundAnswer(scrub(retry.output), input.pages, { goal: input.goal }), input.judge, vet, vetoes);
+  // The retry repeated the answer just vetoed: the veto itself (with Jev's p) is the verdict to report.
+  return !retried.accept && retried.reason === ALREADY_VETOED_REASON && verdict.notAnswer === true ? verdict : retried;
 }
 
 /** Paths named in an "answer not found" reason (the rest are counted). */
