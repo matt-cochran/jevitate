@@ -104,7 +104,6 @@ import { runUsabilityMission, UsabilityInvariantsUnsupportedError } from "./ux-a
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
-import { runRecording, resolveRecordAllowlist } from "./record-api.js";
 import {
   addSource,
   listSources,
@@ -162,6 +161,7 @@ import { registerUxCommands } from "./ux-cli.js";
 import { registerServeCommands } from "./serve-cli.js";
 import { registerMissionCommands } from "./mission-cli.js";
 import { registerRegressionCommands } from "./regression-cli.js";
+import { registerRecordCommands } from "./record-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
@@ -2604,74 +2604,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  // Additive: `jevitate record` — record-by-demonstration (Ticket #22). Opens a
-  // real browser on an authorized origin, lets the user demonstrate a flow, and
-  // captures it into a schema-valid, replayable Recording written to disk. The
-  // authorized-origin guard is enforced FIRST (fail-closed) inside runRecording,
-  // before any browser is opened; the temp profile dir is always cleaned up.
-  program
-    .command("record")
-    .description("record a demonstrated flow into a Recording (authoring plane)")
-    .option("--url <url>", "start URL to demonstrate from (must be an authorized origin)")
-    .option("--intent <text>", "your framing of the journey (carried to Recording.intent)")
-    .option("--retro <text>", "optional retrospective note (carried to Recording.retro)")
-    .option(
-      "--allow <origin>",
-      "authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    )
-    .option("--headless", "run headless (default: headed — a record session is a live demonstration)", false)
-    .option("--out <dir>", "directory to write the emitted Recording (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)")
-    .option("--json", "emit a JSON envelope")
-    .action(async function (this: Command) {
-      const o = this.opts<{
-        url?: string;
-        intent?: string;
-        retro?: string;
-        allow: string[];
-        headless?: boolean;
-        out?: string;
-        json?: boolean;
-      }>();
-
-      if (!o.url) {
-        emitJson(program, fail("E_RECORD_ARGS", "--url is required"));
-        return;
-      }
-      const allowlist = resolveRecordAllowlist(o.url, o.allow);
-
-      try {
-        const result = await runRecording({
-          url: o.url,
-          allowlist,
-          intent: o.intent,
-          retro: o.retro,
-          outDir: o.out,
-          headless: o.headless ?? false,
-          browserPortFactory: deps.record?.browserPortFactory,
-          recorderFactory: deps.record?.recorderFactory,
-          waitForStop: deps.record?.waitForStop,
-        });
-        const summary = {
-          recordingPath: result.recordingPath,
-          steps: result.steps,
-          pages: result.pages,
-          finalUrl: result.finalUrl,
-        };
-        if (o.json) {
-          emitJson(program, ok(summary));
-        } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(summary)}\n`);
-        }
-      } catch (err) {
-        if (err instanceof UnauthorizedExploreTargetError) {
-          emitJson(program, fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
-        } else {
-          emitJson(program, fail("E_RECORD_RUN", String(err instanceof Error ? err.message : err)));
-        }
-      }
-    });
+  registerRecordCommands(program, deps);
 
   registerRegressionCommands(program, deps);
 
