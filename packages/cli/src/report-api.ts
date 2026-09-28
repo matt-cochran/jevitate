@@ -98,6 +98,9 @@ export function scanRuns(dirs: readonly string[]): RunRecord[] {
         continue;
       }
       if (!entry.isFile() || !isResultName(entry.name) || seen.has(path)) continue;
+      // #213: a usability report next to its persisted result (`<stem>.recording.result.json`, which
+      // carries the same report) is the same run — read once, from the result.
+      if (UX_REPORT.test(entry.name) && existsSync(`${path.slice(0, -".json".length)}.recording.result.json`)) continue;
       seen.add(path);
       const run = loadRunFile(path);
       if (run !== null) runs.push(run);

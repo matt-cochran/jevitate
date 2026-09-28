@@ -175,6 +175,16 @@ describe("jevitate report (#139)", () => {
     expect((JSON.parse(sinceRun.out) as { data: { runs: unknown[] } }).data.runs).toHaveLength(3);
   });
 
+  it("#213: a usability report next to its persisted result is ONE run, its UX findings read from the result", async () => {
+    const report = { headline: "1 finding", findings: [{ rubricItemId: "signal-internal-id", route: "/settings", controls: [], screenIds: ["s3"], occurrences: 1, observation: "raw uuid shown" }] };
+    writeFileSync(join(results, "usability-2026-09-22T12-00-00-000Z.json"), JSON.stringify(report));
+    writeResult("usability-2026-09-22T12-00-00-000Z.recording", "clean", { defects: [], report });
+    const { out } = await cli(["report", "--target", ORIGIN, "--dir", results, "--json"]);
+    const env = JSON.parse(out) as { data: { runs: unknown[]; defects: Array<{ category: string }> } };
+    expect(env.data.runs).toHaveLength(1);
+    expect(env.data.defects.map((d) => d.category)).toEqual(["ux"]);
+  });
+
   it("resolves --target by a registered mission target's name", async () => {
     seed();
     mkdirSync(join(dir, "targets"));

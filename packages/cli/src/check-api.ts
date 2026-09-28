@@ -1089,14 +1089,23 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       bounds: b,
     });
     const actions = actionsOf({ transcriptPath: r.transcriptPath });
+    // #213: the item points at the PERSISTED result (which carries the UX report), never at the
+    // report file alone — the same kind of path every other strategy's item has.
+    stampResultFile(r.resultPath, stamp);
     if (r.reportPath === null) {
-      return { status: "error", outcome: r.missionOutcome, actions, error: { type: "inconclusive", message: r.analysisUnavailable ?? "usability analysis unavailable" } };
+      return {
+        status: "error",
+        resultPath: r.resultPath,
+        outcome: r.missionOutcome,
+        actions,
+        error: { type: "inconclusive", message: r.analysisUnavailable ?? "usability analysis unavailable" },
+      };
     }
     stampResultFile(r.reportPath, stamp);
     if (BROKEN.has(r.missionOutcome)) {
-      return { status: "error", resultPath: r.reportPath, outcome: r.missionOutcome, actions, error: { type: r.missionOutcome, message: `usability run ${r.missionOutcome}` } };
+      return { status: "error", resultPath: r.resultPath, outcome: r.missionOutcome, actions, error: { type: r.missionOutcome, message: `usability run ${r.missionOutcome}` } };
     }
-    return { status: "ran", resultPath: r.reportPath, outcome: r.missionOutcome, actions };
+    return { status: "ran", resultPath: r.resultPath, outcome: r.missionOutcome, actions };
   }
 
   if (item.kind === "verify-fix" && item.verify !== undefined) {

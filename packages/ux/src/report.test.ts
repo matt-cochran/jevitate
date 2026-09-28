@@ -44,6 +44,31 @@ const partialCoverage: Coverage = {
   budgetTruncated: ["s3"],
 };
 
+describe("buildReport — #213: the headline's accounting adds up, and claims only grades that exist", () => {
+  it("every flagged occurrence is attributed: shown (with contributing), appendix, suppressed — nothing unaccounted", () => {
+    const lead = { ...grounded(finding("major-1", "major", 0.9)), occurrences: 3, contributing: [{ rubricItemId: "minor-1", observation: "o", confidence: 0.5, occurrences: 2 }] } as UxFinding;
+    const low = { ...grounded(finding("minor-1", "minor", 0.2)), occurrences: 4 } as UxFinding;
+    const outcome: AnalysisOutcome = {
+      kind: "analyzed",
+      findings: [lead, low],
+      coverage: fullCoverage,
+      suppressed: [{ rubricItemId: "major-1", route: "/x", screenId: "s9", reason: "not-confirmed", detail: "d" }],
+      // 3 + 2 (lead + its contributing) + 4 (suppressed below the cutoff) + 1 (not confirmed)
+      rawOccurrences: 10,
+    };
+    const report = buildReport(outcome, { minConfidence: 0.5 });
+    expect(report.headline).toContain("(from 10 flagged occurrence(s): 5 in the 1 shown finding(s), 0 in the appendix, 5 in the 2 suppressed)");
+    expect(report.headline).not.toContain("not attributed");
+  });
+
+  it("a mix of graded and ungraded findings says how many carry a grade", () => {
+    const g = { ...grounded(finding("major-1", "major", 0.9)), quality: { label: "actionable", confidence: 0.8 } } as UxFinding;
+    const u = grounded(finding("minor-1", "minor", 0.9));
+    const report = buildReport({ kind: "analyzed", findings: [g, u], coverage: fullCoverage }, { minConfidence: 0 });
+    expect(report.headline).toContain("— 1 of 2 graded (objective/signal findings are not graded)");
+  });
+});
+
 describe("buildReport", () => {
   it("ranks findings by severity × confidence (major before minor) within one impact", () => {
     const outcome: AnalysisOutcome = { kind: "analyzed", findings: [grounded(finding("minor-1", "minor", 0.99)), grounded(finding("major-1", "major", 0.5, true))], coverage: fullCoverage };
@@ -131,7 +156,7 @@ describe("buildReport", () => {
     expect(report.suppressed.items.filter((i) => i.reason === "below-min-confidence").every((i) => i.confidence !== undefined)).toBe(true);
     expect(report.rawOccurrences).toBe(12);
     expect(report.headline).toMatch(
-      /^\[PREVIEW:.*\] 1 finding\(s\) grounded in observed run behavior, shown with their quality grade \(not filtered by it\), at finding-confidence ≥ 0\.75 .*12 flagged.*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/,
+      /^\[PREVIEW:.*\] 1 finding\(s\) grounded in observed run behavior, shown with their quality grade where they have one \(not filtered by it\) — none has a quality grade \(objective\/signal findings are not graded\), at finding-confidence ≥ 0\.75 \(from 12 flagged occurrence\(s\): 1 in the 1 shown finding\(s\), 0 in the appendix, 3 in the 3 suppressed, 8 not attributed to any of them\).*3 suppressed \(by rubric item: minor-1 2, major-1 1\)/,
     );
     expect(report.coverageSummary).toMatch(/3 suppressed/);
   });
@@ -148,7 +173,7 @@ describe("buildReport", () => {
     expect(report.findings.map((f) => f.quality?.label).sort()).toEqual(["actionable", "generic", "relevant-minor", "wrong"]);
     expect(report.qualityFiltered).toBe(false);
     expect(report.suppressed.byReason["quality-policy"]).toBe(0);
-    expect(report.headline).toMatch(/shown with their quality grade \(not filtered by it\)/);
+    expect(report.headline).toMatch(/shown with their quality grade where they have one \(not filtered by it\), at/);
     expect(report.qualityDistribution).toEqual({ actionable: 1, generic: 1, wrong: 1, "relevant-minor": 1 });
     expect(report.clean).toBe(false);
   });
