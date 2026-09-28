@@ -1,3 +1,4 @@
+import { sessionLostReason } from "./session-check.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -316,6 +317,8 @@ export interface RunSummary {
   readonly failureKind?: string;
   /** #226: a find-out run's answer (`{text, evidence}`), as its result carried it. */
   readonly answer?: unknown;
+  /** #213: why the run's storage-state session (a persona's) was not honoured, when it was not. */
+  readonly sessionLost?: string;
 }
 
 export interface AggregatedFinding {
@@ -371,6 +374,10 @@ export interface CellResult {
    * and controls are the environment, never an access difference.
    */
   readonly notObserved?: string;
+   * #213: the persona's session was not honoured in some run (its first page was a sign-in page) —
+   * what it tested was not this persona. Which runs, and why.
+   */
+  readonly sessionLost?: string;
 }
 
 /** #213: endings that say nothing about what the app shows a persona — the environment, not access. */
@@ -474,9 +481,13 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
       ? (runs[0]!.reason ?? runs[0]!.failureKind!)
       : undefined;
 
+  const lost = runs.filter((r) => r.sessionLost !== undefined);
+  const sessionLost =
+    lost.length === 0 ? undefined : `run(s) ${lost.map((r) => r.index).join(", ")} of ${n}: ${lost[0]!.sessionLost}`;
   return {
     persona: persona?.name ?? null,
     ...(persona === null ? {} : { storageStatePath: persona.storageState }),
+    ...(sessionLost === undefined ? {} : { sessionLost }),
     outcome,
     missionOutcome,
     ...(goalOutcome === undefined ? {} : { goalOutcome }),
@@ -530,6 +541,11 @@ export interface PersonaDiff {
   readonly rbacCandidates: RbacCandidate[];
   /** #213: personas left out of the comparison because their runs never observed the app — and why. */
   readonly notCompared: Array<{ readonly persona: string; readonly reason: string }>;
+  /**
+   * #213: persona → why its session was lost (its first page was a sign-in page). Every other
+   * difference for that persona is then an access difference of whoever the run was, not the persona.
+   */
+  readonly sessionLost?: Record<string, string>;
 }
 
 const is2xx = (s: number): boolean => s >= 200 && s < 300;
@@ -586,8 +602,12 @@ export function diffPersonas(cells: readonly CellResult[]): PersonaDiff {
   }
   const outcomes: Record<string, string> = {};
   for (const c of personaCells) outcomes[c.persona] = c.missionOutcome;
+  // #213: session loss is flagged for EVERY persona (observed or not).
+  const sessionLost: Record<string, string> = {};
+  for (const c of personaCells) if (c.sessionLost !== undefined) sessionLost[c.persona] = c.sessionLost;
   return {
     advisory: true,
+    ...(Object.keys(sessionLost).length === 0 ? {} : { sessionLost }),
     requestsOnlyIn: presence(requestSets),
     statusDiffs,
     controlsOnlyIn: presence(controlSets),
@@ -728,6 +748,11 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
   const reason = runReasonOf(data);
   const failureKind = runFailureKindOf(data);
   const missionOutcome = runMissionOutcomeOf(strategy, data);
+  // #213: a result may already say so (goal); else decided here from its target + first transcript page.
+  const sessionLost =
+    isRecord(data.sessionLost) && typeof data.sessionLost.reason === "string"
+      ? data.sessionLost.reason
+      : sessionLostReason({ target: data.target, transcript: readTranscript(data) });
   const goalOutcome = strategy === "goal" ? (goalOutcomeOf(data) ?? missionOutcome) : undefined;
   return {
     ...base,
@@ -744,6 +769,7 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
     ...(resultPath === undefined ? {} : { resultPath }),
     ...(usage === undefined ? {} : { usage }),
     ...(data.answer === undefined || data.answer === null ? {} : { answer: data.answer }),
+    ...(sessionLost === undefined ? {} : { sessionLost }),
   };
 }
 

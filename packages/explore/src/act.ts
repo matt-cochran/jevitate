@@ -120,8 +120,15 @@ const SELECT_TIMEOUT_MS = 5_000;
  * actionability timeout and throw (#77).
  */
 const GATE_TIMEOUT_MS = 2_000;
-/** Bound (ms) on the click Playwright performs after the gate has passed. */
-const CLICK_TIMEOUT_MS = 5_000;
+/**
+ * Bound (ms) on the click Playwright performs after the gate has passed: `JEVITATE_CLICK_TIMEOUT_MS`
+ * (a positive integer) raises it for a slow app or a loaded host (#213), else 5s.
+ */
+export function clickTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["JEVITATE_CLICK_TIMEOUT_MS"];
+  const n = raw === undefined ? NaN : Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : 5_000;
+}
 /** Pixels a scroll op moves. */
 const SCROLL_PX = 600;
 /**
@@ -434,7 +441,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const via = await clickTargetFor(actor, args.control);
       if ("reason" in via) return { ok: false, mutated: false, reason: via.reason };
-      return dispatch(() => Click.on(via.target, { timeout: CLICK_TIMEOUT_MS }).performAs(actor));
+      return dispatch(() => Click.on(via.target, { timeout: clickTimeoutMs() }).performAs(actor));
     }
     case "type": {
       if (args.control === null) return { ok: false, mutated: false, reason: "type needs a target" };
@@ -465,7 +472,7 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
         // with none, Enter submits a single-line field or its form.
         const submit = await submitControlFor(actor, field, pool);
         if (submit !== null && (await gate(actor, submit)) === null) {
-          await Click.on(targetFor(submit.descriptor), { timeout: CLICK_TIMEOUT_MS }).performAs(actor);
+          await Click.on(targetFor(submit.descriptor), { timeout: clickTimeoutMs() }).performAs(actor);
           via = { kind: "click", control: submit };
           return;
         }

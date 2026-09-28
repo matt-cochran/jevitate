@@ -113,6 +113,8 @@ export function formatMissionHuman(result: unknown): string {
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
+  // #213: the --storage-state session was not honoured (the run started on a sign-in page).
+  if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
@@ -120,6 +122,7 @@ export function formatMissionHuman(result: unknown): string {
   } else if (str(result.reason) !== undefined) {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }
+  for (const l of uxLines(result)) lines.push(l);
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
   const resultPath = str(result.resultPath);
@@ -139,6 +142,32 @@ function scopeLine(scope: unknown): string | undefined {
   if (globs.length === 0) return undefined;
   const source = scope.source === "route" ? " (--route)" : scope.source === "start-url" ? " (derived from the start URL; pass --route to change it)" : "";
   return `${globs.join(", ")}${source}`;
+}
+
+/**
+ * #213: a usability run's UX findings in its summary — how many, the appendix and suppressed counts,
+ * and the top few (severity, rubric item, route, observation) — or why there are none (analysis
+ * unavailable). Nothing for other strategies.
+ */
+function uxLines(result: Record<string, unknown>): string[] {
+  if (result.strategy !== "usability") return [];
+  const report = result.report;
+  if (!isRecord(report)) {
+    const why = str(result.analysisUnavailable);
+    return [`${tag("UX")}no UX findings: ${why === undefined ? "the review produced no report" : `analysis unavailable (${why})`}`];
+  }
+  const findings = arr(report.findings).filter(isRecord);
+  const appendix = arr(report.heuristicAppendix).length;
+  const suppressed = isRecord(report.suppressed) && typeof report.suppressed.total === "number" ? report.suppressed.total : 0;
+  const extra = [appendix > 0 ? `${appendix} heuristic-only in the appendix` : "", suppressed > 0 ? `${suppressed} suppressed` : ""].filter((x) => x !== "");
+  const lines = [`${tag("UX")}${findings.length} UX finding(s)${extra.length === 0 ? "" : ` (${extra.join(", ")})`}${str(result.reportPath) === undefined ? "" : ` — report: ${str(result.reportPath)}`}`];
+  const TOP = 3;
+  for (const f of findings.slice(0, TOP)) {
+    const obs = str(f.observation) ?? "";
+    lines.push(`${tag("")}- [${str(f.severity) ?? "?"}] ${str(f.rubricItemId) ?? "?"} ${str(f.route) ?? ""}: ${obs.length > 100 ? `${obs.slice(0, 99)}…` : obs}`);
+  }
+  if (findings.length > TOP) lines.push(`${tag("")}  … and ${findings.length - TOP} more in the report`);
+  return lines;
 }
 
 /**
@@ -208,7 +237,12 @@ export function formatMultiRunHuman(result: unknown): string {
   // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
   const reason = str(result.reason);
   if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
-  for (const c of personas) lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+  for (const c of personas) {
+    lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+    // #213: a persona whose session was lost did not test as that persona — said, never silent.
+    const lost = str(c.sessionLost);
+    if (lost !== undefined) lines.push(`${tag("WARNING")}${str(c.persona)}: session lost — ${lost}`);
+  }
   const answers: Array<{ label: string; text: string }> = [];
   for (const c of cells) {
     const persona = str(c.persona);

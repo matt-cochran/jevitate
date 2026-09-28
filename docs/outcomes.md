@@ -54,7 +54,7 @@ clean.
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
 `explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own
-`succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `adversarial-`, `feature-` or
+`succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `exploratory-`, `adversarial-`, `feature-` or
 `usability-<stamp>` — or a `queue_exploration` `missionId`.
 
 ### Every `outcome`, `stop` and `missionOutcome` value

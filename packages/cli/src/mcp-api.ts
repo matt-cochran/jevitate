@@ -339,7 +339,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       return {
         response: errorResult({
           error: "invalid_args",
-          message: `${tool} requires a mission result 'id' (explore-|coverage-|adversarial-|feature-|usability-<stamp>) or a queue_exploration missionId`,
+          message: `${tool} requires a mission result 'id' (explore-|coverage-|exploratory-|adversarial-|feature-|usability-<stamp>) or a queue_exploration missionId`,
         }),
       };
     }
@@ -489,7 +489,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     },
     get_mission_result: {
       description:
-        "Read a mission's TYPED result by id: a result stem (explore-|coverage-|adversarial-|feature-|usability-<stamp>, e.g. adversarial-2026-09-23T00-00-00-000Z) or a queue_exploration missionId. A queued mission reports status queued | running (pending: true — poll again; `jevitate mission run` drains the queue) or failed (an error: it could not run). A finished one: status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
+        "Read a mission's TYPED result by id: a result stem (explore-|coverage-|exploratory-|adversarial-|feature-|usability-<stamp>, e.g. adversarial-2026-09-23T00-00-00-000Z) or a queue_exploration missionId. A queued mission reports status queued | running (pending: true — poll again; `jevitate mission run` drains the queue) or failed (an error: it could not run). A finished one: status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: getMissionResult,
     },

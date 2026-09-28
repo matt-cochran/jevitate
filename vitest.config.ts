@@ -50,7 +50,8 @@ export default defineConfig({
     // Host-starvation attribution (#203) is judged against the REAL host by default; on a loaded CI box
     // that would turn unrelated tests' hangs/timeouts into `environment-degraded` and their outcomes
     // `inconclusive`. Tests of the attribution itself inject a fake host with `attribute: true`.
-    env: { JEVITATE_DURABLE_WRITES: "off", JEVITATE_HOST_STARVATION: "off" },
+    // #213: never record test runs in the real ~/.jevitate/run-index.jsonl (index tests inject their own).
+    env: { JEVITATE_DURABLE_WRITES: "off", JEVITATE_HOST_STARVATION: "off", JEVITATE_RUN_INDEX: "off" },
     // Only the workspace's `browser` project runs on threads (see
     // vitest.workspace.ts): at most two real-Chromium test files at once.
     poolOptions: { threads: { maxThreads: 2, minThreads: 1 } },

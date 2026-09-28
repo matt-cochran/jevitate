@@ -34,7 +34,7 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
@@ -383,6 +383,7 @@ async function runFeatureFrontier(
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
+      await guard(assertSeedReachable(sessions.actor, params.seedUrl));
       await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);

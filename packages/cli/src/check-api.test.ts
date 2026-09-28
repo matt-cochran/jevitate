@@ -542,10 +542,41 @@ describe("#225: a usability mission's success checks are honoured, never ignored
     const seen: Array<{ successChecks?: unknown; successWhen?: unknown; allowVacuousChecks?: unknown }> = [];
     const usability = (async (o: { successChecks?: unknown; successWhen?: unknown; allowVacuousChecks?: unknown }) => {
       seen.push({ successChecks: o.successChecks, successWhen: o.successWhen, allowVacuousChecks: o.allowVacuousChecks });
-      return { missionOutcome: "clean", exitCode: 0, reportPath: null, transcriptPath: join(dir, "none.transcript.json"), analysisUnavailable: "fake" };
+      const resultPath = join(dir, "usability-2026-09-25T10-00-00-000Z.recording.result.json");
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "usability", report: null } }));
+      return { missionOutcome: "clean", exitCode: 0, resultPath, reportPath: null, transcriptPath: join(dir, "none.transcript.json"), analysisUnavailable: "fake" };
     }) as unknown as CheckRunners["usability"];
     await runCheck({ suite: s, outDir: join(dir, "out-225"), journeysDir: dir, runners: { usability }, gateways: async () => gw, aiMode: "fake" });
     expect(seen).toEqual([{ successChecks: [{ kind: "requestMade", method: "PUT", pathGlob: "/api/profile" }], successWhen: "held", allowVacuousChecks: true }]);
+  });
+});
+
+describe("#213: a usability item's resultPath is the persisted result, which carries its UX findings", () => {
+  it("points at <stem>.recording.result.json (not the UX report), and its UX findings are read from it", async () => {
+    const s = suite(0, {}, { missions: [{ name: "bio", strategy: "usability", goal: "save a bio", appClass: "consumer" }] });
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const outDir = join(dir, "out-213-ux");
+    mkdirSync(outDir, { recursive: true });
+    const stem = join(outDir, "usability-2026-09-25T11-00-00-000Z");
+    const report = {
+      headline: "h",
+      findings: [{ rubricItemId: "nielsen-1", route: "/profile", severity: "major", confidence: 0.9, observation: "No feedback after Save.", citation: { source: "S", ref: "r" } }],
+    };
+    const usability = (async () => {
+      writeFileSync(`${stem}.json`, JSON.stringify(report));
+      writeFileSync(
+        `${stem}.recording.result.json`,
+        JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "usability", target: { seedUrl: URL0 }, report, defects: [] } }),
+      );
+      return { missionOutcome: "clean", exitCode: 0, resultPath: `${stem}.recording.result.json`, reportPath: `${stem}.json`, transcriptPath: join(dir, "none.transcript.json") };
+    }) as unknown as CheckRunners["usability"];
+    const r = await runCheck({ suite: s, outDir, journeysDir: dir, runners: { usability }, gateways: async () => gw, aiMode: "fake" });
+    const item = r.items.find((i) => i.strategy === "usability");
+    expect(item?.resultPath).toBe(`${stem}.recording.result.json`);
+    const run = loadRunFile(item!.resultPath!);
+    expect(run?.mode).toBe("usability");
+    expect(run?.observations.some((o) => JSON.stringify(o).includes("nielsen-1"))).toBe(true);
   });
 });
 

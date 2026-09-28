@@ -26,7 +26,7 @@ import {
   type TranscriptJudgment,
   type TranscriptListener,
 } from "../transcript.js";
-import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage } from "../mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage, assertSeedReachable } from "../mission-failure.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
@@ -910,6 +910,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
+      await assertSeedReachable(sessions.actor, params.seedUrl);
       await Navigate.to(params.seedUrl).performAs(sessions.actor);
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);

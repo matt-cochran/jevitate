@@ -580,6 +580,9 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
       }
     }
     if (mode === "goal") observations.push(...goalCheckObservations(result, ctx));
+    // #213: a usability result carries its UX report — its findings read exactly as the report
+    // file's own (`runFromUxReport`), so the persisted result stands for the whole review.
+    if (mode === "usability" && isRecord(result.report)) observations.push(...uxObservations(result.report, str(result.screenshotDir)));
   }
   const suite = isRecord(result.suite) ? result.suite : undefined;
   const engine = engineOf(result.engine);

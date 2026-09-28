@@ -3,6 +3,7 @@ import { request as playwrightRequest } from "playwright";
 import type { GenerationPort } from "@jevitate/ai-core";
 import type { MissionFailure } from "@jevitate/domain";
 import { pageLostReason } from "@jevitate/playwright";
+import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 
 /**
  * The mission-side half of "a mission's outcome is a typed result, never a throw":
@@ -41,6 +42,29 @@ const NET_ERROR_PHRASES: Readonly<Record<string, string>> = {
   ERR_EMPTY_RESPONSE: "empty response",
 };
 
+const PROBE_PREFIX = "reachability probe: ";
+
+/**
+ * #213: fail fast when nothing is listening at the seed. Before the FIRST navigation, the session's
+ * pre-flight probe (a TCP connect — see `@jevitate/playwright`'s `probeReachable`) runs; a definite
+ * "connection refused" / "host not found" throws at once — an error `isUnreachableTarget` recognises
+ * and `describeUnreachable` renders as the probe's own plain words ("connection refused — is the app
+ * running at <origin>?") — instead of waiting out Chromium's 30s navigation timeout. A session
+ * without a probe (a test double) is never probed.
+ */
+export async function assertSeedReachable(actor: Actor, url: string): Promise<void> {
+  let probe: ((url: string) => Promise<string | null>) | undefined;
+  try {
+    const session = actor.ability(BrowseTheWebToken).session;
+    probe = session.probeReachable?.bind(session);
+  } catch {
+    return;
+  }
+  if (probe === undefined) return;
+  const reason = await probe(url);
+  if (reason !== null) throw new Error(`${PROBE_PREFIX}${reason}`);
+}
+
 /**
  * Is this failure the start URL simply not loading — a `net::ERR_*` network error, an OS-level
  * connection refusal, or a timeout before any response? Never a defect in the app under test or a
@@ -48,7 +72,7 @@ const NET_ERROR_PHRASES: Readonly<Record<string, string>> = {
  * jevitate's, was ever observed.
  */
 export function isUnreachableTarget(message: string): boolean {
-  return /net::ERR_[A-Z_]+/.test(message) || /ECONNREFUSED/i.test(message) || /Timeout \d+ms exceeded/i.test(message);
+  return message.startsWith(PROBE_PREFIX) || /net::ERR_[A-Z_]+/.test(message) || /ECONNREFUSED/i.test(message) || /Timeout \d+ms exceeded/i.test(message);
 }
 
 /**
@@ -60,6 +84,7 @@ export function isUnreachableTarget(message: string): boolean {
  * reads as "timed out before any response", not a guessed cause.
  */
 export function describeUnreachable(message: string, netErrorText?: string | null): string {
+  if (message.startsWith(PROBE_PREFIX)) return message.slice(PROBE_PREFIX.length);
   const fromNet = netErrorText === null || netErrorText === undefined ? null : netErrorCode(netErrorText) ?? netErrorCode(message);
   const code = fromNet ?? netErrorCode(message);
   if (code !== null) return NET_ERROR_PHRASES[code] ?? code;

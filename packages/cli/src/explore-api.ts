@@ -1,3 +1,4 @@
+import { sessionLostReason } from "./session-check.js";
 import { chmod, writeFile } from "node:fs/promises";
 import { assertSessionFileOutsideProject, logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
@@ -41,6 +42,8 @@ import {
   type FeatureRunResult,
   type MissionRouteScope,
   resolveRouteScope,
+  refusalNote,
+  safetyRefusalsFromTranscript,
   startRouteGlobs,
   type TranscriptEntry,
   type RunAnswer,
@@ -395,6 +398,11 @@ export interface RunExplorationResult {
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "goal";
   /**
+   * #213: the `--storage-state` session was not honoured — the run's first page was a sign-in page, so
+   * whatever it did (the model may sign in by itself), it did not start as that session. A warning.
+   */
+  readonly sessionLost?: { readonly reason: string };
+  /**
    * The portable verdict — ALWAYS canonical (#217): `goalOutcome` folded by the domain's single
    * mapping (`GOAL_OUTCOME_FOLD`): succeeded → clean; failed/exhausted/blocked → defects-found.
    */
@@ -737,6 +745,13 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),
+      ...((): { sessionLost?: { reason: string } } => {
+        const lost = sessionLostReason({
+          target: primaryState === undefined ? {} : { storageStatePath: resolvePath(primaryState) },
+          transcript: serverLogRun?.transcript ?? mission.transcript,
+        });
+        return lost === undefined ? {} : { sessionLost: { reason: lost } };
+      })(),
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,
@@ -1043,8 +1058,10 @@ export interface RunCoverageMissionResult {
 
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
-  /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix is `coverage-` for both. */
+  /** Which frontier ran: `coverage` (breadth) or `exploratory` (novelty-first) — the file prefix names it (`coverage-`/`exploratory-`, #213). */
   readonly strategy: "coverage" | "exploratory";
+  /** #213: the route scope the frontier was contained to, and where it came from (the #224 field). */
+  readonly scope: MissionRouteScope;
   readonly coverage: CoverageReport;
   readonly outcome: CoverageRunOutcome;
   /** Hangs met while exploring (deduped), each with its reproduction and its own path Recording. */
@@ -1064,10 +1081,10 @@ export interface RunCoverageMissionResult {
   readonly failure?: MissionFailure;
   /** Slowest pages/transitions and endpoints (p50/max), keyed by normalized route/endpoint. */
   readonly timing: TimingSummary;
-  /** The persisted typed result (`coverage-<stamp>.result.json`). */
+  /** The persisted typed result (`<strategy>-<stamp>.result.json`: `coverage-` or `exploratory-`). */
   readonly resultPath: string;
   readonly recordingPaths: string[];
-  /** The shared decision transcript (`coverage-<stamp>.transcript.json`). */
+  /** The shared decision transcript (`<strategy>-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
@@ -1114,7 +1131,10 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   // `MissionJournal` creates `outDir` synchronously (mkdirSync).
-  const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
+  // #213: an exploratory run's files are named for it (`exploratory-*`), not `coverage-*`; every
+  // reader finds a result by its content (#211), never by this prefix.
+  const filePrefix = opts.strategy ?? "coverage";
+  const journal = new MissionJournal(join(outDir, `${filePrefix}-${stamp}.json`));
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
   // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
@@ -1191,7 +1211,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
-      const p = join(outDir, `coverage-${stamp}-state-${i}.json`);
+      const p = join(outDir, `${filePrefix}-${stamp}-state-${i}.json`);
       await writeFile(p, `${JSON.stringify(withEmu(result.recordings[i]!), null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
@@ -1248,6 +1268,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       },
       timing: result.timing,
       strategy: opts.strategy ?? "coverage",
+      // #213: the SCOPE line (#224's field) — the start route plus any --route/--scope app globs.
+      scope: {
+        routeGlobs: [...stampedCoverage.scope.routeGlobs],
+        source: (opts.routeGlobs ?? []).some((g) => g.trim() !== "") ? ("route" as const) : ("start-url" as const),
+      },
       coverage: stampedCoverage,
       // #209: a frontier that emptied having exercised too little to be clean is not `exhausted`
       // (that reads as "fully covered") — it is `insufficient-coverage`, the same word as its
@@ -1807,7 +1832,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
           kind: "insufficient-coverage",
           message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${routeScope.routeGlobs.join(", ")}]${
             routeScope.source === "start-url" ? " (derived from the start URL)" : ""
-          } — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
+          } — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead${refusalNote(safetyRefusalsFromTranscript(result.transcript))}`,
         }
       : irrelevant
         ? {
