@@ -52,6 +52,7 @@ import {
   controlFields,
   goalAsksForReply,
   reportAnswer,
+  VetoedAnswers,
   type AnswerVerdict,
   type RunAnswer,
 } from "./answer.js";
@@ -551,6 +552,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const blockedReported = new Set<string>();
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   let lastReportNotFound = false;
+  // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.
+  const vetoes = new VetoedAnswers();
   const replies = new ObservedPages(secrets);
   /** The page text just before the run's first message was sent (null until one is sent). */
   let preSend: string | null = null;
@@ -1114,6 +1117,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // the document's status (an answer on a 404 page is no answer). A link that is page content
         // (in the main content, a list, a table, a card) is NOT one: its text may be the answer.
         controlNames: snap.controls.filter((c) => isActionOrChromeName(c, chrome)).map((c) => c.name),
+        // #229: the content links' text, in page order (a list's entries: "the first item").
+        contentLinks: snap.controls.filter((c) => !isActionOrChromeName(c, chrome)).map((c) => c.name),
         ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
       });
       noteReplyText(snap.url, visibleText);
@@ -1455,6 +1460,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 history,
                 secrets,
                 judge: cfg.judge,
+                vetoes,
               }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
           const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
