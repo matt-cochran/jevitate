@@ -374,6 +374,7 @@ export interface CellResult {
    * and controls are the environment, never an access difference.
    */
   readonly notObserved?: string;
+  /**
    * #213: the persona's session was not honoured in some run (its first page was a sign-in page) —
    * what it tested was not this persona. Which runs, and why.
    */

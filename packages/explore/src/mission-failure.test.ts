@@ -118,6 +118,9 @@ describe("targetStoppedAnswering — the app stopped answering vs a slow host (#
   it("describeFailure types a TargetUnresponsiveError as target-unresponsive with no stack", () => {
     const f = describeFailure(new TargetUnresponsiveError("the app stopped responding on /a (x)"), { pageCrashed: false, pageClosed: false, browserDisconnected: false });
     expect(f).toEqual({ kind: "target-unresponsive", message: "the app stopped responding on /a (x)" });
+  });
+});
+
 describe("assertSeedReachable — #213: a target that is not running fails fast, in plain words", () => {
   const actorWith = (probeReachable?: (url: string) => Promise<string | null>) =>
     CastActor.named("x").whoCan(new BrowseTheWeb({ ...(probeReachable === undefined ? {} : { probeReachable }) } as unknown as BrowserSession, []));
