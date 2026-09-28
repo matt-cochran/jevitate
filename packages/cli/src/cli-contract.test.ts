@@ -10,7 +10,7 @@ import type { BrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram, type CliDeps } from "./program.js";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
-import { formatMissionHuman, formatRegressionCaptureHuman, formatRegressionRunHuman } from "./cli-output.js";
+import { formatMissionHuman, formatRegressionCaptureHuman, formatRegressionRunHuman, formatVerifyFixHuman, formatLedgerAddHuman } from "./cli-output.js";
 
 /**
  * The CLI contract (#210): ONE exit-code table for every command (usage errors distinct from
@@ -133,7 +133,8 @@ describe("human output: never raw JSON without --json (#210)", () => {
 
   it("ledger list / add: a summary with a next step", async () => {
     const list = await cli().run(["ledger", "list", "--dir", dir]);
-    expect(list.out).toBe("0 ledger entries\nnext: jevitate ledger add <result.json> <fingerprint>\n");
+    // #230: the hint carries the same --dir the user passed.
+    expect(list.out).toBe(`0 ledger entries\nnext: jevitate ledger add <result.json> <fingerprint> --dir ${dir}\n`);
     expect(list.code).toBe(0);
     const listJson = await cli().run(["ledger", "list", "--dir", dir, "--json"]);
     expect(JSON.parse(listJson.out)).toEqual({ v: 1, ok: true, data: { entries: [] } });
@@ -238,12 +239,88 @@ describe("human output: never raw JSON without --json (#210)", () => {
   // #227 item 5: `ledger verify` with nothing to verify used to print `FIXED: 0 entries` at exit 0.
   it("ledger verify with no matching entries: says nothing was verified, exit 2 (never a false FIXED/0)", async () => {
     const r = await cli().run(["ledger", "verify", "--dir", dir]);
-    expect(r.out).toBe("NOTHING VERIFIED: the ledger has no matching entries\nnext: jevitate ledger add <result.json> <fingerprint>\n");
+    // #230: the hint carries the same --dir the user passed.
+    expect(r.out).toBe(`NOTHING VERIFIED: the ledger has no matching entries\nnext: jevitate ledger add <result.json> <fingerprint> --dir ${dir}\n`);
     expect(r.out).not.toContain("FIXED");
     expect(r.code).toBe(2);
     const json = await cli().run(["ledger", "verify", "--dir", dir, "--json"]);
     expect(JSON.parse(json.out)).toMatchObject({ ok: true, data: { entries: [], exitCode: 2 } });
     expect(json.code).toBe(2);
+  });
+});
+
+describe("#230 — explore refuses an unknown --strategy before any other required-option message", () => {
+  it("is E_EXPLORE_ARGS at parse time, exit 64 — never a silently-run goal mission", async () => {
+    // No --goal given either: if "nope" fell through to the default goal path, this would
+    // instead fail with "--url and --goal are required" (or actually run a goal mission).
+    const r = await cli().run(["explore", "--strategy", "nope", "--url", URL, "--json"]);
+    const parsed = JSON.parse(r.out) as { ok: boolean; error?: { code: string; message: string } };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error?.code).toBe("E_EXPLORE_ARGS");
+    expect(parsed.error?.message).toContain('unknown strategy "nope"');
+    expect(parsed.error?.message).toMatch(/one of .*goal.*coverage.*exploratory.*adversarial.*usability/);
+    expect(parsed.error?.message).not.toMatch(/--url and --goal/);
+    expect(r.code).toBe(64);
+  });
+
+  it("human output: `error E_EXPLORE_ARGS: unknown strategy \"nope\" (one of …)` with a --help hint", async () => {
+    const r = await cli().run(["explore", "--strategy", "nope", "--url", URL, "--goal", "g"]);
+    expect(r.out).toBe("");
+    expect(r.err).toMatch(/^error E_EXPLORE_ARGS: unknown strategy "nope" \(one of goal, coverage, exploratory, adversarial, usability\)/m);
+    expect(r.err).toContain("next: jevitate explore --help");
+    expect(r.code).toBe(64);
+  });
+
+  it("a known --strategy (e.g. usability) is never refused as unknown", async () => {
+    const r = await cli().run(["explore", "--strategy", "usability", "--url", URL, "--json"]);
+    const parsed = JSON.parse(r.out) as { ok: boolean; error?: { code: string; message: string } };
+    expect(parsed.ok).toBe(false);
+    // Falls through to usability's OWN required-option check instead — proof the strategy itself
+    // was accepted, not refused as unknown.
+    expect(parsed.error?.message).not.toContain("unknown strategy");
+    expect(parsed.error?.code).toBe("E_EXPLORE_ARGS");
+  });
+});
+
+describe("#230 — next: hints carry the location flags the user passed", () => {
+  it("regression capture --dir X: the next hint carries --dir X (the README demo path)", () => {
+    const captured = formatRegressionCaptureHuman(
+      { recordingPath: "demo-regressions/saved-means-stored.recording.json", metaPath: "demo-regressions/saved-means-stored.meta.json" },
+      { dir: "demo-regressions" },
+    );
+    expect(captured).toContain("next: jevitate regression run saved-means-stored --dir demo-regressions");
+    // Without --dir (the default location), the hint stays bare.
+    const withoutDir = formatRegressionCaptureHuman({ recordingPath: "/home/.jevitate/regressions/r1.recording.json" });
+    expect(withoutDir).toContain("next: jevitate regression run r1\n");
+    expect(withoutDir).not.toContain("--dir");
+  });
+
+  it("regression run --dir X: the re-check hints carry --dir X", () => {
+    const reproduces = formatRegressionRunHuman({ id: "saved-means-stored", verdict: "reproduces", reason: "still fails" }, { dir: "demo-regressions" });
+    expect(reproduces).toContain("next: fix it, then jevitate regression run saved-means-stored --dir demo-regressions");
+    const inconclusive = formatRegressionRunHuman({ id: "saved-means-stored", verdict: "inconclusive" }, { dir: "demo-regressions" });
+    expect(inconclusive).toContain("next: jevitate regression run saved-means-stored --dir demo-regressions (re-check)");
+    // "fixed" needs no location — jevitate report is never dir-scoped.
+    const fixed = formatRegressionRunHuman({ id: "saved-means-stored", verdict: "fixed" }, { dir: "demo-regressions" });
+    expect(fixed).toContain("next: jevitate report");
+  });
+
+  it("verify-fix --result R: the re-check hints carry --result R", () => {
+    const reproduces = formatVerifyFixHuman({ verdict: "still-reproduces", fingerprint: "0123456789abcdef" }, { result: "/runs/r1.result.json" });
+    expect(reproduces).toContain("next: fix it, then jevitate verify-fix 0123456789abcdef --result /runs/r1.result.json");
+    const inconclusive = formatVerifyFixHuman({ verdict: "inconclusive", fingerprint: "0123456789abcdef" }, { result: "/runs/r1.result.json" });
+    expect(inconclusive).toContain("next: jevitate verify-fix 0123456789abcdef --result /runs/r1.result.json --replays 5 (re-check)");
+  });
+
+  it("verify-fix without --result (the ledger fallback): the hint stays bare — nothing was passed to carry", () => {
+    const reproduces = formatVerifyFixHuman({ verdict: "still-reproduces", fingerprint: "0123456789abcdef" });
+    expect(reproduces).toContain("next: fix it, then jevitate verify-fix 0123456789abcdef\n");
+    expect(reproduces).not.toContain("--result");
+  });
+
+  it("ledger add --dir X: the verify-fix hint carries --regressions-dir X, the ledger verify hint carries --dir X", () => {
+    const added = formatLedgerAddHuman({ fingerprint: "0123456789abcdef", kind: "http-5xx", entryPath: "/regressions/ledger/0123456789abcdef.json" }, { dir: "demo-regressions" });
+    expect(added).toContain("next: jevitate verify-fix 0123456789abcdef --regressions-dir demo-regressions (re-check from the ledger) · jevitate ledger verify --dir demo-regressions");
   });
 });
 

@@ -285,8 +285,10 @@ export interface CliDeps {
   record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
    *  in production means the real `existsSync`/`homedir`/`cwd` and the real
-   *  `~/.jevitate/skills-install-state.json` state path. */
-  init?: { detection?: DetectionDeps; statePath?: string };
+   *  `~/.jevitate/skills-install-state.json` state path.
+   *  `isInteractive` (#230): whether key collection may prompt stdin;
+   *  omitted in production means the real `process.stdin.isTTY` check. */
+  init?: { detection?: DetectionDeps; statePath?: string; isInteractive?: () => boolean };
   /**
    * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
    * Every field is injectable so tests never touch the network, the real home
@@ -625,6 +627,9 @@ function stallTimeoutMs(raw: string | number | undefined): number | undefined | 
   return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
 }
 
+/** #230: the only `--strategy` values `explore` accepts; anything else is refused, never silently run as goal. */
+const EXPLORE_STRATEGIES = ["goal", "coverage", "exploratory", "adversarial", "usability"] as const;
+
 const EXPLORE_OUTCOME_HELP = `
 Outcomes, stop reasons and exit codes:
   Every result carries a canonical missionOutcome (and exitCode), whatever the strategy:
@@ -701,11 +706,15 @@ export function buildProgram(deps: CliDeps): Command {
         if (!skipProject) data.project = initProjectDir(deps.init?.detection?.cwd?.() ?? process.cwd(), { ...(dryRun === true ? { dryRun: true } : {}) });
         if (!skipKeys) {
           // SECURITY: reuses the existing, already-guardrailed credential
-          // collection. The report holds only key NAMES (required/collected),
+          // collection. The report holds only key NAMES (required/collected/missing),
           // never a value — nothing here reads, echoes, logs, or returns a key.
           const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
           const io = deps.ai?.secureIO ?? realSecureIO();
-          data.keys = await collectAllMissingKeys(store, io);
+          // #230: never prompt a non-interactive stdin (no TTY — how coding agents and CI run
+          // `jevitate init`) — it would hang reading a 'line' event that never comes, or read EOF
+          // silently. Report what's still missing instead; the rest of init still completes.
+          const interactive = deps.init?.isInteractive?.() ?? process.stdin.isTTY === true;
+          data.keys = await collectAllMissingKeys(store, io, { interactive });
         }
         // Explicit `--targets` overrides detection entirely (the user takes
         // full control); otherwise `detectRuntimes` decides, always including
@@ -731,13 +740,22 @@ export function buildProgram(deps: CliDeps): Command {
           const mcpPaths = resolveMcpTargetPaths(deps.init?.detection);
           data.mcp = await registerMcp(runtimes, mcpPaths, { force, dryRun });
         }
+        // #230: exit 0 even when keys are still missing (the non-interactive path above) —
+        // init's other work (project dir, skills, MCP registration) genuinely succeeded, and a
+        // missing key is expected/normal for a fresh non-interactive install (CI, a coding
+        // agent) that configures keys separately. The warning lives in `data.keys[*].missing`
+        // (both here and in the --json envelope) rather than in the exit code, so a script that
+        // only checks the exit code still sees init as having done its job; a caller that cares
+        // about keys reads the summary/envelope, same as `jevitate ai status`.
         const envelope = ok(data);
         if (json) {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
           out?.("jevitate initialized\n");
-          // #210: per feature, "ready — n/n configured", never a raw `collected: []` that reads as "missing".
+          // #210/#230: per feature, "ready — n/n configured", or (no TTY on stdin) "not
+          // configured — set X or run `jevitate ai setup <feature>`" — never a raw `collected:
+          // []` that reads as "missing" when every key was already set.
           if (data.keys) out?.(`${formatInitKeysHuman(data.keys as KeyCollectionReport)}\n`);
           if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
           if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) processed\n`);
@@ -2091,6 +2109,14 @@ export function buildProgram(deps: CliDeps): Command {
       const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
 
+      // #230: an unknown --strategy must be refused before any other required-option message — it
+      // would otherwise fall through to the default goal-strategy path and silently run a goal
+      // mission. Checked first, ahead of every other validation below.
+      if (o.strategy !== undefined && !EXPLORE_STRATEGIES.includes(o.strategy as (typeof EXPLORE_STRATEGIES)[number])) {
+        emitExplore(fail("E_EXPLORE_ARGS", `unknown strategy ${JSON.stringify(o.strategy)} (one of ${EXPLORE_STRATEGIES.join(", ")})`));
+        return;
+      }
+
       // #195: a session file never lands in the repo's .jevitate/ (refused before any run, multi-runs included).
       if (o.saveStorageState !== undefined) {
         try {
@@ -2868,8 +2894,15 @@ export function buildProgram(deps: CliDeps): Command {
           FixtureFlags &
           EmulationFlags
       >();
+      // #230: the re-check hint carries the same --result the user passed (never the ledger
+      // fallback's own path, which formatVerifyFixHuman never sees).
       const emitVerify = (envelope: JsonEnvelope<unknown>, exitCode?: number): void =>
-        emitCommandResult(program, envelope, { json: o.json === true, command: "verify-fix", human: formatVerifyFixHuman, ...(exitCode === undefined ? {} : { exitCode }) });
+        emitCommandResult(program, envelope, {
+          json: o.json === true,
+          command: "verify-fix",
+          human: (data) => formatVerifyFixHuman(data, { result: o.result }),
+          ...(exitCode === undefined ? {} : { exitCode }),
+        });
       // #195: `--secret env:VAR`, as on explore.
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
@@ -3225,9 +3258,10 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          // #227: a human summary (captured/flaky, where the files went, what to run next) — never
-          // the raw result JSON, which used to print unconditionally without --json.
-          writeHumanResult(program, result, formatRegressionCaptureHuman);
+          // #227/#230: a human summary (captured/flaky, where the files went, what to run next,
+          // carrying the same --dir the user passed) — never the raw result JSON, which used to
+          // print unconditionally without --json.
+          writeHumanResult(program, result, (r) => formatRegressionCaptureHuman(r, { dir }));
           process.exitCode = 0;
         }
       } catch (err) {
@@ -3296,8 +3330,9 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          // #227: the verdict/reason/next-step summary — never the raw report JSON.
-          program.configureOutput().writeOut?.(formatRegressionRunHuman(report));
+          // #227/#230: the verdict/reason/next-step summary (carrying the same --dir the user
+          // passed) — never the raw report JSON.
+          program.configureOutput().writeOut?.(formatRegressionRunHuman(report, { dir }));
         }
         process.exitCode = report.verdict === "reproduces" ? 1 : report.verdict === "fixed" ? 0 : 2;
       } catch (err) {
