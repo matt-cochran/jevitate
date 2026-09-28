@@ -72,6 +72,11 @@ jevitate explore --url http://localhost:3000/profile --goal "set the last name t
   --real
 ```
 
+`jevitate init` only prompts for keys at a real terminal. Run without a TTY (CI, a coding agent —
+see below), it never prompts: it completes the rest of init and reports which keys are still
+missing, in both the human summary and the `--json` envelope. Set the keys yourself (or via env
+vars) and configure them with `jevitate ai setup <generation|judgment>`.
+
 The run succeeds only if the save request was sent and the value survived a reload, checked by
 code. The model saying "done" doesn't count.
 
@@ -149,6 +154,11 @@ read a typed result, re-check a finding after a fix.
 jevitate init                      # installs skills for detected agents and registers the MCP server
 jevitate mcp --print-config claude # or cursor | codex | json: print the snippet, write nothing
 ```
+
+Run non-interactively like this, `init` never prompts for keys — it reports what's still missing
+(`keys: generation not configured — set OPENROUTER_API_KEY or run \`jevitate ai setup generation\``)
+and exits 0 regardless, since the rest of init (skills, MCP registration) still succeeded. Set the
+keys separately with `jevitate ai setup <generation|judgment>`.
 
 The MCP server exposes an allowlist of domain tools (`queue_exploration`, `get_mission_result`,
 `verify_fix`, `run_journey`, …). Raw browser tools such as `browser_click` or `page_evaluate` are

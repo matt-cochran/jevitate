@@ -390,6 +390,32 @@ describe("multi-run results follow the #217 contract (#226)", () => {
     }
   });
 
+  // #230: apply #227's goal-verdict headline here too — every run agreeing the goal failed used to
+  // still lead "DEFECTS-FOUND: goal ×2 · 0 agreed finding(s) · 0 flaky", self-contradicting (the
+  // goal's own check failed; no defect was found).
+  it("--repeat of a failed goal: heads FAILED, not 'DEFECTS-FOUND … 0 agreed finding(s)'", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-failed-goal-"));
+    try {
+      const result = await runMultiRun({
+        plan: { repeat: 2, minAgreement: 2, personas: null },
+        strategy: "goal",
+        outDir: dir,
+        runOnce: async (): Promise<RunEnvelope> => ({
+          ok: true,
+          data: { outcome: "failed", goalOutcome: "failed", missionOutcome: "defects-found", exitCode: 1, reason: "success check never held" },
+        }),
+      });
+      expect(result).toMatchObject({ outcome: "failed", missionOutcome: "defects-found", goalOutcome: "failed", exitCode: 1 });
+      const human = formatMultiRunHuman(result);
+      expect(human).toMatch(/^FAILED: goal ×2$/m);
+      expect(human).not.toContain("DEFECTS-FOUND");
+      expect(human).not.toContain("0 agreed finding(s)");
+      expect(human).toMatch(/^GOAL {4}failed$/m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("--persona: the headline is the canonical (most severe) verdict; each persona's runs, the status diff and each answer are listed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "jev-multi-persona-"));
     try {
