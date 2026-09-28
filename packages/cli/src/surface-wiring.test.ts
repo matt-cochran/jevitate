@@ -93,8 +93,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     emulation: "replays under each finding's own recorded emulation",
     allowEmulationOverride: "replays under each finding's own recorded emulation",
   },
-  "program.ts runRegressionCapture": {},
-  "program.ts runRegressionRun": {},
+  "regression-cli.ts runRegressionCapture": {},
+  "regression-cli.ts runRegressionRun": {},
   "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM },
   "mcp-api.ts runVerifyFix": {
     storageState: MCP_NARROW,
