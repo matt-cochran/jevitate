@@ -1,25 +1,11 @@
 import { z } from "zod";
-import {
-  ATTR_NAME_RE,
-  AssertionSchema,
-  STYLE_PROPERTIES,
-  TargetDescriptorSchema,
-  type Assertion,
-  type StyleChannel,
-  type StyleProperty,
-  type TargetDescriptor,
-} from "./schema.js";
+import { AssertionSchema, type Assertion } from "./schema.js";
 import {
   expressionObservables,
   parseInvariantExpression,
   type ExprNode,
 } from "./invariants/expression.js";
-import { parseJsonPath } from "./invariants/json-path.js";
-import { globRegex, matchesPattern, patternRegex } from "./invariants/patterns.js";
 import {
-  ACTION_OPS,
-  ACTOR_NAME_RE,
-  INVARIANT_HTTP_METHODS,
   INVARIANT_ID_RE,
   MAX_BUDGETS,
   MAX_INVARIANTS,
@@ -27,25 +13,41 @@ import {
   MAX_SETTLE_WITHIN_MS,
   MIN_SETTLE_POLL_MS,
   OBSERVABLE_NAME_RE,
-  type ActionOp,
   type InvariantSettle,
   type InvariantWhen,
 } from "./invariants/shared.js";
 import {
   CAPTURE_GATE_RE,
   CAPTURE_REF_RE,
-  httpMethodField,
-  JsonPathStringSchema,
+  CaptureSchema,
+  DeniedAsSchema,
   MAX_EXPRESSION_CHARS,
+  NeverSchema,
+  ObservableSchema,
   OpSchema,
   RESERVED,
   TextPatternSchema,
 } from "./invariants/internal.js";
+import { probeUrl, resolveHttpUrl } from "./invariants/probe.js";
+import { type ObservableSpec } from "./invariants/observable.js";
+import { type InvariantNever } from "./invariants/never-response.js";
+import {
+  captureRefs,
+  invariantGate,
+  type CaptureSpec,
+  type DeniedAsSpec,
+} from "./invariants/capture.js";
 
 export * from "./invariants/expression.js";
 export * from "./invariants/json-path.js";
 export * from "./invariants/patterns.js";
 export * from "./invariants/shared.js";
+export * from "./invariants/dom.js";
+export * from "./invariants/network.js";
+export * from "./invariants/probe.js";
+export * from "./invariants/observable.js";
+export * from "./invariants/never-response.js";
+export * from "./invariants/capture.js";
 
 /**
  * App-declared invariants (#86): a CLOSED, declarative spec a caller hands to a dispatch
@@ -87,162 +89,6 @@ export * from "./invariants/shared.js";
  * — with a precise path like `invariants[2].require: unknown observable "balanse"` — before any
  * browser work. The browser-side evaluation lives in `@jevitate/explore`.
  */
-
-export interface DomObservable {
-  /** A CSS selector (shorthand for `target: { css }`). Exactly one of `selector` / `target`. */
-  selector?: string;
-  target?: TargetDescriptor;
-  /**
-   * What to read: the FIRST match's text (default) or form value, the match count, or its visual
-   * state (#148) — see `DomRead`.
-   */
-  read?: DomRead;
-  /**
-   * Parse the number(s) out of what was read (`"≈ 1,240 credits"` → 1240; a Unicode minus U+2212 and
-   * thousands separators are handled). `true` reads the FIRST number (index 0, the default); `{
-   * index }` reads the number at that 0-based position (negative counts from the end, so `-1` is the
-   * LAST) — e.g. `"≈ 30–90 credits"` with `{ index: 1 }` reads 90, a range's upper bound; `"all"`
-   * reads every number as a LIST observable (#147/#148's list-valued reads) — a scalar consumer (like
-   * #150's `BudgetMonitor`) treats it as unreadable, same as a `[*]` network/probe read.
-   */
-  number?: boolean | "all" | { readonly index: number };
-  /** When the element is absent the value is `null` (instead of "could not be read"). */
-  optional?: boolean;
-}
-
-/**
- * A `dom` observable's read. Besides `text`/`value`/`count`:
- *  - `inViewport` — the first match's visible fraction of its box inside the viewport (0..1);
- *  - `{ style, channel?, reduce? }` — the COMPUTED value of an allowlisted CSS property, parsed by
- *    code: with a `channel` (a color's `alpha`/`r`/`g`/`b`, a length's `px`) a number, else the raw
- *    string. `reduce` picks across matches: `first` (default), `min`/`max` (numeric: need a channel);
- *  - `{ attr }` — an attribute of the first match (absent attribute → the observable is missing).
- * All are read by fixed built-in page functions — never a declared string evaluated as JS.
- */
-export type DomRead =
-  | "text"
-  | "value"
-  | "count"
-  | "inViewport"
-  | { style: StyleProperty; channel?: StyleChannel; reduce?: "first" | "min" | "max" }
-  | { attr: string };
-
-export interface NetworkObservable {
-  /** URL glob over the full URL (`**` any run, `*` any run without `/`); a leading `/` globs path+query. */
-  url: string;
-  /** Only responses to this request method (default: any). */
-  method?: string;
-  /** JSON path into the response body, e.g. `$.entries[0].credits`. */
-  json: string;
-  optional?: boolean;
-}
-
-/**
- * Authenticates a probe from the run's own session (#135) — never a new credential path. Exactly one
- * source:
- *  - `localStorage` — a key read from the live page's `localStorage` (via `page.evaluate`);
- *  - `cookie`       — a named cookie's value, read from the browser context;
- *  - `secret`       — a `--secret`/env reference (`env:VAR`), resolved by the CLI dispatch — never
- *                      read from a file here.
- * The value becomes the probe's `Authorization` header, prefixed by `scheme` (default `Bearer`; `""`
- * sends the raw value with no prefix). The token itself never reaches the model, is never persisted,
- * and is redacted from every evidence line the same way a bound secret is.
- */
-export interface ProbeAuthFrom {
-  localStorage?: string;
-  cookie?: string;
-  secret?: string;
-  /** Prefixed onto the Authorization header's value. Default `"Bearer"`; `""` = no prefix. */
-  scheme?: string;
-}
-
-export interface ProbeObservable {
-  /** A read-only GET of this path (resolved against the mission's start URL) or absolute URL. */
-  get?: string;
-  /** A read-only HEAD (its value is the HTTP status). Exactly one of `get` / `head`. */
-  head?: string;
-  /** JSON path into a GET's body; without it the value is the HTTP status. */
-  json?: string;
-  optional?: boolean;
-  /** Authenticates the probe from the run's session (#135); see `ProbeAuthFrom`. */
-  authFrom?: ProbeAuthFrom;
-  /**
-   * #147: read in this OBSERVER actor's own browser context (its own cookies), never the primary's.
-   * Only a capture-gated invariant (`when.after: "capture.<name>"`) may read such an observable.
-   */
-  as?: string;
-}
-
-export type ObservableSpec = { dom: DomObservable } | { network: NetworkObservable } | { probe: ProbeObservable };
-
-/**
- * #195 — `never.response`: an app response on the mission's OWN traffic (the primary's page) that
- * must never be seen, e.g. the guaranteed billing 403 of a role (`{ url: "/api/v1/tool/billing/**",
- * status: "403" }`). `url` is a glob: starting with `/` it matches the response URL's PATH (with or
- * without its query); otherwise the whole URL. Only responses from the mission's authorized origins
- * (the start URL's origin unless `--allow` widens it) are ever matched. `status` is an exact code
- * (`"403"` or `403`) or a class (`"4xx"`); `method` optionally narrows it (`GET`, `POST`, …).
- */
-export interface NeverResponse {
-  url: string;
-  status: string | number;
-  method?: string;
-}
-
-export type InvariantNever = { pageText: string } | { assertion: Assertion } | { response: NeverResponse };
-
-/** Does an HTTP status match a `never.response.status` (#195): an exact code, or a class like `"4xx"`. */
-export function matchesResponseStatus(want: string | number, status: number): boolean {
-  const s = String(want).toLowerCase();
-  const cls = /^([1-5])xx$/.exec(s);
-  if (cls !== null) return Math.floor(status / 100) === Number(cls[1]);
-  return Number(s) === status;
-}
-
-/**
- * #147 — which of the primary actor's actions a capture binds after. Every given field must match
- * (the same vocabulary as `InvariantWhen`).
- */
-export interface CaptureWhen {
-  control?: { name: string };
-  /** The route the action was taken on (path glob). */
-  route?: string;
-  op?: string[];
-}
-
-/**
- * #147 — a resource id (or URL) taken from the PRIMARY actor's run, so an observer's checks can
- * ask about exactly that resource. Bound once (its first value); read-only like every observable:
- *  - `network` a JSON path in a captured response (to an authorized origin) whose URL matches;
- *  - `dom`     text / form value / an attribute (`attr:data-id`) of the first match on the page;
- *  - `url`     the primary's page URL once an action matching `after` settled (and, with `route`,
- *              only when that URL's path matches the glob).
- */
-export type CaptureSpec =
-  | { network: { url: string; method?: string; json: string } }
-  | { dom: { selector: string; read?: string; after?: CaptureWhen } }
-  | { url: { after: CaptureWhen; route?: string } };
-
-/**
- * #147 — "the observer is DENIED this resource": navigate the observer's own context to `open`
- * (passive: the app makes its own reads) and hold when ANY declared expectation is observed. A 200
- * page with none of them is a violation; an observer bounced to a login page is "session lost"
- * (undecided), never "denied".
- */
-export interface DeniedAsSpec {
-  /** The observer actor (a registered `--actor` other than the primary). */
-  actor: string;
-  /** Path or absolute URL; `${capture.<name>}` is substituted (a `url` capture may be the whole of it). */
-  open: string;
-  expect: {
-    /** The observer's document (main-frame) response status is one of these. */
-    documentStatus?: number[];
-    /** An app response whose URL matches `url` has one of these statuses or Connect/gRPC codes. */
-    appResponses?: { url: string; status?: number[]; connectCode?: string[] };
-    /** Page text matching this pattern (`"/re/flags"` or a literal) is visible. */
-    orVisible?: string;
-  };
-}
 
 export interface DeclaredInvariant {
   id: string;
@@ -295,97 +141,6 @@ export interface InvariantSpec {
 
 // === Schema ===
 
-const DomObservableSchema = z
-  .object({
-    selector: z.string().min(1).optional(),
-    target: TargetDescriptorSchema.optional(),
-    read: z
-      .union([
-        z.enum(["text", "value", "count", "inViewport"]),
-        z
-          .object({
-            style: z.enum(STYLE_PROPERTIES),
-            channel: z.enum(["alpha", "r", "g", "b", "px"]).optional(),
-            reduce: z.enum(["first", "min", "max"]).optional(),
-          })
-          .strict()
-          .refine((r) => (r.reduce ?? "first") === "first" || r.channel !== undefined, {
-            message: "reduce min/max needs a numeric channel",
-          }),
-        z.object({ attr: z.string().regex(ATTR_NAME_RE) }).strict(),
-      ])
-      .optional(),
-    number: z.union([z.boolean(), z.literal("all"), z.object({ index: z.number().int() }).strict()]).optional(),
-    optional: z.boolean().optional(),
-  })
-  .strict()
-  .superRefine((d, ctx) => {
-    if ((d.selector === undefined) === (d.target === undefined)) {
-      ctx.addIssue({ code: "custom", message: "exactly one of selector or target is required", path: ["selector"] });
-    }
-  });
-
-const NetworkObservableSchema = z
-  .object({
-    url: z.string().min(1),
-    method: httpMethodField(),
-    json: JsonPathStringSchema,
-    optional: z.boolean().optional(),
-  })
-  .strict();
-
-/** `authFrom.secret`'s only accepted shape (#135): the same `env:VAR` reference `--secret-field` uses. */
-export const AUTH_SECRET_REF_RE = /^env:[A-Za-z_][A-Za-z0-9_]*$/;
-
-const ProbeAuthFromSchema = z
-  .object({
-    localStorage: z.string().min(1).optional(),
-    cookie: z.string().min(1).optional(),
-    secret: z.string().regex(AUTH_SECRET_REF_RE, 'a secret ref must be "env:VAR"').optional(),
-    scheme: z.string().max(40).optional(),
-  })
-  .strict()
-  .superRefine((a, ctx) => {
-    if ([a.localStorage, a.cookie, a.secret].filter((k) => k !== undefined).length !== 1) {
-      ctx.addIssue({ code: "custom", message: "authFrom is exactly one of localStorage, cookie or secret" });
-    }
-  });
-
-const ProbeObservableSchema = z
-  .object({
-    get: z.string().min(1).optional(),
-    head: z.string().min(1).optional(),
-    json: JsonPathStringSchema.optional(),
-    optional: z.boolean().optional(),
-    authFrom: ProbeAuthFromSchema.optional(),
-    as: z.string().regex(ACTOR_NAME_RE, "invalid actor name").optional(),
-  })
-  // `.strict()` is the method guardrail: a `post`/`put`/`delete`/`method`/`headers`/`body` key is an
-  // unknown key and the spec is refused — a probe can only ever be a GET or a HEAD, with no payload.
-  .strict()
-  .superRefine((p, ctx) => {
-    if ((p.get === undefined) === (p.head === undefined)) {
-      ctx.addIssue({ code: "custom", message: "a probe is exactly one of get or head (read-only)", path: ["get"] });
-    }
-    if (p.head !== undefined && p.json !== undefined) {
-      ctx.addIssue({ code: "custom", message: "a head probe has no body to read", path: ["json"] });
-    }
-  });
-
-// Keyed objects (not a zod union) so a refusal names the exact field: `observe.balance.dom.selector`.
-const ObservableSchema = z
-  .object({
-    dom: DomObservableSchema.optional(),
-    network: NetworkObservableSchema.optional(),
-    probe: ProbeObservableSchema.optional(),
-  })
-  .strict()
-  .superRefine((o, ctx) => {
-    if ([o.dom, o.network, o.probe].filter((k) => k !== undefined).length !== 1) {
-      ctx.addIssue({ code: "custom", message: "an observable is exactly one of dom, network or probe" });
-    }
-  });
-
 const BudgetGuardSchema = z
   .object({
     estimate: z.union([z.number(), z.string().min(1)]),
@@ -418,89 +173,6 @@ const WhenSchema = z
     control: z.object({ name: TextPatternSchema }).strict().optional(),
     route: z.string().min(1).optional(),
     op: z.array(OpSchema).min(1).optional(),
-  })
-  .strict();
-
-const NeverResponseSchema = z
-  .object({
-    url: z.string().min(1).max(2_000),
-    status: z.union([
-      z.number().int().min(100).max(599),
-      z.string().regex(/^([1-5][0-9]{2}|[1-5][xX]{2})$/, 'status is a code ("403") or a class ("4xx")'),
-    ]),
-    method: httpMethodField(),
-  })
-  .strict();
-
-const NeverSchema = z
-  .object({ pageText: TextPatternSchema.optional(), assertion: AssertionSchema.optional(), response: NeverResponseSchema.optional() })
-  .strict()
-  .superRefine((n, ctx) => {
-    if ([n.pageText, n.assertion, n.response].filter((k) => k !== undefined).length !== 1) {
-      ctx.addIssue({ code: "custom", message: "a never is exactly one of pageText, assertion or response" });
-    }
-  });
-
-const CaptureWhenSchema = z
-  .object({
-    control: z.object({ name: TextPatternSchema }).strict().optional(),
-    route: z.string().min(1).optional(),
-    op: z.array(OpSchema).min(1).optional(),
-  })
-  .strict()
-  .refine((w) => w.control !== undefined || w.route !== undefined || w.op !== undefined, "after names at least one of control, route or op");
-
-const CaptureSchema = z
-  .object({
-    network: z
-      .object({ url: z.string().min(1), method: httpMethodField(), json: JsonPathStringSchema })
-      .strict()
-      .optional(),
-    dom: z
-      .object({
-        selector: z.string().min(1),
-        read: z
-          .string()
-          .regex(/^(text|value|attr:[A-Za-z_:][A-Za-z0-9_.:-]*)$/, 'read is "text", "value" or "attr:<name>"')
-          .optional(),
-        after: CaptureWhenSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    url: z.object({ after: CaptureWhenSchema, route: z.string().min(1).optional() }).strict().optional(),
-  })
-  .strict()
-  .superRefine((c, ctx) => {
-    if ([c.network, c.dom, c.url].filter((k) => k !== undefined).length !== 1) {
-      ctx.addIssue({ code: "custom", message: "a capture is exactly one of network, dom or url" });
-    }
-  });
-
-const StatusListSchema = z.array(z.number().int().min(100).max(599)).min(1).max(20);
-
-const DeniedAsSchema = z
-  .object({
-    actor: z.string().regex(ACTOR_NAME_RE, "invalid actor name"),
-    open: z.string().min(1).max(2_000),
-    expect: z
-      .object({
-        documentStatus: StatusListSchema.optional(),
-        appResponses: z
-          .object({
-            url: z.string().min(1),
-            status: StatusListSchema.optional(),
-            connectCode: z.array(z.string().regex(/^[a-z_]+$/, "a Connect code is snake_case (not_found)")).min(1).max(20).optional(),
-          })
-          .strict()
-          .refine((a) => a.status !== undefined || a.connectCode !== undefined, "appResponses needs status or connectCode")
-          .optional(),
-        orVisible: TextPatternSchema.optional(),
-      })
-      .strict()
-      .refine(
-        (e) => e.documentStatus !== undefined || e.appResponses !== undefined || e.orVisible !== undefined,
-        "expect names at least one of documentStatus, appResponses or orVisible",
-      ),
   })
   .strict();
 
@@ -783,55 +455,6 @@ function crossReferenceProblems(raw: unknown): SpecIssue[] {
     }
   });
   return issues;
-}
-
-/** The origin a probe's URL resolves to (relative paths against `baseUrl`), or null when unparseable. */
-export function probeUrl(probe: ProbeObservable, baseUrl: string): URL | null {
-  const raw = probe.get ?? probe.head;
-  if (raw === undefined) return null;
-  return resolveHttpUrl(raw, baseUrl);
-}
-
-/** An http(s) URL (relative paths against `baseUrl`), or null. */
-export function resolveHttpUrl(raw: string, baseUrl: string): URL | null {
-  try {
-    const u = new URL(raw, baseUrl);
-    return u.protocol === "http:" || u.protocol === "https:" ? u : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Every `${capture.<name>}` a template references (#147), deduped. */
-export function captureRefs(template: string): string[] {
-  return [...new Set([...template.matchAll(CAPTURE_REF_RE)].map((m) => m[1] as string))];
-}
-
-/**
- * Substitutes `${capture.<name>}` refs (#147). A ref that IS the whole template is replaced by the
- * raw value (a captured URL); inside a path/query it is URL-encoded, so a captured id can never
- * add a path segment, a query or an origin. Null when any ref is unbound.
- */
-export function substituteCaptureRefs(template: string, lookup: (name: string) => string | undefined): string | null {
-  const whole = /^\$\{capture\.([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(template);
-  if (whole !== null) return lookup(whole[1] as string) ?? null;
-  let missing = false;
-  const out = template.replace(CAPTURE_REF_RE, (_m, name: string) => {
-    const v = lookup(name);
-    if (v === undefined) {
-      missing = true;
-      return "";
-    }
-    return encodeURIComponent(v);
-  });
-  return missing ? null : out;
-}
-
-/** The capture a cross-actor invariant is gated on (`when.after: "capture.x"` → `x`), or null. */
-export function invariantGate(inv: { readonly when?: { readonly after?: string } }): string | null {
-  const after = inv.when?.after;
-  if (after === undefined || after === "action") return null;
-  return CAPTURE_GATE_RE.exec(after)?.[1] ?? null;
 }
 
 /**
