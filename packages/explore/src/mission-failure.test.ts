@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
+import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
+import type { BrowserSession } from "@jevitate/playwright";
+import { assertSeedReachable, describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
 
 /**
  * #128 — the pure rule for "the start URL simply could not be loaded": neither a defect in the app
@@ -76,5 +78,23 @@ describe("describeFailure — a navigation the app never answered (#226)", () =>
   });
   it("crash evidence still wins", () => {
     expect(describeFailure(gotoTimeout(), { ...live, pageCrashed: true }).kind).toBe("page-crash");
+  });
+});
+
+describe("assertSeedReachable — #213: a target that is not running fails fast, in plain words", () => {
+  const actorWith = (probeReachable?: (url: string) => Promise<string | null>) =>
+    CastActor.named("x").whoCan(new BrowseTheWeb({ ...(probeReachable === undefined ? {} : { probeReachable }) } as unknown as BrowserSession, []));
+
+  it("a refused probe throws an unreachable-target error whose description is the probe's own words", async () => {
+    const actor = actorWith(async () => "connection refused — is the app running at http://127.0.0.1:5999?");
+    const err = await assertSeedReachable(actor, "http://127.0.0.1:5999/").then(() => null, (e: Error) => e);
+    expect(err).not.toBeNull();
+    expect(isUnreachableTarget(err!.message)).toBe(true);
+    expect(describeUnreachable(err!.message)).toBe("connection refused — is the app running at http://127.0.0.1:5999?");
+  });
+
+  it("a reachable target, or a session with no probe (a test double), passes", async () => {
+    await expect(assertSeedReachable(actorWith(async () => null), "http://x/")).resolves.toBeUndefined();
+    await expect(assertSeedReachable(actorWith(), "http://x/")).resolves.toBeUndefined();
   });
 });

@@ -86,7 +86,7 @@ import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "./mission-failure.js";
+import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "./mission-failure.js";
 import {
   EMPTY_STATUS,
   describeStatus,
@@ -766,6 +766,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // Initial navigation (authorized above).
     page.on("requestfailed", onFirstNavRequestFailed);
     try {
+      await assertSeedReachable(cfg.actor, cfg.startUrl);
       await Navigate.to(cfg.startUrl).performAs(cfg.actor);
     } catch (e) {
       const message = firstLine(e);
