@@ -1,3 +1,4 @@
+import { sessionLostReason } from "./session-check.js";
 import { chmod, writeFile } from "node:fs/promises";
 import { assertSessionFileOutsideProject, logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
@@ -397,6 +398,11 @@ export interface RunExplorationResult {
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "goal";
   /**
+   * #213: the `--storage-state` session was not honoured — the run's first page was a sign-in page, so
+   * whatever it did (the model may sign in by itself), it did not start as that session. A warning.
+   */
+  readonly sessionLost?: { readonly reason: string };
+  /**
    * The portable verdict — ALWAYS canonical (#217): `goalOutcome` folded by the domain's single
    * mapping (`GOAL_OUTCOME_FOLD`): succeeded → clean; failed/exhausted/blocked → defects-found.
    */
@@ -734,6 +740,13 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       assertionPassed: mission.assertionPassed,
       checks: mission.checks,
       ...(mission.warnings === undefined ? {} : { checkWarnings: mission.warnings }),
+      ...((): { sessionLost?: { reason: string } } => {
+        const lost = sessionLostReason({
+          target: primaryState === undefined ? {} : { storageStatePath: resolvePath(primaryState) },
+          transcript: serverLogRun?.transcript ?? mission.transcript,
+        });
+        return lost === undefined ? {} : { sessionLost: { reason: lost } };
+      })(),
       stop: mission.run.stop,
       finalUrl: mission.finalUrl,
       decisions: mission.run.decisions,

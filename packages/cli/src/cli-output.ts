@@ -111,6 +111,8 @@ export function formatMissionHuman(result: unknown): string {
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
+  // #213: the --storage-state session was not honoured (the run started on a sign-in page).
+  if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
@@ -228,7 +230,12 @@ export function formatMultiRunHuman(result: unknown): string {
   // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
   const reason = str(result.reason);
   if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
-  for (const c of personas) lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+  for (const c of personas) {
+    lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+    // #213: a persona whose session was lost did not test as that persona — said, never silent.
+    const lost = str(c.sessionLost);
+    if (lost !== undefined) lines.push(`${tag("WARNING")}${str(c.persona)}: session lost — ${lost}`);
+  }
   const answers: Array<{ label: string; text: string }> = [];
   for (const c of cells) {
     const persona = str(c.persona);

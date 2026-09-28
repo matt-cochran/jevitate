@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -17,7 +17,7 @@ import { BrowseTheWeb, CastActor, type BrowserSession } from "@jevitate/screenpl
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
-import { runAdversarialCliMission, runCoverageMission, runFeatureCliMission } from "./explore-api.js";
+import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { formatMissionHuman } from "./cli-output.js";
 
 /**
@@ -449,6 +449,35 @@ describe("shared decision transcript — every model-deciding strategy writes on
       }
     },
     60_000,
+  );
+});
+
+describe("#213: a dead --storage-state session is flagged, never silently passed", () => {
+  it(
+    "a goal run whose storage state carries a rejected cookie (sid=nope) starts on /login: the result and summary say the session was lost",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-dead-session-"));
+      try {
+        const state = join(outDir, "nope.json");
+        const host = new URL(site.url).hostname;
+        await writeFile(state, JSON.stringify({ cookies: [{ name: "sid", value: "nope", domain: host, path: "/", expires: -1, httpOnly: false, secure: false, sameSite: "Lax" }], origins: [] }));
+        const result = await runExploration({
+          url: `${site.url}/inbox`,
+          goal: "open the inbox",
+          allowlist: [site.url],
+          storageState: state,
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway(),
+          bounds: { maxActions: 2, maxDecisions: 2 },
+          outDir,
+        });
+        expect(result.sessionLost?.reason).toMatch(/^the session in nope\.json was not honoured — the first page was a sign-in page \(\/login\)/);
+        expect(formatMissionHuman(result)).toContain("WARNING the session in nope.json was not honoured");
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    120_000,
   );
 });
 

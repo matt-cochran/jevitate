@@ -450,3 +450,34 @@ describe("multi-run results follow the #217 contract (#226)", () => {
     }
   });
 });
+
+describe("#213: a persona whose session was not honoured is flagged, never silently passed", () => {
+  const data = (url: string, controls: string[]) => ({
+    outcome: "succeeded",
+    goalOutcome: "succeeded",
+    missionOutcome: "clean",
+    exitCode: 0,
+    target: { seedUrl: "http://app.test/inbox", storageStatePath: "/tmp/nope.json" },
+    transcript: [{ step: 1, url, controls }, { step: 2, url: "http://app.test/inbox", controls: [] }],
+  });
+
+  it("a run whose first page is a sign-in page (URL or password field) carries sessionLost", () => {
+    const byUrl = summarizeRun("goal", 1, { ok: true, data: data("http://app.test/login", ['button "Sign in"']) });
+    expect(byUrl.sessionLost).toMatch(/^the session in nope\.json was not honoured — the first page was a sign-in page \(\/login\)/);
+    const byForm = summarizeRun("goal", 1, { ok: true, data: data("http://app.test/inbox", ['textbox "Username"', 'textbox "Password"']) });
+    expect(byForm.sessionLost).toMatch(/the first page \(\/inbox\) showed a sign-in form \(a password field\)/);
+    expect(summarizeRun("goal", 1, { ok: true, data: data("http://app.test/inbox", ['button "Compose"']) }).sessionLost).toBeUndefined();
+  });
+
+  it("the cell, the persona diff and the human summary say the session was lost", () => {
+    const lost = "the session in nope.json was not honoured — the first page was a sign-in page (/login)";
+    const admin = voteRuns([run(1, "succeeded", [])], 1, { name: "admin", storageState: "/a.json" });
+    const dead = voteRuns([run(1, "succeeded", [], { sessionLost: lost })], 1, { name: "ghost", storageState: "/tmp/nope.json" });
+    expect(dead.sessionLost).toBe(`run(s) 1 of 1: ${lost}`);
+    expect(admin.sessionLost).toBeUndefined();
+    const diff = diffPersonas([admin, dead]);
+    expect(diff.sessionLost).toEqual({ ghost: `run(s) 1 of 1: ${lost}` });
+    const text = formatMultiRunHuman({ missionOutcome: "clean", strategy: "goal", repeat: 1, cells: [admin, dead], findings: [], flaky: [], diff });
+    expect(text).toContain(`WARNING ghost: session lost — run(s) 1 of 1: ${lost}`);
+  });
+});

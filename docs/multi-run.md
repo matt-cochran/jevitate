@@ -56,6 +56,11 @@ and a top-level `diff` (`PersonaDiff`, `advisory: true` always) carries:
   — the same request 2xx'd for one persona and was denied for another.
 - `outcomes` (`{persona: outcome}`) and `outcomeDiffers` (`true` when personas didn't all reach the
   same outcome).
+- `sessionLost` (`{persona: why}`, only when it happened): a persona whose session was not honoured —
+  its run's first page was a sign-in page (a login-like URL, or a password field). The run did not
+  start as that persona (a goal run's model may even sign in by itself), so its other differences are
+  not that persona's. The persona's cell carries the same `sessionLost`, and the human summary prints a
+  `WARNING <persona>: session lost` line. Re-save the persona's storage state and run it again.
 
 The top-level `outcome` is that shared outcome when every persona agreed, else `"mixed"`; the
 canonical `missionOutcome` is then the most severe persona's.
