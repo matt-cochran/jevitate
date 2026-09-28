@@ -21,6 +21,14 @@ because a run broke. The human summary leads with that verdict, then each run's 
 reason, the persona status differences (e.g. `GET /api/invoices: 200 for admin; 404 for viewer`),
 and a find-out's `ANSWER`. See [results](./results.md#multi-run-results---repeat---persona) for the fields.
 
+**A write goal needs its state reset every run.** The runs share the app: what run 1 wrote is
+still there for run 2. On a write goal ("change the display name to Ada", "create a project named
+Demo"), every run after the first starts with the goal already done, so its success check passes
+without proving anything, and the vote counts those vacuous passes. Give it `--fixtures` (HTTP
+`setup`/`restore` steps) or `--before`/`--after` shell hooks — they run before and after **every**
+repeat — so each run starts from the same state; see [fixtures](./fixtures.md). Adversarial runs
+leave junk values behind the same way (see [safety](./safety.md)).
+
 **On disk.** Every multi-run writes `<outDir>/multi-run.result.json`, rewritten after every run so
 a killed multi-run still leaves the runs it finished. Each run gets its own directory,
 `<outDir>/run-<i>/` (1-based), holding that run's own artifacts plus `run.envelope.json` (its raw
