@@ -31,6 +31,7 @@ import {
 } from "../index.js";
 import { contentHash, type MissionFailure } from "@jevitate/domain";
 import type { SettleConfig, TimingConfig } from "../settle-config.js";
+import type { ActResult } from "../act.js";
 import { outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
@@ -62,6 +63,17 @@ import { detectOverflow, shouldCheckOverflow, type OverflowFinding } from "../ov
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
+/** A failure that is a timeout (#203) — retried once before it counts (#213). */
+function isTimeoutFailure(reason: string | undefined): boolean {
+  return /timeout/i.test(reason ?? "");
+}
+
+/** A safety refusal's category from its reason (`… (destructive); pass …`, `… matches --deny …`). */
+function refusalRisk(reason: string): string {
+  if (/matches --deny/.test(reason)) return "denied";
+  return /\((session-end|destructive|paid)\)/.exec(reason)?.[1] ?? "refused";
+}
+
 function isUnactionableFailure(reason: string | undefined): boolean {
   if (reason === undefined) return false;
   return /timeout|not actionable|no longer present/i.test(reason);
@@ -464,6 +476,10 @@ async function runInductionFrontier(
   let actions = 0;
   let failedActions = 0;
   let timedOutActions = 0;
+  /** #213: what explains a run that took no action — the seed's candidates, safety refusals, dropped chrome. */
+  let seedCandidates = 0;
+  const refusedControls = new Map<string, string>();
+  let frontierRef: Frontier | undefined;
   let nonNavActionsExercised = 0;
   /** #209: exercised links to another page — global navigation only if chrome (see `report`). */
   const crossPageLinks: Control[] = [];
@@ -499,6 +515,12 @@ async function runInductionFrontier(
         // so a header link met before its second page still counts as chrome). A link in the page's
         // own body (a small app whose pages link to each other in their content) is in-page coverage.
         nonNavActionsExercised: nonNavActionsExercised + crossPageLinks.filter((c) => (c.landmark ?? null) === null && !chrome.isChrome(c)).length,
+        timedOutActions,
+        noAction: {
+          seedCandidates,
+          refused: [...refusedControls].map(([name, risk]) => ({ name, risk })),
+          outOfScopeChrome: frontierRef?.droppedLeavingChrome ?? 0,
+        },
       },
       sufficiencyThresholds,
     ),
@@ -602,7 +624,9 @@ async function runInductionFrontier(
 
     // A candidate the safety policy refuses is withheld at enqueue time (#186), its refusal recorded once.
     const withheld = (control: Control, on: Snapshot): boolean =>
-      safety.withholds("click", control, (reason) =>
+      safety.withholds("click", control, (reason) => {
+        // #213: kept (name + category) to explain a run that took no action.
+        refusedControls.set(control.name.replace(/\s+/g, " ").trim() || control.role, refusalRisk(reason));
         transcript.record({
           op: null,
           control,
@@ -613,18 +637,20 @@ async function runInductionFrontier(
           actOk: false,
           reason,
           snapshot: on,
-        }),
-      );
+        });
+      });
 
     const frontier = new Frontier({
       order: params.strategy === "exploratory" ? "novelty" : "breadth",
       classify: chromeClassifier({ chrome, inScope }),
     });
+    frontierRef = frontier;
     /** The last transition left the target scope — the next reset is a return after a departure. */
     let departed = false;
 
     const seedRecording: Recording = { version: "1", site, pages: [] };
     statePaths.set(currentFingerprint, seedRecording);
+    seedCandidates = targetCandidates(snap.controls, { ops: FRONTIER_OPS, enabledOnly: true }).length;
     enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls, (c) => withheld(c, snap));
     // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
     await guard(checkOverflow(currentFingerprint, snap.url, withSeed(seedRecording, params.seedUrl)));
@@ -707,13 +733,18 @@ async function runInductionFrontier(
       watchdog.during(`acting on "${liveControl.name || item.op}"`);
       if (declared !== null) await guard(declared.monitor.before(sessions.actor));
       safety.mark(transcript.nextStep, item.op, liveControl);
-      const result = await guard(
-        act(sessions.actor, {
-          op: item.op,
-          control: liveControl,
-          value: item.op === "click" ? null : "",
-        }),
-      );
+      const actOnce = (): Promise<ActResult> =>
+        guard(
+          act(sessions.actor, {
+            op: item.op,
+            control: liveControl,
+            value: item.op === "click" ? null : "",
+          }),
+        );
+      let result = await actOnce();
+      // #213: a single timeout on a working control (a slow moment on a loaded host) is retried once
+      // before it counts as a failed action — one blip must not make the run inconclusive.
+      if (!result.ok && isTimeoutFailure(result.reason)) result = await actOnce();
       actions += 1;
       frontier.recordAttempt();
       const decidedOn = snap;
@@ -722,7 +753,7 @@ async function runInductionFrontier(
     lastTiming = undefined;
       if (!result.ok) {
         failedActions += 1;
-        if (/timeout/i.test(result.reason ?? "")) timedOutActions += 1;
+        if (isTimeoutFailure(result.reason)) timedOutActions += 1;
         // A control that failed with a timeout (or was refused as not actionable — a clipped/
         // offscreen skip link, an occluded target) is never re-chosen for the rest of the run
         // (#75): every OTHER state that re-offers the same control identity drops it at `push`.
@@ -949,7 +980,7 @@ async function runInductionFrontier(
         outcome: "insufficient-coverage",
         failure: {
           kind: "insufficient-coverage",
-          message: `the frontier ended because ${timedOutActions} action(s) timed out (vs ${transitionsExercised} transition(s) exercised, ${visited.size} state(s) visited), not because its states ran out`,
+          message: `the frontier ended because ${timedOutActions} action(s) timed out even after a retry (vs ${transitionsExercised} transition(s) exercised, ${visited.size} state(s) visited), not because its states ran out — a slow app or a loaded host can time out a working control: re-run it, or raise the click timeout with JEVITATE_CLICK_TIMEOUT_MS`,
         },
         coverage: report(true),
         recordings: [...statePaths.values()],

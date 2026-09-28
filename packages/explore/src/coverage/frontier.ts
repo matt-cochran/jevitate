@@ -115,6 +115,8 @@ export class Frontier {
   private readonly maxLeavingChromeShare: number;
   private attempted = 0;
   private leavingChromeAttempted = 0;
+  /** #213: leaving-scope chrome dropped over the share, never tried (explains a run with no action). */
+  private leavingChromeDropped = 0;
   private lastClass: FrontierClass | null = null;
 
   constructor(options: FrontierOptions = {}) {
@@ -217,6 +219,11 @@ export class Frontier {
     if (this.lastClass?.deferred === true && this.lastClass.leavesScope) this.leavingChromeAttempted += 1;
   }
 
+  /** #213: how many leaving-scope chrome items were dropped over the share, never tried. */
+  get droppedLeavingChrome(): number {
+    return this.leavingChromeDropped;
+  }
+
   /** How the item last popped was classified (null when there is no classifier). */
   get lastPoppedClass(): FrontierClass | null {
     return this.lastClass;
@@ -262,6 +269,7 @@ export class Frontier {
           picked = next;
           break;
         }
+        if (overShare) this.leavingChromeDropped += 1;
         this.remove(next); // already tried this destination, or over the share: never chosen
       }
     }
