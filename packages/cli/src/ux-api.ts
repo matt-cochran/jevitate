@@ -1131,7 +1131,17 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     const jobFailure: MissionFailure | undefined =
       loopOutcome !== "clean" ? undefined : checked === undefined ? jobIncomplete : checked === "clean" ? undefined : (checkFailure ?? jobIncomplete);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never `clean`.
-    const host = await finishHostHealth(health, jobVerdict);
+    // #213: a job whose completion code verified (#225: its success checks held, or its done was
+    // adjudicated from save signals) is a positive proof — a starved host does not undo it. Only an
+    // unverified ending is downgraded, and it keeps its own reason (a failed check) in the degraded one.
+    // A model-only `grounded-judgment` is not code's proof, so it is still downgraded.
+    const jobVerified =
+      jobVerdict === "clean" &&
+      (checked === "clean" || (checked === undefined && run.outcome.status === "completed" && run.outcome.verifiedBy !== "grounded-judgment"));
+    const host = await finishHostHealth(health, jobVerdict, {
+      verified: jobVerified,
+      ...(jobFailure === undefined ? {} : { wouldHaveBeen: jobFailure.message }),
+    });
     const runOutcome: MissionOutcome = host.outcome;
     const base = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,

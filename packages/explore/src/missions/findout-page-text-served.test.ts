@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   FakeGenerationGateway,
+  GOAL_ANSWER_INSTRUCTIONS,
   type Answer,
   type GenerationPort,
   type GenerationResult,
@@ -90,6 +91,8 @@ class ReadingJudge implements JudgmentPort {
   /** #223: every "does this quote answer the goal's question?" ask, and Jev's P(yes) to it. */
   readonly fitsCalls: JudgmentState[] = [];
   fitsProbability = 0.9;
+  /** #229: Jev's P(yes) per ask, in order (a real model's judgments vary); then `fitsProbability`. */
+  fitsSequence: number[] = [];
   constructor(private readonly policy: (state: JudgmentState, turn: number) => string) {}
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
     if (!("action" in args.questions)) {
@@ -98,7 +101,8 @@ class ReadingJudge implements JudgmentPort {
         if (q.kind !== "noul") continue;
         if (name === ANSWER_FITS_QUESTION) {
           this.fitsCalls.push(args.state);
-          out[name] = { kind: "noul", value: this.fitsProbability >= 0.5, probability: this.fitsProbability };
+          const p = this.fitsSequence.shift() ?? this.fitsProbability;
+          out[name] = { kind: "noul", value: p >= 0.5, probability: p };
         } else out[name] = { kind: "noul", value: false, probability: 0.1 };
       }
       return out;
@@ -450,6 +454,91 @@ describe("#223 — a quote on the page must answer the question; a textarea's va
       expect(r.outcome).not.toBe("succeeded");
       expect(r.transcript.find((e) => e.op === "report")?.reason).toMatch(/only a control's label/);
       expect(reasonOf(r)).toBe("answer not found (pages seen: /list)");
+    },
+    90_000,
+  );
+});
+
+/**
+ * #229: gpt-4o-mini on a list page. It follows the brief's word on headings: while the instructions
+ * (or a hint) say the page's heading IS the title of what it shows, it answers the heading — its claim
+ * copying the hint's wording; otherwise it answers an ordinal question from the list's entries (the
+ * lines after the heading). Records every ask's `hint`.
+ */
+class HeadingLedGen implements GenerationPort {
+  readonly hints: (string | undefined)[] = [];
+  readonly #fallback = new FakeGenerationGateway();
+  async generate<K extends GenTaskKind>(kind: K, input: GenInput<K>): Promise<GenerationResult<K>> {
+    if (kind !== "goal.answer") return this.#fallback.generate(kind, input);
+    const i = input as { pages: string; hint?: string; instructions?: string };
+    this.hints.push(i.hint);
+    const instructions = i.instructions ?? GOAL_ANSWER_INSTRUCTIONS;
+    const lines = i.pages.split("\n").map((l) => l.trim());
+    const at = lines.indexOf("Items");
+    const hinted = i.hint === undefined ? undefined : /main heading is "([^"]+)"/.exec(i.hint)?.[1];
+    const output =
+      hinted !== undefined
+        ? { answer: hinted, claims: [{ claim: `The current page's main heading is ${hinted}`, quote: hinted }] }
+        : /heading[^.]*\bIS the title\b/.test(instructions) && at >= 0
+          ? { answer: "Items", claims: [{ claim: "The page's main heading is the title: Items", quote: "Items" }] }
+          : at >= 0 && lines[at + 1]
+            ? { answer: lines[at + 1]!, claims: [{ claim: "The first entry of the list", quote: lines[at + 1]! }] }
+            : { answer: null, claims: [] };
+    return {
+      output,
+      provenance: { adapter: "fake", model: "heading-led", promptVersion: "4", latencyMs: 0, responseHash: "x" },
+    } as unknown as GenerationResult<K>;
+  }
+}
+
+describe("#229 — find-out with real-model behaviour: a veto stands, list pages are answered from their entries, the answer in its quote grounds", () => {
+  it(
+    "H1: 'Items' on tenant a's empty list, vetoed once (p=0.23), re-reported and judged yes next time: still rejected — answer not found",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      judge.fitsSequence = [0.23];
+      const gen = new FixedAnswerGen({ answer: "Items", claims: [{ claim: "The title of this item is Items", quote: "Items" }] });
+      const r = await run("/t/items", TITLE_GOAL, judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(r.run.answer).toBeUndefined();
+      expect(reasonOf(r)).toBe("answer not found (pages seen: /t/items)");
+      const reports = r.transcript.filter((e) => e.op === "report");
+      expect(reports.length).toBeGreaterThan(1);
+      expect(reports.every((e) => e.actOk === false)).toBe(true);
+      expect(reports.slice(1).every((e) => /already vetoed/.test(e.reason ?? ""))).toBe(true);
+      // Jev was asked once; the veto was never re-judged.
+      expect(judge.fitsCalls).toHaveLength(1);
+      // "this item" on a page whose heading names the list ("Items"): no heading hint.
+      expect(gen.hints.every((h) => h === undefined)).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "H2: 'the title of the first item' on a list page is the first entry's link text, never the list's heading; no heading hint",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new HeadingLedGen();
+      const r = await run("/list", "Find out the title of the first item", judge, gen);
+
+      expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
+      expect(r.run.answer?.text).toBe("Quarterly roadmap review");
+      expect(gen.hints.every((h) => h === undefined)).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "H3: the bio, claimed in words the quote does not share ('The bio of the profile states what the user does'): the answer is in its quote — grounded",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new PageReadingGen(/^Bio: (.+)$/m, () => "The bio of the profile states what the user does", (v) => `Bio: ${v}`);
+      const r = await run("/bio", "What is the current bio text on the profile?", judge, gen);
+
+      expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
+      expect(r.run.answer?.text).toBe("Mathematician and writer; first to publish an algorithm for a machine.");
+      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-value", control: "Bio" });
     },
     90_000,
   );

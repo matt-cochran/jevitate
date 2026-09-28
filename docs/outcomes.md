@@ -54,7 +54,7 @@ clean.
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
 `explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own
-`succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `adversarial-`, `feature-` or
+`succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `exploratory-`, `adversarial-`, `feature-` or
 `usability-<stamp>` — or a `queue_exploration` `missionId`.
 
 ### Every `outcome`, `stop` and `missionOutcome` value
@@ -140,6 +140,27 @@ listed. A page whose main-thread probe gets no answer while a document is still 
 the app, not hung: it is given the render ceiling, and a navigation still unanswered after it is a
 `request-pending` hang on that document, never `main-thread-unresponsive`.
 
+A freeze usually shows up first as a hang (a click's request or navigation that never answers) or a
+no-progress stop, not as a failed navigation. Before any hang or no-progress stop becomes a finding
+— and before it is blamed on a starved host — the run asks the app directly (#230), the same way in
+goal, usability, adversarial, coverage/exploratory and feature runs:
+
+- **The probe:** one fresh, cookie-less `GET` from outside the page, for the page the run is on (its
+  origin and path; the query is dropped so a one-shot token isn't re-sent). That page already answered
+  once. Any HTTP response counts as an answer, whatever its status. The probe waits up to 10 s.
+- **The app stopped answering** when that probe gets no response at all within 10 s, or the
+  connection is refused. The run ends `inconclusive` / `target-unresponsive` with a plain reason
+  (`the app stopped responding on /app (a fresh request for it got no response within 10s)`).
+  There's no hang finding, no `environment-degraded` entry and no `next: verify-fix` or `ledger add`
+  hint. This rule wins over host starvation: a starved host makes a live server **slow**, but it
+  doesn't make it withhold every response for 10 s.
+- **The machine is too slow** when the app answers the probe, however late. The hang stands as a
+  finding, or it's `environment-degraded` on a starved host (below). A single stuck endpoint on a
+  server that still serves the page is a real `request-pending` hang, not `target-unresponsive`. So
+  is a separately hosted API that freezes while the page's own server keeps answering.
+- **Inconclusive probes don't count.** A probe that fails for any other reason (a TLS or DNS quirk
+  of the probe itself) proves nothing, and the finding is judged as before.
+
 ### A starved host (`hostHealth`, `environmentDegraded`)
 
 On a saturated machine (parallel builds, a busy CI runner) a run's hangs, click timeouts and
@@ -152,7 +173,7 @@ run's own baseline. The thresholds (`packages/explore/src/host-health.ts`) are:
 |---|---|
 | admission sample | over the browser pool's own thresholds (memory pressure, < 400 MiB available, CPU PSI > 80%) |
 | load average | > 2 runnable tasks per core (every task gets ≤ half a core) |
-| driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) |
+| driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) **and** load ≥ 1 runnable task per core. The lag histogram also counts the driver's own synchronous work, so lag with idle cores (e.g. 506 ms at 0.70/core) is self-inflicted and never counts (#213) |
 | render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s |
 
 A starved sample explains the 15 s after it. Then:
@@ -162,12 +183,24 @@ A starved sample explains the 15 s after it. Then:
   defect or hang finding. A goal run that ends on one is `inconclusive`
   (`failure.kind: "degraded-environment"`);
 - a run most of whose steps (> 50%) ran starved is `inconclusive` with
-  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`/`blocked`).
-  A confirmed defect, a `succeeded` goal and a crash keep their outcome.
+  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`/`blocked`/`failed`).
+  A confirmed defect, a `succeeded` goal and a crash keep their outcome. So does a usability job whose
+  completion code verified: its `--success` checks held, or its `done` was proven by save or sign-in
+  signals. Only an ending the model alone judged (`verifiedBy: "grounded-judgment"`) is downgraded (#213).
+- the degraded reason is one sentence with the peak readings, followed by what the run would have
+  ended as without the starved host. A goal whose check didn't hold still names that check (#213):
+  `3/4 steps ran on a starved host (peak load 3.50/core, min free memory 6144 MiB), so the run proves
+  nothing about the app; otherwise it would have ended failed: success check … did not hold`.
+- a start page that doesn't load in time (a bare timeout, not a network error) while the host is
+  starved is `degraded-environment` with an `environmentDegraded` `page-load-timeout` entry, not
+  `target-unreachable`. This holds when a fresh request for the page still answers. A page that
+  doesn't answer at all stays `target-unreachable` (#230). In a persona matrix, a persona whose runs
+  never observed the app is left out of the persona diff (`diff.notCompared`, printed as `DIFF
+  <persona>: not compared — …`), so a starved load never reads as an access difference (#213).
 
 Every result carries `hostHealth`: `peakLoadPerCore`, `minFreeMemoryBytes`,
 `peakEventLoopLagMs`, `slowestRenderMs` (and the `baselineRenderMs` it is judged against),
-`steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes, and `attribution`.
+`steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes (one per kind of signal, not one per reading), and `attribution`.
 `JEVITATE_HOST_STARVATION=off` keeps the sampling and the summary but never attributes a finding to
 the host (`attribution: "off"`) — for a harness that guarantees a quiet host itself.
 

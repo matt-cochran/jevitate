@@ -4,7 +4,7 @@ import { Navigate } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
 import { redactUrl, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { combineOutcomes, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
-import { assertAuthorizedExploreTarget } from "../authorized-targets.js";
+import { assertAuthorizedExploreTarget, isAuthorizedExploreTarget } from "../authorized-targets.js";
 import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
@@ -26,7 +26,7 @@ import {
   type TranscriptJudgment,
   type TranscriptListener,
 } from "../transcript.js";
-import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage } from "../mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage, assertSeedReachable } from "../mission-failure.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
@@ -600,6 +600,12 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
       snapshot,
       timing,
     });
+    // #230: the app stopped answering a fresh request — `target-unresponsive`, never a hang finding
+    // and never blamed on a starved host.
+    await assertTargetAnswering({
+      pageUrl: sessions.page.url(),
+      authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist),
+    });
     const step = transcript.nextStep - 1;
     const known = hangs.get(hangFingerprint(h));
     if (known !== undefined) {
@@ -904,6 +910,7 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
+      await assertSeedReachable(sessions.actor, params.seedUrl);
       await Navigate.to(params.seedUrl).performAs(sessions.actor);
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);

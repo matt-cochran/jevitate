@@ -80,7 +80,7 @@ import {
   type ProjectInitReport,
 } from "./project-dir.js";
 import { sitePolicyKey, withSiteGate } from "./site-gate-cli.js";
-import { runRegressionCapture, runRegressionRun, RegressionNotFoundError } from "./regression-api.js";
+import { runRegressionCapture, runRegressionRun, RegressionNotFoundError, RegressionHardSignalOracleError, RegressionExistsError } from "./regression-api.js";
 import {
   addMissionTarget,
   listMissionTargets,
@@ -285,8 +285,10 @@ export interface CliDeps {
   record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
    *  in production means the real `existsSync`/`homedir`/`cwd` and the real
-   *  `~/.jevitate/skills-install-state.json` state path. */
-  init?: { detection?: DetectionDeps; statePath?: string };
+   *  `~/.jevitate/skills-install-state.json` state path.
+   *  `isInteractive` (#230): whether key collection may prompt stdin;
+   *  omitted in production means the real `process.stdin.isTTY` check. */
+  init?: { detection?: DetectionDeps; statePath?: string; isInteractive?: () => boolean };
   /**
    * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
    * Every field is injectable so tests never touch the network, the real home
@@ -625,6 +627,9 @@ function stallTimeoutMs(raw: string | number | undefined): number | undefined | 
   return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
 }
 
+/** #230: the only `--strategy` values `explore` accepts; anything else is refused, never silently run as goal. */
+const EXPLORE_STRATEGIES = ["goal", "coverage", "exploratory", "adversarial", "usability"] as const;
+
 const EXPLORE_OUTCOME_HELP = `
 Outcomes, stop reasons and exit codes:
   Every result carries a canonical missionOutcome (and exitCode), whatever the strategy:
@@ -675,6 +680,7 @@ export function buildProgram(deps: CliDeps): Command {
 
   program
     .command("init")
+    .description("set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/")
     .option("--json", "emit a JSON envelope")
     .option("--skip-keys", "skip credential collection")
     .option("--skip-skills", "skip skill installation")
@@ -701,11 +707,15 @@ export function buildProgram(deps: CliDeps): Command {
         if (!skipProject) data.project = initProjectDir(deps.init?.detection?.cwd?.() ?? process.cwd(), { ...(dryRun === true ? { dryRun: true } : {}) });
         if (!skipKeys) {
           // SECURITY: reuses the existing, already-guardrailed credential
-          // collection. The report holds only key NAMES (required/collected),
+          // collection. The report holds only key NAMES (required/collected/missing),
           // never a value — nothing here reads, echoes, logs, or returns a key.
           const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
           const io = deps.ai?.secureIO ?? realSecureIO();
-          data.keys = await collectAllMissingKeys(store, io);
+          // #230: never prompt a non-interactive stdin (no TTY — how coding agents and CI run
+          // `jevitate init`) — it would hang reading a 'line' event that never comes, or read EOF
+          // silently. Report what's still missing instead; the rest of init still completes.
+          const interactive = deps.init?.isInteractive?.() ?? process.stdin.isTTY === true;
+          data.keys = await collectAllMissingKeys(store, io, { interactive });
         }
         // Explicit `--targets` overrides detection entirely (the user takes
         // full control); otherwise `detectRuntimes` decides, always including
@@ -731,18 +741,34 @@ export function buildProgram(deps: CliDeps): Command {
           const mcpPaths = resolveMcpTargetPaths(deps.init?.detection);
           data.mcp = await registerMcp(runtimes, mcpPaths, { force, dryRun });
         }
+        // #230: exit 0 even when keys are still missing (the non-interactive path above) —
+        // init's other work (project dir, skills, MCP registration) genuinely succeeded, and a
+        // missing key is expected/normal for a fresh non-interactive install (CI, a coding
+        // agent) that configures keys separately. The warning lives in `data.keys[*].missing`
+        // (both here and in the --json envelope) rather than in the exit code, so a script that
+        // only checks the exit code still sees init as having done its job; a caller that cares
+        // about keys reads the summary/envelope, same as `jevitate ai status`.
         const envelope = ok(data);
         if (json) {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
-          out?.("jevitate initialized\n");
-          // #210: per feature, "ready — n/n configured", never a raw `collected: []` that reads as "missing".
+          // #213: --dry-run writes nothing — say "would" so the summary matches the disk.
+          out?.(dryRun === true ? "jevitate: dry run — nothing was written\n" : "jevitate initialized\n");
+          // #210/#230: per feature, "ready — n/n configured", or (no TTY on stdin) "not
+          // configured — set X or run `jevitate ai setup <feature>`" — never a raw `collected:
+          // []` that reads as "missing" when every key was already set.
           if (data.keys) out?.(`${formatInitKeysHuman(data.keys as KeyCollectionReport)}\n`);
-          if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs processed\n`);
-          if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) processed\n`);
+          if (data.skills) out?.(`skills: ${(data.skills as unknown[]).length} target/skill pairs ${dryRun === true ? "would be processed" : "processed"}\n`);
+          if (data.mcp) out?.(`mcp: ${(data.mcp as unknown[]).length} harness config(s) ${dryRun === true ? "would be processed" : "processed"}\n`);
           const project = data.project as ProjectInitReport | undefined;
-          if (project !== undefined) out?.(project.dir === null ? `project: ${project.reason ?? "none"}\n` : `project: ${project.dir} (${project.created.length} created)\n`);
+          if (project !== undefined) {
+            out?.(
+              project.dir === null
+                ? `project: ${project.reason ?? "none"}\n`
+                : `project: ${project.dir} (${project.created.length} ${dryRun === true ? "would create" : "created"})\n`,
+            );
+          }
           out?.("next: jevitate explore --url <url> --goal \"<goal>\" --real (see jevitate explore --help)\n");
           process.exitCode = 0;
         }
@@ -751,7 +777,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  const profile = program.command("profile");
+  const profile = program.command("profile").description("manage jevitate profiles (isolated credential/data sets)");
 
   profile
     .command("create <name>")
@@ -781,13 +807,17 @@ export function buildProgram(deps: CliDeps): Command {
       if (refuseUnsafeName(program, name, "profile name")) return;
       try {
         const status = await deps.profiles.status(name);
+        // #213: an unknown profile is a refusal (64), never a silent "missing" exit 0 — the caller
+        // asked about a profile that was never created.
+        if (!status.exists) {
+          emitJson(program, fail("E_PROFILE_UNKNOWN", `unknown profile ${JSON.stringify(name)} (${status.dir})`));
+          return;
+        }
         const envelope = ok(status);
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(
-            `profile '${status.name}': ${status.exists ? "exists" : "missing"} (${status.dir})\n`
-          );
+          program.configureOutput().writeOut?.(`profile '${status.name}': exists (${status.dir})\n`);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -957,7 +987,7 @@ export function buildProgram(deps: CliDeps): Command {
     return { recording: parsed.recording, values: new Map(Object.entries(parsed.values)) };
   }
 
-  const recording = program.command("recording");
+  const recording = program.command("recording").description("inspect and edit recorded takes (promote, edit steps, diff, postdoc)");
 
   recording
     .command("promote <file>")
@@ -1070,7 +1100,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  const journey = program.command("journey");
+  const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
   /**
    * `journey list` = ALL journeys' metadata via the store directly
@@ -1371,7 +1401,7 @@ export function buildProgram(deps: CliDeps): Command {
   // #18 — manage distributed Journey sources (add/list/pull/update/remove/
   // trust). Trust is an explicit user act, content-hash-bound; add/pull/update
   // never trust anything implicitly.
-  const source = program.command("source");
+  const source = program.command("source").description("manage distributed Journey sources (git-backed collections of Journeys)");
 
   source
     .command("add <name> <gitUrl>")
@@ -1618,7 +1648,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  const load = program.command("load");
+  const load = program.command("load").description("run a promoted Journey as a load test");
 
   withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>")))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
@@ -2090,6 +2120,14 @@ export function buildProgram(deps: CliDeps): Command {
       // #210: one output rule for every strategy — the envelope with --json, a human summary without.
       const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
+
+      // #230: an unknown --strategy must be refused before any other required-option message — it
+      // would otherwise fall through to the default goal-strategy path and silently run a goal
+      // mission. Checked first, ahead of every other validation below.
+      if (o.strategy !== undefined && !EXPLORE_STRATEGIES.includes(o.strategy as (typeof EXPLORE_STRATEGIES)[number])) {
+        emitExplore(fail("E_EXPLORE_ARGS", `unknown strategy ${JSON.stringify(o.strategy)} (one of ${EXPLORE_STRATEGIES.join(", ")})`));
+        return;
+      }
 
       // #195: a session file never lands in the repo's .jevitate/ (refused before any run, multi-runs included).
       if (o.saveStorageState !== undefined) {
@@ -2868,8 +2906,15 @@ export function buildProgram(deps: CliDeps): Command {
           FixtureFlags &
           EmulationFlags
       >();
+      // #230: the re-check hint carries the same --result the user passed (never the ledger
+      // fallback's own path, which formatVerifyFixHuman never sees).
       const emitVerify = (envelope: JsonEnvelope<unknown>, exitCode?: number): void =>
-        emitCommandResult(program, envelope, { json: o.json === true, command: "verify-fix", human: formatVerifyFixHuman, ...(exitCode === undefined ? {} : { exitCode }) });
+        emitCommandResult(program, envelope, {
+          json: o.json === true,
+          command: "verify-fix",
+          human: (data) => formatVerifyFixHuman(data, { result: o.result }),
+          ...(exitCode === undefined ? {} : { exitCode }),
+        });
       // #195: `--secret env:VAR`, as on explore.
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
@@ -3127,7 +3172,7 @@ export function buildProgram(deps: CliDeps): Command {
   // Playwright-backed `makeActor` (one fresh browser session per
   // reproduce/minimize attempt, closed after each use) into
   // `runRegressionCapture`.
-  const regression = program.command("regression");
+  const regression = program.command("regression").description("capture, run and manage regression tests from discovered failures");
 
   withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture"))))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
@@ -3147,6 +3192,7 @@ export function buildProgram(deps: CliDeps): Command {
       "--storage-state <file>",
       "Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist",
     )
+    .option("--force", "overwrite an existing regression id's committed files (default: refused, #213)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const flags = this.opts<{
@@ -3158,9 +3204,10 @@ export function buildProgram(deps: CliDeps): Command {
         result?: string;
         fingerprint?: string;
         storageState?: string;
+        force?: boolean;
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
-      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, json } = flags;
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json } = flags;
       if (refuseUnsafeName(program, id, "regression id")) return;
       // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
       for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
@@ -3210,6 +3257,7 @@ export function buildProgram(deps: CliDeps): Command {
           bugSummary: summary,
           resultPath,
           fingerprint,
+          force,
           makeActor: async () => {
             await replayFixture?.reset();
             const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
@@ -3225,13 +3273,20 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          // #227: a human summary (captured/flaky, where the files went, what to run next) — never
-          // the raw result JSON, which used to print unconditionally without --json.
-          writeHumanResult(program, result, formatRegressionCaptureHuman);
+          // #227/#230: a human summary (captured/flaky, where the files went, what to run next,
+          // carrying the same --dir the user passed) — never the raw result JSON, which used to
+          // print unconditionally without --json.
+          writeHumanResult(program, result, (r) => formatRegressionCaptureHuman(r, { dir }));
           process.exitCode = 0;
         }
       } catch (err) {
-        emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
+        // #213: these two are usage refusals (64) — an existing id needing --force, or a
+        // hard-signal defect that needs `ledger add` instead — never a generic capture failure (2).
+        if (err instanceof RegressionExistsError || err instanceof RegressionHardSignalOracleError) {
+          emitJson(program, fail(err.code, err.message));
+        } else {
+          emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
+        }
       } finally {
         for (const close of opened) await close();
         await fx?.restore();
@@ -3296,8 +3351,9 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          // #227: the verdict/reason/next-step summary — never the raw report JSON.
-          program.configureOutput().writeOut?.(formatRegressionRunHuman(report));
+          // #227/#230: the verdict/reason/next-step summary (carrying the same --dir the user
+          // passed) — never the raw report JSON.
+          program.configureOutput().writeOut?.(formatRegressionRunHuman(report, { dir }));
         }
         process.exitCode = report.verdict === "reproduces" ? 1 : report.verdict === "fixed" ? 0 : 2;
       } catch (err) {
@@ -3317,7 +3373,7 @@ export function buildProgram(deps: CliDeps): Command {
   // targets from). SECURITY: `add` registers UNPROMOTED — the promoted-only
   // gate stays intact, so a registered target is not resolvable by
   // `queue_exploration` until a separate `promote` flips it.
-  const mission = program.command("mission");
+  const mission = program.command("mission").description("manage exploration mission targets and drain the mission queue");
   const missionTarget = mission.command("target");
 
   const missionTargetAdd = missionTarget
@@ -3908,6 +3964,11 @@ async function buildExploreGateways(
   // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
   // without a key). Injected gateways (tests) get an empty tracker: they have no real seam to count.
   // #136/#163: configured prices (env/config) override the built-in, versioned price tables.
+  // #213: --real and --fake-ai are mutually exclusive — silently preferring one (real used to win)
+  // hides that the caller's own flags contradict each other.
+  if (opts.real && opts.fakeAi) {
+    throw new GatewaySelectionError("--real and --fake-ai are mutually exclusive — pass one, not both");
+  }
   const usage = deps.explore?.usage ?? new UsageTracker(resolveUsagePricing(deps.explore?.env ?? process.env));
   if (deps.explore?.judge && deps.explore?.gen) {
     return { judge: deps.explore.judge, gen: deps.explore.gen, usage };
@@ -3936,10 +3997,15 @@ async function buildExploreGateways(
 }
 
 /**
- * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It answers EVERY
- * question it is asked (whatever the mission names it): a choice picks `done` when offered (else
- * fails closed), a noul answers "no", a score answers 0. `usage` (#100) is optional: when supplied,
- * every call reports 1 judgment at 0 tokens.
+ * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It is TOTAL and
+ * deterministic: it answers EVERY question it is asked, whatever the mission or rubric names it
+ * (#213) — a choice offering `done` picks `done` (so the goal/coverage loop stops at once, and
+ * will not drive to a goal); a choice that does NOT offer `done` (e.g. the UX quality grader's
+ * label set, `grade::0`) deterministically picks its first listed option instead of throwing; a
+ * noul answers "no"; a score answers 0. It never throws on a question SHAPE it does not
+ * specifically know about — only on a malformed one (a choice with no options at all), which is a
+ * bug upstream, not an unknown question. `usage` (#100) is optional: when supplied, every call
+ * reports 1 judgment at 0 tokens.
  */
 export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
   return {
@@ -3947,10 +4013,13 @@ export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
       const out: Record<string, Answer> = {};
       for (const [name, q] of Object.entries(args.questions)) {
         switch (q.kind) {
-          case "choice":
-            if (!q.options.includes("done")) throw new Error(`fake judge: question '${name}' does not offer 'done'`);
-            out[name] = { kind: "choice", value: "done", confidence: 1 };
+          case "choice": {
+            // #213: total over every choice family, not just the goal/coverage loop's `done`.
+            const value = q.options.includes("done") ? "done" : q.options[0];
+            if (value === undefined) throw new Error(`fake judge: question '${name}' offers no options`);
+            out[name] = { kind: "choice", value, confidence: 1 };
             break;
+          }
           case "noul":
             out[name] = { kind: "noul", value: false, probability: 0 };
             break;

@@ -56,6 +56,25 @@ describe("#128 — the start URL cannot be loaded at all", () => {
   );
 
   it(
+    "#213: nothing listening fails FAST (no navigation timeout wait) with 'connection refused — is the app running at <origin>?'",
+    async () => {
+      const probe = createServer();
+      await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+      const port = (probe.address() as AddressInfo).port;
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+      const url = `http://127.0.0.1:${port}/`;
+      const t0 = Date.now();
+      const r = await runAt(url, url); // Playwright's default 30s navigation timeout
+      expect(Date.now() - t0).toBeLessThan(15_000);
+      expect(r.stop).toBe("inconclusive");
+      expect(r.failure?.kind).toBe("target-unreachable");
+      expect(r.failure?.message).toMatch(new RegExp(`^target unreachable \\(connection refused.* — is the app running at http://127\\.0\\.0\\.1:${port}\\?\\)$`));
+      expect(r.crash).toBeUndefined();
+    },
+    40_000,
+  );
+
+  it(
     "a connection that never answers (timeout before any response) ends inconclusive with a target-unreachable failure, never crashed",
     async () => {
       // A server bound then immediately closed: nothing is listening at this port.

@@ -55,21 +55,78 @@ export interface CoverageSufficiency {
 export const ONLY_GLOBAL_NAVIGATION =
   "no non-nav (in-page) control was exercised — only global navigation (links in <nav>/<header>/<footer>, or repeated on every page); to reach clean, start --url on a page with its own controls or content links, or widen the scope with --route";
 
+/**
+ * #213: why a run took no action at all, from what the frontier saw — so "no action was taken" can
+ * say why and how to reach `clean`, never just that it happened.
+ */
+export interface NoActionContext {
+  /** Actionable (enabled, clickable) controls the seed page offered. */
+  readonly seedCandidates: number;
+  /** Controls the safety policy refused (name + category: session-end/destructive/paid/denied). */
+  readonly refused: readonly { readonly name: string; readonly risk: string }[];
+  /** Navigation chrome leaving the route scope that was never tried (the leaving-chrome share). */
+  readonly outOfScopeChrome: number;
+}
+
+/** "no action was taken — <why>; to reach clean, <how>" (#213). */
+export function noActionShortfall(ctx: NoActionContext | undefined): string {
+  if (ctx === undefined) return "no action was taken";
+  const why: string[] = [];
+  const how: string[] = [];
+  if (ctx.seedCandidates === 0 && ctx.refused.length === 0) {
+    why.push("the start page offered no enabled control to act on");
+    how.push("start --url on a page with its own controls (a signed-out page? pass --storage-state)");
+  }
+  if (ctx.refused.length > 0) {
+    const names = ctx.refused.slice(0, 5).map((r) => `"${r.name}" (${r.risk})`).join(", ");
+    const more = ctx.refused.length > 5 ? ` and ${ctx.refused.length - 5} more` : "";
+    why.push(`${ctx.refused.length} control(s) were refused by the safety policy: ${names}${more}`);
+    if (ctx.refused.some((r) => r.risk !== "denied")) how.push("--allow-destructive to permit the refused session-end/destructive/paid controls");
+    if (ctx.refused.some((r) => r.risk === "denied")) how.push("remove the --deny pattern that matches them");
+  }
+  if (ctx.outOfScopeChrome > 0) {
+    why.push(`${ctx.outOfScopeChrome} control(s) were only navigation chrome leaving the route scope (links in <nav>/<header>/<footer>)`);
+    how.push("widen the scope with --route '<glob>' or --scope app, or start --url on a page inside the scope");
+  }
+  if (why.length === 0) {
+    why.push("every candidate control vanished or was out of reach before it could be acted on");
+    how.push("re-run it, or start --url on a page with stable controls");
+  }
+  return `no action was taken — ${why.join("; ")}; to reach clean: ${how.join(", or ")}`;
+}
+
 /** Accumulates a coverage run's action outcomes and reports whether they meet the thresholds. */
 export function assessCoverageSufficiency(
-  counts: { readonly actions: number; readonly failedActions: number; readonly nonNavActionsExercised: number },
+  counts: {
+    readonly actions: number;
+    readonly failedActions: number;
+    readonly nonNavActionsExercised: number;
+    /** #213: of `failedActions`, the ones that timed out even after one retry. */
+    readonly timedOutActions?: number;
+    /** #213: why nothing was acted on, when nothing was. */
+    readonly noAction?: NoActionContext;
+  },
   thresholds: CoverageSufficiencyThresholds,
 ): CoverageSufficiency {
   const { actions, failedActions, nonNavActionsExercised } = counts;
+  const timedOut = Math.min(counts.timedOutActions ?? 0, failedActions);
   const failedActionRatio = actions === 0 ? 0 : failedActions / actions;
   const shortfalls: string[] = [];
-  if (actions === 0) shortfalls.push("no action was taken");
+  if (actions === 0) shortfalls.push(noActionShortfall(counts.noAction));
   // ">=" — a run where a QUARTER of its actions failed is already inconclusive, not only above it.
   // `failedActions > 0` guards a threshold of exactly 0: a run with no failures at all must not be
   // flagged just because 0 >= 0.
   if (failedActions > 0 && failedActionRatio >= thresholds.maxFailedActionRatio) {
+    const head = `${failedActions}/${actions} actions failed (${pct(failedActionRatio)}), at or above the ${pct(thresholds.maxFailedActionRatio)} threshold`;
+    // #213: a TIMEOUT on a working control (a slow moment on a loaded host) is not a reason to
+    // withhold it — the advice is to re-run or raise the click timeout, never --deny.
+    const rerun = `re-run it, or raise the click timeout with JEVITATE_CLICK_TIMEOUT_MS (default ${DEFAULT_CLICK_TIMEOUT_MS}ms)`;
     shortfalls.push(
-      `${failedActions}/${actions} actions failed (${pct(failedActionRatio)}), at or above the ${pct(thresholds.maxFailedActionRatio)} threshold — the failing controls are in the transcript (actOk: false); to reach clean they must act (or be withheld with --deny)`,
+      timedOut === failedActions
+        ? `${head} — every one timed out, even after a retry; a slow app or a loaded host can time out a working control: ${rerun}`
+        : timedOut > 0
+          ? `${head} — ${timedOut} timed out even after a retry (${rerun}); the other failing controls are in the transcript (actOk: false) — to reach clean they must act (or be withheld with --deny)`
+          : `${head} — the failing controls are in the transcript (actOk: false); to reach clean they must act (or be withheld with --deny)`,
     );
   }
   if (thresholds.requireNonNavControl && actions > 0 && nonNavActionsExercised === 0) {
@@ -85,6 +142,9 @@ export function assessCoverageSufficiency(
     shortfalls,
   };
 }
+
+/** The default click bound (`act.ts`'s `clickTimeoutMs`), named in the timeout advice. */
+const DEFAULT_CLICK_TIMEOUT_MS = 5_000;
 
 function pct(r: number): string {
   return `${Math.round(r * 100)}%`;

@@ -137,7 +137,7 @@ function buildStore(ai: AiCliDeps | undefined) {
 }
 
 export function registerAiCommands(program: Command, deps: CliDeps): void {
-  const ai = program.command("ai");
+  const ai = program.command("ai").description("check or configure the model gateway credentials jevitate's AI features need");
 
   ai.command("status")
     .option("--json", "emit a JSON envelope")

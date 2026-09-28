@@ -10,6 +10,7 @@ import {
   goalAsksForReply,
   groundAnswer,
   headingHint,
+  VetoedAnswers,
   pagesContext,
   quoteIsOnlyControlNames,
   reportAnswer,
@@ -233,9 +234,10 @@ describe("#216 — the heading hint for a null answer", () => {
     const [page] = observed.pages();
     expect(page?.heading).toBe("Tenant B roadmap");
     expect(page?.title).not.toContain("s3cr3t-token");
-    expect(headingHint(page)).toContain('main heading is "Tenant B roadmap"');
-    expect(headingHint({ url: "http://app.test/", text: "x" })).toBeNull();
-    expect(headingHint(undefined)).toBeNull();
+    const goal = "Find out the title of this item";
+    expect(headingHint(page, goal)).toContain('main heading is "Tenant B roadmap"');
+    expect(headingHint({ url: "http://app.test/", text: "x" }, goal)).toBeNull();
+    expect(headingHint(undefined, goal)).toBeNull();
   });
 });
 
@@ -272,7 +274,7 @@ describe("#223 — on the page is not the same as answering", () => {
     }
     const v = groundAnswer({ answer: "Item not found", claims: [{ claim: "The title is Item not found", quote: "Item not found" }] }, [notFound], { goal: title });
     expect(!v.accept && v.notAnswer).toBe(true);
-    expect(headingHint(notFound)).toBeNull();
+    expect(headingHint(notFound, title)).toBeNull();
     // A goal about the error itself may quote it.
     expect(groundAnswer({ answer: "Item not found", claims: [{ claim: "The error says Item not found", quote: "Item not found" }] }, [notFound], { goal: "What error does the page show?" }).accept).toBe(true);
   });
@@ -300,5 +302,90 @@ describe("#223 — on the page is not the same as answering", () => {
     expect((await reportAnswer(gen, { ...input, judge: new FakeJudgmentGateway({}) })).accept).toBe(true); // throws → no veto
     const bad = new FakeGenerationGateway({ "goal.answer": { answer: "tenant c", claims: [{ claim: "The owner is tenant c", quote: "Owner: tenant c" }] } });
     expect((await reportAnswer(bad, { ...input, judge: yes })).accept).toBe(false);
+  });
+});
+
+describe("#229 — real-model find-out: vetoes stand, the heading hint is for one item only, the answer in its quote grounds", () => {
+  it("H1: an answer Jev vetoed stays rejected when re-reported, even if a later judgment would say yes", async () => {
+    const page = { url: "http://app.test/items", text: "Items\nNo items yet.", heading: "Items" };
+    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "Items", claims: [{ claim: "The item is titled Items", quote: "Items" }] } });
+    const input = { goal: "Find out the title of this item", url: page.url, pages: [page], history: [] };
+    const vetoes = new VetoedAnswers();
+    const no = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: false, probability: 0.23 } });
+    const first = await reportAnswer(gen, { ...input, judge: no, vetoes });
+    expect(!first.accept && first.notAnswer).toBe(true);
+    expect(vetoes.size).toBe(1);
+    const yes = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: true, probability: 0.9 } });
+    const again = await reportAnswer(gen, { ...input, judge: yes, vetoes });
+    expect(again.accept).toBe(false);
+    expect(!again.accept && again.notAnswer).toBe(true);
+    expect(!again.accept && again.reason).toMatch(/already vetoed/);
+    // Same answer, quote with added quotation marks / full stop: the same pair.
+    const quoted = new FakeGenerationGateway({ "goal.answer": { answer: "Items.", claims: [{ claim: "Title", quote: "“Items.”" }] } });
+    expect((await reportAnswer(quoted, { ...input, judge: yes, vetoes })).accept).toBe(false);
+    // Another run (its own store) is judged afresh.
+    expect((await reportAnswer(gen, { ...input, judge: yes, vetoes: new VetoedAnswers() })).accept).toBe(true);
+  });
+
+  it("H2: the heading hint is only for a goal about the one item a page shows — never a list / ordinal goal or a list page", () => {
+    const item = { url: "http://app.test/items/1", text: "Tenant B roadmap", heading: "Tenant B roadmap" };
+    const list = { url: "http://app.test/items", text: "Items\nTenant B roadmap", heading: "Items", title: "Items · Example" };
+    expect(headingHint(item, "Find out the title of this item")).toContain('main heading is "Tenant B roadmap"');
+    for (const goal of ["Find out the title of the first item", "find out the title of the 2nd item in the list", "What are all the item titles?", "Find out the title of the last entry"]) {
+      expect(headingHint(item, goal)).toBeNull();
+    }
+    // "this item" on a list page: the heading names the list ("Items"), not an item.
+    expect(headingHint(list, "Find out the title of this item")).toBeNull();
+    expect(headingHint({ ...list, heading: "Your entries" }, "What is the name of this entry?")).toBeNull();
+    // Never asserts the heading IS the answer.
+    const hint = headingHint(item, "Find out the title of this item") ?? "";
+    expect(hint).toMatch(/if the goal asks for this item's title or name/);
+    expect(hint).toMatch(/otherwise it is not the answer/);
+  });
+
+  it("H2: the generator is told which words are controls and which links are the content's entries, in order — never groundable text", () => {
+    const observed = new ObservedPages(["s3cr3t"]);
+    observed.add("http://app.test/items", "Items\nTitle Create item\nTenant B roadmap\nHiring s3cr3t", [], {
+      heading: "Items",
+      controlNames: ["Title", "Create item"],
+      contentLinks: ["Tenant B roadmap", "Hiring s3cr3t"],
+    });
+    const [page] = observed.pages();
+    const ctx = pagesContext(observed.pages());
+    expect(ctx).toContain('ACTIONS AND LABELS (buttons, form-field labels, navigation — not content): "Title", "Create item"');
+    expect(ctx).toMatch(/LINKS IN THE CONTENT \(in page order\): "Tenant B roadmap", "Hiring [^"]*"/);
+    expect(ctx).not.toContain("s3cr3t");
+    // The annotation lines are context, not page text: a quote of them grounds nothing.
+    const v = groundAnswer({ answer: "x", claims: [{ claim: "x", quote: "LINKS IN THE CONTENT" }] }, [page!], { goal: "Find out the title of the first item" });
+    expect(v.accept).toBe(false);
+  });
+
+  it("a table row keeps its cell breaks for the generator (which cell is the Name), and a quote across cells still grounds", () => {
+    const table = { url: "http://app.test/keys", text: "Key\tName\nk_live_1 \t  Production   key" };
+    expect(pagesContext([table])).toContain("Key\tName\nk_live_1\tProduction key");
+    const v = groundAnswer({ answer: "Production key", claims: [{ claim: "The name of the key is Production key", quote: "Name\nk_live_1\tProduction key" }] }, [table], {
+      goal: "Find out the name of the key listed in the table",
+    });
+    expect(v.accept).toBe(true);
+  });
+
+  it("H3: a claim in any wording grounds when the answer text is in its grounded quote; strict otherwise", () => {
+    const profile = { url: "http://app.test/profile", text: "Profile\nBio", fields: [{ label: "Bio", value: "Mathematician and writer." }] };
+    const goal = "What is the current bio text on the profile?";
+    const ok = groundAnswer(
+      { answer: "Mathematician and writer.", claims: [{ claim: "The bio of the profile states what the user does", quote: "Bio: Mathematician and writer." }] },
+      [profile],
+      { goal },
+    );
+    expect(ok.accept).toBe(true);
+    // The answer not in the quote: the claim's words must still be in it.
+    const off = groundAnswer({ answer: "A poet", claims: [{ claim: "The profile describes a poet", quote: "Mathematician and writer" }] }, [profile], { goal });
+    expect(!off.accept && off.reason).toMatch(/does not say what the claim says/);
+    // The quote must still be on a page …
+    expect(groundAnswer({ answer: "Poet", claims: [{ claim: "x", quote: "Bio: Poet" }] }, [profile], { goal }).accept).toBe(false);
+    // … and a control's name still never answers.
+    const list = { url: "http://app.test/items", text: "Items\nCreate item", controls: ["Create item"] };
+    const v = groundAnswer({ answer: "Create item", claims: [{ claim: "the title", quote: "Create item" }] }, [list], { goal: "Find out the title of this item" });
+    expect(!v.accept && v.notAnswer).toBe(true);
   });
 });

@@ -97,6 +97,26 @@ describe("project data dir", () => {
     await program.parseAsync(["init", "--skip-keys", "--skip-skills", "--skip-mcp", "--json"], { from: "user" });
     expect(JSON.parse(lines.join("")).data.project).toMatchObject({ dir: join(repo, ".jevitate") });
   });
+
+  // #213: `init --dry-run` wrote NOTHING (`initProjectDir(..., { dryRun: true })` never calls
+  // `mkdirSync`/`writeFileSync`) but the human summary said "initialized (5 created)" — a false
+  // claim of work done. It must say "would create" and leave the dir absent.
+  it("`jevitate init --dry-run` says 'would create', never 'created' — and creates nothing", async () => {
+    const repo = join(root, "app");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const lines: string[] = [];
+    const program = buildProgram({
+      profiles: new ProfileManager("/unused"),
+      init: { detection: { existsSync: () => false, homedir: () => join(root, "home"), cwd: () => repo }, statePath: join(root, "state.json") },
+    });
+    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.exitOverride();
+    await program.parseAsync(["init", "--dry-run", "--skip-keys", "--skip-skills", "--skip-mcp"], { from: "user" });
+    const out = lines.join("");
+    expect(out).toMatch(/would create/);
+    expect(out).not.toMatch(/\d+ created\)/);
+    expect(existsSync(join(repo, ".jevitate"))).toBe(false);
+  });
 });
 
 describe("log retention", () => {

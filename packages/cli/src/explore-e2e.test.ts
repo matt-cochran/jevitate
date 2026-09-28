@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
@@ -17,7 +17,7 @@ import { BrowseTheWeb, CastActor, type BrowserSession } from "@jevitate/screenpl
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram } from "./program.js";
-import { runAdversarialCliMission, runCoverageMission, runFeatureCliMission } from "./explore-api.js";
+import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { formatMissionHuman } from "./cli-output.js";
 
 /**
@@ -421,13 +421,22 @@ describe("shared decision transcript — every model-deciding strategy writes on
           outDir,
           saveStorageState: saveTo,
           strategy: "exploratory",
+          nowIso: () => "2026-09-23T00:00:00.000Z",
         });
+        // #213: an exploratory run's files are named for it, not `coverage-*`.
+        expect(result.resultPath).toBe(join(outDir, "exploratory-2026-09-23T00-00-00-000Z.result.json"));
+        expect(result.transcriptPath).toBe(join(outDir, "exploratory-2026-09-23T00-00-00-000Z.transcript.json"));
+        // #213: the result states its scope (#224's field), and the human output prints a SCOPE line.
+        expect(result.scope).toEqual({ routeGlobs: ["/whoami", "/whoami/", "/whoami/**"], source: "start-url" });
+        expect(formatMissionHuman(result)).toContain("SCOPE   /whoami, /whoami/, /whoami/** (derived from the start URL; pass --route to change it)");
+        // #213: "no action was taken" says why and how to reach clean.
+        expect(result.failure?.message).toContain("no action was taken — the start page offered no enabled control");
         // #209: was `exhausted` — /whoami (JSON) offers no control, so the frontier emptied having
         // proved nothing: one name for that ending, `insufficient-coverage` (its missionOutcome was
         // already `inconclusive`).
         expect(result.outcome).toBe("insufficient-coverage");
         expect(result.missionOutcome).toBe("inconclusive");
-        // The result says which frontier ran (both write `coverage-*` files).
+        // The result says which frontier ran.
         expect(result.strategy).toBe("exploratory");
         const written = JSON.parse(await readFile(saveTo, "utf8"));
         expect(written).toHaveProperty("cookies");
@@ -443,7 +452,61 @@ describe("shared decision transcript — every model-deciding strategy writes on
   );
 });
 
+describe("#213: a dead --storage-state session is flagged, never silently passed", () => {
+  it(
+    "a goal run whose storage state carries a rejected cookie (sid=nope) starts on /login: the result and summary say the session was lost",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-dead-session-"));
+      try {
+        const state = join(outDir, "nope.json");
+        const host = new URL(site.url).hostname;
+        await writeFile(state, JSON.stringify({ cookies: [{ name: "sid", value: "nope", domain: host, path: "/", expires: -1, httpOnly: false, secure: false, sameSite: "Lax" }], origins: [] }));
+        const result = await runExploration({
+          url: `${site.url}/inbox`,
+          goal: "open the inbox",
+          allowlist: [site.url],
+          storageState: state,
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway(),
+          bounds: { maxActions: 2, maxDecisions: 2 },
+          outDir,
+        });
+        expect(result.sessionLost?.reason).toMatch(/^the session in nope\.json was not honoured — the first page was a sign-in page \(\/login\)/);
+        expect(formatMissionHuman(result)).toContain("WARNING the session in nope.json was not honoured");
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
+});
+
 describe("runFeatureCliMission — ranked, honest --out (ticket #78)", () => {
+  it(
+    "#213: a feature whose controls were all refused names them and how to permit them — not just '0 boundary edges'",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jevitate-feature-refused-"));
+      try {
+        const result = await runFeatureCliMission({
+          seedUrl: `${site.url}/feature-mission/shop`,
+          allowlist: [site.url],
+          capability: "buy a pack",
+          routeGlobs: ["/feature-mission/shop"],
+          // A capability that names its controls lifts a paid refusal (#116), so --deny makes them all refused.
+          safety: { deny: ["/Buy pack/"] },
+          bounds: { maxActions: 3 },
+          outDir,
+        });
+        expect(result.missionOutcome).toBe("inconclusive");
+        expect(result.failure?.kind).toBe("insufficient-coverage");
+        expect(result.failure?.message).toMatch(/boundary edge\(s\) hit instead — 3 control\(s\) refused by the safety policy \(denied: "Buy pack 1", "Buy pack 2", "Buy pack 3"\); to exercise them, remove the --deny pattern that matches them/);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
+
   it(
     "exercises the in-scope 'Buy pack' buttons, is reported clean, and writes recordings + transcript + a typed result",
     async () => {

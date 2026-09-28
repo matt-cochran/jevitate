@@ -1,4 +1,5 @@
 import { safeChildPath } from "@jevitate/domain";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Actor } from "@jevitate/screenplay";
@@ -28,6 +29,16 @@ import { parseSuccessSpec } from "./explore-api.js";
 import { assertAuthorizedExploreTarget, monitorFor, evaluateNetworkCheck, describeCheck, verifyFix, type SuccessCheck } from "@jevitate/explore";
 import { parsePersistedMission, findFinding, type PersistedMission, type PersistedFinding } from "./verify-fix-api.js";
 
+/** #213: `--id <id>` already names a committed regression — refused unless `--force`, checked
+ * BEFORE any reproduce/minimize attempt runs (never a browser-driven overwrite the caller didn't ask for). */
+export class RegressionExistsError extends Error {
+  readonly code = "E_REGRESSION_EXISTS" as const;
+  constructor(id: string, dir: string) {
+    super(`regression '${id}' already exists in ${dir} — pass --force to overwrite it`);
+    this.name = "RegressionExistsError";
+  }
+}
+
 /**
  * The clear, actionable refusal #81 requires: a Recording with no failure to
  * reproduce is refused rather than "minimized" into a vacuous artifact that
@@ -53,6 +64,28 @@ export class NoOracleInResultError extends Error {
   constructor(resultPath: string, detail: string) {
     super(`--result ${resultPath} has no usable oracle: ${detail}`);
     this.name = "NoOracleInResultError";
+  }
+}
+
+/**
+ * #213: `--fingerprint` names one of the mission's OWN findings, but a hard-signal one (http-5xx,
+ * hang, server-log, adversarial-misuse, … — everything but `invariant`, which `captureInvariantRegression`
+ * already handles). Its oracle is the signal itself, never a page/success-check assertion —
+ * `deriveOracle` (transcript/checks only) can never express it, so falling through to it just
+ * produces a generic "no usable oracle" that reads as the `--result` file being unusable, when the
+ * real answer is: this isn't the tool for it. Points at the route that IS: `ledger add` (repro
+ * material for `ledger verify` / `verify-fix`).
+ */
+export class RegressionHardSignalOracleError extends Error {
+  readonly code = "E_REGRESSION_HARD_SIGNAL" as const;
+  constructor(resultPath: string, finding: PersistedFinding) {
+    super(
+      `--fingerprint ${finding.fingerprint} is a ${finding.kind} defect in ${resultPath} — a hard signal with its own oracle, ` +
+        `which 'regression capture' cannot turn into a page/success-check regression. Keep its repro material with ` +
+        `'jevitate ledger add ${resultPath} ${finding.fingerprint}', then re-check it with 'jevitate ledger verify' or ` +
+        `'jevitate verify-fix ${finding.fingerprint}'.`,
+    );
+    this.name = "RegressionHardSignalOracleError";
   }
 }
 
@@ -169,6 +202,8 @@ export interface RunRegressionCaptureOptions {
    * cross-checks the derived oracle.
    */
   fingerprint?: string;
+  /** #213: overwrite an existing `<id>.recording.json`/`.meta.json` — default: refused (fail closed). */
+  force?: boolean;
 }
 
 export type RunRegressionCaptureResult =
@@ -177,7 +212,12 @@ export type RunRegressionCaptureResult =
 
 export async function runRegressionCapture(opts: RunRegressionCaptureOptions): Promise<RunRegressionCaptureResult> {
   // #221: the id names the committed files — one safe segment inside the regressions dir, never a path.
-  safeChildPath(opts.regressionsDir, opts.id, { what: "regression id", suffix: ".recording.json" });
+  const recordingPath = safeChildPath(opts.regressionsDir, opts.id, { what: "regression id", suffix: ".recording.json" });
+  // #213: an existing id is refused (fail closed) BEFORE any reproduce/minimize attempt runs —
+  // never a browser-driven overwrite the caller did not ask for. --force opts in.
+  if (opts.force !== true && existsSync(recordingPath)) {
+    throw new RegressionExistsError(opts.id, opts.regressionsDir);
+  }
   const raw = JSON.parse(await readFile(opts.failingRecordingPath, "utf8"));
   const recording = RecordingSchema.parse(raw);
   const attempts = opts.attempts ?? 3;
@@ -203,6 +243,13 @@ export async function runRegressionCapture(opts: RunRegressionCaptureOptions): P
     const finding = findFinding(persistedMission, opts.fingerprint);
     if (finding !== undefined && finding.kind === "invariant" && finding.invariantId !== undefined && persistedMission.invariantSpec !== undefined) {
       return captureInvariantRegression(opts, recording, persistedMission, finding, attempts);
+    }
+    // #213: a hard-signal defect (http-5xx, hang, server-log, adversarial-misuse, …) has its own
+    // oracle — never a page/success-check assertion `deriveOracle` could derive. Refuse up front
+    // with the route that DOES work (the ledger), before falling through to a generic "no usable
+    // oracle" that reads as the --result file being unusable.
+    if (finding !== undefined && finding.kind !== "invariant") {
+      throw new RegressionHardSignalOracleError(opts.resultPath as string, finding);
     }
   }
 

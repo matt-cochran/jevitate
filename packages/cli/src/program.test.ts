@@ -68,6 +68,13 @@ test("mcp command is registered on the program (additive #20)", async () => {
   expect(mcp?.description()).toContain("MCP");
 });
 
+test("#213: every top-level command has a --help description", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const missing = program.commands.filter((c) => c.description().trim() === "").map((c) => c.name());
+  expect(missing).toEqual([]);
+});
+
 test("mcp --print-config json prints the bare mcpServers JSON (no server start)", async () => {
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });
@@ -659,7 +666,7 @@ test("load run accumulates repeated --authorized-origin flags", async () => {
  * (so no prompt fires) and skill-install detection pinned to fresh temp
  * home/cwd dirs plus a temp state path (so nothing touches the real machine).
  */
-function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) => boolean } = {}) {
+function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) => boolean; isInteractive?: () => boolean } = {}) {
   const profiles = new ProfileManager("/unused-in-init-tests");
   const home = mkdtempSync(join(tmpdir(), "init-home-"));
   const cwd = mkdtempSync(join(tmpdir(), "init-cwd-"));
@@ -668,10 +675,14 @@ function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) 
   const lines: string[] = [];
   const program = buildProgram({
     profiles,
-    ai: { env },
+    // `localConfig: {}` isolates from the real machine's ~/.jevitate/credentials.json — these
+    // tests assert on exactly what `env` provides, not whatever keys happen to be configured
+    // on whatever machine runs the suite.
+    ai: { env, localConfig: {} },
     init: {
       detection: { existsSync: opts.existsSync ?? (() => false), homedir: () => home, cwd: () => cwd },
       statePath,
+      ...(opts.isInteractive === undefined ? {} : { isInteractive: opts.isInteractive }),
     },
   });
   program.configureOutput({ writeOut: (s) => lines.push(s) });
@@ -694,6 +705,42 @@ test("init --json (keys present, first run) emits initialized + keys + skills", 
   expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
   // never leaks a key value
   expect(lines.join("")).not.toContain('"x"');
+});
+
+// #230: `jevitate init </dev/null` (no TTY, no key env vars — how coding agents and CI run it) used
+// to write the key prompt to stdout, read EOF, and exit 0 silently (no summary, no --json envelope).
+test("init --json (no TTY, keys missing): never prompts, completes init, reports missing keys — exit 0", async () => {
+  const { program, lines } = newInitProgram({ keysPresent: false, isInteractive: () => false });
+  await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.keys).toEqual({
+    generation: { required: ["OPENROUTER_API_KEY"], collected: [], missing: ["OPENROUTER_API_KEY"] },
+    judgment: { required: ["TYPESAFE_API_KEY"], collected: [], missing: ["TYPESAFE_API_KEY"] },
+  });
+  // #230: exit 0 with a warning — init's other work (project dir/skills/MCP, here skipped by
+  // flag) still genuinely succeeded; a missing key is expected for a fresh non-interactive
+  // install that configures keys separately (see program.ts's init action for the full rationale).
+  expect(process.exitCode).toBe(0);
+});
+
+test("init (no TTY, keys missing, human output): reports 'not configured' with the same setup command README uses", async () => {
+  const { program, lines } = newInitProgram({ keysPresent: false, isInteractive: () => false });
+  await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project"], { from: "user" });
+  const out = lines.join("");
+  expect(out).toContain("keys: generation not configured — set OPENROUTER_API_KEY or run `jevitate ai setup generation`");
+  expect(out).toContain("keys: judgment not configured — set TYPESAFE_API_KEY or run `jevitate ai setup judgment`");
+  expect(process.exitCode).toBe(0);
+});
+
+test("init (no TTY, keys already present): reads exactly like the interactive path — no 'missing'", async () => {
+  const { program, lines } = newInitProgram({ keysPresent: true, isInteractive: () => false });
+  await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.data.keys).toEqual({
+    generation: { required: ["OPENROUTER_API_KEY"], collected: [] },
+    judgment: { required: ["TYPESAFE_API_KEY"], collected: [] },
+  });
 });
 
 test("init --skip-keys --json runs the skill install but omits keys", async () => {
@@ -734,6 +781,22 @@ test("init --dry-run --skip-keys --json reports planned actions but writes nothi
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(true);
   expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
+  expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
+  expect(existsSync(statePath)).toBe(false);
+});
+
+// #213: the human summary must never claim an action ("initialized", "N created", "processed")
+// that --dry-run did not actually take — it wrote nothing, so it says "would".
+test("init --dry-run --skip-keys human summary says 'would', never 'initialized'/'created'/'processed'", async () => {
+  const { program, lines, cwd, statePath } = newInitProgram();
+  await program.parseAsync(["init", "--dry-run", "--skip-keys"], { from: "user" });
+  const out = lines.join("");
+  expect(out).toMatch(/dry run — nothing was written/);
+  expect(out).toMatch(/would be processed/);
+  expect(out).not.toContain("jevitate initialized");
+  expect(out).not.toContain("pairs processed");
+  expect(out).not.toContain("config(s) processed");
+  expect(out).not.toMatch(/\d+ created\)/);
   expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
   expect(existsSync(statePath)).toBe(false);
 });

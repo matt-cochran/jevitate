@@ -190,6 +190,32 @@ function applyGroundingRule(f: UxFinding): { finding: UxFinding; appendix: boole
   return { finding: Object.freeze({ ...f, severity: "info" as const, heuristicOnly: true, impact: "cosmetic" as const }), appendix: true };
 }
 
+/** The flagged occurrences a finding stands for: its own plus every contributing finding's (#198 grouping). */
+function occurrencesOf(f: Pick<UxFinding, "occurrences" | "contributing">): number {
+  return f.occurrences + (f.contributing ?? []).reduce((n, c) => n + (c.occurrences ?? 1), 0);
+}
+
+/**
+ * #213: where EVERY flagged occurrence went, so the headline adds up — "from N flagged occurrence(s):
+ * S in the shown findings, A in the appendix, U suppressed". A suppressed item stands for its own
+ * `occurrences` (a deduplicated finding suppressed after dedupe) or one (an occurrence suppressed
+ * before it). Anything left over is stated, never silently absent.
+ */
+function occurrenceAccounting(
+  raw: number,
+  shown: readonly UxFinding[],
+  appendix: readonly UxFinding[],
+  suppressed: readonly SuppressedItem[],
+): string {
+  const inShown = shown.reduce((n, f) => n + occurrencesOf(f), 0);
+  const inAppendix = appendix.reduce((n, f) => n + occurrencesOf(f), 0);
+  const inSuppressed = suppressed.reduce((n, it) => n + (it.occurrences ?? 1), 0);
+  const parts = [`${inShown} in the ${shown.length} shown finding(s)`, `${inAppendix} in the appendix`, `${inSuppressed} in the ${suppressed.length} suppressed`];
+  const rest = raw - inShown - inAppendix - inSuppressed;
+  if (rest !== 0) parts.push(`${rest} not attributed to any of them`);
+  return `from ${raw} flagged occurrence(s): ${parts.join(", ")}`;
+}
+
 function summarize(items: readonly SuppressedItem[]): SuppressionSummary {
   const byReason: Record<SuppressionReason, number> = {
     ungrounded: 0,
@@ -268,7 +294,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
         reason: "quality-policy",
         detail: `graded ${f.quality.label}: ${f.observation.slice(0, 160)}`,
         confidence: f.confidence,
-        occurrences: f.occurrences,
+        occurrences: occurrencesOf(f),
         qualityLabel: f.quality.label,
       });
     } else if (f.confidence >= minConfidence) {
@@ -281,7 +307,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
         reason: "below-min-confidence",
         detail: `confidence ${f.confidence} < ${minConfidence}: ${f.observation.slice(0, 160)}`,
         confidence: f.confidence,
-        occurrences: f.occurrences,
+        occurrences: occurrencesOf(f),
         ...(f.quality ? { qualityLabel: f.quality.label } : {}),
       });
     }
@@ -306,7 +332,7 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
         reason: "per-page-cap",
         detail: `${f.route} already has ${maxFindingsPerRoute} finding(s) shown (highest-confidence first): ${f.observation.slice(0, 160)}`,
         confidence: f.confidence,
-        occurrences: f.occurrences,
+        occurrences: occurrencesOf(f),
         ...(f.quality ? { qualityLabel: f.quality.label } : {}),
       });
     }
@@ -329,9 +355,19 @@ export function buildReport(outcome: AnalysisOutcome, options: BuildReportOption
   // independent grader's confidence in the actionable/relevant-minor/... label) — the two read
   // as one number if this says just "confidence" (issue #83 item 6).
   // #133: say whether the (uncalibrated) grader filtered anything, or only labelled.
-  const graded = filtered ? `graded ${policy.show.join("/")}` : "shown with their quality grade (not filtered by it)";
+  // #213: only claim a grade the findings carry — objective (a11y) and signal findings are never
+  // graded (`quality` absent), so "shown with their quality grade" must say how many actually have one.
+  const withGrade = ranked.filter((f) => f.quality !== undefined).length;
+  const gradeNote =
+    ranked.length === 0 || withGrade === ranked.length
+      ? ""
+      : withGrade === 0
+        ? " — none has a quality grade (objective/signal findings are not graded)"
+        : ` — ${withGrade} of ${ranked.length} graded (objective/signal findings are not graded)`;
+  const graded = filtered ? `graded ${policy.show.join("/")}${gradeNote}` : `shown with their quality grade where they have one (not filtered by it)${gradeNote}`;
+  const rawOccurrences = outcome.rawOccurrences ?? outcome.findings.length;
   const headline =
-    `${PREVIEW_NOTE} ${ranked.length} finding(s) grounded in observed run behavior, ${graded}, at finding-confidence ≥ ${minConfidence} (deduplicated from ${outcome.rawOccurrences ?? outcome.findings.length} flagged occurrence(s))` +
+    `${PREVIEW_NOTE} ${ranked.length} finding(s) grounded in observed run behavior, ${graded}, at finding-confidence ≥ ${minConfidence} (${occurrenceAccounting(rawOccurrences, ranked, heuristicAppendix, suppressed.items)})` +
     `; ${heuristicAppendix.length} heuristic-only (no observed friction, info) in the appendix` +
     (suppressed.total > 0 ? `; ${suppressed.total} suppressed (by rubric item: ${byItem})` : "; none suppressed") +
     calibrationSuffix;

@@ -31,6 +31,8 @@ export interface EvidenceRef {
   readonly url?: string;
   readonly transcript?: string;
   readonly recording?: string;
+  /** A persisted `<stem>.result.json` the finding was re-observed from (#213: never labeled "recording" — that's the Recording file itself). */
+  readonly result?: string;
   readonly screen?: string;
 }
 
@@ -321,6 +323,12 @@ function flaggedStateObservation(d: Json): FindingObservation | null {
 
 /** A goal run's failed success checks: each is a hard `goal-check` finding. */
 function goalCheckObservations(result: Json, ctx: Ctx): FindingObservation[] {
+  // #213: `--fake-ai`'s judge is a deterministic stand-in (always `done`) that drove every action
+  // in this run — it cannot prove the goal's own success condition held or not, so it is never the
+  // source of a hard, gating finding here. A genuine hard signal the same run hit (an invariant
+  // violation, a hang, a 5xx) is extracted from `result.defects`/`result.hangs` independently of
+  // this function and still gates: it never depended on the judge.
+  if (str(result.aiMode) === "fake") return [];
   // #217: the goal's own ending is `goalOutcome` (`outcome` is the same word, on older results too).
   const outcome = str(result.goalOutcome) ?? str(result.outcome);
   // A run that broke (crashed/inconclusive) proved nothing about its checks: not a finding.
@@ -413,7 +421,7 @@ function verifyObservations(result: Json): FindingObservation[] {
     observation(identity, {
       title: `${str(result.title) ?? signal} — verify-fix: ${verdict}`,
       occurrences: 1,
-      evidence: [{ ...(source === undefined ? {} : { recording: source }) }],
+      evidence: [{ ...(source === undefined ? {} : { result: source }) }],
       ...(source === undefined ? {} : { reproduce: verifyCommand(source, fingerprint) }),
       ...(verdict === "intermittent" ? { intermittent: true } : {}),
     }),
@@ -572,6 +580,9 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
       }
     }
     if (mode === "goal") observations.push(...goalCheckObservations(result, ctx));
+    // #213: a usability result carries its UX report — its findings read exactly as the report
+    // file's own (`runFromUxReport`), so the persisted result stands for the whole review.
+    if (mode === "usability" && isRecord(result.report)) observations.push(...uxObservations(result.report, str(result.screenshotDir)));
   }
   const suite = isRecord(result.suite) ? result.suite : undefined;
   const engine = engineOf(result.engine);

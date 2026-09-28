@@ -275,9 +275,42 @@ describe("check gating (#137)", () => {
       return { ...result, actions: 2, resultPath };
     }) as unknown as CheckRunners["goal"];
     const s = suite(0, {}, { goals: [{ name: "cart", goal: "check out", success: ["urlIncludes:/done"] }] });
-    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "fake" });
+    // #213: this folding test is about `--real`'s canonical verdict — a real judgment IS trusted to
+    // gate. The `--fake-ai` case (never gates on the judge) is covered separately below.
+    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "real" });
     expect(r.items.map((i) => [i.name, i.status, i.outcome, i.goalOutcome, i.verdict])).toEqual([["cart", "ran", "defects-found", "failed", "failed"]]);
     expect(r.exitCode).toBe(1);
+  });
+
+  it("#213: `ai: \"fake\"` never gates a goal on the fake judge's own ending — it is honestly inconclusive, not FAILED", async () => {
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const goal = (async (o: { goal: string; outDir?: string }) => {
+      const resultPath = join(o.outDir ?? dir, `explore-2026-09-24T10-00-00-000Z.result.json`);
+      const result = {
+        strategy: "goal",
+        missionOutcome: "defects-found",
+        goalOutcome: "failed",
+        outcome: "failed",
+        stop: "done",
+        checks: [{ check: "urlIncludes:/done", passed: false, detail: "url was /cart" }],
+        target: { seedUrl: URL0 },
+      };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "defects-found", exitCode: 1, result }));
+      return { ...result, actions: 2, resultPath };
+    }) as unknown as CheckRunners["goal"];
+    const s = suite(0, {}, { goals: [{ name: "cart", goal: "check out", success: ["urlIncludes:/done"] }] });
+    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "fake" });
+    expect(r.items.map((i) => [i.name, i.status, i.outcome, i.verdict]))
+      .toEqual([["cart", "error", "inconclusive", "error"]]);
+    expect(r.items[0]?.error).toMatchObject({ type: "inconclusive" });
+    expect(r.items[0]?.error?.message).toMatch(/goal not verified.*--fake-ai/);
+    // No hard `goal-check` finding, so nothing gates: exit 2 (an item errored), never 1.
+    expect(r.findings.filter((f) => f.gating)).toEqual([]);
+    expect(r.exitCode).toBe(2);
+    // The result file itself is stamped `aiMode: "fake"` — read back by `@jevitate/findings`.
+    const raw = JSON.parse(readFileSync(r.items[0]?.resultPath ?? "", "utf8")) as { result: { aiMode?: string } };
+    expect(raw.result.aiMode).toBe("fake");
   });
 });
 
@@ -374,25 +407,57 @@ describe("changed-route matching", () => {
 });
 
 describe("suite validation", () => {
+  const refuse = (raw: unknown): string => {
+    try {
+      parseSuite(raw, "s.json");
+    } catch (e) {
+      expect(e).toBeInstanceOf(SuiteError);
+      return (e as Error).message;
+    }
+    throw new Error("accepted");
+  };
+
   it("refuses a typo'd field, a goal without success checks or a bad budget, and resolves paths against the suite file", () => {
-    const refuse = (raw: unknown) => {
-      try {
-        parseSuite(raw, "s.json");
-      } catch (e) {
-        expect(e).toBeInstanceOf(SuiteError);
-        return (e as Error).message;
-      }
-      throw new Error("accepted");
-    };
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, jouneys: [] }] })).toBe(
       "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix, viewport, device; and explore's options by camelCase name, e.g. deny, apiPrefix, logSource)",
     );
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, goals: [{ goal: "g" }] }] })).toMatch(/goals\[0\]\.success: at least one success check/);
-    expect(refuse({ version: 2, targets: [] })).toBe("s.json: $.version: must be 1");
-    expect(refuse({ version: 1, budget: { maxActions: -1 }, targets: [] })).toBe("s.json: $.budget.maxActions: must be a positive integer");
+    expect(refuse({ version: 2, targets: [{ name: "a", url: URL0 }] })).toBe("s.json: $.version: must be 1");
+    expect(refuse({ version: 1, budget: { maxActions: -1 }, targets: [{ name: "a", url: URL0 }] })).toBe("s.json: $.budget.maxActions: must be a positive integer");
     mkdirSync(join(dir, "inv"));
     const ok = parseSuite({ version: 1, targets: [{ name: "a", url: URL0, invariants: ["inv/x.json"] }] }, join(dir, "s.json"));
     expect(ok.targets[0]?.invariants).toEqual([join(dir, "inv/x.json")]);
+  });
+
+  it("#213: reports every problem, not just the first — a bad root field, a bad budget field and a target's own bad field all together", () => {
+    const msg = refuse({
+      version: 2,
+      budget: { maxActions: -1 },
+      targets: [
+        { name: "a", url: URL0, jouneys: [] },
+        { name: "b", url: "not-a-url" },
+      ],
+    });
+    expect(msg).toContain("s.json: $.version: must be 1");
+    expect(msg).toContain("s.json: $.budget.maxActions: must be a positive integer");
+    expect(msg).toContain("s.json: $.targets[0].jouneys: unknown field");
+    expect(msg).toContain("s.json: $.targets[1].url: not a URL");
+  });
+
+  it("#213: within one target, an invalid goal's problem does not hide an invalid mission's — both sibling items are validated independently", () => {
+    const msg = refuse({
+      version: 1,
+      targets: [
+        {
+          name: "a",
+          url: URL0,
+          goals: [{ goal: "g" }],
+          missions: [{ strategy: "bogus" }],
+        },
+      ],
+    });
+    expect(msg).toContain("$.targets[0].goals[0].success: at least one success check is required");
+    expect(msg).toContain("$.targets[0].missions[0].strategy: must be one of");
   });
 });
 
@@ -413,6 +478,21 @@ describe("check suites: viewport/device and the exploratory strategy (surface-wi
     ]);
     expect(() => suite(0, {}, { device: "Nokia 3310" })).toThrow(/\$\.targets\[0\]: .*Nokia 3310/);
     expect(() => suite(0, {}, { missions: [{ strategy: "coverage", viewport: "375x812", device: "iPhone 13" }] })).toThrow(SuiteError);
+  });
+
+  // #213: two verifyFix items that both omit `name` and share a fingerprint would otherwise both
+  // default to `verify-<fingerprint>`, colliding in the JUnit output (same classname AND name).
+  it("refuses (SuiteError) two verifyFix items with the same default name — give one an explicit name", () => {
+    const fp = "0123456789abcdef";
+    expect(() =>
+      suite(0, {}, { missions: [], verifyFix: [{ result: "a.result.json", fingerprint: fp }, { result: "b.result.json", fingerprint: fp }] }),
+    ).toThrow(SuiteError);
+    expect(() =>
+      suite(0, {}, { missions: [], verifyFix: [{ result: "a.result.json", fingerprint: fp }, { result: "b.result.json", fingerprint: fp }] }),
+    ).toThrow(/duplicate verifyFix name/);
+    // An explicit name on either one disambiguates it.
+    const s = suite(0, {}, { missions: [], verifyFix: [{ name: "a", result: "a.result.json", fingerprint: fp }, { result: "b.result.json", fingerprint: fp }] });
+    expect(s.targets[0]!.verifyFix.map((v) => v.name)).toEqual(["a", `verify-${fp}`]);
   });
 
   it("each item runs under its own emulation, else the target's; exploratory runs the coverage runner as exploratory", async () => {
@@ -462,10 +542,41 @@ describe("#225: a usability mission's success checks are honoured, never ignored
     const seen: Array<{ successChecks?: unknown; successWhen?: unknown; allowVacuousChecks?: unknown }> = [];
     const usability = (async (o: { successChecks?: unknown; successWhen?: unknown; allowVacuousChecks?: unknown }) => {
       seen.push({ successChecks: o.successChecks, successWhen: o.successWhen, allowVacuousChecks: o.allowVacuousChecks });
-      return { missionOutcome: "clean", exitCode: 0, reportPath: null, transcriptPath: join(dir, "none.transcript.json"), analysisUnavailable: "fake" };
+      const resultPath = join(dir, "usability-2026-09-25T10-00-00-000Z.recording.result.json");
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "usability", report: null } }));
+      return { missionOutcome: "clean", exitCode: 0, resultPath, reportPath: null, transcriptPath: join(dir, "none.transcript.json"), analysisUnavailable: "fake" };
     }) as unknown as CheckRunners["usability"];
     await runCheck({ suite: s, outDir: join(dir, "out-225"), journeysDir: dir, runners: { usability }, gateways: async () => gw, aiMode: "fake" });
     expect(seen).toEqual([{ successChecks: [{ kind: "requestMade", method: "PUT", pathGlob: "/api/profile" }], successWhen: "held", allowVacuousChecks: true }]);
+  });
+});
+
+describe("#213: a usability item's resultPath is the persisted result, which carries its UX findings", () => {
+  it("points at <stem>.recording.result.json (not the UX report), and its UX findings are read from it", async () => {
+    const s = suite(0, {}, { missions: [{ name: "bio", strategy: "usability", goal: "save a bio", appClass: "consumer" }] });
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const outDir = join(dir, "out-213-ux");
+    mkdirSync(outDir, { recursive: true });
+    const stem = join(outDir, "usability-2026-09-25T11-00-00-000Z");
+    const report = {
+      headline: "h",
+      findings: [{ rubricItemId: "nielsen-1", route: "/profile", severity: "major", confidence: 0.9, observation: "No feedback after Save.", citation: { source: "S", ref: "r" } }],
+    };
+    const usability = (async () => {
+      writeFileSync(`${stem}.json`, JSON.stringify(report));
+      writeFileSync(
+        `${stem}.recording.result.json`,
+        JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "usability", target: { seedUrl: URL0 }, report, defects: [] } }),
+      );
+      return { missionOutcome: "clean", exitCode: 0, resultPath: `${stem}.recording.result.json`, reportPath: `${stem}.json`, transcriptPath: join(dir, "none.transcript.json") };
+    }) as unknown as CheckRunners["usability"];
+    const r = await runCheck({ suite: s, outDir, journeysDir: dir, runners: { usability }, gateways: async () => gw, aiMode: "fake" });
+    const item = r.items.find((i) => i.strategy === "usability");
+    expect(item?.resultPath).toBe(`${stem}.recording.result.json`);
+    const run = loadRunFile(item!.resultPath!);
+    expect(run?.mode).toBe("usability");
+    expect(run?.observations.some((o) => JSON.stringify(o).includes("nielsen-1"))).toBe(true);
   });
 });
 

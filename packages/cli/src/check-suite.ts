@@ -170,9 +170,12 @@ export interface CheckSuite {
 
 export class SuiteError extends Error {
   readonly code = "E_CHECK_SUITE" as const;
-  constructor(message: string) {
+  /** #213: each path-precise problem on its own (`$.targets[0].name: …`); the message joins them. */
+  readonly problems: readonly string[];
+  constructor(message: string, problems: readonly string[] = [message]) {
     super(message);
     this.name = "SuiteError";
+    this.problems = problems;
   }
 }
 
@@ -183,6 +186,9 @@ function isRecord(v: unknown): v is Json {
 }
 
 class Reader {
+  /** #213: every problem `collect` caught, so a suite reports ALL of them, not just the first. */
+  readonly problems: string[] = [];
+
   constructor(
     readonly source: string,
     readonly baseDir: string,
@@ -190,6 +196,21 @@ class Reader {
 
   fail(path: string, msg: string): never {
     throw new SuiteError(`${this.source}: ${path}: ${msg}`);
+  }
+
+  /**
+   * Runs `fn`; a `SuiteError` it throws is recorded (#213) and this returns `undefined` instead of
+   * aborting every OTHER independent problem in the suite (a sibling target, goal, mission, journey
+   * or verify-fix item, or a root-level field). Any other error still propagates.
+   */
+  collect<T>(fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (e) {
+      if (!(e instanceof SuiteError)) throw e;
+      this.problems.push(...e.problems);
+      return undefined;
+    }
   }
 
   /** Refuses a field not in `own` (nor, with `explore`, one of `explore`'s options, #195). */
@@ -518,6 +539,21 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
   const fixtures = r.string(v, "fixtures", path, true);
   const journeysDir = r.string(v, "journeysDir", path, true);
   const goals = r.list(v, "goals", path);
+  // #213: each item validated on its own (every problem reported), then duplicate default names refused.
+  const verifyFix = r
+    .list(v, "verifyFix", path)
+    .map((m, i) => r.collect(() => verifyOf(r, m, `${path}.verifyFix[${i}]`)))
+    .filter((m): m is SuiteVerifyFix => m !== undefined);
+  // #213: two verifyFix items that omit `name` and share a fingerprint both default to
+  // `verify-<fingerprint>`, which collides in the JUnit output (same classname AND name). Fail
+  // closed rather than silently deduping the JUnit only — the suite itself is ambiguous.
+  const verifyNames = new Set<string>();
+  for (const vf of verifyFix) {
+    if (verifyNames.has(vf.name)) {
+      r.collect(() => r.fail(`${path}.verifyFix`, `duplicate verifyFix name ${JSON.stringify(vf.name)} — give each verifyFix item (there is more than one for fingerprint ${JSON.stringify(vf.fingerprint)}) its own "name"`));
+    }
+    verifyNames.add(vf.name);
+  }
   return {
     name,
     url,
@@ -528,10 +564,20 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
     ...(fixtures === undefined ? {} : { fixtures: r.resolvePath(fixtures) }),
     invariants: r.strings(v, "invariants", path).map((f) => r.resolvePath(f)),
     ...(journeysDir === undefined ? {} : { journeysDir: r.resolvePath(journeysDir) }),
-    journeys: r.list(v, "journeys", path).map((j, i) => journeyOf(r, j, `${path}.journeys[${i}]`)),
-    goals: goals.map((g, i) => goalOf(r, g, `${path}.goals[${i}]`, i)),
-    missions: r.list(v, "missions", path).map((m, i) => missionOf(r, m, `${path}.missions[${i}]`)),
-    verifyFix: r.list(v, "verifyFix", path).map((m, i) => verifyOf(r, m, `${path}.verifyFix[${i}]`)),
+    // #213: each item is validated on its own — one bad journey/goal/mission is recorded and
+    // dropped, instead of hiding every sibling item's problems behind it.
+    journeys: r
+      .list(v, "journeys", path)
+      .map((j, i) => r.collect(() => journeyOf(r, j, `${path}.journeys[${i}]`)))
+      .filter((j): j is SuiteJourney => j !== undefined),
+    goals: goals
+      .map((g, i) => r.collect(() => goalOf(r, g, `${path}.goals[${i}]`, i)))
+      .filter((g): g is SuiteGoal => g !== undefined),
+    missions: r
+      .list(v, "missions", path)
+      .map((m, i) => r.collect(() => missionOf(r, m, `${path}.missions[${i}]`)))
+      .filter((m): m is SuiteMission => m !== undefined),
+    verifyFix,
     ...(explore === undefined ? {} : { explore }),
   };
 }
@@ -541,28 +587,46 @@ export function parseSuite(raw: unknown, file: string): CheckSuite {
   const abs = resolve(file);
   const r = new Reader(file, dirname(abs));
   if (!isRecord(raw)) return r.fail("$", "must be a JSON object");
-  r.keys(raw, "$", ["version", "name", "budget", "ai", "gateAdvisory", "targets"]);
-  if (raw.version !== 1) r.fail("$.version", "must be 1");
+  r.collect(() => r.keys(raw, "$", ["version", "name", "budget", "ai", "gateAdvisory", "targets"]));
+  r.collect(() => {
+    if (raw.version !== 1) r.fail("$.version", "must be 1");
+  });
   const budgetRaw = raw.budget ?? {};
-  if (!isRecord(budgetRaw)) r.fail("$.budget", "must be an object");
-  const b = budgetRaw as Json;
-  r.keys(b, "$.budget", ["maxActions", "maxMinutes", "maxUsd"]);
-  const maxActions = r.number(b, "maxActions", "$.budget", { integer: true });
-  const maxMinutes = r.number(b, "maxMinutes", "$.budget");
-  const maxUsd = r.number(b, "maxUsd", "$.budget");
+  const budgetOk = isRecord(budgetRaw);
+  r.collect(() => {
+    if (!budgetOk) r.fail("$.budget", "must be an object");
+  });
+  const b = (budgetOk ? budgetRaw : {}) as Json;
+  r.collect(() => r.keys(b, "$.budget", ["maxActions", "maxMinutes", "maxUsd"]));
+  const maxActions = r.collect(() => r.number(b, "maxActions", "$.budget", { integer: true }));
+  const maxMinutes = r.collect(() => r.number(b, "maxMinutes", "$.budget"));
+  const maxUsd = r.collect(() => r.number(b, "maxUsd", "$.budget"));
   const ai: unknown = raw.ai;
-  if (ai !== undefined && ai !== "real" && ai !== "fake") r.fail("$.ai", 'must be "real" or "fake"');
-  if (raw.gateAdvisory !== undefined && typeof raw.gateAdvisory !== "boolean") r.fail("$.gateAdvisory", "must be a boolean");
-  const targets = r.list(raw, "targets", "$").map((t, i) => targetOf(r, t, `$.targets[${i}]`));
-  if (targets.length === 0) r.fail("$.targets", "at least one target is required");
+  r.collect(() => {
+    if (ai !== undefined && ai !== "real" && ai !== "fake") r.fail("$.ai", 'must be "real" or "fake"');
+  });
+  r.collect(() => {
+    if (raw.gateAdvisory !== undefined && typeof raw.gateAdvisory !== "boolean") r.fail("$.gateAdvisory", "must be a boolean");
+  });
+  const name = r.collect(() => r.string(raw, "name", "$", true)) ?? "suite";
+  // #213: every target — and within it, every journey/goal/mission/verify-fix item — is validated on
+  // its own, so a suite with several unrelated problems reports all of them, not just the first.
+  const targetsRaw = r.collect(() => r.list(raw, "targets", "$")) ?? [];
+  const targets = targetsRaw
+    .map((t, i) => r.collect(() => targetOf(r, t, `$.targets[${i}]`)))
+    .filter((t): t is SuiteTarget => t !== undefined);
+  // Only when NO target was even attempted — when some targets failed their own validation, that is
+  // already reported per-target above, and "at least one target is required" would just be noise.
+  if (targetsRaw.length === 0) r.collect(() => r.fail("$.targets", "at least one target is required"));
   const names = new Set<string>();
   for (const t of targets) {
-    if (names.has(t.name)) r.fail("$.targets", `duplicate target name ${JSON.stringify(t.name)}`);
-    names.add(t.name);
+    if (names.has(t.name)) r.collect(() => r.fail("$.targets", `duplicate target name ${JSON.stringify(t.name)}`));
+    else names.add(t.name);
   }
+  if (r.problems.length > 0) throw new SuiteError(r.problems.join("; "), [...r.problems]);
   return {
     version: 1,
-    name: r.string(raw, "name", "$", true) ?? "suite",
+    name,
     budget: {
       ...(maxActions === undefined ? {} : { maxActions }),
       ...(maxMinutes === undefined ? {} : { maxMinutes }),

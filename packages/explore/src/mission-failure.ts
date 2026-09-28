@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
+import { request as playwrightRequest } from "playwright";
 import type { GenerationPort } from "@jevitate/ai-core";
 import type { MissionFailure } from "@jevitate/domain";
 import { pageLostReason } from "@jevitate/playwright";
+import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 
 /**
  * The mission-side half of "a mission's outcome is a typed result, never a throw":
@@ -40,6 +42,29 @@ const NET_ERROR_PHRASES: Readonly<Record<string, string>> = {
   ERR_EMPTY_RESPONSE: "empty response",
 };
 
+const PROBE_PREFIX = "reachability probe: ";
+
+/**
+ * #213: fail fast when nothing is listening at the seed. Before the FIRST navigation, the session's
+ * pre-flight probe (a TCP connect — see `@jevitate/playwright`'s `probeReachable`) runs; a definite
+ * "connection refused" / "host not found" throws at once — an error `isUnreachableTarget` recognises
+ * and `describeUnreachable` renders as the probe's own plain words ("connection refused — is the app
+ * running at <origin>?") — instead of waiting out Chromium's 30s navigation timeout. A session
+ * without a probe (a test double) is never probed.
+ */
+export async function assertSeedReachable(actor: Actor, url: string): Promise<void> {
+  let probe: ((url: string) => Promise<string | null>) | undefined;
+  try {
+    const session = actor.ability(BrowseTheWebToken).session;
+    probe = session.probeReachable?.bind(session);
+  } catch {
+    return;
+  }
+  if (probe === undefined) return;
+  const reason = await probe(url);
+  if (reason !== null) throw new Error(`${PROBE_PREFIX}${reason}`);
+}
+
 /**
  * Is this failure the start URL simply not loading — a `net::ERR_*` network error, an OS-level
  * connection refusal, or a timeout before any response? Never a defect in the app under test or a
@@ -47,7 +72,7 @@ const NET_ERROR_PHRASES: Readonly<Record<string, string>> = {
  * jevitate's, was ever observed.
  */
 export function isUnreachableTarget(message: string): boolean {
-  return /net::ERR_[A-Z_]+/.test(message) || /ECONNREFUSED/i.test(message) || /Timeout \d+ms exceeded/i.test(message);
+  return message.startsWith(PROBE_PREFIX) || /net::ERR_[A-Z_]+/.test(message) || /ECONNREFUSED/i.test(message) || /Timeout \d+ms exceeded/i.test(message);
 }
 
 /**
@@ -59,6 +84,7 @@ export function isUnreachableTarget(message: string): boolean {
  * reads as "timed out before any response", not a guessed cause.
  */
 export function describeUnreachable(message: string, netErrorText?: string | null): string {
+  if (message.startsWith(PROBE_PREFIX)) return message.slice(PROBE_PREFIX.length);
   const fromNet = netErrorText === null || netErrorText === undefined ? null : netErrorCode(netErrorText) ?? netErrorCode(message);
   const code = fromNet ?? netErrorCode(message);
   if (code !== null) return NET_ERROR_PHRASES[code] ?? code;
@@ -137,6 +163,9 @@ function unresponsiveSignal(page: Page): { unresponsive?: string } {
  * what attribution needs.
  */
 export function describeFailure(e: unknown, signals: CrashSignals): MissionFailure {
+  // #230: a hang/no-progress stop whose app then failed a fresh liveness probe — the app stopped
+  // answering (typed at the finding, see `assertTargetAnswering`): the plain reason, no stack.
+  if (e instanceof TargetUnresponsiveError) return { kind: "target-unresponsive", message: e.message };
   const message = messageOf(e);
   const stack = e instanceof Error && e.stack !== undefined ? e.stack : undefined;
   // #220: the liveness watchdog closed a page that stopped answering — the run ended rather than
@@ -186,4 +215,85 @@ export function targetUnresponsiveMessage(e: unknown): string | null {
 /** True for a failure that means the app stopped answering (#226): the run is `inconclusive`, never `crashed`. */
 export function isTargetUnresponsive(failure: MissionFailure | undefined): boolean {
   return failure?.kind === "target-unresponsive";
+}
+
+/**
+ * #230: thrown at a hang / no-progress finding when the app itself stopped answering; every
+ * mission's engine-failure path turns it (via `describeFailure`) into the same typed
+ * `target-unresponsive` ending #226 gave a navigation the app never answered.
+ */
+export class TargetUnresponsiveError extends Error {
+  override readonly name = "TargetUnresponsiveError";
+}
+
+/**
+ * How long a fresh request to the app gets to produce ANY response before the app counts as having
+ * stopped answering. Far above what a starved host adds to a live server's reply (seconds), so a slow
+ * app is never mistaken for a frozen one.
+ */
+export const TARGET_LIVENESS_PROBE_MS = 10_000;
+
+/** What one fresh request to an origin met. `unknown` (e.g. a TLS or DNS quirk of the probe itself) is never evidence. */
+export type LivenessAnswer = "answered" | "no-response" | "refused" | "unknown";
+
+/** Sends one fresh request and says whether the server answered (any status counts). */
+export type LivenessProbe = (url: string, timeoutMs: number) => Promise<LivenessAnswer>;
+
+/**
+ * The default probe: a cookie-less GET from a throwaway request context (outside the page — never
+ * queued behind the page's own stuck connections, never touching its session or side-effect logs),
+ * no redirects followed, any HTTP status an answer.
+ */
+export const playwrightLivenessProbe: LivenessProbe = async (url, timeoutMs) => {
+  const ctx = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+  try {
+    await ctx.get(url, { timeout: timeoutMs, maxRedirects: 0, failOnStatusCode: false });
+    return "answered";
+  } catch (e) {
+    const text = e instanceof Error ? e.message : String(e);
+    if (/Timeout \d+ms exceeded|timed out/i.test(text)) return "no-response";
+    if (/ECONNREFUSED|ECONNRESET|socket hang up/i.test(text)) return "refused";
+    return "unknown";
+  } finally {
+    await ctx.dispose().catch(() => undefined);
+  }
+};
+
+/**
+ * #230 — did the APP stop answering, or is the machine just slow? The rule (docs/outcomes.md): a
+ * hang or no-progress stop is `target-unresponsive` only when a FRESH request for the page the run is
+ * on (its origin and path — the query and fragment dropped, so a one-shot token is never re-sent)
+ * gets no response at all — not even an error status — within `TARGET_LIVENESS_PROBE_MS`, or its
+ * connection is refused. That page already answered once, so a live server answers it again: a slow
+ * app answers late (a hang finding, or `environment-degraded` on a starved host), and one stuck
+ * endpoint on a live server stays a hang finding. Returns the plain-words reason, or null when the
+ * app answered, the page is not an authorized http(s) page, or the probe proved nothing.
+ */
+export async function targetStoppedAnswering(p: {
+  readonly pageUrl: string;
+  readonly authorized?: (url: string) => boolean;
+  readonly timeoutMs?: number;
+  readonly probe?: LivenessProbe;
+}): Promise<string | null> {
+  const timeoutMs = p.timeoutMs ?? TARGET_LIVENESS_PROBE_MS;
+  const probe = p.probe ?? playwrightLivenessProbe;
+  let page: URL;
+  try {
+    page = new URL(p.pageUrl);
+  } catch {
+    return null;
+  }
+  if (page.protocol !== "http:" && page.protocol !== "https:") return null;
+  const target = `${page.origin}${page.pathname}`;
+  if (p.authorized !== undefined && !p.authorized(target)) return null;
+  const answer = await probe(target, timeoutMs).catch((): LivenessAnswer => "unknown");
+  if (answer !== "no-response" && answer !== "refused") return null;
+  const why = answer === "refused" ? "connection refused" : `no response within ${Math.round(timeoutMs / 1000)}s`;
+  return `the app stopped responding on ${page.pathname} (a fresh request for it got ${why})`;
+}
+
+/** #230: throws `TargetUnresponsiveError` when `targetStoppedAnswering` says the app stopped answering. */
+export async function assertTargetAnswering(p: Parameters<typeof targetStoppedAnswering>[0]): Promise<void> {
+  const reason = await targetStoppedAnswering(p);
+  if (reason !== null) throw new TargetUnresponsiveError(reason);
 }

@@ -68,8 +68,30 @@ describe("HostHealthSampler — starvation judged from the injected host", () =>
     expect((await over.sampler.judge()).starved).toBe("host over threshold: memory available=100MiB < 400MiB (source=test)");
     const loaded = fakeHost({ host: { ...calm, loadPerCore: 3.25 } });
     expect((await loaded.sampler.judge()).starved).toBe("load 3.25/core > 2");
-    const lagging = fakeHost({ lag: 900 });
-    expect((await lagging.sampler.judge()).starved).toBe("driver event-loop lag 900ms > 500ms");
+    const lagging = fakeHost({ host: { ...calm, loadPerCore: 1.25 }, lag: 900 });
+    expect((await lagging.sampler.judge()).starved).toBe("driver event-loop lag 900ms > 500ms at load 1.25/core");
+  });
+
+  it("#213: driver lag with idle cores is the driver's own work, never the host (it needs load ≥ 1/core)", async () => {
+    // The dogfood reading: 506ms lag at 0.70 load/core — was `degraded` on 67/121 steps.
+    const selfInflicted = fakeHost({ host: { ...calm, loadPerCore: 0.7 }, lag: 506 });
+    await selfInflicted.sampler.sample();
+    for (let i = 0; i < 4; i++) selfInflicted.sampler.noteStep(entry({ step: i }));
+    expect((await selfInflicted.sampler.judge()).starved).toBeNull();
+    expect(selfInflicted.sampler.summary()).toMatchObject({ degraded: false, degradedSteps: 0, starvation: [], peakEventLoopLagMs: 506 });
+    const noLoad = fakeHost({ host: { sample: null, overThreshold: null }, lag: 2_000 });
+    expect((await noLoad.sampler.judge()).starved).toBeNull();
+  });
+
+  it("#213: the starvation causes are one per kind of signal, not one per reading", async () => {
+    const { state, sampler } = fakeHost({ host: { ...calm, loadPerCore: 3.5 } });
+    for (const load of [3.5, 3.52, 3.61]) {
+      state.host = { ...calm, loadPerCore: load };
+      await sampler.sample();
+      sampler.noteStep(entry());
+      state.at += 1_000;
+    }
+    expect(sampler.summary().starvation).toEqual(["load 3.50/core > 2"]);
   });
 
   it("a starved sample explains what follows it for the window, then expires", async () => {
@@ -136,7 +158,7 @@ describe("HostHealthSampler — starvation judged from the injected host", () =>
 describe("degradedEnvironmentOutcome — a starved run proved nothing", () => {
   const health = (degraded: boolean) => {
     const { sampler } = fakeHost();
-    return { ...sampler.summary(), steps: 4, degradedSteps: degraded ? 3 : 1, degraded, starvation: degraded ? ["load 3/core > 2"] : [] };
+    return { ...sampler.summary(), peakLoadPerCore: 3, peakEventLoopLagMs: 900, steps: 4, degradedSteps: degraded ? 3 : 1, degraded, starvation: degraded ? ["load 3/core > 2"] : [] };
   };
 
   it("clean / exhausted / blocked become inconclusive (degraded-environment) when most steps were starved", () => {
@@ -144,8 +166,22 @@ describe("degradedEnvironmentOutcome — a starved run proved nothing", () => {
       const v = degradedEnvironmentOutcome(o, health(true));
       expect(v.outcome).toBe("inconclusive");
       expect(v.failure?.kind).toBe("degraded-environment");
-      expect(v.failure?.message).toMatch(/^degraded-environment — 3\/4 steps ran on a starved host: load 3\/core > 2/);
+      // #213: one plain sentence with the peak readings — never "degraded-environment — …" (the kind
+      // is printed beside it) and never one load reading per sample.
+      expect(v.failure?.message).toBe(
+        "3/4 steps ran on a starved host (peak load 3/core, peak driver event-loop lag 900ms), so the run proves nothing about the app",
+      );
     }
+  });
+
+  it("#213: a failed goal keeps its own reason (the check that did not hold) inside the degraded one", () => {
+    const v = degradedEnvironmentOutcome("failed", health(true), { wouldHaveBeen: "success check 'textIncludes:Saved' did not hold" });
+    expect(v.outcome).toBe("inconclusive");
+    expect(v.failure?.message).toMatch(/proves nothing about the app; otherwise it would have ended failed: success check 'textIncludes:Saved' did not hold$/);
+  });
+
+  it("#213: a code-verified ending (a usability job whose completion code proved) stands on a starved host", () => {
+    expect(degradedEnvironmentOutcome("clean", health(true), { verified: true })).toEqual({ outcome: "clean" });
   });
 
   it("a confirmed defect, a succeeded goal, a crash and a healthy run keep their outcome", () => {

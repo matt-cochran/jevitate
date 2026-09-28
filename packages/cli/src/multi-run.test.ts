@@ -174,6 +174,31 @@ describe("persona diff (#143)", () => {
     ]);
   });
 
+  it("#213: a persona whose page never loaded on a starved host is not compared — never an access difference", () => {
+    const starved = voteRuns(
+      [
+        run(1, "inconclusive", [], {
+          failureKind: "degraded-environment",
+          reason: "degraded-environment: environment-degraded page load (the start page did not load in time (timed out before any response)) while the host was starved: load 3.50/core > 2 — not an app or access finding",
+        }),
+      ],
+      1,
+      { name: "viewer", storageState: "/s/viewer.json" },
+    );
+    expect(starved.notObserved).toMatch(/host was starved/);
+    const d = diffPersonas([admin, starved]);
+    expect(d).toMatchObject({ requestsOnlyIn: [], statusDiffs: [], controlsOnlyIn: [], rbacCandidates: [], outcomeDiffers: false });
+    expect(d.notCompared).toEqual([{ persona: "viewer", reason: starved.notObserved }]);
+    expect(d.outcomes).toEqual({ admin: "clean", viewer: "inconclusive" });
+    const human = formatMultiRunHuman({ kind: "multi-run", strategy: "goal", repeat: 1, missionOutcome: "inconclusive", cells: [admin, starved], findings: [], flaky: [], diff: d });
+    expect(human).toMatch(/DIFF\s+viewer: not compared — its runs never observed the app \(degraded-environment: .*host was starved/);
+    expect(
+      summarizeRun("goal", 1, { ok: true, data: { outcome: "inconclusive", missionOutcome: "inconclusive", exitCode: 2, failure: { kind: "degraded-environment", message: "m" } } }).failureKind,
+    ).toBe("degraded-environment");
+    // A persona that did load and was refused is still compared (the RBAC diff above is unchanged).
+    expect(diffPersonas([admin, sales]).notCompared).toEqual([]);
+  });
+
   it("identical personas diff to nothing", () => {
     const twin = { ...admin, persona: "admin2" };
     const d = diffPersonas([admin, twin]);
@@ -390,6 +415,32 @@ describe("multi-run results follow the #217 contract (#226)", () => {
     }
   });
 
+  // #230: apply #227's goal-verdict headline here too — every run agreeing the goal failed used to
+  // still lead "DEFECTS-FOUND: goal ×2 · 0 agreed finding(s) · 0 flaky", self-contradicting (the
+  // goal's own check failed; no defect was found).
+  it("--repeat of a failed goal: heads FAILED, not 'DEFECTS-FOUND … 0 agreed finding(s)'", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-failed-goal-"));
+    try {
+      const result = await runMultiRun({
+        plan: { repeat: 2, minAgreement: 2, personas: null },
+        strategy: "goal",
+        outDir: dir,
+        runOnce: async (): Promise<RunEnvelope> => ({
+          ok: true,
+          data: { outcome: "failed", goalOutcome: "failed", missionOutcome: "defects-found", exitCode: 1, reason: "success check never held" },
+        }),
+      });
+      expect(result).toMatchObject({ outcome: "failed", missionOutcome: "defects-found", goalOutcome: "failed", exitCode: 1 });
+      const human = formatMultiRunHuman(result);
+      expect(human).toMatch(/^FAILED: goal ×2$/m);
+      expect(human).not.toContain("DEFECTS-FOUND");
+      expect(human).not.toContain("0 agreed finding(s)");
+      expect(human).toMatch(/^GOAL {4}failed$/m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("--persona: the headline is the canonical (most severe) verdict; each persona's runs, the status diff and each answer are listed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "jev-multi-persona-"));
     try {
@@ -448,5 +499,36 @@ describe("multi-run results follow the #217 contract (#226)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("#213: a persona whose session was not honoured is flagged, never silently passed", () => {
+  const data = (url: string, controls: string[]) => ({
+    outcome: "succeeded",
+    goalOutcome: "succeeded",
+    missionOutcome: "clean",
+    exitCode: 0,
+    target: { seedUrl: "http://app.test/inbox", storageStatePath: "/tmp/nope.json" },
+    transcript: [{ step: 1, url, controls }, { step: 2, url: "http://app.test/inbox", controls: [] }],
+  });
+
+  it("a run whose first page is a sign-in page (URL or password field) carries sessionLost", () => {
+    const byUrl = summarizeRun("goal", 1, { ok: true, data: data("http://app.test/login", ['button "Sign in"']) });
+    expect(byUrl.sessionLost).toMatch(/^the session in nope\.json was not honoured — the first page was a sign-in page \(\/login\)/);
+    const byForm = summarizeRun("goal", 1, { ok: true, data: data("http://app.test/inbox", ['textbox "Username"', 'textbox "Password"']) });
+    expect(byForm.sessionLost).toMatch(/the first page \(\/inbox\) showed a sign-in form \(a password field\)/);
+    expect(summarizeRun("goal", 1, { ok: true, data: data("http://app.test/inbox", ['button "Compose"']) }).sessionLost).toBeUndefined();
+  });
+
+  it("the cell, the persona diff and the human summary say the session was lost", () => {
+    const lost = "the session in nope.json was not honoured — the first page was a sign-in page (/login)";
+    const admin = voteRuns([run(1, "succeeded", [])], 1, { name: "admin", storageState: "/a.json" });
+    const dead = voteRuns([run(1, "succeeded", [], { sessionLost: lost })], 1, { name: "ghost", storageState: "/tmp/nope.json" });
+    expect(dead.sessionLost).toBe(`run(s) 1 of 1: ${lost}`);
+    expect(admin.sessionLost).toBeUndefined();
+    const diff = diffPersonas([admin, dead]);
+    expect(diff.sessionLost).toEqual({ ghost: `run(s) 1 of 1: ${lost}` });
+    const text = formatMultiRunHuman({ missionOutcome: "clean", strategy: "goal", repeat: 1, cells: [admin, dead], findings: [], flaky: [], diff });
+    expect(text).toContain(`WARNING ghost: session lost — run(s) 1 of 1: ${lost}`);
   });
 });

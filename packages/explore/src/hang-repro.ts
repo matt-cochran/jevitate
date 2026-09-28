@@ -11,6 +11,7 @@ import type { MissionOutcome } from "@jevitate/domain";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler } from "./host-health.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
+import { assertTargetAnswering, type targetStoppedAnswering } from "./mission-failure.js";
 
 /**
  * Reproducing a hang (owner ruling 7): when a hang is detected, the steps that led to it are
@@ -473,7 +474,14 @@ export async function recordCoverageHang(p: {
    * `environment-degraded` on it instead — never reproduced, never a hang finding.
    */
   readonly hostHealth?: HostHealthSampler;
+  /**
+   * #230: where the app is (the page's URL, what the allowlist authorizes). When given, a hang whose
+   * app no longer answers a fresh request throws `TargetUnresponsiveError` — never a hang finding,
+   * never blamed on a starved host.
+   */
+  readonly liveness?: Parameters<typeof targetStoppedAnswering>[0];
 }): Promise<"recorded" | "degraded"> {
+  if (p.liveness !== undefined) await assertTargetAnswering(p.liveness);
   const fingerprint = hangFingerprint(p.hang);
   const known = p.found.get(fingerprint);
   const step = p.steps.length;

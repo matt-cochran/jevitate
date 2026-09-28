@@ -303,3 +303,47 @@ describe("runInductionMission — horizontal-overflow hard signal (#149)", () =>
     expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
   }, 30_000);
 });
+
+describe("runInductionMission — #213: a timed-out action is retried once before it counts", () => {
+  test("a working button that is still animating when first clicked (a 5s click timeout) lands on the retry — no failed action", async () => {
+    // The button keeps moving for 8s after load: Playwright's click waits for it to be stable and
+    // times out (5s) on the first try; the one retry lands once it stops.
+    const path = "/t213-slow-button";
+    await page.route(`${site.url}${path}`, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<!doctype html><html><head><style>@keyframes wob{from{transform:translateX(0)}to{transform:translateX(40px)}}
+#b{animation:wob .2s linear 40 alternate}</style></head><body><main><button id="b" onclick="document.getElementById('o').textContent='clicked'">Slow button</button><p id="o"></p></main></body></html>`,
+      }),
+    );
+    try {
+      const result = await runInductionMission({
+        page,
+        actor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}${path}`,
+        allowlist: [site.url],
+      });
+      expect(result.coverage.failedActions).toBe(0);
+      expect(result.coverage.timedOutActions).toBe(0);
+      expect(result.transcript.some((e) => (e.target ?? "").includes("Slow button") && e.actOk === true)).toBe(true);
+    } finally {
+      await page.unroute(`${site.url}${path}`);
+    }
+  }, 60_000);
+
+  test("a control-free start page's 'no action was taken' says why and how to reach clean", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/whoami`,
+      allowlist: [site.url],
+    });
+    expect(result.coverage.sufficiency.shortfalls[0]).toMatch(
+      /^no action was taken — the start page offered no enabled control to act on; to reach clean: start --url on a page with its own controls/,
+    );
+  }, 30_000);
+});

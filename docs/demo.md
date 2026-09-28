@@ -121,24 +121,33 @@ $ jevitate verify-fix ... --json | jq ...
 { "verdict": "still-reproduces",
   "reason": "the defect's fingerprint fired on all 3/3 replay(s) that ran (the original run observed it 3 time(s))" }
 
-$ jevitate regression capture ...
-{"recordingPath":"demo-regressions/saved-means-stored.recording.json","metaPath":"demo-regressions/saved-means-stored.meta.json", ...}
+$ jevitate regression capture --from "$RECORDING" --result "$RESULT" --fingerprint "$FP_INV" \
+  --id saved-means-stored --dir demo-regressions
+CAPTURED: demo-regressions/saved-means-stored.recording.json
+META    demo-regressions/saved-means-stored.meta.json
+next: jevitate regression run saved-means-stored --dir demo-regressions
 
 $ jevitate regression run saved-means-stored --dir demo-regressions
-{"id":"saved-means-stored","verdict":"reproduces","reason":"the defect's fingerprint fired on all 3/3 replay(s) that ran"}
+REPRODUCES: saved-means-stored
+REASON  the defect's fingerprint fired on all 3/3 replay(s) that ran
+next: fix it, then jevitate regression run saved-means-stored --dir demo-regressions
 
 # after restarting the app with DEMO_FIXED=1
 $ jevitate regression run saved-means-stored --dir demo-regressions
-{"id":"saved-means-stored","verdict":"fixed","reason":"the defect's fingerprint was absent on all 3/3 replay(s) that ran"}
+FIXED: saved-means-stored
+REASON  the defect's fingerprint was absent on all 3/3 replay(s) that ran
+next: jevitate report
 
 $ jevitate verify-fix ... --json | jq ...
 { "verdict": "fixed",
   "reason": "the defect's fingerprint was absent on all 3/3 replay(s) that ran (the original run observed it 3 time(s))" }
 ```
 
-(The JSON output is trimmed and reformatted. The full result also carries the invariant's before
-and after values, for example `typedName: "مرحبا 😀 тест"` against `storedName: "test-value"`,
-the steps to reproduce, and a ready-to-file issue draft under `demo-runs/*.issues/`.)
+(`explore`/`verify-fix` are run with `--json`, trimmed and reformatted above; `regression
+capture`/`regression run` are the CLI's default human summary, unchanged. The full JSON result also
+carries the invariant's before and after values, for example `typedName: "مرحبا 😀 тест"` against
+`storedName: "test-value"`, the steps to reproduce, and a ready-to-file issue draft under
+`demo-runs/*.issues/`.)
 
 Things worth pointing out in the output:
 

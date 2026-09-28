@@ -48,7 +48,9 @@ export function formatErrorHuman(error: { readonly code: string; readonly messag
 }
 
 const TAG = 8;
-const tag = (t: string): string => t.padEnd(TAG);
+// #213: a label at or past the column width (e.g. STILL-REPRODUCES, BASELINE) must still get a
+// separator — padEnd alone is a no-op once the label reaches TAG, which glues it to the next value.
+const tag = (t: string): string => (t.length >= TAG ? `${t} ` : t.padEnd(TAG));
 
 interface DefectLike {
   readonly fingerprint?: string;
@@ -111,6 +113,8 @@ export function formatMissionHuman(result: unknown): string {
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
+  // #213: the --storage-state session was not honoured (the run started on a sign-in page).
+  if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
@@ -118,6 +122,7 @@ export function formatMissionHuman(result: unknown): string {
   } else if (str(result.reason) !== undefined) {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }
+  for (const l of uxLines(result)) lines.push(l);
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
   const resultPath = str(result.resultPath);
@@ -137,6 +142,32 @@ function scopeLine(scope: unknown): string | undefined {
   if (globs.length === 0) return undefined;
   const source = scope.source === "route" ? " (--route)" : scope.source === "start-url" ? " (derived from the start URL; pass --route to change it)" : "";
   return `${globs.join(", ")}${source}`;
+}
+
+/**
+ * #213: a usability run's UX findings in its summary — how many, the appendix and suppressed counts,
+ * and the top few (severity, rubric item, route, observation) — or why there are none (analysis
+ * unavailable). Nothing for other strategies.
+ */
+function uxLines(result: Record<string, unknown>): string[] {
+  if (result.strategy !== "usability") return [];
+  const report = result.report;
+  if (!isRecord(report)) {
+    const why = str(result.analysisUnavailable);
+    return [`${tag("UX")}no UX findings: ${why === undefined ? "the review produced no report" : `analysis unavailable (${why})`}`];
+  }
+  const findings = arr(report.findings).filter(isRecord);
+  const appendix = arr(report.heuristicAppendix).length;
+  const suppressed = isRecord(report.suppressed) && typeof report.suppressed.total === "number" ? report.suppressed.total : 0;
+  const extra = [appendix > 0 ? `${appendix} heuristic-only in the appendix` : "", suppressed > 0 ? `${suppressed} suppressed` : ""].filter((x) => x !== "");
+  const lines = [`${tag("UX")}${findings.length} UX finding(s)${extra.length === 0 ? "" : ` (${extra.join(", ")})`}${str(result.reportPath) === undefined ? "" : ` — report: ${str(result.reportPath)}`}`];
+  const TOP = 3;
+  for (const f of findings.slice(0, TOP)) {
+    const obs = str(f.observation) ?? "";
+    lines.push(`${tag("")}- [${str(f.severity) ?? "?"}] ${str(f.rubricItemId) ?? "?"} ${str(f.route) ?? ""}: ${obs.length > 100 ? `${obs.slice(0, 99)}…` : obs}`);
+  }
+  if (findings.length > TOP) lines.push(`${tag("")}  … and ${findings.length - TOP} more in the report`);
+  return lines;
 }
 
 /**
@@ -193,15 +224,25 @@ export function formatMultiRunHuman(result: unknown): string {
   const cells = arr(result.cells).filter(isRecord);
   const personas = cells.filter((c) => str(c.persona) !== undefined);
   const outcome = str(result.missionOutcome) ?? str(result.outcome) ?? "unknown";
-  const lines = [
-    `${outcome.toUpperCase()}: ${str(result.strategy) ?? "explore"} ×${String(result.repeat ?? "?")}${personas.length > 0 ? ` · ${personas.length} personas` : ""} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`,
-  ];
+  const base = `${str(result.strategy) ?? "explore"} ×${String(result.repeat ?? "?")}${personas.length > 0 ? ` · ${personas.length} personas` : ""}`;
   const goal = str(result.goalOutcome);
+  // #230: the same #227 rule, here for the multi-run aggregate — a failed/exhausted/blocked goal
+  // every run agreed on folds onto the canonical defects-found, but the agreed findings are
+  // typically empty for these (every run's OWN check failed, not a discovered defect); a
+  // "DEFECTS-FOUND … 0 agreed finding(s)" headline self-contradicts. Lead with the goal's own
+  // verdict instead; missionOutcome/goalOutcome stay canonical in --json.
+  const selfContradicting = goal === "failed" || goal === "exhausted" || goal === "blocked";
+  const lines = [selfContradicting ? `${goal.toUpperCase()}: ${base}` : `${outcome.toUpperCase()}: ${base} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`];
   if (goal !== undefined) lines.push(`${tag("GOAL")}${goal}`);
   // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
   const reason = str(result.reason);
   if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
-  for (const c of personas) lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+  for (const c of personas) {
+    lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+    // #213: a persona whose session was lost did not test as that persona — said, never silent.
+    const lost = str(c.sessionLost);
+    if (lost !== undefined) lines.push(`${tag("WARNING")}${str(c.persona)}: session lost — ${lost}`);
+  }
   const answers: Array<{ label: string; text: string }> = [];
   for (const c of cells) {
     const persona = str(c.persona);
@@ -221,6 +262,10 @@ export function formatMultiRunHuman(result: unknown): string {
     const text = statuses.map(([p, ss]) => `${arr(ss).map(String).join("/")} for ${p}`).join("; ");
     lines.push(`${tag("DIFF")}${request}: ${text}  (advisory${rbac.has(request) ? ": RBAC candidate" : ""})`);
   }
+  // #213: a persona whose runs never observed the app is not compared — never read as an access difference.
+  for (const n of arr(diff?.notCompared).filter(isRecord)) {
+    lines.push(`${tag("DIFF")}${str(n.persona) ?? "?"}: not compared — its runs never observed the app (${str(n.reason) ?? "environment"})`);
+  }
   for (const f of findings) {
     lines.push(`${tag("FINDING")}${[str(f.fingerprint) ?? "(no fingerprint)", str(f.kind) ?? "", str(f.stability) ?? "", str(f.title) ?? ""].filter((p) => p !== "").join("  ")}`);
   }
@@ -237,8 +282,13 @@ export function formatMultiRunHuman(result: unknown): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** `verify-fix`: the verdict, why, and what to do about it. */
-export function formatVerifyFixHuman(report: unknown): string {
+/**
+ * `verify-fix`: the verdict, why, and what to do about it.
+ * #230: `opts.result` is the `--result` the user passed (not the ledger fallback's own path) — a
+ * re-check hint must carry it too, or (with no ledger entry for this fingerprint at that path) the
+ * follow-up `verify-fix` fails to find the repro material.
+ */
+export function formatVerifyFixHuman(report: unknown, opts: { readonly result?: string } = {}): string {
   if (!isRecord(report)) return "";
   const verdict = str(report.verdict) ?? "unknown";
   const fp = str(report.fingerprint) ?? "";
@@ -250,49 +300,57 @@ export function formatVerifyFixHuman(report: unknown): string {
     const fired = attempts.filter((a) => a.fired === true).length;
     lines.push(`${tag("REPLAYS")}${attempts.length} fresh replay(s), signal fired in ${fired}`);
   }
+  const resultFlag = opts.result === undefined ? "" : ` --result ${opts.result}`;
   lines.push(
     verdict === "fixed"
       ? "next: jevitate report"
       : verdict === "still-reproduces"
-        ? `next: fix it, then jevitate verify-fix ${fp}`
-        : `next: jevitate verify-fix ${fp} --replays 5 (re-check)`,
+        ? `next: fix it, then jevitate verify-fix ${fp}${resultFlag}`
+        : `next: jevitate verify-fix ${fp}${resultFlag} --replays 5 (re-check)`,
   );
   return `${lines.join("\n")}\n`;
 }
 
-/** `ledger list`. */
-export function formatLedgerListHuman(listed: { readonly entries: readonly object[] }): string {
+/** `ledger list`. #230: `opts.dir` is the `--dir` the user passed — the follow-up hints must carry it too. */
+export function formatLedgerListHuman(listed: { readonly entries: readonly object[] }, opts: { readonly dir?: string } = {}): string {
   const data = { entries: listed.entries as readonly Record<string, unknown>[] };
-  if (data.entries.length === 0) return "0 ledger entries\nnext: jevitate ledger add <result.json> <fingerprint>\n";
+  const dirFlag = opts.dir === undefined ? "" : ` --dir ${opts.dir}`;
+  if (data.entries.length === 0) return `0 ledger entries\nnext: jevitate ledger add <result.json> <fingerprint>${dirFlag}\n`;
   const lines = [`${data.entries.length} ledger entr${data.entries.length === 1 ? "y" : "ies"}`];
   for (const e of data.entries) {
     const parts = [str(e.fingerprint) ?? "", str(e.kind) ?? "", str(e.ticket) === undefined ? "" : `[${str(e.ticket)}]`, str(e.title) ?? ""];
     lines.push(`${tag("ENTRY")}${parts.filter((p) => p !== "").join("  ")}`);
   }
-  lines.push("next: jevitate ledger verify");
+  lines.push(`next: jevitate ledger verify${dirFlag}`);
   return `${lines.join("\n")}\n`;
 }
 
-/** `ledger add`. */
-export function formatLedgerAddHuman(added: object): string {
+/**
+ * `ledger add`. #230: `opts.dir` is the `--dir` the user passed. `verify-fix`'s equivalent flag is
+ * named `--regressions-dir` (same directory, a ledger's own `--dir`), so the hint uses that name.
+ */
+export function formatLedgerAddHuman(added: object, opts: { readonly dir?: string } = {}): string {
   const data = added as Record<string, unknown>;
   const fp = str(data.fingerprint) ?? "";
   const parts = [fp, str(data.kind) ?? "", str(data.ticket) === undefined ? "" : `[${str(data.ticket)}]`, str(data.title) ?? ""];
+  const regressionsDirFlag = opts.dir === undefined ? "" : ` --regressions-dir ${opts.dir}`;
+  const dirFlag = opts.dir === undefined ? "" : ` --dir ${opts.dir}`;
   return [
     `${data.updated === true ? "UPDATED" : "ADDED"}: ${parts.filter((p) => p !== "").join("  ")}`,
     `${tag("ENTRY")}${str(data.entryPath) ?? ""}`,
-    `next: jevitate verify-fix ${fp} (re-check from the ledger) · jevitate ledger verify`,
+    `next: jevitate verify-fix ${fp}${regressionsDirFlag} (re-check from the ledger) · jevitate ledger verify${dirFlag}`,
     "",
   ].join("\n");
 }
 
-/** `ledger verify`. */
-export function formatLedgerVerifyHuman(verified: object): string {
+/** `ledger verify`. #230: `opts.dir` is the `--dir` the user passed (see `formatLedgerAddHuman`). */
+export function formatLedgerVerifyHuman(verified: object, opts: { readonly dir?: string } = {}): string {
   const data = verified as Record<string, unknown>;
   const entries = arr(data.entries).filter(isRecord);
+  const dirFlag = opts.dir === undefined ? "" : ` --dir ${opts.dir}`;
   // #227: nothing chosen (an empty ledger, or fingerprints/ticket matching nothing) verified
   // nothing — never "FIXED: 0 entries" (a false pass at a glance).
-  if (entries.length === 0) return "NOTHING VERIFIED: the ledger has no matching entries\nnext: jevitate ledger add <result.json> <fingerprint>\n";
+  if (entries.length === 0) return `NOTHING VERIFIED: the ledger has no matching entries\nnext: jevitate ledger add <result.json> <fingerprint>${dirFlag}\n`;
   const summary = isRecord(data.summary) ? data.summary : {};
   const counts = Object.entries(summary)
     .filter(([, n]) => typeof n === "number" && n > 0)
@@ -304,7 +362,8 @@ export function formatLedgerVerifyHuman(verified: object): string {
     lines.push(`${tag((str(e.verdict) ?? "unknown").toUpperCase())}${parts.filter((p) => p !== "").join("  ")}`);
   }
   const open = entries.find((e) => e.verdict === "still-reproduces")?.fingerprint;
-  lines.push(typeof open === "string" ? `next: fix it, then jevitate verify-fix ${open}` : "next: jevitate report");
+  const regressionsDirFlag = opts.dir === undefined ? "" : ` --regressions-dir ${opts.dir}`;
+  lines.push(typeof open === "string" ? `next: fix it, then jevitate verify-fix ${open}${regressionsDirFlag}` : "next: jevitate report");
   return `${lines.join("\n")}\n`;
 }
 
@@ -313,9 +372,16 @@ export function formatLedgerVerifyHuman(verified: object): string {
  * as "keys missing" when every key was already set (#210). Collection either stores every missing
  * key or fails closed, so after it every required key is configured. Names only, never a value.
  */
-export function formatInitKeysHuman(keys: Readonly<Record<string, { readonly required: readonly string[]; readonly collected: readonly string[] }>>): string {
+export function formatInitKeysHuman(
+  keys: Readonly<Record<string, { readonly required: readonly string[]; readonly collected: readonly string[]; readonly missing?: readonly string[] }>>,
+): string {
   return Object.entries(keys)
-    .map(([feature, { required, collected }]) => {
+    .map(([feature, { required, collected, missing }]) => {
+      // #230: the non-interactive path (no TTY on stdin) never prompts — report what's still
+      // missing and how to configure it, the same command name as the E_AI_SETUP_REQUIRED refusals.
+      if (missing !== undefined && missing.length > 0) {
+        return `keys: ${feature} not configured — set ${missing.join(", ")} or run \`jevitate ai setup ${feature}\``;
+      }
       const detail = collected.length > 0 ? `collected ${collected.join(", ")} now` : "already configured";
       return `keys: ${feature} ready — ${required.length}/${required.length} configured (${detail})`;
     })
@@ -328,8 +394,13 @@ function idFromRecordingPath(p: string): string | undefined {
   return base?.endsWith(".recording.json") ? base.slice(0, -".recording.json".length) : undefined;
 }
 
-/** `regression capture` (#227): a committed regression, or a failure too flaky to commit — never the raw envelope. */
-export function formatRegressionCaptureHuman(result: unknown): string {
+/**
+ * `regression capture` (#227): a committed regression, or a failure too flaky to commit — never the
+ * raw envelope. #230: `opts.dir` is the `--dir` the user passed — the `regression run` hint must
+ * carry it too, or (a non-default regressions dir, e.g. the README demo's `--dir demo-regressions`)
+ * the follow-up looks in the default dir and refuses E_REGRESSION_NOT_FOUND.
+ */
+export function formatRegressionCaptureHuman(result: unknown, opts: { readonly dir?: string } = {}): string {
   if (!isRecord(result)) return "";
   if (result.skipped === "flaky") {
     const rate = typeof result.rate === "number" ? result.rate : undefined;
@@ -344,24 +415,29 @@ export function formatRegressionCaptureHuman(result: unknown): string {
   const id = recordingPath === undefined ? undefined : idFromRecordingPath(recordingPath);
   const lines = [`CAPTURED: ${recordingPath ?? "(no recording path)"}`];
   if (metaPath !== undefined) lines.push(`${tag("META")}${metaPath}`);
-  lines.push(id === undefined ? "next: jevitate regression run <id>" : `next: jevitate regression run ${id}`);
+  const dirFlag = opts.dir === undefined ? "" : ` --dir ${opts.dir}`;
+  lines.push(id === undefined ? "next: jevitate regression run <id>" : `next: jevitate regression run ${id}${dirFlag}`);
   return `${lines.join("\n")}\n`;
 }
 
-/** `regression run` (#227): the verdict, why, and what to do about it — matches `verify-fix`'s shape. */
-export function formatRegressionRunHuman(report: unknown): string {
+/**
+ * `regression run` (#227): the verdict, why, and what to do about it — matches `verify-fix`'s shape.
+ * #230: `opts.dir` is the `--dir` the user passed — the re-check hints must carry it too.
+ */
+export function formatRegressionRunHuman(report: unknown, opts: { readonly dir?: string } = {}): string {
   if (!isRecord(report)) return "";
   const id = str(report.id) ?? "";
   const verdict = str(report.verdict) ?? "unknown";
   const reason = str(report.reason);
   const lines = [`${verdict.toUpperCase()}: ${id}`];
   if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
+  const dirFlag = opts.dir === undefined ? "" : ` --dir ${opts.dir}`;
   lines.push(
     verdict === "fixed"
       ? "next: jevitate report"
       : verdict === "reproduces"
-        ? `next: fix it, then jevitate regression run ${id}`
-        : `next: jevitate regression run ${id} (re-check)`,
+        ? `next: fix it, then jevitate regression run ${id}${dirFlag}`
+        : `next: jevitate regression run ${id}${dirFlag} (re-check)`,
   );
   return `${lines.join("\n")}\n`;
 }

@@ -130,7 +130,7 @@ export const HostHealthSummarySchema = z.looseObject({
 export type HostHealthSummary = z.infer<typeof HostHealthSummarySchema>;
 
 /** Which finding the host's starvation explains. */
-export const DEGRADED_FINDINGS = ["hang", "click-timeout", "no-progress"] as const;
+export const DEGRADED_FINDINGS = ["hang", "click-timeout", "no-progress", "page-load-timeout"] as const;
 export type DegradedFindingKind = (typeof DEGRADED_FINDINGS)[number];
 
 /** A finding met while the host was starved (#203): advisory, never a defect/hang, never failing the run. */

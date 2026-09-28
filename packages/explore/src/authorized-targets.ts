@@ -20,9 +20,14 @@ export class UnauthorizedExploreTargetError extends Error {
     readonly url: string,
     readonly allowlist: readonly string[],
   ) {
+    // #213: a URL that does not even parse is an invalid URL, never "not an authorized origin" —
+    // that phrasing implies the URL was understood and simply refused, which sends a typo'd
+    // `--url` chasing an allowlist problem it does not have.
     super(
-      `exploration target ${JSON.stringify(url)} is not an authorized origin ` +
-        `(allowed: ${allowlist.length === 0 ? "<none>" : allowlist.join(", ")}) — refused`,
+      originOf(url) === null
+        ? `exploration target ${JSON.stringify(url)} is not a valid URL`
+        : `exploration target ${JSON.stringify(url)} is not an authorized origin ` +
+            `(allowed: ${allowlist.length === 0 ? "<none>" : allowlist.join(", ")}) — refused`,
     );
     this.name = "UnauthorizedExploreTargetError";
   }
