@@ -20,22 +20,22 @@ import {
   buildExploreGateways,
   fakeDoneJudge,
 } from "./cli-shared.js";
-import { registerLogsCommands } from "./logs-cli.js";
-import { registerUxCommands } from "./ux-cli.js";
-import { registerServeCommands } from "./serve-cli.js";
-import { registerMissionCommands } from "./mission-cli.js";
-import { registerRegressionCommands } from "./regression-cli.js";
-import { registerRecordCommands } from "./record-cli.js";
-import { registerAuthorJourneyCommands } from "./author-journey-cli.js";
-import { registerVerifyFixCommands } from "./verify-fix-cli.js";
-import { registerExploreCommands } from "./explore-cli.js";
-import { registerLoadCommands } from "./load-cli.js";
-import { registerSourceCommands } from "./source-cli.js";
-import { registerJourneyCommands } from "./journey-cli.js";
-import { registerRecordingCommands } from "./recording-cli.js";
-import { registerSiteCommands } from "./site-cli.js";
-import { registerProfileCommands } from "./profile-cli.js";
 import { registerInitCommands } from "./init-cli.js";
+import { registerProfileCommands } from "./profile-cli.js";
+import { registerSiteCommands } from "./site-cli.js";
+import { registerRecordingCommands } from "./recording-cli.js";
+import { registerJourneyCommands } from "./journey-cli.js";
+import { registerSourceCommands } from "./source-cli.js";
+import { registerLoadCommands } from "./load-cli.js";
+import { registerExploreCommands } from "./explore-cli.js";
+import { registerVerifyFixCommands } from "./verify-fix-cli.js";
+import { registerAuthorJourneyCommands } from "./author-journey-cli.js";
+import { registerRecordCommands } from "./record-cli.js";
+import { registerRegressionCommands } from "./regression-cli.js";
+import { registerMissionCommands } from "./mission-cli.js";
+import { registerServeCommands } from "./serve-cli.js";
+import { registerUxCommands } from "./ux-cli.js";
+import { registerLogsCommands } from "./logs-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
@@ -60,21 +60,13 @@ export function buildProgram(deps: CliDeps): Command {
   trackActionCommand(program);
 
   registerInitCommands(program, deps);
-
   registerProfileCommands(program, deps);
-
   registerSiteCommands(program, deps);
-
   registerRecordingCommands(program, deps);
-
   registerJourneyCommands(program, deps);
-
   registerSourceCommands(program, deps);
-
   registerLoadCommands(program, deps);
-
   registerExploreCommands(program, deps, buildProgram);
-
   registerVerifyFixCommands(program, deps);
 
   // `ledger add|verify|list` (#195 part 6): the repro material verify-fix needs, kept by fingerprint.
@@ -89,17 +81,11 @@ export function buildProgram(deps: CliDeps): Command {
   );
 
   registerAuthorJourneyCommands(program, deps);
-
   registerRecordCommands(program, deps);
-
   registerRegressionCommands(program, deps);
-
   registerMissionCommands(program, deps);
-
   registerServeCommands(program, deps);
-
   registerUxCommands(program, deps);
-
   registerAiCommands(program, deps);
 
   // #137 / #138 / #139 — CI gate, baseline diff and the consolidated defect report (own files).
