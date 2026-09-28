@@ -113,7 +113,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
   "program.ts runJourneyProgrammatically": { account: SITE_ACCOUNT },
-  "program.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
+  "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
     browser: MCP_JOURNEY,
