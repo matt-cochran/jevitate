@@ -144,6 +144,13 @@ export function describeFailure(e: unknown, signals: CrashSignals): MissionFailu
   if (signals.unresponsive !== undefined && !signals.pageCrashed && !signals.browserDisconnected) {
     return { kind: "stalled", message: `${signals.unresponsive} (${message})`, ...(stack === undefined ? {} : { stack }) };
   }
+  // #226: a navigation the app never answered (its server froze or went away mid-run) — the app
+  // stopped responding, not the engine: a typed `target-unresponsive` ending with a plain reason, no
+  // stack (nothing in jevitate failed, so there is nothing to attribute).
+  if (!signals.pageCrashed && !signals.browserDisconnected && !signals.pageClosed) {
+    const unresponsive = targetUnresponsiveMessage(e);
+    if (unresponsive !== null) return { kind: "target-unresponsive", message: unresponsive };
+  }
   const kind: MissionFailure["kind"] = signals.pageCrashed
     ? "page-crash"
     : signals.browserDisconnected
@@ -152,4 +159,31 @@ export function describeFailure(e: unknown, signals: CrashSignals): MissionFailu
         ? "page-closed"
         : "exception";
   return { kind, message, ...(stack === undefined ? {} : { stack }) };
+}
+
+/** A Playwright navigation call (`page.goto: …`, `page.reload: …`, `frame.waitForNavigation: …`). */
+const NAVIGATION_CALL = /^(?:page|frame)\.(?:goto|reload|goBack|goForward|waitForNavigation|waitForURL|waitForLoadState)\b/;
+
+/**
+ * #226: the plain-words reason when `e` is a navigation the app never answered — a navigation call
+ * that timed out, or failed with a network error — else null. Names the navigated path (never its
+ * query, which may carry secrets) from Playwright's call log when it has one.
+ */
+export function targetUnresponsiveMessage(e: unknown): string | null {
+  const full = e instanceof Error ? e.message : String(e);
+  const first = full.split("\n")[0] ?? full;
+  if (!NAVIGATION_CALL.test(first) || !isUnreachableTarget(first)) return null;
+  const navigated = /navigating to "([^"]+)"/.exec(full)?.[1];
+  let path: string | undefined;
+  try {
+    path = navigated === undefined ? undefined : new URL(navigated).pathname;
+  } catch {
+    path = undefined;
+  }
+  return `the app stopped responding to navigation${path === undefined ? "" : ` to ${path}`} (${describeUnreachable(first)})`;
+}
+
+/** True for a failure that means the app stopped answering (#226): the run is `inconclusive`, never `crashed`. */
+export function isTargetUnresponsive(failure: MissionFailure | undefined): boolean {
+  return failure?.kind === "target-unresponsive";
 }

@@ -91,8 +91,8 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
-import { armMissionKillSwitch } from "./kill-signal.js";
-import { finishHostHealth, startHostHealth } from "./host-health-run.js";
+import { launchArmed } from "./launch-armed.js";
+import { finishHostHealth } from "./host-health-run.js";
 import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 import {
   applyServerLogOutcome,
@@ -586,11 +586,31 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     ...opts.emulation,
     ...(primaryState !== undefined ? { storageState: primaryState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
+  const outDir = opts.outDir ?? logsDirFor();
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
+  // itself creates `outDir` synchronously (mkdirSync).
+  const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
+  const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
+    hostHealth: opts.hostHealth,
+    saveStorageState: opts.saveStorageState !== undefined,
+    open: () => port.open(launch),
+    mission: (hooks) => ({
+      // #220: the killed run's partial result carries the unified schema's common fields too.
+      strategy: "goal",
+      target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}) },
+      recordingPath: journal.recordingPath,
+      hostHealth: hooks.hostHealth,
+      transcriptPath: journal.transcriptPath,
+      transcript: () => journal.transcript,
+      ...(runUsage === undefined ? {} : { usage: runUsage }),
+      ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
+    }),
   });
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
@@ -599,33 +619,6 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     opts.actors === undefined || opts.actors.observers.length === 0
       ? undefined
       : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
-
-  const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-  // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
-  // itself creates `outDir` synchronously (mkdirSync) — no `await` here, so there is no gap between
-  // the browser opening and the kill switch arming below for a SIGTERM/SIGINT to land in unarmed.
-  const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
-  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
-  // whatever the journal has already flushed, and the process exits with the conventional code.
-  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
-  const runUsage = opts.usage?.scope();
-  // #159: refreshed after each settled step below; the kill switch writes whatever this holds
-  // synchronously on SIGTERM/SIGINT (it cannot await a live capture — see kill-signal.ts).
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: "goal",
-    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(runUsage === undefined ? {} : { usage: runUsage }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
-  });
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
@@ -1112,39 +1105,33 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
+  const outDir = opts.outDir ?? logsDirFor();
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  const stamp = artifactStamp(iso);
+  // `MissionJournal` creates `outDir` synchronously (mkdirSync).
+  const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
+  const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
+    hostHealth: opts.hostHealth,
+    saveStorageState: opts.saveStorageState !== undefined,
+    open: () => port.open(launch),
+    mission: (hooks) => ({
+      // #220: the killed run's partial result carries the unified schema's common fields too.
+      strategy: opts.strategy ?? "coverage",
+      target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
+      recordingPath: journal.recordingPath,
+      hostHealth: hooks.hostHealth,
+      transcriptPath: journal.transcriptPath,
+      transcript: () => journal.transcript,
+      ...(runUsage === undefined ? {} : { usage: runUsage }),
+      ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
+    }),
   });
 
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
-
-  const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-  const stamp = artifactStamp(iso);
-  // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
-  // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
-  const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
-  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
-  const runUsage = opts.usage?.scope();
-  // #159: see runExploration's own doc comment on the equivalent lines.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: opts.strategy ?? "coverage",
-    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(runUsage === undefined ? {} : { usage: runUsage }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
-  });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
@@ -1459,32 +1446,28 @@ export async function runAdversarialCliMission(
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
-  // #159: see runExploration's own doc comment on the equivalent lines.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: "adversarial",
-    target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(runUsage === undefined ? {} : { usage: runUsage }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
+  // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
+  const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
+    hostHealth: opts.hostHealth,
+    saveStorageState: opts.saveStorageState !== undefined,
+    open: () => port.open(launch),
+    mission: (hooks) => ({
+      // #220: the killed run's partial result carries the unified schema's common fields too.
+      strategy: "adversarial",
+      target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
+      recordingPath: journal.recordingPath,
+      hostHealth: hooks.hostHealth,
+      transcriptPath: journal.transcriptPath,
+      transcript: () => journal.transcript,
+      ...(runUsage === undefined ? {} : { usage: runUsage }),
+      ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
+    }),
   });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
@@ -1737,35 +1720,30 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await portFactory().open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
-  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
-  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
-
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
-  // #159: see runExploration's own doc comment on the equivalent lines.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: "feature",
-    target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
+  // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
+  const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
+    hostHealth: opts.hostHealth,
+    saveStorageState: opts.saveStorageState !== undefined,
+    open: () => portFactory().open(launch),
+    mission: (hooks) => ({
+      // #220: the killed run's partial result carries the unified schema's common fields too.
+      strategy: "feature",
+      target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
+      recordingPath: journal.recordingPath,
+      hostHealth: hooks.hostHealth,
+      transcriptPath: journal.transcriptPath,
+      transcript: () => journal.transcript,
+      ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
+    }),
   });
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],

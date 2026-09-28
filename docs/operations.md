@@ -22,7 +22,8 @@ A run killed by SIGTERM/SIGINT (`timeout -s TERM 900 jevitate explore …`) exit
 writes `<stem>.result.json`: `missionOutcome: "inconclusive"`, `stop: "terminated"`, the real step
 count and transcript, the `transcriptPath` that exists, `engine`, the `usage` spent so far, and any
 partial report (a usability review's observed screens). Before the process exits, the same result
-is printed as the envelope with `--json`, or as the human summary without it.
+is printed as the envelope with `--json`, or as the human summary without it. That holds from the
+moment the run starts, while the browser is still launching (0 steps) included.
 
 ## Usage accounting
 

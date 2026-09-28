@@ -1,8 +1,17 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { MISSION_EXIT_CODES } from "@jevitate/domain";
+import {
+  MISSION_EXIT_CODES,
+  MISSION_OUTCOMES,
+  combineOutcomes,
+  foldGoalOutcome,
+  isGoalOutcome,
+  type GoalOutcome,
+  type MissionOutcome,
+} from "@jevitate/domain";
 import { sumUsage, usageCountsFrom, type UsageAggregate, type UsageCounts } from "@jevitate/ai-core";
 import { normalizeRoute } from "@jevitate/explore";
+import { currentEngineInfo, type EngineInfo } from "./engine.js";
 
 /**
  * Multi-run orchestration over the existing explore strategies (#141 repeat-and-vote, #143 persona
@@ -228,17 +237,29 @@ export function extractRunFindings(data: unknown): RunFinding[] {
   return out;
 }
 
+function isMissionOutcome(v: unknown): v is MissionOutcome {
+  return typeof v === "string" && (MISSION_OUTCOMES as readonly string[]).includes(v);
+}
+
+/** A goal run's own ending (#217): its `goalOutcome`, else (an older result) its `outcome`. */
+function goalOutcomeOf(data: Record<string, unknown>): GoalOutcome | undefined {
+  if (isGoalOutcome(data.goalOutcome)) return data.goalOutcome;
+  return isGoalOutcome(data.outcome) ? data.outcome : undefined;
+}
+
 /**
- * A run's outcome for voting: the goal strategy's own ending (`goalOutcome`, #217: succeeded / failed /
- * exhausted / blocked / …), else the canonical `missionOutcome` (adversarial's `outcome` already is one).
+ * #226: a run's canonical verdict (the #217 contract): its own `missionOutcome`; else a goal run's
+ * ending folded (`GOAL_OUTCOME_FOLD`), or another strategy's `outcome` when it already is one; else
+ * `crashed` — a run that says nothing readable proves nothing.
  */
-export function runOutcomeOf(strategy: string, data: unknown): string {
+export function runMissionOutcomeOf(strategy: string, data: unknown): MissionOutcome {
   if (!isRecord(data)) return "crashed";
-  if (strategy === "goal" && typeof data.goalOutcome === "string") return data.goalOutcome;
-  if (strategy === "goal" && typeof data.outcome === "string") return data.outcome;
-  if (typeof data.missionOutcome === "string") return data.missionOutcome;
-  if (typeof data.outcome === "string") return data.outcome;
-  return "crashed";
+  if (isMissionOutcome(data.missionOutcome)) return data.missionOutcome;
+  if (strategy === "goal") {
+    const goal = goalOutcomeOf(data);
+    return goal === undefined ? "crashed" : foldGoalOutcome(goal);
+  }
+  return isMissionOutcome(data.outcome) ? data.outcome : "crashed";
 }
 
 /** `METHOD /templated/path` → the distinct response statuses seen (assets excluded; pending dropped). */
@@ -272,7 +293,12 @@ export interface RunSummary {
   readonly index: number;
   /** False when the run could not start or broke outside the mission (its envelope was an error). */
   readonly ok: boolean;
+  /** The run's own ending: a goal run's `goalOutcome`, else its canonical outcome. */
   readonly outcome: string;
+  /** #226: the run's canonical verdict (#217) — what the vote counts. */
+  readonly missionOutcome: MissionOutcome;
+  /** #226: a goal run's own ending (#217), beside `missionOutcome`. */
+  readonly goalOutcome?: GoalOutcome;
   readonly exitCode: number;
   readonly findings: readonly RunFinding[];
   readonly requests: Readonly<Record<string, readonly number[]>>;
@@ -286,6 +312,8 @@ export interface RunSummary {
   readonly reason?: string;
   /** The run's model usage (#163), as its envelope reported it. */
   readonly usage?: UsageCounts;
+  /** #226: a find-out run's answer (`{text, evidence}`), as its result carried it. */
+  readonly answer?: unknown;
 }
 
 export interface AggregatedFinding {
@@ -313,10 +341,18 @@ export interface CellResult {
    * browser proves nothing about the app) or runs are still missing. `reason` then says which.
    */
   readonly outcome: string;
+  /**
+   * #226: the canonical verdict (#217) the runs agreed on — voted over each run's `missionOutcome`, so
+   * goal runs that failed in different ways (exhausted, blocked) still agree they found a defect.
+   */
+  readonly missionOutcome: MissionOutcome;
+  /** #226: goal runs only — the goal ending ≥ k runs agreed on, else the canonical outcome (#217). */
+  readonly goalOutcome?: GoalOutcome;
   /** #220: why the outcome is `inconclusive` (which runs broke, or how many are missing). */
   readonly reason?: string;
+  /** The exit code of `missionOutcome`. */
   readonly exitCode: number;
-  /** How many runs ended in each outcome. */
+  /** How many runs ended in each (own) outcome. */
   readonly outcomes: Readonly<Record<string, number>>;
   readonly runs: readonly RunSummary[];
   /** Agreed findings (≥ k runs), most stable first. */
@@ -329,34 +365,35 @@ export interface CellResult {
   readonly controls: string[];
 }
 
-/** Exit code for an agreed outcome: taken from a run that reached it (strategies differ); intermittent → 4. */
-function exitCodeFor(outcome: string, runs: readonly RunSummary[]): number {
-  if (outcome === "intermittent") return MISSION_EXIT_CODES.intermittent;
-  return runs.find((r) => r.outcome === outcome)?.exitCode ?? MISSION_EXIT_CODES.inconclusive;
+/** Outcomes that mean the run itself broke — it proves nothing about the app, so it never makes a vote `intermittent`. */
+function isBrokenRunSummary(r: RunSummary): boolean {
+  return !r.ok || r.missionOutcome === "crashed" || r.missionOutcome === "inconclusive";
 }
 
-/** Outcomes that mean the run itself broke — it proves nothing about the app, so it never makes a vote `intermittent`. */
-const BROKEN_RUN_OUTCOMES: ReadonlySet<string> = new Set(["crashed", "inconclusive"]);
-
-function isBrokenRunSummary(r: RunSummary): boolean {
-  return !r.ok || BROKEN_RUN_OUTCOMES.has(r.outcome);
+/** The most common value when ≥ k runs reached it and it is not tied; else undefined. */
+function agreed<T extends string>(values: readonly T[], k: number): T | undefined {
+  const counts = new Map<T, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const top = ranked[0];
+  const tied = ranked[1] !== undefined && top !== undefined && ranked[1][1] === top[1];
+  return top !== undefined && top[1] >= k && !tied ? top[0] : undefined;
 }
 
 /**
- * The vote's outcome (#141, #220): the most common outcome when ≥ k runs reached it (and it is not
- * tied); otherwise `inconclusive` when runs are still missing or a run broke (with the reason), and
- * `intermittent` only when every run finished with a real verdict and they disagree.
+ * The vote's canonical outcome (#141, #220, #226): the most common `missionOutcome` when ≥ k runs
+ * reached it (and it is not tied); otherwise `inconclusive` when runs are still missing or a run broke
+ * (with the reason), and `intermittent` only when every run finished with a real verdict and they disagree.
  */
-function voteOutcome(runs: readonly RunSummary[], k: number, planned: number): { outcome: string; reason?: string } {
-  const outcomes: Record<string, number> = {};
-  for (const r of runs) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
-  const ranked = Object.entries(outcomes).sort((a, b) => b[1] - a[1]);
-  const top = ranked[0];
-  const tied = ranked[1] !== undefined && top !== undefined && ranked[1][1] === top[1];
-  if (top !== undefined && top[1] >= k && !tied) return { outcome: top[0] };
+function voteOutcome(runs: readonly RunSummary[], k: number, planned: number): { outcome: MissionOutcome; reason?: string } {
+  const top = agreed(
+    runs.map((r) => r.missionOutcome),
+    k,
+  );
+  if (top !== undefined) return { outcome: top };
   const broken = runs.filter(isBrokenRunSummary);
   if (broken.length > 0) {
-    const which = broken.map((r) => `run ${r.index} ${r.outcome}${r.reason === undefined ? "" : ` (${r.reason})`}`).join("; ");
+    const which = broken.map((r) => `run ${r.index} ${r.missionOutcome}${r.reason === undefined ? "" : ` (${r.reason})`}`).join("; ");
     return { outcome: "inconclusive", reason: `no outcome reached ${k} of ${runs.length} run(s) because a run broke: ${which}` };
   }
   if (runs.length < planned) {
@@ -373,7 +410,14 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
   const n = runs.length;
   const outcomes: Record<string, number> = {};
   for (const r of runs) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
-  const { outcome, reason } = voteOutcome(runs, k, planned);
+  const { outcome: missionOutcome, reason } = voteOutcome(runs, k, planned);
+  // A goal cell's own ending: the goal ending ≥ k runs agreed on (when it folds onto the agreed
+  // verdict), else the canonical verdict itself (a shared outcome is a goal outcome too, #217).
+  const goalRuns = runs.filter((r) => r.goalOutcome !== undefined);
+  const goalAgreed = goalRuns.length === 0 ? undefined : agreed(goalRuns.map((r) => r.goalOutcome!), k);
+  const goalOutcome: GoalOutcome | undefined =
+    goalRuns.length === 0 ? undefined : goalAgreed !== undefined && foldGoalOutcome(goalAgreed) === missionOutcome ? goalAgreed : missionOutcome;
+  const outcome: string = goalOutcome ?? missionOutcome;
 
   const byId = new Map<string, { f: RunFinding; runs: number[] }>();
   for (const r of runs) {
@@ -419,8 +463,10 @@ export function voteRuns(runs: readonly RunSummary[], k: number, persona: Person
     persona: persona?.name ?? null,
     ...(persona === null ? {} : { storageStatePath: persona.storageState }),
     outcome,
+    missionOutcome,
+    ...(goalOutcome === undefined ? {} : { goalOutcome }),
     ...(reason === undefined ? {} : { reason }),
-    exitCode: reason === undefined ? exitCodeFor(outcome, runs) : MISSION_EXIT_CODES.inconclusive,
+    exitCode: MISSION_EXIT_CODES[missionOutcome],
     outcomes,
     runs,
     findings: all.filter((f) => f.status === "agreed"),
@@ -460,7 +506,7 @@ export interface PersonaDiff {
   readonly requestsOnlyIn: PersonaPresenceDiff[];
   readonly statusDiffs: PersonaStatusDiff[];
   readonly controlsOnlyIn: PersonaPresenceDiff[];
-  /** Persona → its agreed outcome. */
+  /** Persona → its agreed canonical outcome (`missionOutcome`, #226). */
   readonly outcomes: Record<string, string>;
   /** True when not every persona reached the same outcome. */
   readonly outcomeDiffers: boolean;
@@ -517,7 +563,7 @@ export function diffPersonas(cells: readonly CellResult[]): PersonaDiff {
     }
   }
   const outcomes: Record<string, string> = {};
-  for (const c of named) outcomes[c.persona] = c.outcome;
+  for (const c of named) outcomes[c.persona] = c.missionOutcome;
   return {
     advisory: true,
     requestsOnlyIn: presence(requestSets),
@@ -555,12 +601,23 @@ export interface MultiRunResult {
    * `mixed`. While runs are pending (`complete: false`, or a killed multi-run) it is `inconclusive` (#220).
    */
   readonly outcome: string;
+  /**
+   * #226: the canonical verdict (#217), like every mission result's: without personas, the agreed
+   * `missionOutcome`; with personas, the shared one when they agree, else the most severe persona's
+   * (`combineOutcomes`: a broken persona run dominates, a confirmed hang beats a defect). While runs
+   * are pending (`complete: false`, or a killed multi-run) it is `inconclusive`.
+   */
+  readonly missionOutcome: MissionOutcome;
+  /** #226: `--goal` multi-runs only — the goal ending the runs agreed on, else the canonical outcome (#217). */
+  readonly goalOutcome?: GoalOutcome;
   /** #220: why the outcome is `inconclusive` (runs pending or interrupted, or a run broke). */
   readonly reason?: string;
   /** #220: the multi-run was stopped by this signal; the run in flight is recorded as interrupted. */
   readonly interrupted?: { readonly signal: string };
-  /** Without personas: the agreed outcome's code. With personas: the highest persona code. */
+  /** The exit code of `missionOutcome` (130/143 for a killed multi-run). */
   readonly exitCode: number;
+  /** #226: the build that produced the aggregate (`{version, commit, builtAt}`), like every result. */
+  readonly engine: EngineInfo;
   /** Agreed findings (with personas: each tagged by persona). */
   readonly findings: Array<AggregatedFinding & { readonly persona?: string }>;
   /** Flaky findings (seen in fewer than k runs) — reported, not counted. */
@@ -627,6 +684,7 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
       ...base,
       ok: false,
       outcome: "crashed",
+      missionOutcome: "crashed",
       exitCode: MISSION_EXIT_CODES.crashed,
       findings: [],
       requests: {},
@@ -639,17 +697,22 @@ export function summarizeRun(strategy: string, index: number, envelope: RunEnvel
   const resultPath = typeof data.resultPath === "string" ? data.resultPath : typeof data.reportPath === "string" ? data.reportPath : undefined;
   const usage = usageCountsFrom(data.usage);
   const reason = runReasonOf(data);
+  const missionOutcome = runMissionOutcomeOf(strategy, data);
+  const goalOutcome = strategy === "goal" ? (goalOutcomeOf(data) ?? missionOutcome) : undefined;
   return {
     ...base,
     ok: true,
     ...(reason === undefined ? {} : { reason }),
-    outcome: runOutcomeOf(strategy, data),
-    exitCode: typeof data.exitCode === "number" ? data.exitCode : MISSION_EXIT_CODES.inconclusive,
+    outcome: goalOutcome ?? missionOutcome,
+    missionOutcome,
+    ...(goalOutcome === undefined ? {} : { goalOutcome }),
+    exitCode: typeof data.exitCode === "number" ? data.exitCode : MISSION_EXIT_CODES[missionOutcome],
     findings: extractRunFindings(data),
     requests: extractRequests(data),
     controls: extractControls(readTranscript(data)),
     ...(resultPath === undefined ? {} : { resultPath }),
     ...(usage === undefined ? {} : { usage }),
+    ...(data.answer === undefined || data.answer === null ? {} : { answer: data.answer }),
   };
 }
 
@@ -665,26 +728,36 @@ export function aggregateCells(
   cells: CellResult[],
   resultPath: string,
   complete: boolean,
+  engine: EngineInfo = currentEngineInfo(),
 ): MultiRunResult {
   const withPersona = <T extends AggregatedFinding>(c: CellResult, fs: T[]): Array<T & { persona?: string }> =>
     fs.map((f) => (c.persona === null ? f : { ...f, persona: c.persona }));
   const personas = plan.personas !== null;
   const outcomes = new Set(cells.map((c) => c.outcome));
   const voted = !personas ? (cells[0]?.outcome ?? "inconclusive") : outcomes.size === 1 ? [...outcomes][0]! : "mixed";
+  // #226: the canonical verdict — one persona's (or the mission's), or the most severe persona's.
+  const votedMission: MissionOutcome = cells.length === 0 ? "inconclusive" : combineOutcomes(cells.map((c) => c.missionOutcome));
+  const goals = cells.map((c) => c.goalOutcome).filter((g): g is GoalOutcome => g !== undefined);
   // #220: a multi-run with runs still pending proves nothing yet — never `intermittent`.
   const finished = cells.reduce((n, c) => n + c.runs.length, 0);
   const planned = plan.repeat * (plan.personas?.length ?? 1);
   const cellReason = cells.find((c) => c.reason !== undefined)?.reason;
   const outcome = complete ? voted : "inconclusive";
-  const reason = complete ? (voted === "inconclusive" ? cellReason : undefined) : `incomplete: ${finished} of ${planned} run(s) finished`;
+  const missionOutcome: MissionOutcome = complete ? votedMission : "inconclusive";
+  const goalOutcome: GoalOutcome | undefined =
+    strategy !== "goal" ? undefined : complete && goals.length === cells.length && new Set(goals).size === 1 ? goals[0] : missionOutcome;
+  const reason = complete ? (missionOutcome === "inconclusive" ? cellReason : undefined) : `incomplete: ${finished} of ${planned} run(s) finished`;
   return {
     kind: "multi-run",
     strategy,
     repeat: plan.repeat,
     minAgreement: plan.minAgreement,
     outcome,
+    missionOutcome,
+    ...(goalOutcome === undefined ? {} : { goalOutcome }),
     ...(reason === undefined ? {} : { reason }),
-    exitCode: complete ? cells.reduce((m, c) => Math.max(m, c.exitCode), 0) : MISSION_EXIT_CODES.inconclusive,
+    exitCode: MISSION_EXIT_CODES[missionOutcome],
+    engine,
     findings: cells.flatMap((c) => withPersona(c, c.findings)),
     flaky: cells.flatMap((c) => withPersona(c, c.flaky)),
     cells,

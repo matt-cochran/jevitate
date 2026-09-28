@@ -637,7 +637,7 @@ Outcomes, stop reasons and exit codes:
     (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
   --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
     step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
-    | scope-unreachable | targets-refused | hang | crashed
+    | scope-unreachable | targets-refused | target-unresponsive | hang | crashed
   --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
     exhausted | insufficient-coverage | cap | scope-unreachable | stalled | crashed | hang
   A run that proved nothing is inconclusive with failure.kind insufficient-coverage (the same word as
