@@ -1,3 +1,4 @@
+import { recordRun } from "./run-index.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
@@ -941,6 +942,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       },
     };
     await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    recordRun(path); // #213: a bare `report` in this project finds it
     const actions = failed && at !== undefined ? at + 1 : recordingSteps(j);
     return { status: "ran", resultPath: path, outcome: r.outcome, actions };
   }
@@ -1144,6 +1146,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       },
     };
     await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    recordRun(path); // #213: a bare `report` in this project finds it
     if (r.verdict === "inconclusive") {
       return { status: "error", resultPath: path, outcome: r.verdict, actions: 0, error: { type: "inconclusive", message: `verify-fix inconclusive: ${r.reason}` } };
     }

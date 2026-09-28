@@ -185,6 +185,15 @@ describe("jevitate report (#139)", () => {
     expect(env.data.defects.map((d) => d.category)).toEqual(["ux"]);
   });
 
+  it("#213: an unknown --target exits 64 and lists the known targets — never an empty report with exit 0", async () => {
+    seed();
+    const { out, code } = await cli(["report", "--target", "nosuch", "--dir", results, "--json"]);
+    expect(code).toBe(64);
+    const env = JSON.parse(out) as { ok: boolean; error: { code: string; message: string } };
+    expect(env.ok).toBe(false);
+    expect(env.error.message).toBe(`--target "nosuch" matches no recorded run; known targets: ${ORIGIN}, https://other.example`);
+  });
+
   it("resolves --target by a registered mission target's name", async () => {
     seed();
     mkdirSync(join(dir, "targets"));

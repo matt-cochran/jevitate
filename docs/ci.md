@@ -245,10 +245,23 @@ jevitate report --target shop --since explore-2026-09-22T11-00-00-000Z --baselin
 ```
 
 `--target` takes an origin (or any URL on it), a suite target name, or a registered mission
-target. `--since` takes an ISO date or a run. `--dir` (repeatable) reads other results directories
-(default: every dated `.jevitate/logs/<date>/` dir, in the project and in `~/.jevitate`, then
-the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`), including their
-subdirectories. Each defect lists:
+target; a target no recorded run matches is refused (exit 64) with the known targets listed.
+`--since` takes an ISO date or a run. `--dir` (repeatable) reads the given results directories,
+including their subdirectories.
+
+Without `--dir`, a report reads **the current project's runs only**:
+
+- the project's own `.jevitate/logs/<date>/` dirs (only this project writes there), and
+- every run recorded for this project in the run index, `~/.jevitate/run-index.jsonl` — wherever
+  it was written, so runs sent to an `--out` dir are included. Each persisted result appends one
+  line `{project, path}`; the project is the directory holding the repo's `.jevitate/`, else the
+  git root of the working directory, else the working directory. `JEVITATE_RUN_INDEX=off` stops
+  recording.
+
+With `--target`, a report also reads every dated `.jevitate/logs/<date>/` dir (project and
+`~/.jevitate`) and the 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`, filtered to
+that target. `diff` and `baseline tag` look a run id up in this project's sources first, then in
+those dirs. Each defect lists:
 
 - every mode and run that observed it, with occurrence counts;
 - evidence refs (step, screenshot, request, URL, transcript);

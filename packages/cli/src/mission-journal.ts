@@ -1,3 +1,4 @@
+import { recordRun } from "./run-index.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Recording } from "@jevitate/recording";
@@ -81,6 +82,8 @@ export function writeMissionResult(
   const path = resultPathFor(recordingPath);
   writeFileSync(path, `${JSON.stringify({ missionOutcome, exitCode, result }, null, 2)}\n`, "utf8");
   if (usage !== undefined) writeUsageSidecar(path, usage);
+  // #213: recorded for this project, so a bare `report` finds it — wherever it was written (`--out`).
+  recordRun(path);
   return path;
 }
 

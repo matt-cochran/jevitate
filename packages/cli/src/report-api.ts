@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { allResultDirs, projectDataDir } from "./project-dir.js";
+import { indexedRunsFor, projectLogDirs, type RunIndexDeps } from "./run-index.js";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -38,6 +39,62 @@ export class ReportInputError extends Error {
 /** Where results live by default: mission results next to their Recordings, and UX reports. */
 export function defaultResultDirs(): string[] {
   return allResultDirs();
+}
+
+/**
+ * #213: where a report reads by default. A bare `report` reads the CURRENT project only: its own
+ * `.jevitate/logs` (none outside a project) plus every run the run index recorded for this project —
+ * including runs written to an `--out` dir. With `--target`, every results dir is read too (the
+ * target filter keeps it to that app), plus the indexed runs.
+ */
+export function defaultReportSources(withTarget: boolean, deps: RunIndexDeps = {}): { dirs: string[]; files: string[] } {
+  return { dirs: withTarget ? allResultDirs(deps) : projectLogDirs(deps), files: indexedRunsFor(deps) };
+}
+
+/** #213: where `diff`/`baseline tag` look a run id up: this project's sources first, then every results dir. */
+export function defaultLookupDirs(deps: RunIndexDeps = {}): string[] {
+  return [...new Set([...projectLogDirs(deps), ...parentDirs(indexedRunsFor(deps)), ...allResultDirs(deps)])];
+}
+
+function parentDirs(files: readonly string[]): string[] {
+  return [...new Set(files.map((f) => dirname(f)))];
+}
+
+/** A scan plus the indexed result files it did not already read (each path once), oldest first. */
+function withFiles(scanned: RunRecord[], files: readonly string[]): RunRecord[] {
+  const seen = new Set(scanned.map((r) => resolve(r.path)));
+  const out = [...scanned];
+  for (const f of files) {
+    const path = resolve(f);
+    if (seen.has(path)) continue;
+    // A usability report whose persisted result is indexed too is the same run (read from the result).
+    if (UX_REPORT.test(basename(path)) && existsSync(`${path.slice(0, -".json".length)}.recording.result.json`)) continue;
+    seen.add(path);
+    const run = loadRunFile(path);
+    if (run !== null) out.push(run);
+  }
+  return out.sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.runId.localeCompare(b.runId));
+}
+
+/** The targets a report could be asked for: the runs' origins and suite target names, and registered mission targets. */
+async function knownTargets(pool: readonly RunRecord[], missionTargetsDir: string): Promise<string[]> {
+  const known = new Set<string>();
+  for (const r of pool) {
+    if (r.target !== undefined) known.add(r.target);
+    if (r.targetName !== undefined) known.add(r.targetName);
+  }
+  if (existsSync(missionTargetsDir)) {
+    for (const f of await readdir(missionTargetsDir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const t = JSON.parse(await readFile(join(missionTargetsDir, f), "utf8")) as unknown;
+        if (isRecord(t) && typeof t.name === "string") known.add(t.name);
+      } catch {
+        continue;
+      }
+    }
+  }
+  return [...known].sort();
 }
 
 export function defaultBaselinesDir(): string {
@@ -318,6 +375,8 @@ export interface BuildReportOptions {
   readonly missionTargetsDir: string;
   /** Explicit runs (e.g. `jevitate check`'s own results) instead of scanning `dirs`. */
   readonly runs?: readonly RunRecord[];
+  /** #213: the project/run-index seam (cwd, home, index file) for the default sources. */
+  readonly index?: RunIndexDeps;
 }
 
 export interface RunSummary {
@@ -366,15 +425,26 @@ export function summarizeRun(r: RunRecord): RunSummary {
 }
 
 export async function buildReport(opts: BuildReportOptions): Promise<ReportResult> {
-  const dirs = opts.dirs !== undefined && opts.dirs.length > 0 ? opts.dirs : defaultResultDirs();
-  const ctx: RunRefContext = { dirs, ...(opts.baselinesDir === undefined ? {} : { baselinesDir: opts.baselinesDir }) };
-  const pool = opts.runs ?? scanRuns(dirs);
+  const explicitDirs = opts.dirs !== undefined && opts.dirs.length > 0;
+  const sources = explicitDirs ? { dirs: [...opts.dirs!], files: [] } : defaultReportSources(opts.target !== undefined, opts.index);
+  const dirs = sources.dirs;
+  const ctx: RunRefContext = { dirs: [...dirs, ...parentDirs(sources.files)], ...(opts.baselinesDir === undefined ? {} : { baselinesDir: opts.baselinesDir }) };
+  const scanPool = (): RunRecord[] => withFiles(scanRuns(dirs), sources.files);
+  const pool = opts.runs ?? scanPool();
   let runs = [...pool];
   let targetLabel: string | undefined;
   if (opts.target !== undefined) {
     const t = await resolveTargetFilter(opts.target, opts.missionTargetsDir);
     targetLabel = t.origins.length > 0 ? t.origins.join(", ") : t.name;
     runs = runs.filter((r) => (r.target !== undefined && t.origins.includes(r.target)) || r.targetName === t.name);
+    // #213: a target no run was ever recorded for is refused (exit 64), naming the known ones — never
+    // an empty report that reads like "nothing wrong".
+    if (runs.length === 0 && opts.runs === undefined) {
+      const known = await knownTargets(pool, opts.missionTargetsDir);
+      throw new ReportInputError(
+        `--target ${JSON.stringify(opts.target)} matches no recorded run${known.length === 0 ? " (no runs found at all)" : `; known targets: ${known.join(", ")}`}`,
+      );
+    }
   }
   const since = opts.since === undefined ? undefined : resolveSince(opts.since, ctx);
   if (since !== undefined) runs = runs.filter((r) => r.startedAt !== undefined && r.startedAt >= since);
@@ -382,7 +452,7 @@ export async function buildReport(opts: BuildReportOptions): Promise<ReportResul
   let diff: FindingsDiff | undefined;
   let baselineRuns: RunRecord[] | undefined;
   if (opts.baseline !== undefined) {
-    baselineRuns = resolveBaseline(opts.baseline, runs, { ...ctx, pool: scanRuns(dirs) });
+    baselineRuns = resolveBaseline(opts.baseline, runs, { ...ctx, pool: opts.runs === undefined ? pool : scanPool() });
     diff = diffRuns(baselineRuns, runs);
   }
   const usage = usageOfRuns(runs);
