@@ -39,6 +39,9 @@ import {
   type MisuseStrategy,
   type CapabilityScope,
   type FeatureRunResult,
+  type MissionRouteScope,
+  resolveRouteScope,
+  startRouteGlobs,
   type TranscriptEntry,
   type RunAnswer,
   type RunOutcome,
@@ -1094,6 +1097,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
+  // #224: the shared default scope (the start URL's route) must be derivable — refused up front.
+  startRouteGlobs(opts.url);
 
   // #149: refused BEFORE any browser opens.
   const resolvedEmulation = resolveEmulation(opts.emulation);
@@ -1440,6 +1445,8 @@ export async function runAdversarialCliMission(
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
+  // #224: the shared default scope (the start URL's route) must be derivable — refused up front.
+  startRouteGlobs(opts.seedUrl);
   // #149: refused BEFORE any browser opens.
   const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
@@ -1610,7 +1617,13 @@ export interface RunFeatureCliMissionOptions {
   readonly seedUrl: string;
   readonly allowlist: readonly string[];
   readonly capability: string;
-  readonly routeGlobs: readonly string[];
+  /**
+   * The `--route` globs, used exactly as given. Empty/absent (#224): the start URL's route and
+   * everything under it — the default every strategy shares (`resolveRouteScope`), stated in the
+   * result's `scope`. A start URL no default can be derived from is refused up front
+   * (`ScopeUnderivableError`, a usage error) before any browser opens.
+   */
+  readonly routeGlobs?: readonly string[];
   readonly headless?: boolean;
   /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
   readonly stallTimeoutMs?: number;
@@ -1658,6 +1671,8 @@ export type FeatureCliMissionResult = Omit<FeatureRunResult, "outcome"> & {
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "feature";
+  /** The route scope the run used (#224): the `--route` globs, or the one derived from the start URL. */
+  readonly scope: MissionRouteScope;
   /**
    * `clean` only when the run actually exercised an in-scope, non-chrome
    * control of the named capability (`coverage.inScopeActionsExercised > 0`).
@@ -1707,7 +1722,9 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
-  const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: opts.routeGlobs };
+  // #224: no --route → the start URL's route (the shared default); refused up front when underivable.
+  const routeScope = resolveRouteScope(opts.seedUrl, opts.routeGlobs);
+  const scope: CapabilityScope = { name: opts.capability, originAllowlist: opts.allowlist, routeGlobs: routeScope.routeGlobs };
 
   // #149: refused BEFORE any browser opens.
   resolveEmulation(opts.emulation);
@@ -1805,9 +1822,9 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const coverageFailure: MissionFailure | undefined = chromeOnly
       ? {
           kind: "insufficient-coverage",
-          message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${
-            opts.routeGlobs.join(", ") || "(none)"
-          }] — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
+          message: `no in-scope, non-chrome control of "${opts.capability}" was exercised within route(s) [${routeScope.routeGlobs.join(", ")}]${
+            routeScope.source === "start-url" ? " (derived from the start URL)" : ""
+          } — ${result.coverage.boundaryEdges.length} boundary edge(s) hit instead`,
         }
       : irrelevant
         ? {
@@ -1849,6 +1866,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       outcome: thin && result.outcome === "exhausted" ? ("insufficient-coverage" as const) : result.outcome,
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "feature" as const,
+      scope: routeScope,
       transcript: (serverLogRun?.transcript ?? result.transcript) as TranscriptEntry[],
       failure: result.failure ?? host.failure ?? coverageFailure,
       missionOutcome,
