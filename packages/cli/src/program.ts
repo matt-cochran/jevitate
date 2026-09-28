@@ -1,13 +1,9 @@
 import { existsSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { userInfo } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
 import * as clack from "@clack/prompts";
-import type { ProfileManager } from "@jevitate/daemon";
 import { SitePolicySchema, simulateTiming, type PlannedStep, type SitePolicy } from "@jevitate/domain";
-import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@jevitate/storage-sqlite";
 import {
   RecordingSchema,
   AuthoringTakeSchema,
@@ -26,26 +22,11 @@ import {
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
 import {
   envCredentialStore,
-  requireKeys,
   MissingCredentialError,
-  FakeGenerationGateway,
   OpenRouterGenerationGateway,
-  RetryingGenerationPort,
-  RetryingJudgmentPort,
-  JevJudgmentGateway,
-  realJevClientCall,
   UsageTracker,
-  FAKE_CALL_USAGE,
-  formatUsageLine,
-  usageCountsFrom,
   type JudgmentPort,
   type GenerationPort,
-  type Answer,
-  type JudgmentState,
-  type Question,
-  type CatalogModel,
-  type ModelConstraints,
-  type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import {
@@ -60,9 +41,8 @@ import {
   type SecretField,
   type SuccessCheck,
 } from "@jevitate/explore";
-import { PlaywrightBrowserPort } from "@jevitate/playwright";
-import { CastActor, BrowseTheWeb, BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
-import { UnsafeNameError, assertSafeName, safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { BrowseTheWebToken } from "@jevitate/screenplay";
+import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
@@ -75,7 +55,6 @@ import {
   initProjectDir,
   logsDirFor,
   logsRoot,
-  projectDataDir,
   resultDirsFor,
   type ProjectInitReport,
 } from "./project-dir.js";
@@ -94,18 +73,11 @@ import {
 } from "./mission-api.js";
 import { startMcpServer } from "./mcp-api.js";
 import { FsMissionQueueStore } from "@jevitate/missions";
-import {
-  drainMissionQueue,
-  needsModel,
-  realQueuedMissionExecutor,
-  type DrainReport,
-  type QueuedMissionExecutor,
-} from "./mission-queue-runner.js";
+import { drainMissionQueue, needsModel, realQueuedMissionExecutor, type DrainReport } from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
 import { registerLedgerCommands } from "./ledger-cli.js";
 import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
-import { resolveUsagePricing } from "./usage-config.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
@@ -131,8 +103,8 @@ import {
   type MissionFixtures,
 } from "./mission-fixtures.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
-import { startUiServer, type StartUiServerDeps, type UiServerHandle } from "./ui-api.js";
-import { registerAiCommands, realSecureIO, type AiCliDeps } from "./ai-cli.js";
+import { startUiServer } from "./ui-api.js";
+import { registerAiCommands, realSecureIO } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
 import { registerInvariantsCommands } from "./invariants-validate.js";
@@ -141,25 +113,17 @@ import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js"
 import { currentEngineInfo, withEngine } from "./engine.js";
 import { setKillSwitchOutput } from "./kill-signal.js";
 import { EXIT_CODES } from "./exit-codes.js";
-import { commandPath, emitJsonOrRefusal, trackActionCommand } from "./cli-refusal.js";
+import { commandPath, trackActionCommand } from "./cli-refusal.js";
 import { finiteNumberArg, intArg, positiveNumberArg, nonNegativeIntArg, positiveIntArg, ratioArg } from "./cli-args.js";
 import {
-  emitEnvelope,
   formatInitKeysHuman,
   formatMissionHuman,
   formatMultiRunHuman,
   formatRegressionCaptureHuman,
   formatRegressionRunHuman,
   formatVerifyFixHuman,
-  type EmitOptions,
 } from "./cli-output.js";
-import {
-  detectRuntimes,
-  resolveInstallTargetPaths,
-  installSkills,
-  type RuntimeId,
-  type DetectionDeps,
-} from "./init-skills.js";
+import { detectRuntimes, resolveInstallTargetPaths, installSkills, type RuntimeId } from "./init-skills.js";
 import {
   registerMcp,
   resolveMcpTargetPaths,
@@ -177,7 +141,6 @@ import {
   parseAssertionSpec,
   parseSuccessSpec,
   resolveExploreAllowlist,
-  type ExploreCliDeps,
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
@@ -193,16 +156,11 @@ import {
   runUxReview,
   UxAnalysisFailedError,
   UsabilityInvariantsUnsupportedError,
-  type MissionTranscriptEntryLike,
 } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
 import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
 import { resolveDataDir } from "./data-dir.js";
-import {
-  runRecording,
-  resolveRecordAllowlist,
-  type RecorderLike,
-} from "./record-api.js";
+import { runRecording, resolveRecordAllowlist } from "./record-api.js";
 import {
   addSource,
   listSources,
@@ -214,17 +172,9 @@ import {
   realGhPort,
   NotPromotedError,
   NoDeclaredOriginsError,
-  type SourceApiDeps,
 } from "./source-api.js";
+import { runSourceJourney, realResolvedJourneyRunner, type SourceRunApiDeps } from "./source-run-api.js";
 import {
-  runSourceJourney,
-  realResolvedJourneyRunner,
-  type RunResolvedJourney,
-  type SourceRunApiDeps,
-} from "./source-run-api.js";
-import {
-  FsTrustStore,
-  FsAckStore,
   UnknownSourceError,
   EmbeddedSecretError,
   UndeclaredOriginError,
@@ -232,432 +182,46 @@ import {
   HashMismatchError,
   UntrustedRiskyJourneyError,
   SourceValidationError,
-  DEFAULT_LOCK_PATH,
-  type GitExec,
-  type GhPort,
 } from "@jevitate/sources";
-import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
-import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
+import { type EmulationSpec } from "@jevitate/playwright";
+import {
+  type RecordCliDeps,
+  type CliDeps,
+  resolveDbPath,
+  resolveJourneysDir,
+  resolveRegressionsDir,
+  resolveMissionTargetsDir,
+  resolveInboxDir,
+  resolveSourceApiDeps,
+  resolveApprovedBy,
+  makeRealBrowserActor,
+  type BrowserLaunchFlags,
+  withBrowserLaunchFlags,
+  browserLaunchFromFlags,
+  browserOption,
+  type EmulationFlags,
+  withEmulationFlags,
+  emulationFromFlags,
+  collectParam,
+  withSitePolicyRepository,
+  parsePlannedScript,
+  emitJson,
+  emitCommandResult,
+  refuseUnsafeName,
+  writeRawResult,
+  writeHumanResult,
+  stallTimeoutMs,
+  EXPLORE_STRATEGIES,
+  EXPLORE_OUTCOME_HELP,
+  GatewaySelectionError,
+  DEFAULT_EXPLORE_CATALOG,
+  DEFAULT_EXPLORE_CONSTRAINTS,
+  buildExploreGateways,
+  fakeDoneJudge,
+} from "./cli-shared.js";
 
-/** Injectable wiring for the `record` command (all optional; real defaults). */
-export interface RecordCliDeps {
-  /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
-  browserPortFactory?: () => BrowserPort;
-  /** Testing seam — defaults to a real `@jevitate/recorder` `Recorder`. */
-  recorderFactory?: (session: BrowserSession, site: string) => RecorderLike;
-  /** Testing seam — the "user signalled done" wait. Defaults to Enter on stdin. */
-  waitForStop?: () => Promise<void>;
-}
-
-export interface CliDeps {
-  profiles: ProfileManager;
-  dbPath?: string;
-  /**
-   * Prune `.jevitate/logs` by the retention policy before each command that writes run output (the
-   * real binary sets it; left unset, e.g. in tests, nothing is pruned implicitly). `logsRoot`
-   * overrides where (default: the project's logs, else `~/.jevitate/logs`).
-   */
-  logs?: { readonly autoPrune: boolean; readonly logsRoot?: string; readonly configPath?: string };
-  journeysDir?: string;
-  /** Optional, additive: overrides the mission-targets store directory
-   *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
-   *  resolves promoted targets from. */
-  missionTargetsDir?: string;
-  /** Optional, additive: overrides the inbox store directory (default:
-   *  ~/.jevitate/inbox). Same dir BOTH `jevitate mcp`'s inbox tools AND
-   *  `jevitate ui` resolve against by default — Task 8 threads one resolved
-   *  dir into both so they serve/consume the same store. */
-  inboxDir?: string;
-  /** Optional, additive: `jevitate ui` wiring (see ui-api.ts). Omitted in
-   *  production means the real `startUiServer`, which binds a real loopback
-   *  HTTP port — tests inject a fake so no port is ever bound. */
-  ui?: {
-    startUiServer?: (deps: StartUiServerDeps) => Promise<UiServerHandle>;
-  };
-  /** Optional, additive: `@jevitate/ai-core` wiring (see ai-cli.ts). Omitted in
-   *  production means real env + the deterministic fake generation gateway. */
-  ai?: AiCliDeps;
-  /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
-  explore?: ExploreCliDeps;
-  /** Optional, additive: `mission run` wiring — tests inject the executor so no browser opens. */
-  missions?: { execute?: QueuedMissionExecutor };
-  /** Optional, additive: `jevitate record` wiring (see record-api.ts). */
-  record?: RecordCliDeps;
-  /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
-   *  in production means the real `existsSync`/`homedir`/`cwd` and the real
-   *  `~/.jevitate/skills-install-state.json` state path.
-   *  `isInteractive` (#230): whether key collection may prompt stdin;
-   *  omitted in production means the real `process.stdin.isTTY` check. */
-  init?: { detection?: DetectionDeps; statePath?: string; isInteractive?: () => boolean };
-  /**
-   * Optional, additive: distributed-Journey-sources wiring (see source-api.ts).
-   * Every field is injectable so tests never touch the network, the real home
-   * dir, or the real `git`/`gh` binaries. Omitted in production means the real
-   * `~/.jevitate/sources` clone dir, `<cwd>/jevitate.lock`, `~/.jevitate/trust`
-   * stores, and the real `git`/`gh` ports.
-   */
-  sources?: {
-    sourcesDir?: string;
-    lockPath?: string;
-    trustDir?: string;
-    ackDir?: string;
-    git?: GitExec;
-    gh?: GhPort;
-    now?: () => string;
-    /** Identity recorded in a `TrustRecord`/`TouAck`; defaults to the OS user. */
-    approvedBy?: string;
-    /** Optional, additive: `jevitate source run` runner seam (see
-     *  source-run-api.ts). Omitted in production means the real
-     *  Playwright-backed `realResolvedJourneyRunner`; tests inject a fake so no
-     *  browser launches. */
-    runJourney?: RunResolvedJourney;
-  };
-}
-
-// `~/.jevitate/*` is the product's runtime-data convention (product = Jevitate).
-// See data-dir.ts.
-const DEFAULT_DB_PATH = resolveDataDir(["db.sqlite"]);
-
-const DEFAULT_MISSION_TARGETS_DIR = resolveDataDir(["missions", "targets"]);
-const DEFAULT_INBOX_DIR = resolveDataDir(["inbox"]);
-
-function resolveDbPath(deps: CliDeps, flag?: string): string {
-  return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
-}
-
-/**
- * Mirrors `resolveDbPath`'s flag > deps > home-dir-default convention: a
- * per-invocation `--dir` flag wins, then a `CliDeps.journeysDir` wired in by
- * the host, then `~/.jevitate/journeys`.
- */
-function resolveJourneysDir(deps: CliDeps, flag?: string): string {
-  return flag ?? deps.journeysDir ?? projectDataDir(["journeys"]);
-}
-
-/** Same flag > home-dir-default convention as `resolveJourneysDir`, for the
- *  committed-regressions directory `regression capture` writes into. */
-function resolveRegressionsDir(flag?: string): string {
-  return flag ?? projectDataDir(["regressions"]);
-}
-
-/** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
- *  the mission-targets store `mission target ...` reads/writes. */
-function resolveMissionTargetsDir(deps: CliDeps, flag?: string): string {
-  return flag ?? deps.missionTargetsDir ?? DEFAULT_MISSION_TARGETS_DIR;
-}
-
-/** Same flag > deps > home-dir-default convention as `resolveJourneysDir`, for
- *  the inbox store `jevitate mcp`'s inbox tools AND `jevitate ui` both read
- *  from — the SAME resolved directory, so the two commands agree on where
- *  approvals/handbacks/reviews live. */
-function resolveInboxDir(deps: CliDeps, flag?: string): string {
-  return flag ?? deps.inboxDir ?? DEFAULT_INBOX_DIR;
-}
-
-/**
- * Assembles the injected `SourceApiDeps` for the distributed-sources commands
- * from `CliDeps.sources` (test-injected ports) or the real production
- * defaults: `~/.jevitate/sources` clones, `<cwd>/jevitate.lock`, and the
- * local, per-user `FsTrustStore`/`FsAckStore` under `~/.jevitate/trust`.
- * Trust/ack stores are LOCAL by design (§14.1) — never the team-shared lock.
- */
-function resolveSourceApiDeps(deps: CliDeps): SourceApiDeps {
-  const s = deps.sources ?? {};
-  return {
-    sourcesDir: s.sourcesDir ?? resolveDataDir(["sources"]),
-    lockPath: s.lockPath ?? DEFAULT_LOCK_PATH(),
-    trust: new FsTrustStore(s.trustDir ?? resolveDataDir(["trust"])),
-    ack: new FsAckStore(s.ackDir ?? resolveDataDir(["trust", "acks"])),
-    git: s.git,
-    now: s.now,
-  };
-}
-
-/** The identity recorded in a `TrustRecord`/`TouAck` — an injected value, else
- *  the OS username, else `"local"`. Never a secret/credential. */
-function resolveApprovedBy(deps: CliDeps): string {
-  if (deps.sources?.approvedBy) return deps.sources.approvedBy;
-  try {
-    return userInfo().username || "local";
-  } catch {
-    return "local";
-  }
-}
-
-/**
- * Builds a fresh, real Playwright-backed `Actor` (its own temp profile dir +
- * browser context, per `journey-api.ts`'s `runJourneyProgrammatically`
- * pattern) and returns it alongside a `close()` to tear the session down.
- * `@jevitate/regression`'s `makeActor: () => Promise<Actor>` contract calls
- * this once per reproduce/minimize attempt — a Playwright session cannot be
- * reused after a run — so callers must close each one it hands back.
- */
-async function makeRealBrowserActor(
-  site: string,
-  storageState?: string,
-  emulation?: EmulationSpec,
-  browser?: BrowserLaunchOptions,
-  portFactory: () => BrowserPort = () => new PlaywrightBrowserPort(),
-): Promise<{ actor: Actor; close: () => Promise<void> }> {
-  const port = portFactory();
-  const session = await port.open({
-    ...browser,
-    headless: true,
-    allowedOrigins: [site],
-    baseUrl: site,
-    ...emulation,
-    ...(storageState !== undefined ? { storageState } : {}),
-  });
-  const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
-  return {
-    actor,
-    close: () => session.close(),
-  };
-}
-
-/** Raw commander values of the shared `--browser-*` launch flags. */
-interface BrowserLaunchFlags {
-  browserExecutable?: string;
-  browserChannel?: string;
-  browserArg: string[];
-}
-
-/**
- * Adds the shared Chromium launch flags to a browser-driving command. They map
- * 1:1 onto `@jevitate/playwright`'s `BrowserLaunchOptions`; `--browser-arg`
- * EXTENDS the Linux defaults (`--no-sandbox`, `--disable-dev-shm-usage`).
- */
-function withBrowserLaunchFlags(cmd: Command): Command {
-  return cmd
-    .option("--browser-executable <path>", "launch this Chromium binary instead of Playwright's pinned one")
-    .option("--browser-channel <name>", "Playwright browser channel to launch, e.g. chrome | msedge")
-    .option(
-      "--browser-arg <arg>",
-      "extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage",
-      (v, prev: string[]) => [...prev, v],
-      [] as string[],
-    );
-}
-
-/** The `BrowserLaunchOptions` for the parsed flags, or `undefined` when none were given. */
-function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOptions | undefined {
-  const launch: BrowserLaunchOptions = {
-    ...(o.browserExecutable !== undefined ? { executablePath: o.browserExecutable } : {}),
-    ...(o.browserChannel !== undefined ? { channel: o.browserChannel } : {}),
-    ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
-  };
-  return Object.keys(launch).length > 0 ? launch : undefined;
-}
-
-/** `{ browser }` for the parsed `--browser-*` flags, or `{}` when none were given — spread into a runner's options. */
-function browserOption(o: BrowserLaunchFlags): { browser?: BrowserLaunchOptions } {
-  const launch = browserLaunchFromFlags(o);
-  return launch === undefined ? {} : { browser: launch };
-}
-
-/** Raw commander values of the shared `--viewport`/`--device` emulation flags (#149). */
-interface EmulationFlags {
-  viewport?: string;
-  device?: string;
-}
-
-/**
- * Adds the shared `--viewport <W>x<H>` / `--device "<name>"` flags (#149) to a browser-driving
- * command — mutually exclusive, on `explore`, `journey run`, `load run`, `source run`, `verify-fix`
- * and `regression capture`/`run`. Absent both: Playwright's default (desktop) viewport, documented
- * in each command's `--help`.
- */
-function withEmulationFlags(cmd: Command): Command {
-  return cmd
-    .option("--viewport <WxH>", "emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)")
-    .option(
-      "--device <name>",
-      'emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)',
-    );
-}
-
-/**
- * The `EmulationSpec` for the parsed flags, or `undefined` when neither was given (Playwright's own
- * default viewport applies). Refused HERE, before any browser opens, when both are given —
- * `resolveEmulation` (an unknown `--device`, or both together) is also re-checked wherever the spec
- * is finally used, so every call path fails closed the same way.
- */
-function emulationFromFlags(o: EmulationFlags): EmulationSpec | undefined {
-  const spec: EmulationSpec = {
-    ...(o.viewport !== undefined ? { viewport: parseViewport(o.viewport) } : {}),
-    ...(o.device !== undefined ? { device: o.device } : {}),
-  };
-  if (Object.keys(spec).length === 0) return undefined;
-  resolveEmulation(spec); // throws UnknownDeviceError / ConflictingEmulationError before any browser opens
-  return spec;
-}
-
-/**
- * Parses repeated `--param key=value` flags into a `Record<string,string>`.
- * `previous` starts as the option's default (`{}`) and this is called once
- * per occurrence, commander's standard "collect" pattern.
- */
-function collectParam(value: string, previous: Record<string, string>): Record<string, string> {
-  const idx = value.indexOf("=");
-  const key = idx === -1 ? value : value.slice(0, idx);
-  const val = idx === -1 ? "" : value.slice(idx + 1);
-  return { ...previous, [key]: val };
-}
-
-function makeClock() {
-  return {
-    nowIso: () => new Date().toISOString(),
-    monotonicMs: () => Date.now(),
-  };
-}
-
-async function withSitePolicyRepository<T>(
-  dbPath: string,
-  fn: (repository: SqliteSitePolicyRepository) => Promise<T>
-): Promise<T> {
-  await mkdir(dirname(dbPath), { recursive: true });
-  const db = openDatabase(dbPath);
-  try {
-    await migrateToLatest(db);
-    const repository = new SqliteSitePolicyRepository(db, makeClock());
-    return await fn(repository);
-  } finally {
-    await db.destroy();
-  }
-}
-
-function isPlannedStep(value: unknown): value is PlannedStep {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  if (typeof record.label !== "string") return false;
-  switch (record.kind) {
-    case "type":
-      return typeof record.text === "string";
-    case "click":
-    case "navigate":
-      return true;
-    case "read":
-      return typeof record.chars === "number";
-    default:
-      return false;
-  }
-}
-
-function parsePlannedScript(raw: string): PlannedStep[] {
-  const parsed: unknown = JSON.parse(raw);
-  if (!Array.isArray(parsed) || !parsed.every(isPlannedStep)) {
-    throw new Error("script must be a JSON array of planned steps ({kind, label, ...})");
-  }
-  return parsed;
-}
-
-/**
- * Writes a JSON envelope using the program's CURRENTLY-CONFIGURED output
- * writer (read at call time via `configureOutput()`), so tests that call
- * `program.configureOutput({ writeOut })` after `buildProgram()` still see
- * output routed to their writer. Also sets `process.exitCode` (0 for `ok`; for
- * `fail`, the error's class from exit-codes.ts — 64 usage, else 2) instead of
- * hard-exiting, so `exitOverride()` in tests works.
- */
-function emitJson(program: Command, envelope: JsonEnvelope<unknown>): void {
-  // #218: a refusal without --json is a human `error <CODE>: …` line on stderr (cli-refusal.ts).
-  emitJsonOrRefusal(program, envelope);
-  if (envelope.ok) emitUsageLine(program, envelope.data);
-}
-
-/**
- * #210: the envelope with `--json`, else a human summary (a refusal: `error <CODE>: …` on stderr);
- * the cost line on stderr either way. Exit code: the verdict's, else the envelope's class (exit-codes.ts).
- */
-function emitCommandResult<T>(program: Command, envelope: JsonEnvelope<T>, opts: EmitOptions<T>): void {
-  emitEnvelope(program, envelope, opts);
-  if (envelope.ok) emitUsageLine(program, envelope.data);
-}
-
-/**
- * #221: a user-supplied name that becomes a path (a profile name, a regression id) must be one safe
- * segment (`assertSafeName`, @jevitate/domain). Refuses it (E_INVALID_NAME, exit 64) and returns true.
- */
-function refuseUnsafeName(program: Command, name: string, what: string): boolean {
-  try {
-    assertSafeName(name, what);
-    return false;
-  } catch (err) {
-    if (!(err instanceof UnsafeNameError)) throw err;
-    emitJson(program, fail(err.code, err.message));
-    return true;
-  }
-}
-
-/** A non-`--json` result: printed as bare JSON on stdout, with the cost summary line on stderr. */
-function writeRawResult(program: Command, result: unknown): void {
-  program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
-  emitUsageLine(program, result);
-}
-
-/** A non-`--json` result (#227): the human summary a `cli-output.ts` formatter renders, with the cost summary line on stderr. */
-function writeHumanResult(program: Command, result: unknown, human: (data: unknown) => string): void {
-  const text = human(result);
-  if (text !== "") program.configureOutput().writeOut?.(text);
-  emitUsageLine(program, result);
-}
-
-/**
- * The human cost summary (#163) — on STDERR, so stdout stays exactly the JSON a caller parses:
- * `usage: cost $0.0312 (jev $0.0203 + generation $0.0109) · 398 judgments, …`, flagged
- * `(partial: …)` when some call could not be priced. Nothing when the result carries no usage.
- */
-function emitUsageLine(program: Command, data: unknown): void {
-  if (data === null || typeof data !== "object") return;
-  const usage = usageCountsFrom((data as { usage?: unknown }).usage);
-  if (usage === undefined || usage.judgments + usage.generations === 0) return;
-  program.configureOutput().writeErr?.(`usage: ${formatUsageLine(usage)}\n`);
-}
-
-/**
- * `explore --help` trailer documenting every `outcome`/`stop`/`missionOutcome` value and its
- * exit code (issue #83 item 2) — mirrors the README "Mission outcomes and exit codes" /
- * "Every outcome, stop and missionOutcome value" sections, derived from the same sources:
- * `MISSION_EXIT_CODES` (@jevitate/domain) and `goalExitCode`/`missionExitCode` (./mission-exit.ts).
- */
-/** `--stall-timeout <seconds>` (#114) → milliseconds; `undefined` when omitted, `null` when not a positive number. */
-function stallTimeoutMs(raw: string | number | undefined): number | undefined | null {
-  if (raw === undefined) return undefined;
-  const seconds = Number(raw);
-  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
-}
-
-/** #230: the only `--strategy` values `explore` accepts; anything else is refused, never silently run as goal. */
-const EXPLORE_STRATEGIES = ["goal", "coverage", "exploratory", "adversarial", "usability"] as const;
-
-const EXPLORE_OUTCOME_HELP = `
-Outcomes, stop reasons and exit codes:
-  Every result carries a canonical missionOutcome (and exitCode), whatever the strategy:
-    clean 0 · defects-found 1 · inconclusive 2 · crashed 2 · hang 3 · intermittent 4
-  --strategy goal also carries its own ending as "goalOutcome" (= its "outcome"), folded onto missionOutcome:
-    succeeded → clean 0 · failed / exhausted / blocked → defects-found 1
-    (defects-found, inconclusive, crashed, hang, intermittent are themselves)
-  --strategy goal's "stop" (why the loop itself stopped; not separately exit-coded):
-    done | blocked | exhausted | no-progress | hang | inconclusive | crashed | budget
-    (a "done" code rejected ends stop done, goalOutcome failed — never blocked)
-  --strategy adversarial's "stop" (why the hunt ended; its "outcome" is the canonical one above):
-    step-budget | action-budget | time-budget | strategies-exhausted | not-rendered
-    | scope-unreachable | targets-refused | target-unresponsive | hang | crashed
-  --strategy coverage/exploratory's own "outcome" (folds into missionOutcome above):
-    exhausted | insufficient-coverage | cap | scope-unreachable | stalled | crashed | hang
-  A run that proved nothing is inconclusive with failure.kind insufficient-coverage (the same word as
-  the frontier outcome), and failure.message says how to reach clean.
-  A starved host (#203): every result carries "hostHealth" (peak load/core, min free memory, peak
-  event-loop lag, slowest render). A hang, click timeout or no-progress met while the host was
-  starved is listed in "environmentDegraded" (advisory, never a finding); a run most of whose steps
-  ran starved is inconclusive (failure.kind degraded-environment), never clean.
-  --feature's own "outcome" (folds into missionOutcome above):
-    exhausted | insufficient-coverage | cap | path-cap | scope-unreachable | stalled | crashed | hang
-  Argument/input errors (E_EXPLORE_ARGS, E_EXPLORE_ASSERTION, …) exit 64, never 1.
-  Without --json: a human summary (verdict, defects by fingerprint, result file, next step);
-  with --json: the {v, ok, data} envelope.
-  Every command's exit codes: docs/outcomes.md "Exit codes".
-`;
+export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
+export { fakeDoneJudge } from "./cli-shared.js";
 
 /**
  * `--version`'s display string: the published semver alone once that alone identifies the
@@ -3939,103 +3503,6 @@ function registerLogsCommands(program: Command, deps: CliDeps): void {
         else emitJson(program, fail("E_LOGS_PRUNE", err instanceof Error ? err.message : String(err)));
       }
     });
-}
-
-/** Distinct from MissingCredentialError: "no --real/--fake-ai selected" vs "keys missing." */
-class GatewaySelectionError extends Error {}
-
-const DEFAULT_EXPLORE_CATALOG: CatalogModel[] = [
-  { id: "openai/gpt-4o-mini", promptUsdPer1k: 0.15, completionUsdPer1k: 0.6, regions: [], latencyClass: "fast", capabilities: [] },
-];
-const DEFAULT_EXPLORE_CONSTRAINTS: ModelConstraints = { requiredCapabilities: [] };
-
-/**
- * Selects the exploration gateways. Injected gateways (tests) win; otherwise
- * `--real` builds the live Jev + OpenRouter adapters behind a fail-closed
- * credential preflight, and `--fake-ai` uses deterministic fakes (a pipeline
- * smoke — the fake judge always proposes `done`, so it will not drive to a
- * goal). No selection is a fail-closed refusal, never a silent fake.
- */
-async function buildExploreGateways(
-  deps: CliDeps,
-  opts: { real: boolean; fakeAi: boolean },
-): Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }> {
-  // #100: ONE tracker per invocation, handed to whichever gateways are built below — real (counted
-  // at the innermost seam, so a retry counts too) or fake (0 tokens, so a test can assert the shape
-  // without a key). Injected gateways (tests) get an empty tracker: they have no real seam to count.
-  // #136/#163: configured prices (env/config) override the built-in, versioned price tables.
-  // #213: --real and --fake-ai are mutually exclusive — silently preferring one (real used to win)
-  // hides that the caller's own flags contradict each other.
-  if (opts.real && opts.fakeAi) {
-    throw new GatewaySelectionError("--real and --fake-ai are mutually exclusive — pass one, not both");
-  }
-  const usage = deps.explore?.usage ?? new UsageTracker(resolveUsagePricing(deps.explore?.env ?? process.env));
-  if (deps.explore?.judge && deps.explore?.gen) {
-    return { judge: deps.explore.judge, gen: deps.explore.gen, usage };
-  }
-  const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
-  if (opts.real) {
-    requireKeys("generation", store); // fail-closed
-    requireKeys("judgment", store); // fail-closed
-    const gen = new OpenRouterGenerationGateway({
-      store,
-      catalog: DEFAULT_EXPLORE_CATALOG,
-      constraints: DEFAULT_EXPLORE_CONSTRAINTS,
-      call: await realOpenRouterCall(usage),
-    });
-    const judge = new JevJudgmentGateway(store, await realJevClientCall(undefined, usage));
-    // Transient model/network failures are retried with exponential backoff + jitter (≈16s), then
-    // fail typed; validation/auth errors fail at once (owner ruling 4).
-    return { judge: new RetryingJudgmentPort(judge), gen: new RetryingGenerationPort(gen), usage };
-  }
-  if (opts.fakeAi) {
-    return { judge: fakeDoneJudge(usage), gen: new FakeGenerationGateway(undefined, usage), usage };
-  }
-  throw new GatewaySelectionError(
-    "no gateway selected — pass --real for live Jev+OpenRouter (after `jevitate ai setup`), or --fake-ai for a deterministic pipeline smoke",
-  );
-}
-
-/**
- * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It is TOTAL and
- * deterministic: it answers EVERY question it is asked, whatever the mission or rubric names it
- * (#213) — a choice offering `done` picks `done` (so the goal/coverage loop stops at once, and
- * will not drive to a goal); a choice that does NOT offer `done` (e.g. the UX quality grader's
- * label set, `grade::0`) deterministically picks its first listed option instead of throwing; a
- * noul answers "no"; a score answers 0. It never throws on a question SHAPE it does not
- * specifically know about — only on a malformed one (a choice with no options at all), which is a
- * bug upstream, not an unknown question. `usage` (#100) is optional: when supplied, every call
- * reports 1 judgment at 0 tokens.
- */
-export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
-  return {
-    async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
-      const out: Record<string, Answer> = {};
-      for (const [name, q] of Object.entries(args.questions)) {
-        switch (q.kind) {
-          case "choice": {
-            // #213: total over every choice family, not just the goal/coverage loop's `done`.
-            const value = q.options.includes("done") ? "done" : q.options[0];
-            if (value === undefined) throw new Error(`fake judge: question '${name}' offers no options`);
-            out[name] = { kind: "choice", value, confidence: 1 };
-            break;
-          }
-          case "noul":
-            out[name] = { kind: "noul", value: false, probability: 0 };
-            break;
-          case "score":
-            out[name] = { kind: "score", value: 0 };
-            break;
-          default: {
-            const exhaustive: never = q;
-            throw new Error(`fake judge: unsupported question ${JSON.stringify(exhaustive)}`);
-          }
-        }
-      }
-      usage?.recordJudgment(FAKE_CALL_USAGE);
-      return out;
-    },
-  };
 }
 
 /**
