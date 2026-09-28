@@ -87,7 +87,9 @@ other than the repo's `.jevitate/regressions`.
 `ledger verify` exits with the worst verdict across the entries it checked, in this order:
 `still-reproduces` (1), then `intermittent` (4), then `inconclusive` (2). It exits 0 only when every
 entry is `fixed`. An entry that cannot be replayed, for example because its session is missing,
-counts as `inconclusive` and never as fixed.
+counts as `inconclusive` and never as fixed. Nothing chosen to verify (an empty ledger, or
+`--ticket`/fingerprints matching nothing) is inconclusive too (exit 2, "NOTHING VERIFIED") — never a
+false `FIXED` at exit 0.
 
 ## Reproducing a finding: `verify-fix`
 

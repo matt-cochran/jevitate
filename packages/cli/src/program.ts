@@ -143,7 +143,16 @@ import { setKillSwitchOutput } from "./kill-signal.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { commandPath, emitJsonOrRefusal, trackActionCommand } from "./cli-refusal.js";
 import { finiteNumberArg, intArg, positiveNumberArg, nonNegativeIntArg, positiveIntArg, ratioArg } from "./cli-args.js";
-import { emitEnvelope, formatInitKeysHuman, formatMissionHuman, formatMultiRunHuman, formatVerifyFixHuman, type EmitOptions } from "./cli-output.js";
+import {
+  emitEnvelope,
+  formatInitKeysHuman,
+  formatMissionHuman,
+  formatMultiRunHuman,
+  formatRegressionCaptureHuman,
+  formatRegressionRunHuman,
+  formatVerifyFixHuman,
+  type EmitOptions,
+} from "./cli-output.js";
 import {
   detectRuntimes,
   resolveInstallTargetPaths,
@@ -581,6 +590,13 @@ function refuseUnsafeName(program: Command, name: string, what: string): boolean
 /** A non-`--json` result: printed as bare JSON on stdout, with the cost summary line on stderr. */
 function writeRawResult(program: Command, result: unknown): void {
   program.configureOutput().writeOut?.(`${JSON.stringify(result)}\n`);
+  emitUsageLine(program, result);
+}
+
+/** A non-`--json` result (#227): the human summary a `cli-output.ts` formatter renders, with the cost summary line on stderr. */
+function writeHumanResult(program: Command, result: unknown, human: (data: unknown) => string): void {
+  const text = human(result);
+  if (text !== "") program.configureOutput().writeOut?.(text);
   emitUsageLine(program, result);
 }
 
@@ -1078,8 +1094,12 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
-          for (const m of metas) {
-            out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}\n`);
+          if (metas.length === 0) {
+            out?.("no journeys yet — record one with `jevitate record` (see jevitate record --help)\n");
+          } else {
+            for (const m of metas) {
+              out?.(`${m.id}\t${m.name}${m.promoted ? "" : " (unpromoted)"}\n`);
+            }
           }
           process.exitCode = 0;
         }
@@ -1399,8 +1419,12 @@ export function buildProgram(deps: CliDeps): Command {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
-          for (const s of listing) {
-            out?.(`${s.name}\t${s.gitUrl}\t${s.pinnedCommit}\ttrusted=[${s.trustedJourneys.join(", ")}]\n`);
+          if (listing.length === 0) {
+            out?.("no sources yet — add one with `jevitate source add <name> <gitUrl>`\n");
+          } else {
+            for (const s of listing) {
+              out?.(`${s.name}\t${s.gitUrl}\t${s.pinnedCommit}\ttrusted=[${s.trustedJourneys.join(", ")}]\n`);
+            }
           }
           process.exitCode = 0;
         }
@@ -3166,7 +3190,9 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          writeRawResult(program, result);
+          // #227: a human summary (captured/flaky, where the files went, what to run next) — never
+          // the raw result JSON, which used to print unconditionally without --json.
+          writeHumanResult(program, result, formatRegressionCaptureHuman);
           process.exitCode = 0;
         }
       } catch (err) {
@@ -3235,7 +3261,8 @@ export function buildProgram(deps: CliDeps): Command {
         if (json) {
           emitJson(program, envelope);
         } else {
-          program.configureOutput().writeOut?.(`${JSON.stringify(report)}\n`);
+          // #227: the verdict/reason/next-step summary — never the raw report JSON.
+          program.configureOutput().writeOut?.(formatRegressionRunHuman(report));
         }
         process.exitCode = report.verdict === "reproduces" ? 1 : report.verdict === "fixed" ? 0 : 2;
       } catch (err) {
@@ -3744,13 +3771,19 @@ function useUsageExitCode(cmd: Command): void {
   cmd.error = (message: string, errorOptions?: { code?: string; exitCode?: number }): never => {
     // An argParser's InvalidArgumentError (cli-args.ts) carries commander's generic exit code 1.
     const exitCode = errorOptions?.code === "commander.invalidArgument" ? EXIT_CODES.usage : (errorOptions?.exitCode ?? EXIT_CODES.usage);
+    const bare = message.replace(/^error: /, "");
     // #218: a bad numeric value (cli-args.ts), unknown flag or missing argument under `--json` still
     // yields the one envelope line a machine caller parses; commander's human line goes to stderr.
     if (exitCode === EXIT_CODES.usage && rawArgsOf(rootOf(cmd)).includes("--json")) {
-      const envelope = fail(usageParseErrorCode(cmd), message.replace(/^error: /, ""));
+      const envelope = fail(usageParseErrorCode(cmd), bare);
       rootOf(cmd).configureOutput().writeOut?.(`${JSON.stringify(envelope)}\n`);
     }
-    return original(message, { ...errorOptions, exitCode });
+    // #227: the human stderr line matches every other refusal's `error <CODE>: …` (+ a --help hint) —
+    // never commander's own unlabeled `error: …` text, which used to be the only usage refusal
+    // without a code (the code appeared only under --json).
+    const path = commandPath(cmd);
+    const human = exitCode === EXIT_CODES.usage ? `error ${usageParseErrorCode(cmd)}: ${bare}\nnext: jevitate ${path === "" ? "" : `${path} `}--help` : message;
+    return original(human, { ...errorOptions, exitCode });
   };
   for (const sub of cmd.commands) useUsageExitCode(sub);
 }

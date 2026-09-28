@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
+import { formatBaselineListHuman, formatBaselineShowHuman, formatBaselineTagHuman } from "./cli-output.js";
 import {
   ReportInputError,
   buildReport,
@@ -109,7 +110,13 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
         const dirs = o.dir.length > 0 ? o.dir : defaultResultDirs();
         const resolved = resolveRunRefs(runs, { dirs, ...(deps.baselinesDir === undefined ? {} : { baselinesDir: deps.baselinesDir }) });
         const { tag, path } = await tagBaseline({ name, runs: resolved, ...(deps.baselinesDir === undefined ? {} : { dir: deps.baselinesDir }) });
-        emit(program, ok({ name: tag.name, path, createdAt: tag.createdAt, runs: tag.runs.map(summarizeRun) }), 0);
+        const data = { name: tag.name, path, createdAt: tag.createdAt, runs: tag.runs.map(summarizeRun) };
+        // #227: a human summary without --json — this used to print the raw envelope unconditionally.
+        if (o.json) emit(program, ok(data), 0);
+        else {
+          program.configureOutput().writeOut?.(formatBaselineTagHuman(data));
+          process.exitCode = 0;
+        }
       } catch (err) {
         failure(program, err, "E_BASELINE");
       }
@@ -118,8 +125,15 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .command("list")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
+      const o = this.opts<{ json?: boolean }>();
       try {
-        emit(program, ok(await listBaselines(deps.baselinesDir)), 0);
+        const listing = await listBaselines(deps.baselinesDir);
+        // #227: `--json` was never read here before — success always printed the raw envelope.
+        if (o.json) emit(program, ok(listing), 0);
+        else {
+          program.configureOutput().writeOut?.(formatBaselineListHuman(listing));
+          process.exitCode = 0;
+        }
       } catch (err) {
         failure(program, err, "E_BASELINE");
       }
@@ -128,10 +142,19 @@ export function registerReportCommands(program: Command, deps: ReportCliDeps): v
     .command("show <name>")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, name: string) {
+      const o = this.opts<{ json?: boolean }>();
       try {
         const tag = readBaseline(name, deps.baselinesDir);
-        if (tag === null) emit(program, fail("E_BASELINE_NOT_FOUND", `no baseline tag named ${JSON.stringify(name)}`));
-        else emit(program, ok({ name: tag.name, createdAt: tag.createdAt, sources: tag.sources, runs: tag.runs.map(summarizeRun) }), 0);
+        if (tag === null) {
+          emit(program, fail("E_BASELINE_NOT_FOUND", `no baseline tag named ${JSON.stringify(name)}`));
+        } else {
+          const data = { name: tag.name, createdAt: tag.createdAt, sources: tag.sources, runs: tag.runs.map(summarizeRun) };
+          if (o.json) emit(program, ok(data), 0);
+          else {
+            program.configureOutput().writeOut?.(formatBaselineShowHuman(data));
+            process.exitCode = 0;
+          }
+        }
       } catch (err) {
         failure(program, err, "E_BASELINE");
       }
