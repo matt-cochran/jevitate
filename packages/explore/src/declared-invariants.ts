@@ -52,6 +52,32 @@ import {
 import { isAuthorizedExploreTarget } from "./authorized-targets.js";
 import { redactText, redactUrl } from "./redact.js";
 import { invariantFingerprint, normalizeRoute } from "./adversarial/defect-fingerprint.js";
+import {
+  DOM_TIMEOUT_MS,
+  FLUSH_POLL_MS,
+  FLUSH_WAIT_MS,
+  GRPC_CODES,
+  LOGIN_PATH_RE,
+  MAX_APP_EVIDENCE,
+  MAX_BODY_BYTES,
+  MAX_RESPONSE_HITS,
+  MAX_VALUE_CHARS,
+  DEFAULT_SETTLE_POLL_MS,
+  OBSERVER_IDLE_MS,
+  OBSERVER_NAV_TIMEOUT_MS,
+  PENDING_BODY_WAIT_MS,
+  PROBE_TIMEOUT_MS,
+  connectCodeOf,
+  display,
+  firstLine,
+  isList,
+  matchesActionWhen,
+  matchesUrlGlob,
+  namesUsing,
+  pageOf,
+  pathnameOf,
+  safeUrl,
+} from "./declared-invariants/internal.js";
 import { parseNumbers } from "./declared-invariants/numbers.js";
 import type {
   AfterOptions,
@@ -120,100 +146,6 @@ interface CompiledInvariant {
 interface BoundCapture {
   readonly value: string;
   readonly evidence: string;
-}
-
-const DOM_TIMEOUT_MS = 1_000;
-const PROBE_TIMEOUT_MS = 10_000;
-const MAX_BODY_BYTES = 1_000_000;
-const MAX_VALUE_CHARS = 120;
-const DEFAULT_SETTLE_POLL_MS = 1_000;
-const PENDING_BODY_WAIT_MS = 2_000;
-const OBSERVER_NAV_TIMEOUT_MS = 15_000;
-const OBSERVER_IDLE_MS = 5_000;
-const MAX_APP_EVIDENCE = 5;
-/** #195: matching responses kept per `never.response` invariant between two checks (the rest are counted). */
-const MAX_RESPONSE_HITS = 20;
-/** #195: at run end, how long to wait for an in-flight request a `never.response` glob names. */
-const FLUSH_WAIT_MS = 5_000;
-const FLUSH_POLL_MS = 50;
-/** An observer bounced here lost its session: "undecided", never "denied" (#147, cf. #82). */
-const LOGIN_PATH_RE = /(^|\/)(log-?in|sign-?in|signin|auth|sso)(\/|$)/i;
-/** gRPC status codes → the Connect code names (#73/#110: gRPC-web reports errors in a header). */
-const GRPC_CODES: Readonly<Record<string, string>> = {
-  "1": "canceled",
-  "2": "unknown",
-  "3": "invalid_argument",
-  "4": "deadline_exceeded",
-  "5": "not_found",
-  "6": "already_exists",
-  "7": "permission_denied",
-  "8": "resource_exhausted",
-  "9": "failed_precondition",
-  "10": "aborted",
-  "11": "out_of_range",
-  "12": "unimplemented",
-  "13": "internal",
-  "14": "unavailable",
-  "15": "data_loss",
-  "16": "unauthenticated",
-};
-
-function namesUsing(ast: ExprNode, fns: ReadonlyArray<"before" | "after" | "delta">): string[] {
-  const out = new Set<string>();
-  walkExpression(ast, (n) => {
-    if (n.t === "obs" && fns.includes(n.fn)) out.add(n.name);
-  });
-  return [...out];
-}
-
-function matchesActionWhen(w: CaptureWhen, action: InvariantAction | null): boolean {
-  if (action === null || action.op === null) return false;
-  if (w.op !== undefined && !w.op.includes(action.op)) return false;
-  if (w.control !== undefined && (action.control === null || !matchesPattern(w.control.name, action.control, true))) return false;
-  if (w.route !== undefined && !globRegex(w.route).test(pathnameOf(action.url))) return false;
-  return true;
-}
-
-/** The Connect/gRPC error code of a response, if it carries one (header, or a Connect JSON error body). */
-async function connectCodeOf(response: Response): Promise<string | null> {
-  const headers = response.headers();
-  const grpc = headers["grpc-status"];
-  if (grpc !== undefined) return GRPC_CODES[grpc.trim()] ?? null;
-  if (response.status() < 400 || !(headers["content-type"] ?? "").includes("json")) return null;
-  const buf = await response.body().catch(() => null);
-  if (buf === null || buf.length > MAX_BODY_BYTES) return null;
-  try {
-    const body: unknown = JSON.parse(buf.toString("utf8"));
-    const code = body !== null && typeof body === "object" && "code" in body ? (body as { code: unknown }).code : null;
-    return typeof code === "string" && /^[a-z_]+$/.test(code) ? code : null;
-  } catch {
-    return null;
-  }
-}
-
-function pageOf(actor: Actor): Page {
-  return actor.ability(BrowseTheWebToken).session.page;
-}
-
-function matchesUrlGlob(glob: string, url: string): boolean {
-  const re = globRegex(glob);
-  if (glob.startsWith("/")) {
-    try {
-      const u = new URL(url);
-      return re.test(`${u.pathname}${u.search}`) || re.test(u.pathname);
-    } catch {
-      return false;
-    }
-  }
-  return re.test(url);
-}
-
-function pathnameOf(url: string): string {
-  try {
-    return new URL(url).pathname;
-  } catch {
-    return url.split(/[?#]/)[0] ?? url;
-  }
 }
 
 export class InvariantMonitor {
@@ -1081,23 +1013,3 @@ export class InvariantMonitor {
   }
 }
 
-function display(v: InvariantValue): string {
-  if (v !== null && typeof v === "object") return "items" in v ? `(${v.items} items)` : "(unreadable)";
-  return JSON.stringify(v);
-}
-
-function isList(v: EvalValue): v is ObservedList {
-  return Array.isArray(v);
-}
-
-function firstLine(e: unknown): string {
-  return (e instanceof Error ? e.message : String(e)).split("\n")[0] ?? "";
-}
-
-function safeUrl(page: Page): string {
-  try {
-    return page.url();
-  } catch {
-    return "";
-  }
-}
