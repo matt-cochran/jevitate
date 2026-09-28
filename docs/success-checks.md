@@ -26,8 +26,18 @@ decides it. `--success` can be repeated, and every check must hold:
 
 In these specs:
 
-- `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…`, or a CSS selector
-  (`[data-testid=x]` is read as the test id).
+- `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…` (key=value pairs joined by `;`) — a `=`
+  always wins, so this form is never read as CSS or text. With no `=` at all: a descriptor starting
+  with `[`, `#` or `.` is CSS verbatim (`[data-testid=x]` is read as the test id); any OTHER bare
+  descriptor is read as CSS too, but only when it is a **lowercase-only, syntactically valid CSS
+  selector** — a tag name or a combination of them, classes, ids, attributes, pseudo-classes, e.g.
+  `visible:h1`, `textIncludes:main h1|Welcome`, `visible:body`, `visible:div.card`,
+  `visible:ul > li`. HTML tag/class/id names are conventionally lowercase, so requiring the WHOLE
+  string to be lowercase is what tells a genuine selector apart from a plain accessible-name phrase
+  (`Display name` has a capital `D`: never guessed at as CSS, and never guessed at as text either).
+  A bare descriptor that is not a valid key=value spec and not a lowercase CSS selector is refused
+  with a hint naming the key=value forms (`css=`, `label=`, `testId=`, `role=`, `text=`) and an
+  example — never a silent guess.
 - The last `|` separates the descriptor from the text or value (for `style` too). The other
   visual kinds split the descriptor off at the first `|`.
 - Visual-state checks are read by fixed built-in page functions and decided by code, never a
@@ -81,7 +91,10 @@ count every captured request again. Under `--success-when held` this is the same
 start-page rule above.
 
 The result lists each check with what the oracle saw, so a failing run names the
-check that caught it:
+check that caught it. A failing `textIncludes` or `valueEquals` (including `reloadThen:valueEquals`)
+names what was actually read, bounded and redacted — e.g. `did not hold after a reload (read:
+"Lovelace")` for a save that never persisted, instead of a bare "did not hold" that leaves you
+guessing whether the value was wrong or just differently cased.
 
 ```bash
 jevitate explore --url https://app.example.test/profile --goal "set the last name to Litmus and save" \

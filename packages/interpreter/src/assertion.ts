@@ -114,14 +114,16 @@ async function evaluateAssertionOnce(actor: Actor, a: Assertion): Promise<boolea
 }
 
 /**
- * The literal text `textIncludes` compares against, for enriching a failure detail with what was
- * actually read (#113) — a case/CSS-text-transform mismatch is otherwise invisible in "did not
- * hold". The caller bounds and redacts it before surfacing it (page text is untrusted, and may carry
- * a secret). Returns null for a target that did not resolve, or for any other assertion kind.
+ * What `textIncludes` or `valueEquals` actually read, for enriching a failure detail (#113, #213) —
+ * a case/CSS-text-transform mismatch, or a `reloadThen:valueEquals` that read something other than
+ * expected, is otherwise invisible in "did not hold". The caller bounds and redacts it before
+ * surfacing it (page text or a form value is untrusted, and may carry a secret). Returns null for a
+ * target that did not resolve, or for any other assertion kind.
  */
 export async function readAssertionText(actor: Actor, a: Assertion): Promise<string | null> {
-  if (a.kind !== "textIncludes") return null;
-  return actor.asks(TextOf.target(descriptorToTarget(a.target))).catch(() => null);
+  if (a.kind === "textIncludes") return actor.asks(TextOf.target(descriptorToTarget(a.target))).catch(() => null);
+  if (a.kind === "valueEquals") return actor.asks(ValueOf.target(descriptorToTarget(a.target))).catch(() => null);
+  return null;
 }
 
 /**

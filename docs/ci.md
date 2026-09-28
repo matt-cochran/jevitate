@@ -182,9 +182,17 @@ boolean, and a number is a JSON number.
 - An item that sets an option that does not apply to it is refused, naming the path
   (`$.targets[0].missions[1].fixture: does not apply to a coverage mission item`), just as
   `explore` refuses the flag. A target default only reaches the items it applies to.
+- **Every problem is reported, not just the first (#213).** A suite with several unrelated
+  mistakes — a typo'd field in one target, a bad budget value, an invalid goal in another target —
+  refuses with every one of them, each on its own path-precise line, joined by `; `. One bad
+  journey/goal/mission/verify-fix item no longer hides the next sibling item's own problem, or the
+  rest of that target's fields; only a target with no `targets` entries at all still short-circuits
+  ("at least one target is required").
 - **No literal secrets.** `secret` takes `env:<VAR>` references only, and `secretFields`/`totp`
   take `<descriptor>=env:<VAR>` bindings only. A literal is refused (and never echoed); the
-  variables are read when the check starts, and an unset one is refused before anything runs.
+  variables are read when the check starts, and an unset one is refused naming its path-precise
+  location (`$.targets[0].goals[0]: secret env:SHOP_PASSWORD: environment variable SHOP_PASSWORD is
+  not set`), before anything runs.
 - `persona`/`personas` run the item once per persona, each from its own storage state, as
   `<item>@<persona>`. Each run is gated on its own (the check does not diff personas; use
   `explore --persona` for the RBAC diff). An item with `actor`, `persona` or `personas` cannot also
