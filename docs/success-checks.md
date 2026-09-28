@@ -26,11 +26,12 @@ decides it. `--success` can be repeated, and every check must hold:
 
 In these specs:
 
-- `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…` (key=value pairs joined by `;`) — a `=`
-  always wins, so this form is never read as CSS or text. With no `=` at all: a descriptor starting
-  with `[`, `#` or `.` is CSS verbatim (`[data-testid=x]` is read as the test id); any OTHER bare
-  descriptor is read as CSS too, but only when it is a **lowercase-only, syntactically valid CSS
-  selector** — a tag name or a combination of them, classes, ids, attributes, pseudo-classes, e.g.
+- `<d>` is `testId=…;role=…;name=…;label=…;text=…;css=…` (key=value pairs joined by `;`). It is
+  read in this order: (1) a descriptor starting with `[`, `#` or `.` is CSS verbatim
+  (`[data-testid=x]` is read as the test id); (2) otherwise, any recognised `key=` pair (`testId`,
+  `role`, `name`, `label`, `text`, `css`) wins; (3) with no recognised pair, the descriptor is read
+  as CSS only when it is a **lowercase-only, syntactically valid CSS selector** — which may itself
+  contain `=`, e.g. `input[name=email]` (`input` is not a key) — a tag name or a combination of them, classes, ids, attributes, pseudo-classes, e.g.
   `visible:h1`, `textIncludes:main h1|Welcome`, `visible:body`, `visible:div.card`,
   `visible:ul > li`. HTML tag/class/id names are conventionally lowercase, so requiring the WHOLE
   string to be lowercase is what tells a genuine selector apart from a plain accessible-name phrase

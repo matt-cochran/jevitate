@@ -120,14 +120,21 @@ const SELECT_TIMEOUT_MS = 5_000;
  * actionability timeout and throw (#77).
  */
 const GATE_TIMEOUT_MS = 2_000;
+/** Default bound (ms) on the click Playwright performs after the gate has passed. */
+export const DEFAULT_CLICK_TIMEOUT_MS = 5_000;
+
 /**
  * Bound (ms) on the click Playwright performs after the gate has passed: `JEVITATE_CLICK_TIMEOUT_MS`
- * (a positive integer) raises it for a slow app or a loaded host (#213), else 5s.
+ * (a positive integer) raises it for a slow app or a loaded host (#213). Unset → the default; a
+ * set-but-invalid value throws, like `JEVITATE_PAGE_UNRESPONSIVE_MS` — a typo must never silently
+ * mean "default". The CLI checks it at startup (runtime-env.ts), so a run never fails mid-click on it.
  */
 export function clickTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env["JEVITATE_CLICK_TIMEOUT_MS"];
-  const n = raw === undefined ? NaN : Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : 5_000;
+  if (raw === undefined || raw === "") return DEFAULT_CLICK_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new RangeError(`JEVITATE_CLICK_TIMEOUT_MS must be a positive integer, got ${JSON.stringify(raw)}`);
+  return n;
 }
 /** Pixels a scroll op moves. */
 const SCROLL_PX = 600;
