@@ -82,8 +82,8 @@ as a defect by default?
   no with a probability) in goal and usability runs. It never sees secrets, and its answers never
   set an outcome.
 - **"Cost?"** Keyless for adversarial, coverage and feature runs with `--fake-ai`. Goal runs
-  report `usage` (judgments, tokens, provider-reported cost). Jev calls are priced only if you set
-  a unit price.
+  report `usage` with the full run cost: Jev calls are priced by default from a dated built-in
+  price table (or your own prices), and `priced: partial` says when any call could not be priced.
 - **"Is it safe to run on production?"** It's designed for apps you're authorized to test. It
   refuses destructive and paid clicks by default and lists every write request it fires, but
   staging is the right place.

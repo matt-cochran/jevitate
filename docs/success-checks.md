@@ -39,6 +39,8 @@ In these specs:
   A bare descriptor that is not a valid key=value spec and not a lowercase CSS selector is refused
   with a hint naming the key=value forms (`css=`, `label=`, `testId=`, `role=`, `text=`) and an
   example — never a silent guess.
+  At least one of `testId`, `role`, `label`, `text` or `css` must be set (`name` alone only narrows
+  a `role`). Because pairs split at `;`, a `css=` value cannot contain `;`.
 - The last `|` separates the descriptor from the text or value (for `style` too). The other
   visual kinds split the descriptor off at the first `|`.
 - Visual-state checks are read by fixed built-in page functions and decided by code, never a
