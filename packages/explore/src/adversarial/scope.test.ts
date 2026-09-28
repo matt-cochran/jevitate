@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeOf, scopeGlobs, scopePredicate } from "./scope.js";
+import { resolveRouteScope, routeOf, ScopeUnderivableError, scopeGlobs, scopePredicate, startRouteGlobs } from "./scope.js";
 import { matchGlob } from "../feature/capability-scope.js";
 
 describe("adversarial scope (#64)", () => {
@@ -35,5 +35,33 @@ describe("adversarial scope (#64)", () => {
     expect(matchGlob("/files/report.pdf", "/files/report.pdf")).toBe(true);
     expect(matchGlob("/files/report.pdf", "/files/reportXpdf")).toBe(false);
     expect(matchGlob("/a+b/*", "/a+b/c")).toBe(true);
+  });
+});
+
+describe("the shared default route scope (#224)", () => {
+  it("with no --route, a feature scope is the start URL's route and everything under it — the same globs coverage/adversarial start from", () => {
+    const scope = resolveRouteScope("http://site.test/feature-mission/shop?x=1");
+    expect(scope).toEqual({
+      routeGlobs: ["/feature-mission/shop", "/feature-mission/shop/", "/feature-mission/shop/**"],
+      source: "start-url",
+    });
+    expect(scope.routeGlobs).toEqual(startRouteGlobs("http://site.test/feature-mission/shop"));
+    expect(scopeGlobs("http://site.test/feature-mission/shop")).toEqual(scope.routeGlobs);
+    expect(resolveRouteScope("http://site.test/", [" "])).toEqual({ routeGlobs: ["/", "/**"], source: "start-url" });
+  });
+
+  it("--route globs are used exactly as given (unchanged behaviour)", () => {
+    expect(resolveRouteScope("http://site.test/feature-mission/shop", ["/feature-mission/shop"])).toEqual({
+      routeGlobs: ["/feature-mission/shop"],
+      source: "route",
+    });
+  });
+
+  it("refuses when no default can be derived, with a --route hint", () => {
+    expect(() => resolveRouteScope("not a url")).toThrow(ScopeUnderivableError);
+    expect(() => resolveRouteScope("data:text/html,hi")).toThrow(/--route/);
+    expect(() => scopeGlobs("about:blank")).toThrow(ScopeUnderivableError);
+    // A --route still works where no default could be derived.
+    expect(resolveRouteScope("about:blank", ["/x"]).routeGlobs).toEqual(["/x"]);
   });
 });

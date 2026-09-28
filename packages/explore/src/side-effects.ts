@@ -72,6 +72,11 @@ interface Open {
 /** Whether the most recently closed click sent any request (#130a). */
 export interface LastClick {
   readonly requestSent: boolean;
+  /**
+   * #225: the writes it fired — finished (with their status) or still in flight (status null) — by
+   * the time its window closed. Empty when it fired none.
+   */
+  readonly writes: readonly FiredWrite[];
 }
 
 /** What the guard says about a proposed click. */
@@ -158,7 +163,6 @@ export class SideEffectGuard {
     const requests = o.capture.requests();
     // #130a: ANY request counts here (a read proves the click did something) — never just a write.
     const inflightAny = this.#monitor.pending().some((r) => r.startedAt >= o.at);
-    this.#lastClick = { requestSent: requests.length > 0 || inflightAny };
     const done: FiredWrite[] = requests
       .filter((r: CapturedRequest) => this.#write(r))
       .map((r) => ({
@@ -169,6 +173,7 @@ export class SideEffectGuard {
       }));
     const inflight = this.#monitor.pending().filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
+    this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
     if (done.length + pending.length === 0) return;
     this.#fired.set(o.key, { label: o.label, route: o.route, writes: [...done, ...pending], inflight, values: o.values });
   }

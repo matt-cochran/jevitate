@@ -103,6 +103,11 @@ function hasRenderedControl(selector: string): boolean {
   return false;
 }
 
+/** A document (a navigation) is among the pending requests. */
+function documentPending(pending: readonly { readonly resourceType: string }[]): boolean {
+  return pending.some((r) => r.resourceType === "document");
+}
+
 export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<Perception> {
   const ceiling = opts.renderWaitMs ?? RENDER_WAIT_MS;
   const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
@@ -128,7 +133,45 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
 
   // 1. Is the page's main thread answering at all? If not, nothing else can be read (every page
   //    API would block too): that is a hang of its own kind.
-  if (!(await probeResponsive(page, hangProbeMs))) {
+  let responsive = await probeResponsive(page, hangProbeMs);
+  // #226: a probe that got no answer while a DOCUMENT is still loading is the page waiting on the app
+  // (a navigation the server has not answered), not a stuck main thread. Give that navigation the
+  // render ceiling: answered → probe again and perceive as usual; still unanswered → the app's own
+  // request hang (`request-pending` on the document), never `main-thread-unresponsive`.
+  if (!responsive && documentPending(monitor.pending())) {
+    const deadline = Date.now() + ceiling;
+    while (Date.now() < deadline && documentPending(monitor.pending()) && !page.isClosed()) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const stillPending = monitor.pending();
+    if (documentPending(stillPending)) {
+      const now = Date.now();
+      const win = monitor.window();
+      const settle: SettleResult = { settled: false, waitedMs: now - (deadline - ceiling), pending: stillPending };
+      const timing = unreadablePageTiming(page.url(), monitor.completedSince(win.start), stillPending, now);
+      monitor.closeWindow(now, null);
+      const evidence = pendingEvidence(stillPending.filter((r) => r.resourceType === "document"), now);
+      const url = redactUrl(page.url());
+      const snap: Snapshot = { url: page.url(), controls: [], truncated: false, signature: contentHash({ url, navigationPending: true }) };
+      return {
+        rendered: false,
+        snapshot: snap,
+        settle,
+        timing,
+        reason: `the app did not answer the navigation to ${evidence[0]?.endpoint ?? "a page"} within ${ceiling}ms`,
+        hang: {
+          kind: "request-pending",
+          detail: hangDetail("request-pending", { pending: evidence, ceilingMs: ceiling, busy: null, probeMs: hangProbeMs }),
+          route: hangRoute(page.url()),
+          url,
+          pending: evidence,
+          lastState: { signature: snap.signature, controls: [] },
+        },
+      };
+    }
+    responsive = await probeResponsive(page, hangProbeMs);
+  }
+  if (!responsive) {
     const now = Date.now();
     const win = monitor.window();
     const pending = monitor.pending();

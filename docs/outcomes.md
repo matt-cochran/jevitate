@@ -11,7 +11,7 @@ command's codes only as a reminder; this is the reference.
 |---|---|---|
 | `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
 | `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
-| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error. It proves nothing. |
+| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
 | `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
@@ -47,7 +47,7 @@ clean.
 |---|---|---|
 | `clean` | 0 | the run finished its budget and found nothing (goal mission: the success assertion held) |
 | `defects-found` | 1 | at least one confirmed defect — one an independent code oracle decided (a hard signal, a declared invariant, an HTTP 5xx, a server-log defect, a horizontal overflow). A defect marked `advisory: true` (a model's judgment alone) never makes a run `defects-found` (goal mission: the success assertion did not hold) |
-| `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash), or it proved nothing: a run that exercised too little of its target to call its silence clean (`failure.kind: "insufficient-coverage"`), a goal whose only failing checks were vacuous (`vacuous-check`), a usability review whose job was never completed (`job-incomplete`) |
+| `inconclusive` / `crashed` | 2 | the run itself broke (page never rendered, model unavailable, browser/page crash), or it proved nothing: a run that exercised too little of its target to call its silence clean (`failure.kind: "insufficient-coverage"`), a goal whose only failing checks were vacuous (`vacuous-check`), a usability review whose job was never completed (`job-incomplete`), an app that stopped answering navigation mid-run (`target-unresponsive`, always `inconclusive`) |
 | `hang` | 3 | the app under test hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
@@ -113,6 +113,7 @@ above, so it needs no separate exit-code mapping):
 | `targets-refused` | every target control on the page was refused by the safety policy (paid, destructive, session-ending or `--deny`'d) and none could be exercised, so the hunt stopped at once — `inconclusive`, `failure.kind: "insufficient-coverage"`, its message naming the refused controls and how to permit them (`--allow-destructive`; remove the `--deny`; reclassify with `--paid`/`--deny`) |
 | `not-rendered` | the target page never rendered. When the start page itself answered 5xx, that is an `http-5xx` defect and the run is `defects-found`. |
 | `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
+| `target-unresponsive` | the app stopped answering mid-run (e.g. its server froze): a navigation got no response — `inconclusive`, `failure.kind: "target-unresponsive"`, `failure.message` in plain words (`the app stopped responding to navigation to /app (timed out before any response)`), never `crashed` and never a stack trace |
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |
 
@@ -124,10 +125,20 @@ above, so it needs no separate exit-code mapping):
 | `exhausted` | the state frontier was fully explored, and exercised enough of the target to call its silence clean |
 | `insufficient-coverage` | the frontier emptied without proving anything — its actions **timed out** (at least as many timed-out actions as exercised transitions), or it exercised only global navigation / mostly failing controls — `inconclusive` (a defect found before still wins), `failure.kind: "insufficient-coverage"`: one name for outcome and failure (it was `insufficient-exploration` / `exhausted` before #209). `failure.message` lists the shortfalls and how to reach `clean` |
 | `cap` | the action budget ran out before the frontier was exhausted |
-| `scope-unreachable` | the start URL redirected elsewhere, or the run could not return to it after a departure (e.g. the session was lost after "Sign out") — `inconclusive` |
+| `scope-unreachable` | the start URL redirected elsewhere, or the run could not return to it after a departure (e.g. the session was lost after "Sign out"), or the app stopped answering navigation mid-run (`failure.kind: "target-unresponsive"`) — `inconclusive` |
 | `stalled` | no step completed within `--stall-timeout` seconds (default 120) — `inconclusive` |
 | `crashed` | the engine failed |
 | `hang` | stopped at a hang it could not reset from |
+
+### An app that stops answering (`target-unresponsive`)
+
+When the app's server freezes or goes away mid-run, a navigation gets no response. That is the app,
+not the engine: every strategy ends `inconclusive` with `failure.kind: "target-unresponsive"` and a
+plain reason naming the path (goal: `stop: "inconclusive"`; adversarial: `stop: "target-unresponsive"`;
+coverage, exploratory and feature: `outcome: "scope-unreachable"`). A defect found before is still
+listed. A page whose main-thread probe gets no answer while a document is still loading is waiting on
+the app, not hung: it is given the render ceiling, and a navigation still unanswered after it is a
+`request-pending` hang on that document, never `main-thread-unresponsive`.
 
 ### A starved host (`hostHealth`, `environmentDegraded`)
 

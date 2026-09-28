@@ -25,7 +25,8 @@ import { HANG_PROBE_MS } from "./perceive.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
-import { AuthProgress } from "./auth-completion.js";
+import { AuthProgress, isCredentialField } from "./auth-completion.js";
+import { SaveProgress } from "./save-completion.js";
 import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
 import {
   type SecretField,
@@ -81,10 +82,11 @@ import { RunRecorder, emptyRecording } from "./record.js";
 import { planTextEdit, readEditableText } from "./rich-text.js";
 import { describeTextEdit } from "@jevitate/interpreter";
 import { resolveMissionFixture } from "./fixture.js";
+import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "./mission-failure.js";
 import {
   EMPTY_STATUS,
   describeStatus,
@@ -235,6 +237,14 @@ export interface ExploreConfig {
    */
   readonly successCheckPending?: () => string | null;
   /**
+   * #225: a `done` rejected by `successCheck` ends the run at once when the job is nonetheless judged
+   * done on the page (the advisory goal judgment / code-observed save grounding, as without a check) —
+   * the failed check is then the result, not a reason to spend the rest of the budget. The outcome
+   * stays incomplete (`doneRejected`); only the independent check decides. Default off (goal runs keep
+   * working toward a check that may still come to hold).
+   */
+  readonly stopWhenJudgedDone?: boolean;
+  /**
    * Idle patience (ms) of a conversational reply wait: how long to keep waiting while the page shows
    * no sign of working on the reply. Default 60s. While it IS working (request in flight, busy
    * indicator, reply still growing) the wait continues up to `replyCeilingMs` (#93).
@@ -380,6 +390,18 @@ const submitsAForm = (c: Control): boolean =>
   c.submits === true || isSubmitControl(c) || ((c.role === "button" || c.tag === "button") && SUBMIT_LIKE_NAME.test(c.name));
 
 /** A click that may submit what was typed (#123: typed values count as used after it). */
+/**
+ * #225: the page's form fields and their current values, for the goal judgment — a field's value is
+ * never in the page's `innerText`, yet it is where a form displays what was saved. Only a non-secret
+ * value (`Control.value` is never read from a password / one-time-code field) and never a bound secret
+ * field or a message composer (the run's own words, #200).
+ */
+function fieldValuesOf(controls: readonly Control[], isBound: (c: Control) => boolean): Array<{ label: string; value: string }> {
+  return controls
+    .filter((c) => typeof c.value === "string" && c.value.trim() !== "" && !isBound(c) && !isCredentialField(c) && !sendable(c))
+    .map((c) => ({ label: c.name || c.summary, value: c.value as string }));
+}
+
 const buttonLike = (c: Control): boolean =>
   c.role === "button" || c.tag === "button" || (c.tag === "input" && (c.inputType === "submit" || c.inputType === "button"));
 
@@ -398,6 +420,17 @@ function noReply(r: ReplyResult): string {
 function quote(s: string, n = 160): string {
   const flat = s.replace(/\s+/g, " ").trim();
   return `"${flat.length > n ? `${flat.slice(0, n)}…` : flat}"`;
+}
+
+/**
+ * #223: a control whose name is an action or a label, not page content: every non-link control
+ * (buttons, submit/reset inputs, form fields — named by their labels) and a chrome link (in a
+ * nav / header / footer landmark, or repeated across pages). A link in the page's content — a list,
+ * a table, a card — is content: its text may be the answer ("the title of the first item").
+ */
+export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean {
+  if (c.role !== "link") return true;
+  return (c.landmark ?? null) !== null || chrome.isChrome(c);
 }
 
 function firstLine(e: unknown): string {
@@ -530,6 +563,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const goalChecked = new Set<string>();
   /** The run's own sign-in steps and the sign-in completion code observes on each state (#188). */
   const auth = new AuthProgress();
+  /** #225: the run's own typed-and-submitted form values, for the code-observed save signal. */
+  const save = new SaveProgress();
   const isBound = (c: Control): boolean => boundSecretField(c, cfg.secretFields) !== null;
   let idleSteps = 0;
   let idleSince: number | null = null;
@@ -664,6 +699,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     firstParty.observe(r.url(), r.headers());
   };
   page.on("request", onRequestSeen);
+  // #223: the main document's HTTP status per URL — an answer on a 404 / error page is no answer.
+  const documentStatus = new Map<string, number>();
+  /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
+  const chrome = new ChromeTracker();
+  const docKey = (u: string): string => u.split("#")[0] ?? u;
+  const onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
+    try {
+      if (!r.request().isNavigationRequest() || r.request().frame() !== page.mainFrame()) return;
+      if (documentStatus.size >= 500) documentStatus.clear();
+      documentStatus.set(docKey(r.url()), r.status());
+    } catch {
+      // a response whose frame is gone: nothing to record
+    }
+  };
+  page.on("response", onDocumentResponse);
   // #194: a write to a third-party origin is listed with its full URL and `thirdParty: true`.
   const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
@@ -1023,6 +1073,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (lastPath !== null && path !== lastPath) {
         unsent.submitted();
         valueLog.submitted();
+        save.reset();
       }
       lastPath = path;
       if (listsSeveral && prevSignature !== null && prevSignature !== snap.signature) {
@@ -1046,7 +1097,25 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // #207: a form field's current value is page content too (grounded as such, never as page text).
       const visibleText = await readPageText(page, secrets);
-      observed.add(snap.url, visibleText, controlFields(snap.controls), await readPageHeadings(page, secrets));
+      // #223: a rich-text (contenteditable) control's text is its value too, groundable like an input's.
+      const richFields: { label: string; value: string }[] = [];
+      for (const c of snap.controls.filter((x) => x.richText === true).slice(0, 5)) {
+        const t = (await readEditableText(page, c))?.trim() ?? "";
+        if (t !== "") richFields.push({ label: c.name.trim() || c.role || c.tag, value: redactText(t, secrets) });
+      }
+      try {
+        chrome.observe(new URL(snap.url).pathname, snap.controls);
+      } catch {
+        // an unparsable URL: no chrome evidence from it
+      }
+      observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
+        ...(await readPageHeadings(page, secrets)),
+        // #223: the action / label names (a quote made only of them is a label, not an answer) and
+        // the document's status (an answer on a 404 page is no answer). A link that is page content
+        // (in the main content, a list, a table, a card) is NOT one: its text may be the answer.
+        controlNames: snap.controls.filter((c) => isActionOrChromeName(c, chrome)).map((c) => c.name),
+        ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
+      });
       noteReplyText(snap.url, visibleText);
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded
@@ -1163,6 +1232,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const op = extra.op ?? decision.op;
         const target = extra.control === undefined ? decision.control : extra.control;
         if (op === "type" || op === "send") auth.noteTyped(target, snap.url, actOk, target !== null && isBound(target));
+        // #225: typed credentials make the pending submit a sign-in, never a save.
+        if ((op === "type" || op === "send") && actOk && target !== null && (isBound(target) || isCredentialField(target))) save.noteCredential();
         if (actOk && target !== null && (op === "click" || op === "type" || op === "select")) {
           const steps = nextFrom.get(snap.signature) ?? [];
           // The first visit's steps only: a return must not overwrite what the state led to.
@@ -1208,7 +1279,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (pending !== null) return `the in-run success checks held, but the final verdict is still pending — ${pending}`;
         return `goal verified by ${o.status === "completed" ? o.verifiedBy : "?"}`;
       };
-      const groundGoal = async (): Promise<{
+      const groundGoal = async (advisoryOnly = false): Promise<{
         verdict: ReturnType<typeof groundDone>;
         judgments: Record<string, { value: boolean; probability: number }> | undefined;
       }> => {
@@ -1216,14 +1287,20 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let successCheck: boolean | undefined;
         let goalMet: number | null | undefined;
         let goalIsSignIn: number | null = null;
+        let goalIsSave: number | null = null;
+        let saved: ReturnType<SaveProgress["signal"]> = null;
         if (unsubmittedLabels.length === 0) {
-          if (cfg.successCheck !== undefined) {
+          if (cfg.successCheck !== undefined && !advisoryOnly) {
             successCheck = await cfg.successCheck().then(
               (v) => v,
               () => false,
             );
           } else {
-            const pageText = withoutAuthored(await readPageText(page, secrets), conversation.sent);
+            const fullText = await readPageText(page, secrets);
+            const pageText = withoutAuthored(fullText, conversation.sent);
+            // #225: the run's own save, as code observed it — its writes, the page's notice, and whether
+            // the page still displays what it saved (a field's value is never in the page text).
+            saved = save.signal(snap, status, sideEffects.lastClick(), fullText);
             const judged = await judgeGoalCompletion(cfg.judge, {
               goal: cfg.goal,
               url: snap.url,
@@ -1232,9 +1309,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               secrets,
               ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
               ...(signIn === null ? {} : { signInFacts: signIn.facts }),
-            }).catch(() => ({ goalMet: null, goalIsSignIn: null }));
+              ...(saved === null ? {} : { saveFacts: saved.facts }),
+              fieldValues: fieldValuesOf(snap.controls, isBound),
+            }).catch(() => ({ goalMet: null, goalIsSignIn: null, goalIsSave: null }));
             goalMet = judged.goalMet;
             goalIsSignIn = judged.goalIsSignIn;
+            goalIsSave = judged.goalIsSave;
           }
         }
         const verdict = groundDone({
@@ -1242,12 +1322,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           ...(successCheck === undefined ? {} : { successCheck }),
           ...(goalMet === undefined ? {} : { goalMetProbability: goalMet }),
           ...(signIn === null || goalMet === undefined ? {} : { signIn: { completed: signIn.completed, goalIsSignIn } }),
+          ...(saved === null || goalMet === undefined ? {} : { save: { completed: saved.completed, goalIsSave } }),
         });
         // `value` is code's reading of the probability (the acceptance threshold), not the port's
         // p >= 0.5 — a transcript must never show "goalMet: true" beside "done rejected" (#91).
         const judgments: Record<string, { value: boolean; probability: number }> = {};
         if (goalMet !== undefined && goalMet !== null) judgments.goalMet = { value: goalMet >= GOAL_MET_THRESHOLD, probability: goalMet };
         if (goalIsSignIn !== null) judgments.goalIsSignIn = { value: goalIsSignIn >= GOAL_MET_THRESHOLD, probability: goalIsSignIn };
+        if (goalIsSave !== null) judgments.goalIsSave = { value: goalIsSave >= GOAL_MET_THRESHOLD, probability: goalIsSave };
         return { verdict, judgments: Object.keys(judgments).length === 0 ? undefined : judgments };
       };
 
@@ -1302,6 +1384,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           stop = "done";
           break;
         }
+        // #225: the model's `done` failed the independent success check, but the job itself is judged
+        // done on this page (the advisory judgment / code-observed save, never the verdict): stop here
+        // rather than spend the rest of the budget — the check's failure is the finding, and the
+        // mission names it (`failed`, success-check-failed).
+        if (cfg.stopWhenJudgedDone === true && cfg.successCheck !== undefined && unsent.pending().size === 0) {
+          const advisory = await groundGoal(true);
+          if (advisory.verdict.accept) {
+            const reason = `the job was judged done on this page (${acceptedBy(advisory.verdict.outcome).replace(/^goal verified by /, "")}), but ${verdict.reason}`;
+            record(false, `done rejected: ${reason} — stopped (the success check decides; it failed)`, {
+              ...(advisory.judgments === undefined ? {} : { judgments: advisory.judgments }),
+            });
+            incomplete = reason;
+            endedOnRejectedDone = true;
+            stop = "done";
+            break;
+          }
+        }
         doneRejections += 1;
         history.push(`done rejected: ${verdict.reason} — keep working toward the goal`);
         record(false, `done rejected (${doneRejections}/${MAX_DONE_REJECTIONS}): ${verdict.reason}`, {
@@ -1355,6 +1454,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 pages: replyPages ?? observed.pages(),
                 history,
                 secrets,
+                judge: cfg.judge,
               }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
           const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
@@ -1367,7 +1467,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         reportRejections += 1;
-        lastReportNotFound = verdict.answer === null && verdict.reason === NO_ANSWER_REASON;
+        // #223: an answer that is on the page but does not answer the question is no answer either.
+        lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
         history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
         record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
           answer: verdict.answer,
@@ -1543,6 +1644,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
           valueLog.reloaded();
+          save.reset();
           history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
         } else {
           history.push(`reload failed: ${r.reason ?? "?"}`);
@@ -1928,6 +2030,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
             valueLog.typed(control.name || control.summary, text);
+            if (!isBound(control) && !isCredentialField(control) && !sendable(control)) save.noteTyped(control.name || control.summary, text);
           } else recorder.select(control.descriptor, text, at);
           noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
           tracker.countAction();
@@ -1977,7 +2080,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           if (isSubmitControl(control)) unsent.submitted();
           // What was typed has now been submitted (a form's button): an add-another flow's next
           // item must differ from it (#123).
-          if (buttonLike(control) || control.submits === true) valueLog.submitted();
+          if (buttonLike(control) || control.submits === true) {
+            valueLog.submitted();
+            save.noteSubmitClick(control.name || control.summary);
+          }
           // Toggling an input (a checkbox, a radio, a switch) changes what a repeat would send (#92).
           if (TOGGLE_ROLES.has(control.role) || (control.tag === "input" && control.inputType !== "submit" && control.inputType !== "button")) {
             // A radio/option now holds "selected"; a checkbox/switch flips — so toggling twice is no
@@ -2054,7 +2160,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
       // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
       failure = describeFailure(e, crashWatch.signals());
-      stop = "crashed";
+      // #226: the app stopped answering navigation (a frozen backend) — nothing in the engine broke:
+      // `inconclusive` with the typed `target-unresponsive` reason, never `crashed`.
+      stop = isTargetUnresponsive(failure) ? "inconclusive" : "crashed";
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
@@ -2074,6 +2182,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
   await readOnly?.disarm();
   page.off("request", onRequestSeen);
+  page.off("response", onDocumentResponse);
   const finished = recorder.tryFinish({ intent: cfg.goal });
   const cause = blockingCause();
   const finalOutcome: RunOutcome =

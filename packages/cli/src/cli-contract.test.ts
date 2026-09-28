@@ -10,7 +10,7 @@ import type { BrowserPort } from "@jevitate/playwright";
 import { startServer } from "@jevitate/example-site";
 import { buildProgram, type CliDeps } from "./program.js";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
-import { formatMissionHuman } from "./cli-output.js";
+import { formatMissionHuman, formatRegressionCaptureHuman, formatRegressionRunHuman } from "./cli-output.js";
 
 /**
  * The CLI contract (#210): ONE exit-code table for every command (usage errors distinct from
@@ -176,10 +176,116 @@ describe("human output: never raw JSON without --json (#210)", () => {
       ].join("\n"),
     );
   });
+
+  // #227 item 1: `regression capture` / `regression run` (the README demo path) used to print the
+  // raw JSON envelope without --json.
+  it("regression capture: a human summary (captured, or too flaky to commit) — never the raw envelope", () => {
+    const captured = formatRegressionCaptureHuman({ recordingPath: "/regressions/r1.recording.json", metaPath: "/regressions/r1.meta.json" });
+    expect(captured).toBe(["CAPTURED: /regressions/r1.recording.json", "META    /regressions/r1.meta.json", "next: jevitate regression run r1", ""].join("\n"));
+    expect(captured).not.toMatch(/^\{/);
+
+    const flaky = formatRegressionCaptureHuman({ skipped: "flaky", rate: 0.4 });
+    expect(flaky).toContain("FLAKY: the failure did not reproduce reliably enough to commit (reproduced 40% of attempts)");
+    expect(flaky).not.toMatch(/^\{/);
+  });
+
+  it("regression run: a human summary (verdict, reason, next step) — never the raw envelope", () => {
+    const fixed = formatRegressionRunHuman({ id: "r1", verdict: "fixed", reason: "the assertion holds" });
+    expect(fixed).toBe(["FIXED: r1", "REASON  the assertion holds", "next: jevitate report", ""].join("\n"));
+    const reproduces = formatRegressionRunHuman({ id: "r1", verdict: "reproduces", reason: "the assertion still fails" });
+    expect(reproduces).toContain("next: fix it, then jevitate regression run r1");
+    expect(reproduces).not.toMatch(/^\{/);
+  });
+
+  // #227 item 2: `journey list` / `source list` printed nothing at all on an empty/missing dir.
+  it("journey list / source list: a next-step line, never silence, on an empty dir", async () => {
+    const journeys = await cli({ journeysDir: join(dir, "journeys") }).run(["journey", "list"]);
+    expect(journeys.out).toBe("no journeys yet — record one with `jevitate record` (see jevitate record --help)\n");
+    expect(journeys.code).toBe(0);
+
+    const sources = await cli({
+      sources: {
+        sourcesDir: join(dir, "sources"),
+        lockPath: join(dir, "jevitate.lock"),
+        trustDir: join(dir, "trust"),
+        ackDir: join(dir, "ack"),
+        git: async () => {
+          throw new Error("git not needed for source list");
+        },
+      },
+    }).run(["source", "list"]);
+    expect(sources.out).toBe("no sources yet — add one with `jevitate source add <name> <gitUrl>`\n");
+    expect(sources.code).toBe(0);
+  });
+
+  // #227 item 3: a commander parse-time error (bad number, unknown option/command) printed
+  // commander's own `error: option …` with no `<CODE>` — the code appeared only under --json.
+  it("a commander parse-time error prints the same `error <CODE>: …` shape as every other refusal", async () => {
+    const badNumber = await cli().run(["explore", "--url", URL, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--max-actions", "abc"]);
+    expect(badNumber.err).toMatch(/^error E_EXPLORE_ARGS: .*--max-actions/m);
+    expect(badNumber.err).toContain("next: jevitate explore --help");
+    expect(badNumber.code).toBe(64);
+
+    const unknownOption = await cli().run(["explore", "--no-such-flag"]);
+    expect(unknownOption.err).toMatch(/^error E_EXPLORE_ARGS: /m);
+    expect(unknownOption.code).toBe(64);
+
+    const unknownCommand = await cli().run(["frobnicate"]);
+    expect(unknownCommand.err).toMatch(/^error E_CLI_ARGS: /m);
+    expect(unknownCommand.code).toBe(64);
+  });
+
+  // #227 item 5: `ledger verify` with nothing to verify used to print `FIXED: 0 entries` at exit 0.
+  it("ledger verify with no matching entries: says nothing was verified, exit 2 (never a false FIXED/0)", async () => {
+    const r = await cli().run(["ledger", "verify", "--dir", dir]);
+    expect(r.out).toBe("NOTHING VERIFIED: the ledger has no matching entries\nnext: jevitate ledger add <result.json> <fingerprint>\n");
+    expect(r.out).not.toContain("FIXED");
+    expect(r.code).toBe(2);
+    const json = await cli().run(["ledger", "verify", "--dir", dir, "--json"]);
+    expect(JSON.parse(json.out)).toMatchObject({ ok: true, data: { entries: [], exitCode: 2 } });
+    expect(json.code).toBe(2);
+  });
 });
 
 describe("#217 — a goal result's human summary", () => {
-  it("heads with the canonical verdict, then the goal's own ending and the stop that ended its loop", () => {
+  it("a succeeded goal heads with the canonical CLEAN verdict, then its own ending and stop", () => {
+    const text = formatMissionHuman({
+      strategy: "goal",
+      missionOutcome: "clean",
+      goalOutcome: "succeeded",
+      outcome: "succeeded",
+      stop: "done",
+      exitCode: 0,
+      target: { seedUrl: "http://app.test/cart", allowlist: [] },
+      defects: [],
+      hangs: [],
+      resultPath: "/runs/explore-1.result.json",
+    });
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("CLEAN: goal http://app.test/cart · 0 defect(s) · 0 hang(s)");
+    expect(lines[1]).toMatch(/^GOAL\s+succeeded \(stop: done\)$/);
+  });
+
+  it("a real defect (an independent oracle, not the goal's own check) still heads DEFECTS-FOUND with the real count", () => {
+    const text = formatMissionHuman({
+      strategy: "goal",
+      missionOutcome: "defects-found",
+      goalOutcome: "defects-found",
+      outcome: "defects-found",
+      stop: "done",
+      exitCode: 1,
+      target: { seedUrl: "http://app.test/cart", allowlist: [] },
+      defects: [{ fingerprint: "0123456789abcdef", kind: "http-5xx", title: "PUT /api/profile returned 500" }],
+      hangs: [],
+      resultPath: "/runs/explore-1.result.json",
+    });
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("DEFECTS-FOUND: goal http://app.test/cart · 1 defect(s) · 0 hang(s)");
+  });
+});
+
+describe("#227 — a failed/exhausted/blocked goal never leads with '0 defect(s)'", () => {
+  it("failed: heads FAILED with the goal's own verdict and why, not 'DEFECTS-FOUND … 0 defect(s)'", () => {
     const text = formatMissionHuman({
       strategy: "goal",
       missionOutcome: "defects-found",
@@ -194,9 +300,44 @@ describe("#217 — a goal result's human summary", () => {
       resultPath: "/runs/explore-1.result.json",
     });
     const lines = text.split("\n");
-    expect(lines[0]).toBe("DEFECTS-FOUND: goal http://app.test/cart · 0 defect(s) · 0 hang(s)");
+    expect(lines[0]).toBe("FAILED: goal http://app.test/cart (the model said done, but success check 'urlIncludes:/done' did not hold)");
+    expect(lines[0]).not.toContain("0 defect(s)");
+    expect(lines[0]).not.toContain("DEFECTS-FOUND");
     expect(lines[1]).toMatch(/^GOAL\s+failed \(stop: done\)$/);
+    // #217: missionOutcome/goalOutcome stay the canonical fold — this is a human-output-only change.
     expect(text).not.toContain("OUTCOME");
+  });
+
+  it("exhausted: heads EXHAUSTED, not DEFECTS-FOUND", () => {
+    const text = formatMissionHuman({
+      strategy: "goal",
+      missionOutcome: "defects-found",
+      goalOutcome: "exhausted",
+      outcome: "exhausted",
+      stop: "exhausted",
+      exitCode: 1,
+      target: { seedUrl: "http://app.test/cart", allowlist: [] },
+      defects: [],
+      hangs: [],
+      resultPath: "/runs/explore-1.result.json",
+    });
+    expect(text.split("\n")[0]).toBe("EXHAUSTED: goal http://app.test/cart");
+  });
+
+  it("blocked: heads BLOCKED, not DEFECTS-FOUND", () => {
+    const text = formatMissionHuman({
+      strategy: "goal",
+      missionOutcome: "defects-found",
+      goalOutcome: "blocked",
+      outcome: "blocked",
+      stop: "blocked",
+      exitCode: 1,
+      target: { seedUrl: "http://app.test/cart", allowlist: [] },
+      defects: [],
+      hangs: [],
+      resultPath: "/runs/explore-1.result.json",
+    });
+    expect(text.split("\n")[0]).toBe("BLOCKED: goal http://app.test/cart");
   });
 });
 

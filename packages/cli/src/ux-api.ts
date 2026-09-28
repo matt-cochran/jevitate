@@ -19,6 +19,12 @@ import type { InvariantSpec } from "@jevitate/recording";
 import type { Recording, TargetDescriptor } from "@jevitate/recording";
 import {
   explore,
+  runGoalBasedMission,
+  type GoalBasedResult,
+  type SuccessCheck,
+  type SuccessCheckResult,
+  type SuccessWhen,
+  type ExploreConfig,
   assertAuthorizedExploreTarget,
   resolveMissionFixture,
   reproduceHang,
@@ -75,12 +81,12 @@ import {
 import { resolveDataDir } from "./data-dir.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
-import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
+import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
-import { armMissionKillSwitch } from "./kill-signal.js";
-import { finishHostHealth, startHostHealth } from "./host-health-run.js";
+import { launchArmed } from "./launch-armed.js";
+import { finishHostHealth } from "./host-health-run.js";
 import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -89,7 +95,6 @@ import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageSta
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
-import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -651,6 +656,18 @@ export interface RunUsabilityMissionOptions {
   readonly invariants?: InvariantSpec;
   /** Resolved `authFrom.secret` refs (#135) a declared budget's probe may use: `env:VAR` → its value. */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /**
+   * #225: independent completion checks on the job (CLI `--success`, a suite mission's `success`) —
+   * the SAME semantics as a goal run's: every one must hold (grounding the model's `done` mid-run and
+   * judged again on the final page), a vacuous one (#202) fails unless `allowVacuousChecks`, and the
+   * verdict folds exactly like a goal run's (`goalOutcome` → `missionOutcome`). Never ignored: with
+   * checks, the job's completion is theirs to decide, not the advisory goal judgment's.
+   */
+  readonly successChecks?: readonly SuccessCheck[];
+  /** When the page checks must hold (`--success-when`): `final` (default) | `held`. */
+  readonly successWhen?: SuccessWhen;
+  /** #202 `--allow-vacuous-checks`: a check satisfied before the first action warns instead of failing. */
+  readonly allowVacuousChecks?: boolean;
 }
 
 /** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
@@ -749,6 +766,15 @@ export interface RunUsabilityMissionResult {
   readonly serverLogDefects?: ServerLogDefect[];
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
+  /**
+   * #225 — present only when `successChecks` were given: the job's own ending as a goal run names it
+   * (`succeeded` / `failed` / `exhausted` / `blocked` / …), folded onto `missionOutcome` the same way.
+   */
+  readonly goalOutcome?: GoalOutcome;
+  /** #225: each success check's result, when `successChecks` were given. */
+  readonly checks?: readonly SuccessCheckResult[];
+  /** #225/#202: the success checks' warnings (a vacuous check, `held` notes), when there were any. */
+  readonly checkWarnings?: readonly string[];
 }
 
 /**
@@ -802,14 +828,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
-  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
-  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
   // #149: one signal finding per distinct fingerprint (route + element) — a wide table seen across
@@ -831,35 +849,42 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const screenshotDir = join(outDir, `usability-${stamp}.screens`);
   // A bound secret (or TOTP seed) is a run secret too: masked on screen, redacted everywhere.
   const secrets = [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)];
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // The screenshot capture needs the open page; until then a killed run has taken none.
+  let armedCapture: UsabilityCapture | undefined;
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
+  // Recording — so the killed run's result names the real file, and reports the live step list,
+  // the tokens spent so far and the screens already observed.
+  // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
+  const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
+    hostHealth: opts.hostHealth,
+    saveStorageState: opts.saveStorageState !== undefined,
+    open: () => port.open(launch),
+    mission: (hooks) => ({
+      // #220: the killed run's partial result carries the unified schema's common fields too.
+      strategy: "usability",
+      target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
+      recordingPath: journal.recordingPath,
+      hostHealth: hooks.hostHealth,
+      transcriptPath: journal.transcriptPath,
+      transcript: () => journal.transcript,
+      ...(runUsage === undefined ? {} : { usage: runUsage }),
+      partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: armedCapture === undefined ? [] : armedCapture.screenshots() }),
+      ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
+    }),
+  });
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const capture = new UsabilityCapture({
     page: session.page,
     screenshotDir,
     secrets,
     ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
   });
-  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
-  // whatever the journal has already flushed, and the process exits with the conventional code.
-  // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
-  // Recording — so the killed run's result names the real file, and reports the live step list,
-  // the tokens spent so far and the screens already observed.
-  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
-  const runUsage = opts.usage?.scope();
-  // #159: see RunExplorationOptions.saveStorageState / runExploration's own doc comment.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: "usability",
-    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(runUsage === undefined ? {} : { usage: runUsage }),
-    partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
-  });
+  armedCapture = capture;
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
   // chain; a server-log runtime (#142) is inserted in FRONT of it (never replacing it) so every step
   // still gets its screenshot/flush exactly as before, whether or not --log-source was given. #159:
@@ -897,7 +922,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
           });
     const budget = invariantMonitor === null ? null : new BudgetMonitor(budgetDecls, invariantMonitor);
     let budgetSettledSteps = 0;
-    const run = await explore({
+    const exploreCfg: Omit<ExploreConfig, "missionContext"> = {
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
@@ -917,8 +942,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       site: origin,
       fixture,
       ...conversationConfig(opts.conversation),
-      missionContext:
-        "usability review: pursue the stated job as a plausible first-time user, using only what is on screen",
       onSnapshot: async (snap) => {
         let visibleText = "";
         try {
@@ -988,7 +1011,24 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
               return r.crossed ? { stop: true, reason: r.reason ?? "mission budget crossed" } : { stop: false };
             },
           }),
-    });
+    };
+    const brief = "usability review: pursue the stated job as a plausible first-time user, using only what is on screen";
+    // #225: `--success` is never ignored — with checks the loop runs through the goal mission's
+    // independent adjudication (the same oracle, `held`/vacuous rules and verdict as a goal run).
+    const checks = opts.successChecks ?? [];
+    const adjudication: GoalBasedResult | undefined =
+      checks.length === 0
+        ? undefined
+        : await runGoalBasedMission({
+            ...exploreCfg,
+            missionBrief: brief,
+            successChecks: checks,
+            // #225: a `done` whose check failed on a job judged done ends the run — never the whole budget.
+            stopWhenJudgedDone: true,
+            ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
+            ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+          });
+    const run = adjudication?.run ?? (await explore({ ...exploreCfg, missionContext: brief }));
     // Never blocks the mission itself: the drain wait happens AFTER `explore()` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(run.transcript);
     journal.writeRecording(run.recording);
@@ -1076,8 +1116,22 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       loopOutcome === "clean" && run.outcome.status === "incomplete"
         ? { kind: "job-incomplete", message: `the job under review was not completed: ${run.outcome.reason}` }
         : undefined;
+    // #225: with success checks, THEY decide whether the job was done — folded exactly like a goal
+    // run's ending (a failed check `defects-found`, a vacuous one `inconclusive`, all held `clean`).
+    const checked: MissionOutcome | undefined = adjudication === undefined ? undefined : foldGoalOutcome(adjudication.outcome);
+    const jobVerdict: MissionOutcome =
+      loopOutcome !== "clean" ? loopOutcome : checked !== undefined ? checked : jobIncomplete === undefined ? "clean" : "inconclusive";
+    // #225/#209: a failed success check is named as such (never "job-incomplete"), as on a goal run.
+    const failedChecks = adjudication?.checks.filter((c) => !c.passed) ?? [];
+    const checkFailure: MissionFailure | undefined =
+      adjudication?.failure ??
+      (failedChecks.length === 0
+        ? undefined
+        : { kind: "success-check-failed", message: `success check ${failedChecks.map((c) => `'${c.check}' ${c.detail}`).join("; ")}` });
+    const jobFailure: MissionFailure | undefined =
+      loopOutcome !== "clean" ? undefined : checked === undefined ? jobIncomplete : checked === "clean" ? undefined : (checkFailure ?? jobIncomplete);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never `clean`.
-    const host = await finishHostHealth(health, jobIncomplete === undefined ? loopOutcome : "inconclusive");
+    const host = await finishHostHealth(health, jobVerdict);
     const runOutcome: MissionOutcome = host.outcome;
     const base = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
@@ -1104,7 +1158,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
       engine: currentEngineInfo(),
       ...((): { failure?: MissionFailure } => {
-        const f = run.failure ?? host.failure ?? jobIncomplete;
+        const f = run.failure ?? host.failure ?? jobFailure;
         return f === undefined ? {} : { failure: f };
       })(),
       ...(run.crash === undefined ? {} : { crash: run.crash }),
@@ -1122,6 +1176,13 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         ...advisoryDefects(serverLogRun?.defects),
       ],
       ...(budget === null ? {} : { budget: budget.trajectory() }),
+      ...(adjudication === undefined
+        ? {}
+        : {
+            goalOutcome: adjudication.outcome,
+            checks: adjudication.checks,
+            ...(adjudication.warnings === undefined ? {} : { checkWarnings: adjudication.warnings }),
+          }),
       ...host.fields,
     };
     if (outcome.kind === "failed") {

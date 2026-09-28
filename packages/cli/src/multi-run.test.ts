@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { UsageTracker, type UsageCounts } from "@jevitate/ai-core";
+import { GOAL_ONLY_OUTCOMES, MISSION_EXIT_CODES, foldGoalOutcome, type GoalOnlyOutcome, type MissionOutcome } from "@jevitate/domain";
+import { formatMultiRunHuman } from "./cli-output.js";
 import {
   MultiRunArgsError,
   diffPersonas,
@@ -20,11 +22,16 @@ import {
 
 /** A synthetic run: only what the vote reads. */
 function run(index: number, outcome: string, fingerprints: string[], extra: Partial<RunSummary> = {}): RunSummary {
+  // A goal-only ending (succeeded/failed/exhausted/blocked) is a goal run's: it folds onto its canonical verdict (#217).
+  const goal = (GOAL_ONLY_OUTCOMES as readonly string[]).includes(outcome) ? (outcome as GoalOnlyOutcome) : undefined;
+  const missionOutcome = goal === undefined ? (outcome as MissionOutcome) : foldGoalOutcome(goal);
   return {
     index,
     ok: true,
     outcome,
-    exitCode: outcome === "succeeded" || outcome === "clean" ? 0 : 1,
+    missionOutcome,
+    ...(goal === undefined ? {} : { goalOutcome: goal }),
+    exitCode: MISSION_EXIT_CODES[missionOutcome],
     findings: fingerprints.map((fp) => ({ kind: "defect/network-5xx", fingerprint: fp, route: "/items/42", title: `bug ${fp}` })),
     requests: {},
     controls: [],
@@ -52,11 +59,18 @@ describe("repeat-and-vote (#141)", () => {
   });
 
   it("the agreed outcome needs ≥k runs; otherwise (or on a tie) it is intermittent (exit 4)", () => {
-    expect(voteRuns([run(1, "succeeded", []), run(2, "succeeded", []), run(3, "exhausted", [])], 2).outcome).toBe("succeeded");
+    expect(voteRuns([run(1, "succeeded", []), run(2, "succeeded", []), run(3, "exhausted", [])], 2)).toMatchObject({
+      outcome: "succeeded",
+      missionOutcome: "clean",
+      goalOutcome: "succeeded",
+      exitCode: 0,
+    });
+    // #226: the vote is over the canonical verdict — two goal runs that failed in different ways
+    // (exhausted, blocked) still agree the run found a defect; the goal ending then reads as that verdict.
     const split = voteRuns([run(1, "succeeded", []), run(2, "exhausted", []), run(3, "blocked", [])], 2);
-    expect(split.outcome).toBe("intermittent");
-    expect(split.exitCode).toBe(4);
-    expect(voteRuns([run(1, "succeeded", []), run(2, "exhausted", [])], 1).outcome).toBe("intermittent");
+    expect(split).toMatchObject({ outcome: "defects-found", missionOutcome: "defects-found", goalOutcome: "defects-found", exitCode: 1 });
+    const tie = voteRuns([run(1, "succeeded", []), run(2, "exhausted", [])], 1);
+    expect(tie).toMatchObject({ outcome: "intermittent", missionOutcome: "intermittent", exitCode: 4 });
   });
 
   it("a finding seen twice in ONE run still counts as one run", () => {
@@ -116,9 +130,17 @@ describe("repeat-and-vote (#141)", () => {
     expect(s).toMatchObject({ ok: false, outcome: "crashed", exitCode: 2, findings: [], error: { message: "boom" } });
   });
 
-  it("the goal strategy votes on its own outcome; others on missionOutcome", () => {
-    expect(summarizeRun("goal", 1, { ok: true, data: { outcome: "succeeded", missionOutcome: "clean", exitCode: 0 } }).outcome).toBe("succeeded");
-    expect(summarizeRun("coverage", 1, { ok: true, data: { outcome: "exhausted", missionOutcome: "clean", exitCode: 0 } }).outcome).toBe("clean");
+  it("a run carries its canonical missionOutcome (#217) — and a goal run its own goalOutcome beside it", () => {
+    expect(summarizeRun("goal", 1, { ok: true, data: { outcome: "succeeded", goalOutcome: "succeeded", missionOutcome: "clean", exitCode: 0 } })).toMatchObject({
+      outcome: "succeeded",
+      missionOutcome: "clean",
+      goalOutcome: "succeeded",
+    });
+    const coverage = summarizeRun("coverage", 1, { ok: true, data: { outcome: "exhausted", missionOutcome: "clean", exitCode: 0 } });
+    expect(coverage).toMatchObject({ outcome: "clean", missionOutcome: "clean" });
+    expect(coverage.goalOutcome).toBeUndefined();
+    // An older goal result without missionOutcome: its ending is folded, never read as the verdict.
+    expect(summarizeRun("goal", 1, { ok: true, data: { outcome: "blocked", exitCode: 1 } })).toMatchObject({ missionOutcome: "defects-found", goalOutcome: "blocked" });
   });
 });
 
@@ -145,7 +167,7 @@ describe("persona diff (#143)", () => {
     expect(d.requestsOnlyIn).toEqual([{ item: "GET /api/admin/users", presentFor: ["admin"], absentFor: ["sales"] }]);
     expect(d.statusDiffs).toEqual([{ request: "GET /api/billing", statuses: { admin: [200], sales: [403] } }]);
     expect(d.controlsOnlyIn).toEqual([{ item: 'button "Billing"', presentFor: ["admin"], absentFor: ["sales"] }]);
-    expect(d.outcomes).toEqual({ admin: "succeeded", sales: "blocked" });
+    expect(d.outcomes).toEqual({ admin: "clean", sales: "defects-found" });
     expect(d.outcomeDiffers).toBe(true);
     expect(d.rbacCandidates).toEqual([
       { request: "GET /api/billing", denied: { sales: [403] }, allowed: ["admin"], title: "GET /api/billing: 403 for sales; 2xx for admin" },
@@ -325,6 +347,104 @@ describe("a broken or interrupted run is never `intermittent` (#220)", () => {
       const cell = (killed as { cells: Array<{ runs: Array<{ outcome: string; reason?: string }> }> }).cells[0]!;
       expect(cell.runs.map((r) => r.outcome)).toEqual(["blocked", "inconclusive"]);
       expect(cell.runs[1]!.reason).toBe("interrupted by SIGINT after 0 steps");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("multi-run results follow the #217 contract (#226)", () => {
+  const answer = { text: "42 items", evidence: [{ source: "page-text", url: "http://127.0.0.1:3000/items" }] };
+
+  it("--repeat of a goal: canonical missionOutcome, goalOutcome and engine — in the result AND on disk; the human headline is canonical", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-contract-"));
+    try {
+      const result = await runMultiRun({
+        plan: { repeat: 2, minAgreement: 2, personas: null },
+        strategy: "goal",
+        outDir: dir,
+        runOnce: async (): Promise<RunEnvelope> => ({
+          ok: true,
+          data: { outcome: "succeeded", goalOutcome: "succeeded", missionOutcome: "clean", exitCode: 0, answer, reason: "every success check held" },
+        }),
+      });
+      expect(result).toMatchObject({ outcome: "succeeded", missionOutcome: "clean", goalOutcome: "succeeded", exitCode: 0 });
+      expect(result.engine).toMatchObject({ version: expect.any(String), commit: expect.any(String), builtAt: expect.any(String) });
+      const onDisk = JSON.parse(readFileSync(result.resultPath, "utf8")) as Record<string, unknown>;
+      expect(onDisk).toMatchObject({ missionOutcome: "clean", goalOutcome: "succeeded", exitCode: 0, engine: result.engine });
+      expect(result.cells[0]!.runs.map((r) => [r.missionOutcome, r.goalOutcome])).toEqual([
+        ["clean", "succeeded"],
+        ["clean", "succeeded"],
+      ]);
+
+      const human = formatMultiRunHuman(result);
+      expect(human).toMatch(/^CLEAN: goal ×2 · 0 agreed finding\(s\) · 0 flaky/);
+      expect(human).not.toMatch(/SUCCEEDED:/);
+      expect(human).toMatch(/^GOAL {4}succeeded$/m);
+      expect(human).toMatch(/^RUN {5}run 1 {2}clean \(goal: succeeded\) {2}every success check held$/m);
+      // Both runs found the same answer: one ANSWER line, with where it came from.
+      expect(human.match(/^ANSWER/gm)).toHaveLength(1);
+      expect(human).toMatch(/^ANSWER {2}42 items {2}\(from page text on \/items\)$/m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--persona: the headline is the canonical (most severe) verdict; each persona's runs, the status diff and each answer are listed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-persona-"));
+    try {
+      const result = await runMultiRun({
+        plan: { repeat: 1, minAgreement: 1, personas: [{ name: "admin", storageState: "/s/admin.json" }, { name: "viewer", storageState: "/s/viewer.json" }] },
+        strategy: "goal",
+        outDir: dir,
+        runOnce: async ({ storageState }): Promise<RunEnvelope> =>
+          storageState === "/s/admin.json"
+            ? { ok: true, data: { goalOutcome: "succeeded", missionOutcome: "clean", exitCode: 0, answer: { text: "3 invoices" }, timing: { endpoints: { "GET /api/invoices": { statuses: [200] } } } } }
+            : {
+                ok: true,
+                data: {
+                  goalOutcome: "blocked",
+                  missionOutcome: "defects-found",
+                  exitCode: 1,
+                  reason: "blocked before the goal was met",
+                  timing: { endpoints: { "GET /api/invoices": { statuses: [404] } } },
+                },
+              },
+      });
+      expect(result).toMatchObject({ outcome: "mixed", missionOutcome: "defects-found", goalOutcome: "defects-found", exitCode: 1 });
+      expect(result.diff?.outcomes).toEqual({ admin: "clean", viewer: "defects-found" });
+      const human = formatMultiRunHuman(result);
+      expect(human).toMatch(/^DEFECTS-FOUND: goal ×1 · 2 personas · 0 agreed finding\(s\) · 0 flaky/);
+      expect(human).toMatch(/^PERSONA admin  clean \(goal: succeeded\)$/m);
+      expect(human).toMatch(/^PERSONA viewer  defects-found \(goal: blocked\)$/m);
+      expect(human).toMatch(/^RUN {5}viewer run 1 {2}defects-found \(goal: blocked\) {2}blocked before the goal was met$/m);
+      expect(human).toMatch(/^DIFF {4}GET \/api\/invoices: 200 for admin; 404 for viewer {2}\(advisory\)$/m);
+      expect(human).toMatch(/^ANSWER {2}admin run 1: 3 invoices$/m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an interrupted multi-run is canonical too: missionOutcome inconclusive with the signal's exit code", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-multi-kill-contract-"));
+    try {
+      let onKill: ((i: { signal: string; exitCode: number }) => unknown) | undefined;
+      let killed: unknown;
+      await runMultiRun({
+        plan: { repeat: 2, minAgreement: 2, personas: null },
+        strategy: "adversarial",
+        outDir: dir,
+        armKill: (fn) => {
+          onKill = fn;
+          return () => undefined;
+        },
+        runOnce: async ({ outDir }): Promise<RunEnvelope> => {
+          if (outDir.endsWith("run-2")) killed = onKill?.({ signal: "SIGTERM", exitCode: 143 });
+          return { ok: true, data: { outcome: "clean", missionOutcome: "clean", exitCode: 0 } };
+        },
+      });
+      expect(killed).toMatchObject({ missionOutcome: "inconclusive", exitCode: 143, engine: expect.any(Object) });
+      expect(formatMultiRunHuman(killed)).toMatch(/^INCONCLUSIVE: adversarial ×2/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

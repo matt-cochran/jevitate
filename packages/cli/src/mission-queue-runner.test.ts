@@ -152,7 +152,9 @@ describe("mission queue runner (#117)", () => {
       let gatewayCalls = 0;
       let browserOpens = 0;
       const execute = realQueuedMissionExecutor({
-        outDir: "/nonexistent-out",
+        // A real, writable directory: since #226 the runner creates its journal (and this outDir)
+        // BEFORE the browser launch, so a kill during launch still writes a partial result.
+        outDir: mkdtempSync(join(tmpdir(), "jev-queue-logsrc-")),
         gateways: async () => {
           gatewayCalls += 1;
           throw new Error("gateways must not be built");

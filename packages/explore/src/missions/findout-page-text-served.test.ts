@@ -15,6 +15,7 @@ import {
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./goal-based.js";
 import { withSession } from "../testkit.js";
+import { ANSWER_FITS_QUESTION } from "../answer.js";
 
 /**
  * #207 — a find-out goal must answer from ordinary page text and from a form field's value, and an
@@ -42,6 +43,22 @@ const PAGES: Record<string, string> = {
 <label>Email <input name="email" type="email" value="ada@example.test"></label>
 <label>Password <input name="password" type="password" value="hunter2-secret"></label>
 <button type="submit">Save</button></form></body></html>`,
+  "/bio": `<!doctype html><html><body><h1>Profile</h1>
+<form onsubmit="return false"><label>Display name <input name="displayName" value="Ada Lovelace"></label>
+<label>Bio <textarea name="bio" aria-label="Bio">Mathematician and writer; first to publish an algorithm for a machine.</textarea></label>
+<button type="submit">Save</button></form></body></html>`,
+  // #223: tenant a's view of tenant b's item — a 404 whose only way on is "Back to items" …
+  "/t/items/item-1": `<!doctype html><html><head><title>Items · Example</title></head><body>
+<h1>Item not found</h1><a href="/t/items">Back to items</a></body></html>`,
+  // … to a list with no items of its own: a create form (a "Title" label and a "Create item" button).
+  "/t/items": `<!doctype html><html><head><title>Items · Example</title></head><body><h1>Items</h1>
+<p>No items yet.</p>
+<form onsubmit="return false"><label>Title <input name="title" aria-label="Title"></label><button type="submit">Create item</button></form></body></html>`,
+  "/notes": `<!doctype html><html><body><h1>Notes</h1>
+<div contenteditable="true" role="textbox" aria-label="Notes">Call the bank on Tuesday.<br>Renew the lease.</div></body></html>`,
+  // #223: item titles as links in the content (a list), beside nav links.
+  "/list": `<!doctype html><html><body><nav><a href="/list">Home</a> <a href="/about">About us</a></nav>
+<main><h1>Items</h1><ul><li><a href="/i/1">Quarterly roadmap review</a></li><li><a href="/i/2">Hiring plan</a></li></ul></main></body></html>`,
   "/packs-bare": `<!doctype html><html><body><p>Nothing to see here.</p><button type="button">Refresh</button></body></html>`,
   "/packs": `<!doctype html><html><body><h1>Credit packs</h1><p>Choose how many packs you need.</p>
 <button type="button">3 packs</button></body></html>`,
@@ -51,8 +68,9 @@ let server: Server;
 let origin: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const html = PAGES[(req.url ?? "/").split("?")[0] ?? "/"];
-    res.writeHead(html === undefined ? 404 : 200, { "content-type": "text/html; charset=utf-8" }).end(html ?? "not found");
+    const path = (req.url ?? "/").split("?")[0] ?? "/";
+    const html = PAGES[path];
+    res.writeHead(html === undefined || path === "/t/items/item-1" ? 404 : 200, { "content-type": "text/html; charset=utf-8" }).end(html ?? "not found");
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -69,11 +87,20 @@ afterAll(async () => {
  */
 class ReadingJudge implements JudgmentPort {
   readonly states: JudgmentState[] = [];
+  /** #223: every "does this quote answer the goal's question?" ask, and Jev's P(yes) to it. */
+  readonly fitsCalls: JudgmentState[] = [];
+  fitsProbability = 0.9;
   constructor(private readonly policy: (state: JudgmentState, turn: number) => string) {}
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
     if (!("action" in args.questions)) {
       const out: Record<string, Answer> = {};
-      for (const [name, q] of Object.entries(args.questions)) if (q.kind === "noul") out[name] = { kind: "noul", value: false, probability: 0.1 };
+      for (const [name, q] of Object.entries(args.questions)) {
+        if (q.kind !== "noul") continue;
+        if (name === ANSWER_FITS_QUESTION) {
+          this.fitsCalls.push(args.state);
+          out[name] = { kind: "noul", value: this.fitsProbability >= 0.5, probability: this.fitsProbability };
+        } else out[name] = { kind: "noul", value: false, probability: 0.1 };
+      }
       return out;
     }
     this.states.push(args.state);
@@ -100,6 +127,7 @@ class PageReadingGen implements GenerationPort {
   constructor(
     private readonly pattern: RegExp,
     private readonly claim: (value: string) => string,
+    private readonly quote: (value: string) => string = (v) => v,
   ) {}
   async generate<K extends GenTaskKind>(kind: K, input: GenInput<K>): Promise<GenerationResult<K>> {
     if (kind !== "goal.answer") return this.#fallback.generate(kind, input);
@@ -107,7 +135,7 @@ class PageReadingGen implements GenerationPort {
     this.pagesSeen.push(pages);
     const m = this.pattern.exec(pages);
     const value = m?.[1];
-    const output = value === undefined ? { answer: null, claims: [] } : { answer: value, claims: [{ claim: this.claim(value), quote: value }] };
+    const output = value === undefined ? { answer: null, claims: [] } : { answer: value, claims: [{ claim: this.claim(value), quote: this.quote(value) }] };
     return {
       output,
       provenance: { adapter: "fake", model: "page-reader", promptVersion: "2", latencyMs: 0, responseHash: "x" },
@@ -274,6 +302,154 @@ describe("#207 — a find-out goal answers from page text and form values; an ab
       expect(r.run.stop).toBe("blocked");
       expect(r.transcript.filter((e) => e.op === "report")).toHaveLength(1);
       expect(reasonOf(r)).toBe("answer not found (pages seen: /packs)");
+    },
+    90_000,
+  );
+});
+
+/** #223: a generator that always proposes the same answer (the dogfood transcript's). */
+class FixedAnswerGen implements GenerationPort {
+  readonly hints: (string | undefined)[] = [];
+  readonly #fallback = new FakeGenerationGateway();
+  constructor(private readonly output: { answer: string; claims: { claim: string; quote: string }[] }) {}
+  async generate<K extends GenTaskKind>(kind: K, input: GenInput<K>): Promise<GenerationResult<K>> {
+    if (kind !== "goal.answer") return this.#fallback.generate(kind, input);
+    this.hints.push((input as { hint?: string }).hint);
+    return {
+      output: this.output,
+      provenance: { adapter: "fake", model: "fixed", promptVersion: "3", latencyMs: 0, responseHash: "x" },
+    } as unknown as GenerationResult<K>;
+  }
+}
+
+const TITLE_GOAL = "Find out the title of this item";
+
+describe("#223 — a quote on the page must answer the question; a textarea's value grounds like an input's", () => {
+  it(
+    "404, then 'Back to items', then the 'Create item' button's label as the title: rejected by code — answer not found",
+    async () => {
+      // On the 404 page: follow "Back to items" (control 0); then report.
+      const judge = new ReadingJudge((state) => (shows(state, "Item not found") ? "click:0" : "report"));
+      const gen = new FixedAnswerGen({ answer: "Create item", claims: [{ claim: "The title of this item is Create item", quote: "Create item" }] });
+      const r = await run("/t/items/item-1", TITLE_GOAL, judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(r.run.answer).toBeUndefined();
+      expect(reasonOf(r)).toBe("answer not found (pages seen: /t/items/item-1, /t/items)");
+      const rejected = r.transcript.filter((e) => e.op === "report");
+      expect(rejected.length).toBeGreaterThan(0);
+      expect(rejected.every((e) => e.actOk === false && /only a control's label/.test(e.reason ?? ""))).toBe(true);
+      // Code rejected it: Jev (who would have said yes here) was never what decided — it never approves alone.
+      expect(judge.fitsCalls).toHaveLength(0);
+    },
+    90_000,
+  );
+
+  it(
+    "the label and the button run together ('Title Create item'): still only controls' names — rejected",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new FixedAnswerGen({ answer: "Create item", claims: [{ claim: "The item title is Create item", quote: "Title Create item" }] });
+      const r = await run("/t/items", TITLE_GOAL, judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(reasonOf(r)).toBe("answer not found (pages seen: /t/items)");
+    },
+    90_000,
+  );
+
+  it(
+    "an answer on the 404 page itself (its h1 'Item not found' as the title): rejected — the page answered HTTP 404; no heading retry",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new FixedAnswerGen({ answer: "Item not found", claims: [{ claim: "The item is titled Item not found", quote: "Item not found" }] });
+      const r = await run("/t/items/item-1", TITLE_GOAL, judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(r.run.answer).toBeUndefined();
+      expect(reasonOf(r)).toBe("answer not found (pages seen: /t/items/item-1)");
+      expect(r.transcript.find((e) => e.op === "report")?.reason).toMatch(/HTTP 404/);
+      // An error page's heading is never offered as the item's title (#216's hint).
+      expect(gen.hints.every((h) => h === undefined)).toBe(true);
+    },
+    90_000,
+  );
+
+  it(
+    "Jev's veto: page content code grounds, but Jev says it does not answer the question — rejected",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      judge.fitsProbability = 0.05;
+      const gen = new FixedAnswerGen({ answer: "tenant b", claims: [{ claim: "The item's title is tenant b", quote: "Owner: tenant b" }] });
+      const r = await run("/items/item-1", TITLE_GOAL, judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(r.run.answer).toBeUndefined();
+      expect(judge.fitsCalls.length).toBeGreaterThan(0);
+      expect(judge.fitsCalls[0]?.controls.some((c) => c.includes("Owner: tenant b"))).toBe(true);
+      expect(r.transcript.find((e) => e.op === "report")?.reason).toMatch(/does not answer the question \(Jev vetoed it/);
+      expect(reasonOf(r)).toMatch(/^answer not found/);
+    },
+    90_000,
+  );
+
+  it(
+    "a <textarea>'s value (quoted as the model sees it, 'Bio: …' with its full stop) grounds on the control value",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new PageReadingGen(/^Bio: (.+)$/m, (v) => `The current bio text on the profile is '${v}'`, (v) => `Bio: ${v}`);
+      const r = await run("/bio", "What is the current bio text on the profile?", judge, gen);
+
+      expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
+      expect(r.run.answer?.text).toBe("Mathematician and writer; first to publish an algorithm for a machine.");
+      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-value", control: "Bio" });
+      // Jev was asked and said yes — the veto only ever turns an accept into a reject.
+      expect(judge.fitsCalls).toHaveLength(1);
+    },
+    90_000,
+  );
+
+  it(
+    "a contenteditable's text (quoted as a form field value, 'Notes: …') grounds on the control value",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new PageReadingGen(/^Notes: (.+)$/m, (v) => `The notes say '${v}'`, (v) => `Notes: ${v}`);
+      const r = await run("/notes", "What do the notes say?", judge, gen);
+
+      expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
+      expect(r.run.answer?.text).toBe("Call the bank on Tuesday. Renew the lease.");
+      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-value", control: "Notes" });
+    },
+    90_000,
+  );
+
+  it(
+    "a list of item-title links: 'the title of the first item' is answered from the link text (content, not an action)",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new FixedAnswerGen({
+        answer: "Quarterly roadmap review",
+        claims: [{ claim: "The first item is titled Quarterly roadmap review", quote: "Quarterly roadmap review" }],
+      });
+      const r = await run("/list", "Find the title of the first item in the list", judge, gen);
+
+      expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
+      expect(r.run.answer?.text).toBe("Quarterly roadmap review");
+      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "page-text" });
+    },
+    90_000,
+  );
+
+  it(
+    "a nav link's label is still only a control's label — rejected, answer not found",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new FixedAnswerGen({ answer: "About us", claims: [{ claim: "The company is called About us", quote: "About us" }] });
+      const r = await run("/list", "Find out the name of the company", judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(r.transcript.find((e) => e.op === "report")?.reason).toMatch(/only a control's label/);
+      expect(reasonOf(r)).toBe("answer not found (pages seen: /list)");
     },
     90_000,
   );

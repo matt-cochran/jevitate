@@ -37,11 +37,29 @@ fields the same way:
 | `target` | object | The run's scope: `seedUrl` and `allowlist`. It can also hold a storage-state path, never the file's contents. `verify-fix` uses it to replay a finding. |
 | `engine` | object | The build that produced the result: `{version, commit, builtAt}`. |
 | `usage` | object | Model calls, tokens and cost. The CLI always sets it; a programmatic caller that does not track usage leaves it out. |
-| `failure` | object | Present when the run broke, proved nothing, or (goal) failed a check after the model's `done`. `failure.kind` says why the run ended `crashed` or `inconclusive` (e.g. `insufficient-coverage`, `vacuous-check`, `job-incomplete`, `degraded-environment`) or `failed` (`success-check-failed`), and `failure.message` names the cause. |
+| `failure` | object | Present when the run broke, proved nothing, or (goal) failed a check after the model's `done`. `failure.kind` says why the run ended `crashed` or `inconclusive` (e.g. `insufficient-coverage`, `vacuous-check`, `job-incomplete`, `degraded-environment`, `target-unresponsive`) or `failed` (`success-check-failed`), and `failure.message` names the cause. |
 | `hostHealth` | object | The host's health over the run (#203): peak load per core, minimum free memory, peak driver event-loop lag, the slowest render, how many steps ran on a starved host. See [a starved host](./outcomes.md#a-starved-host-hosthealth-environmentdegraded). Additive: older results do not have it. |
 | `environmentDegraded` | array | Hangs, click timeouts and no-progress stops met while the host was starved: advisory (`advisory: true`), never a defect or hang, never failing the run. |
 
 `verify-fix`, `ledger add`, `report`, `check` and `--repeat` voting all read defects from `defects`.
+
+## Multi-run results (`--repeat`, `--persona`)
+
+`multi-run.result.json` (and the `--json` envelope's `data`) is an aggregate, not a mission result:
+it has `kind: "multi-run"`, and `jevitate report` reads each run's own `<stem>.result.json` under it
+instead. It follows the same verdict contract as a single result:
+
+| Field | Meaning |
+|---|---|
+| `missionOutcome` | The canonical verdict. Each run's `missionOutcome` is voted (a goal run's own ending folds first, so `exhausted` and `blocked` runs agree on `defects-found`). With personas it is the shared outcome when they agree, else the most severe persona's. `inconclusive` while runs are pending or after a kill. |
+| `goalOutcome` | `--goal` multi-runs only: the goal ending the runs agreed on, else the canonical outcome. |
+| `exitCode` | The exit code of `missionOutcome` (130/143 for a killed multi-run). |
+| `engine` | The build that produced the aggregate. |
+| `outcome` | The runs' own agreed ending (a goal's `succeeded`, …), or `"mixed"` when personas disagree. Not the portable verdict. |
+
+Each `cells[]` entry (one per persona) and each of its `runs[]` carries its own `missionOutcome` (and
+`goalOutcome` for goal runs); a run also carries its `reason` and a find-out run its `answer`. The
+persona `diff.outcomes` map holds canonical outcomes. See [multi-run](./multi-run.md).
 
 ## Strategy-specific fields
 

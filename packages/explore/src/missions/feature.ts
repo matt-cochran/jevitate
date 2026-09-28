@@ -34,7 +34,7 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
@@ -671,7 +671,10 @@ async function runFeatureFrontier(
     // The watchdog fired (#114): a typed `stalled` stop with every path found so far, never an idle run.
     if (e instanceof StalledError) return endRun("stalled", { kind: "stalled", message: e.reason });
     // Engine failure: a typed `crashed` result carrying every path discovered so far.
-    return endRun("crashed", describeFailure(e, crashWatch.signals()));
+    const failure = describeFailure(e, crashWatch.signals());
+    // #226: the app stopped answering navigation (a frozen backend): the run stopped short of its
+    // target — the same `inconclusive` ending as losing the seed, with the typed reason, never `crashed`.
+    return endRun(isTargetUnresponsive(failure) ? "scope-unreachable" : "crashed", failure);
   } finally {
     watchdog.stop();
     await sessions.closeOwned();

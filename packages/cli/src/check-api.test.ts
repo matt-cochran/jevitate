@@ -446,6 +446,29 @@ describe("check suites: viewport/device and the exploratory strategy (surface-wi
   });
 });
 
+describe("#225: a usability mission's success checks are honoured, never ignored", () => {
+  it("parses success/successWhen on a usability mission (refused on any other strategy) and passes them to the usability runner", async () => {
+    const s = suite(0, {}, {
+      missions: [
+        { name: "bio", strategy: "usability", goal: "save a bio", appClass: "consumer", success: ["requestMade:PUT /api/profile"], successWhen: "held", allowVacuousChecks: true },
+      ],
+    });
+    expect(s.targets[0]?.missions[0]).toMatchObject({ success: ["requestMade:PUT /api/profile"], successWhen: "held" });
+    expect(() => suite(0, {}, { missions: [{ strategy: "coverage", success: ["urlIncludes:/x"] }] })).toThrow(/success: applies only to goal items and usability missions/);
+    expect(() => suite(0, {}, { missions: [{ strategy: "usability", goal: "g", appClass: "consumer", successWhen: "held" }] })).toThrow(/successWhen: needs at least one success check/);
+
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const seen: Array<{ successChecks?: unknown; successWhen?: unknown; allowVacuousChecks?: unknown }> = [];
+    const usability = (async (o: { successChecks?: unknown; successWhen?: unknown; allowVacuousChecks?: unknown }) => {
+      seen.push({ successChecks: o.successChecks, successWhen: o.successWhen, allowVacuousChecks: o.allowVacuousChecks });
+      return { missionOutcome: "clean", exitCode: 0, reportPath: null, transcriptPath: join(dir, "none.transcript.json"), analysisUnavailable: "fake" };
+    }) as unknown as CheckRunners["usability"];
+    await runCheck({ suite: s, outDir: join(dir, "out-225"), journeysDir: dir, runners: { usability }, gateways: async () => gw, aiMode: "fake" });
+    expect(seen).toEqual([{ successChecks: [{ kind: "requestMade", method: "PUT", pathGlob: "/api/profile" }], successWhen: "held", allowVacuousChecks: true }]);
+  });
+});
+
 describe("#211: a verifyFix item's strategy comes from its result's content, never its file name", () => {
   it("a renamed result file gives the same verdict as the original — FAILED (exit 1), never an ERROR from a lost identity", async () => {
     const resultsDir = join(dir, "baseline");

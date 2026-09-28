@@ -13,7 +13,7 @@ import {
   matchGlob,
   parseSecretField,
   resolveCoverageThresholds,
-  scopeGlobs,
+  resolveRouteScope,
   secretFieldSecrets,
   SecretFieldSpecError,
   type CoverageThresholds,
@@ -673,6 +673,12 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
     if (!allowlist.includes(new URL(missionUrl).origin)) {
       throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${missionUrl} is not on the target's allowlist`);
     }
+    // #225: a usability mission's success checks are refused up front when unparseable, like a goal's.
+    try {
+      for (const spec of m.success ?? []) parseSuccessSpec(spec);
+    } catch (e) {
+      throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${errorMessage(e)}`);
+    }
   }
   for (const v of t.verifyFix) {
     if (!existsSync(v.result)) throw new CheckPreflightError(`target ${t.name}: verify-fix ${v.name}: result not found: ${v.result}`);
@@ -1003,7 +1009,7 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         seedUrl: url,
         allowlist: item.t.allowlist,
         capability: m.feature ?? m.name,
-        routeGlobs: m.routes ?? scopeGlobs(url),
+        routeGlobs: resolveRouteScope(url, m.routes).routeGlobs,
         bounds: b,
         ...withStall,
       });
@@ -1073,6 +1079,10 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
       ...(x.minConfidence === undefined ? {} : { minConfidence: x.minConfidence }),
       ...(x.show === undefined ? {} : { show: x.show }),
       ...(x.maxFindingsPerPage === undefined ? {} : { maxFindingsPerRoute: x.maxFindingsPerPage }),
+      // #225: the job's completion checks — goal-item semantics, never ignored.
+      ...(m.success === undefined ? {} : { successChecks: m.success.map(parseSuccessSpec) }),
+      ...(m.successWhen === undefined ? {} : { successWhen: m.successWhen }),
+      ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       judge,
       gen,
       usage,
