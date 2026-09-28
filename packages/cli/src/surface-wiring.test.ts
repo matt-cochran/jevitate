@@ -75,7 +75,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     nowIso: SEAM,
     extractText: SEAM,
   },
-  "program.ts runUxReview": {
+  "ux-cli.ts runUxReview": {
     env: SEAM,
     configPath: SEAM,
     signals: SEAM,
