@@ -24,6 +24,7 @@ function evidenceLine(e: ConsolidatedDefect["evidence"][number]): string {
     e.screenshot === undefined ? undefined : `screenshot \`${e.screenshot}\``,
     e.transcript === undefined ? undefined : `transcript \`${e.transcript}\``,
     e.recording === undefined ? undefined : `recording \`${e.recording}\``,
+    e.result === undefined ? undefined : `result \`${e.result}\``,
   ].filter((p): p is string => p !== undefined);
   return `  - ${parts.join(" · ")}`;
 }

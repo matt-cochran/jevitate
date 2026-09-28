@@ -68,6 +68,13 @@ test("mcp command is registered on the program (additive #20)", async () => {
   expect(mcp?.description()).toContain("MCP");
 });
 
+test("#213: every top-level command has a --help description", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const missing = program.commands.filter((c) => c.description().trim() === "").map((c) => c.name());
+  expect(missing).toEqual([]);
+});
+
 test("mcp --print-config json prints the bare mcpServers JSON (no server start)", async () => {
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });
@@ -774,6 +781,22 @@ test("init --dry-run --skip-keys --json reports planned actions but writes nothi
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(true);
   expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
+  expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
+  expect(existsSync(statePath)).toBe(false);
+});
+
+// #213: the human summary must never claim an action ("initialized", "N created", "processed")
+// that --dry-run did not actually take — it wrote nothing, so it says "would".
+test("init --dry-run --skip-keys human summary says 'would', never 'initialized'/'created'/'processed'", async () => {
+  const { program, lines, cwd, statePath } = newInitProgram();
+  await program.parseAsync(["init", "--dry-run", "--skip-keys"], { from: "user" });
+  const out = lines.join("");
+  expect(out).toMatch(/dry run — nothing was written/);
+  expect(out).toMatch(/would be processed/);
+  expect(out).not.toContain("jevitate initialized");
+  expect(out).not.toContain("pairs processed");
+  expect(out).not.toContain("config(s) processed");
+  expect(out).not.toMatch(/\d+ created\)/);
   expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
   expect(existsSync(statePath)).toBe(false);
 });

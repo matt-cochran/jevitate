@@ -69,6 +69,9 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_UX_QUALITY_POLICY",
   "E_UX_NO_APP_CONTEXT",
   "E_JOURNEY_REQUIRES_AUTH",
+  "E_PROFILE_UNKNOWN", // `profile status` named a profile that was never created
+  "E_REGRESSION_EXISTS", // `regression capture --id` already exists; needs --force
+  "E_REGRESSION_HARD_SIGNAL", // `regression capture --fingerprint` names a hard-signal defect; use the ledger instead
 ]);
 
 /** True when a refused command's error code is a usage/input error (exit 64). */

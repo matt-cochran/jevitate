@@ -508,8 +508,12 @@ function money(usd: number): string {
 export function formatUsageLine(u: UsageCounts): string {
   const tokens = (u.inputTokens + u.outputTokens).toLocaleString("en-US");
   const counts = `${u.judgments} judgment${u.judgments === 1 ? "" : "s"}, ${u.generations} generation${u.generations === 1 ? "" : "s"}, ${tokens} tokens`;
-  const split = `jev ${u.jevUsd === undefined ? "unpriced" : money(u.jevUsd)} + generation ${u.generationUsd === undefined ? "unpriced" : money(u.generationUsd)}`;
-  const cost = u.totalUsd === undefined ? "cost unknown" : `cost ${money(u.totalUsd)}`;
+  // #213: zero calls of a kind is a KNOWN $0 — "unpriced" means a call happened but could not be
+  // costed, never that nothing was called.
+  const jevPart = u.judgments === 0 ? money(0) : u.jevUsd === undefined ? "unpriced" : money(u.jevUsd);
+  const genPart = u.generations === 0 ? money(0) : u.generationUsd === undefined ? "unpriced" : money(u.generationUsd);
+  const split = `jev ${jevPart} + generation ${genPart}`;
+  const cost = u.judgments + u.generations === 0 ? `cost ${money(0)}` : u.totalUsd === undefined ? "cost unknown" : `cost ${money(u.totalUsd)}`;
   const flag =
     u.priced === "full" || u.judgments + u.generations === 0
       ? ""

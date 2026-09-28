@@ -48,7 +48,9 @@ export function formatErrorHuman(error: { readonly code: string; readonly messag
 }
 
 const TAG = 8;
-const tag = (t: string): string => t.padEnd(TAG);
+// #213: a label at or past the column width (e.g. STILL-REPRODUCES, BASELINE) must still get a
+// separator — padEnd alone is a no-op once the label reaches TAG, which glues it to the next value.
+const tag = (t: string): string => (t.length >= TAG ? `${t} ` : t.padEnd(TAG));
 
 interface DefectLike {
   readonly fingerprint?: string;
