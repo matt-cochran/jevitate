@@ -16,8 +16,8 @@ import { REDACTION_MASK, buildJudgmentState, redactContext, redactText, redactUr
  * says so (`source: "control-value"`, naming the control), never passing it off as page text.
  *
  * #223: a quote being ON a page is not the same as it ANSWERING the question. Code also rejects an
- * answer grounded only on controls' accessible names (a button / link / field label is not content,
- * unless the goal asks about controls) and an answer grounded on an error page (HTTP status ≥ 400, or a
+ * answer grounded only on action / label names (a button, a field label, a nav / header / footer or
+ * repeated link is not content, unless the goal asks about controls; a link in the content is) and an answer grounded on an error page (HTTP status ≥ 400, or a
  * "not found" / "404" / error heading or title). An independent Jev yes/no — "does this answer the
  * goal's question?" — may then VETO an answer code accepted; it never approves one on its own.
  */
@@ -52,7 +52,10 @@ export interface ObservedPage {
   readonly title?: string;
   /** #223: the main document's HTTP status, when observed for this URL. */
   readonly status?: number;
-  /** #223: the accessible names of the page's controls (one per control); absent when none. */
+  /**
+   * #223: the names of the page's actions and labels (one per control: buttons, form fields, chrome
+   * links — never a link in the page's content); absent when none.
+   */
   readonly controls?: readonly string[];
 }
 
@@ -301,8 +304,9 @@ function occurrences(hay: string, needle: string): number {
 }
 
 /**
- * #223: true when a page-text quote is made only of the page's controls' accessible names — a button
- * or link label, a field's label ("Title Create item") — and says nothing else. A quote a control
+ * #223: true when a page-text quote is made only of the page's action / label names (`controls`: a
+ * button, a field's label, a chrome link — never a content link, whose text may be the answer), as
+ * in "Title Create item", and says nothing else. A quote a control
  * repeats but the page ALSO shows as content (an h1 that a breadcrumb link repeats) is content: it
  * occurs in the page text more often than the controls' names account for.
  */
@@ -379,7 +383,7 @@ function groundClaimOn(
     return { evidence: { ...base, url: page.url, grounded: false, ...where, why: errorPage }, notAnswer: true };
   }
   if (found.source === "page-text" && !CONTROL_GOAL.test(goal) && quoteIsOnlyControlNames(quote, found.page)) {
-    const why = "the quote is only a control's label (a button, link or field name), not page content that answers the question";
+    const why = "the quote is only a control's label (a button, a field label or a navigation link), not page content that answers the question";
     return { evidence: { ...base, url: page.url, grounded: false, ...where, why }, notAnswer: true };
   }
   const quoted = new Set(numbersIn(q));

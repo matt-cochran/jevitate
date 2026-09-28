@@ -56,6 +56,9 @@ const PAGES: Record<string, string> = {
 <form onsubmit="return false"><label>Title <input name="title" aria-label="Title"></label><button type="submit">Create item</button></form></body></html>`,
   "/notes": `<!doctype html><html><body><h1>Notes</h1>
 <div contenteditable="true" role="textbox" aria-label="Notes">Call the bank on Tuesday.<br>Renew the lease.</div></body></html>`,
+  // #223: item titles as links in the content (a list), beside nav links.
+  "/list": `<!doctype html><html><body><nav><a href="/list">Home</a> <a href="/about">About us</a></nav>
+<main><h1>Items</h1><ul><li><a href="/i/1">Quarterly roadmap review</a></li><li><a href="/i/2">Hiring plan</a></li></ul></main></body></html>`,
   "/packs-bare": `<!doctype html><html><body><p>Nothing to see here.</p><button type="button">Refresh</button></body></html>`,
   "/packs": `<!doctype html><html><body><h1>Credit packs</h1><p>Choose how many packs you need.</p>
 <button type="button">3 packs</button></body></html>`,
@@ -416,6 +419,37 @@ describe("#223 — a quote on the page must answer the question; a textarea's va
       expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
       expect(r.run.answer?.text).toBe("Call the bank on Tuesday. Renew the lease.");
       expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "control-value", control: "Notes" });
+    },
+    90_000,
+  );
+
+  it(
+    "a list of item-title links: 'the title of the first item' is answered from the link text (content, not an action)",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new FixedAnswerGen({
+        answer: "Quarterly roadmap review",
+        claims: [{ claim: "The first item is titled Quarterly roadmap review", quote: "Quarterly roadmap review" }],
+      });
+      const r = await run("/list", "Find the title of the first item in the list", judge, gen);
+
+      expect(r.run.outcome).toEqual({ status: "completed", verifiedBy: "grounded-answer" });
+      expect(r.run.answer?.text).toBe("Quarterly roadmap review");
+      expect(r.run.answer?.evidence[0]).toMatchObject({ grounded: true, source: "page-text" });
+    },
+    90_000,
+  );
+
+  it(
+    "a nav link's label is still only a control's label — rejected, answer not found",
+    async () => {
+      const judge = new ReadingJudge(() => "report");
+      const gen = new FixedAnswerGen({ answer: "About us", claims: [{ claim: "The company is called About us", quote: "About us" }] });
+      const r = await run("/list", "Find out the name of the company", judge, gen);
+
+      expect(r.outcome).not.toBe("succeeded");
+      expect(r.transcript.find((e) => e.op === "report")?.reason).toMatch(/only a control's label/);
+      expect(reasonOf(r)).toBe("answer not found (pages seen: /list)");
     },
     90_000,
   );

@@ -81,6 +81,7 @@ import { RunRecorder, emptyRecording } from "./record.js";
 import { planTextEdit, readEditableText } from "./rich-text.js";
 import { describeTextEdit } from "@jevitate/interpreter";
 import { resolveMissionFixture } from "./fixture.js";
+import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
@@ -400,6 +401,17 @@ function quote(s: string, n = 160): string {
   return `"${flat.length > n ? `${flat.slice(0, n)}…` : flat}"`;
 }
 
+/**
+ * #223: a control whose name is an action or a label, not page content: every non-link control
+ * (buttons, submit/reset inputs, form fields — named by their labels) and a chrome link (in a
+ * nav / header / footer landmark, or repeated across pages). A link in the page's content — a list,
+ * a table, a card — is content: its text may be the answer ("the title of the first item").
+ */
+export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean {
+  if (c.role !== "link") return true;
+  return (c.landmark ?? null) !== null || chrome.isChrome(c);
+}
+
 function firstLine(e: unknown): string {
   return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
 }
@@ -666,6 +678,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   page.on("request", onRequestSeen);
   // #223: the main document's HTTP status per URL — an answer on a 404 / error page is no answer.
   const documentStatus = new Map<string, number>();
+  /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
+  const chrome = new ChromeTracker();
   const docKey = (u: string): string => u.split("#")[0] ?? u;
   const onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
     try {
@@ -1065,11 +1079,17 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const t = (await readEditableText(page, c))?.trim() ?? "";
         if (t !== "") richFields.push({ label: c.name.trim() || c.role || c.tag, value: redactText(t, secrets) });
       }
+      try {
+        chrome.observe(new URL(snap.url).pathname, snap.controls);
+      } catch {
+        // an unparsable URL: no chrome evidence from it
+      }
       observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
         ...(await readPageHeadings(page, secrets)),
-        // #223: the controls' names (a quote made only of them is a label, not an answer) and the
-        // document's status (an answer on a 404 page is no answer).
-        controlNames: snap.controls.map((c) => c.name),
+        // #223: the action / label names (a quote made only of them is a label, not an answer) and
+        // the document's status (an answer on a 404 page is no answer). A link that is page content
+        // (in the main content, a list, a table, a card) is NOT one: its text may be the answer.
+        controlNames: snap.controls.filter((c) => isActionOrChromeName(c, chrome)).map((c) => c.name),
         ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
       });
       noteReplyText(snap.url, visibleText);
