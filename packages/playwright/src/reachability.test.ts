@@ -46,3 +46,17 @@ describe("probeReachable (#213: fail fast when nothing is listening)", () => {
     expect(await probeReachable("not a url")).toBeNull();
   });
 });
+
+describe("probeReachable — Chromium's own unsafe ports", () => {
+  it("are never probed: Chromium's instant net::ERR_UNSAFE_PORT is the more accurate reason", async () => {
+    let connected = false;
+    const r = await probeReachable("http://127.0.0.1:1/", {
+      connect: () => {
+        connected = true;
+        return fakeSocket()();
+      },
+    });
+    expect(r).toBeNull();
+    expect(connected).toBe(false);
+  });
+});

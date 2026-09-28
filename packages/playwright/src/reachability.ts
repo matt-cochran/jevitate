@@ -22,6 +22,17 @@ export interface ReachabilityDeps {
   readonly remoteTimeoutMs?: number;
 }
 
+/**
+ * Chromium's restricted ("unsafe") ports: the browser refuses them itself, instantly, with
+ * `net::ERR_UNSAFE_PORT` — a more accurate reason than any probe, so they are never probed.
+ */
+const CHROMIUM_UNSAFE_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113,
+  115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556,
+  563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
+  6669, 6697, 10080,
+]);
+
 const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0)$/i;
 
 export async function probeReachable(url: string, deps: ReachabilityDeps = {}): Promise<string | null> {
@@ -34,6 +45,7 @@ export async function probeReachable(url: string, deps: ReachabilityDeps = {}): 
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   const host = u.hostname.replace(/^\[|\]$/g, "");
   const port = u.port !== "" ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
+  if (CHROMIUM_UNSAFE_PORTS.has(port)) return null;
   const where = `is the app running at ${u.origin}?`;
   const loopback = LOOPBACK.test(u.hostname);
   if (!loopback) {

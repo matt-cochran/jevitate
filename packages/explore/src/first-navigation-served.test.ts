@@ -45,8 +45,7 @@ describe("#128 — the start URL cannot be loaded at all", () => {
       expect(r.stop).toBe("inconclusive");
       expect(r.failure).toBeDefined();
       expect(r.failure?.kind).toBe("target-unreachable");
-      // #213: the pre-flight probe may answer first ("connection refused — is the app running…?").
-      expect(r.failure?.message).toMatch(/^target unreachable \(.*(unsafe port|connection refused).*\)$/i);
+      expect(r.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
       // No crash report at all: the CLI only ever drafts a crash issue when `run.crash` is set, so
       // this path produces NO issue draft (#128).
       expect(r.crash).toBeUndefined();
