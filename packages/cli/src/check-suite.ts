@@ -114,6 +114,9 @@ export interface SuiteMission extends SuiteItemOverrides {
   /** `usability`: the job and app class. */
   readonly goal?: string;
   readonly appClass?: string;
+  /** #225 — `usability`: independent completion checks on the job (goal-item semantics); none by default. */
+  readonly success?: readonly string[];
+  readonly successWhen?: "final" | "held";
   readonly maxActions?: number;
   readonly maxDecisions?: number;
 }
@@ -277,7 +280,7 @@ export const SUITE_FIELDS = {
   target: ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"],
   journey: ["id", "params", "routes", "viewport", "device", "storageState"],
   goal: ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fixtures"],
-  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields"],
+  mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "success", "successWhen", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields"],
   verifyFix: ["name", "result", "fingerprint", "replays", "storageState"],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -460,6 +463,12 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   const goal = r.string(v, "goal", path, true);
   const appClass = r.string(v, "appClass", path, true);
   if (s === "usability" && (goal === undefined || appClass === undefined)) r.fail(path, "strategy usability requires goal and appClass");
+  // #225: success checks judge a usability job's completion; any other strategy has no job to check.
+  const success = r.strings(v, "success", path);
+  const successWhen = v.successWhen;
+  if ((success.length > 0 || successWhen !== undefined) && s !== "usability") r.fail(`${path}.success`, "applies only to goal items and usability missions");
+  if (successWhen !== undefined && successWhen !== "final" && successWhen !== "held") r.fail(`${path}.successWhen`, 'must be "final" or "held"');
+  if (successWhen !== undefined && success.length === 0) r.fail(`${path}.successWhen`, "needs at least one success check");
   const routes = r.strings(v, "routes", path);
   const url = r.url(v, "url", path, true);
   const maxActions = r.number(v, "maxActions", path, { integer: true });
@@ -474,6 +483,8 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
     ...(feature === undefined ? {} : { feature }),
     ...(goal === undefined ? {} : { goal }),
     ...(appClass === undefined ? {} : { appClass }),
+    ...(success.length === 0 ? {} : { success }),
+    ...(successWhen === "final" || successWhen === "held" ? { successWhen } : {}),
     ...(maxActions === undefined ? {} : { maxActions }),
     ...(maxDecisions === undefined ? {} : { maxDecisions }),
   };

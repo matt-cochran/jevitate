@@ -477,7 +477,7 @@ export type RunOutcome =
        * goal, #101) a reported answer whose every claim code found on an observed page, or (a sign-in
        * goal, #188) the sign-in completion code observed after the run's own sign-in steps.
        */
-      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer" | "sign-in-signals";
+      readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer" | "sign-in-signals" | "save-signals";
     }
   | { readonly status: "incomplete"; readonly reason: string };
 
@@ -516,6 +516,14 @@ export interface DoneEvidence {
    * sign in"), `null` when unavailable. Weighed only without a success condition.
    */
   readonly signIn?: { readonly completed: boolean; readonly goalIsSignIn: number | null };
+  /**
+   * Save completion (#225), present only when the run itself submitted typed form values:
+   * `completed` is CODE-observed (./save-completion.ts — every write the submit fired finished 2xx, a
+   * success notice and no failure shows, the page still displays the saved values); `goalIsSave` is
+   * the advisory P("the whole goal is saving this form"), `null` when unavailable. Weighed only
+   * without a success condition — and preferred over the goal judgment's probability.
+   */
+  readonly save?: { readonly completed: boolean; readonly goalIsSave: number | null };
 }
 
 /**
@@ -525,7 +533,10 @@ export interface DoneEvidence {
  *  - otherwise the advisory goal judgment must clear `GOAL_MET_THRESHOLD`;
  *  - or (#188) code observed the run's own sign-in complete AND the advisory scope judgment says the
  *    whole goal is signing in, at the same threshold: code proves the sign-in, the model only scopes
- *    the goal — a goal asking for more than signing in still needs the goal judgment.
+ *    the goal — a goal asking for more than signing in still needs the goal judgment;
+ *  - (#225, checked BEFORE the goal judgment: code evidence is preferred) code observed the run's own
+ *    save go through and stay displayed AND the advisory scope judgment says the whole goal is that
+ *    save — same split: code proves the save, the model only scopes the goal.
  */
 export function groundDone(e: DoneEvidence): DoneVerdict {
   if (e.unsubmitted.length > 0) {
@@ -535,6 +546,11 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
     return e.successCheck
       ? { accept: true, outcome: { status: "completed", verifiedBy: "success-condition" } }
       : { accept: false, reason: "the success condition is not met on this page" };
+  }
+  // #225: code evidence first — the save went through, visibly — when the goal is only that save.
+  const sv = e.save;
+  if (sv !== undefined && sv.completed && sv.goalIsSave !== null && sv.goalIsSave >= GOAL_MET_THRESHOLD) {
+    return { accept: true, outcome: { status: "completed", verifiedBy: "save-signals" } };
   }
   const p = e.goalMetProbability;
   if (p !== undefined && p !== null && p >= GOAL_MET_THRESHOLD) {

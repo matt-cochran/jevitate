@@ -138,6 +138,11 @@ export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionCont
   readonly observers?: ObserverSessions;
   /** #147: the primary actor's name (the owner in a cross-actor finding). */
   readonly primaryActor?: string;
+  /**
+   * #225: the calling mission's own brief (a usability review's "pursue the job as a first-time
+   * user…"), put before this mission's own context — never replacing it.
+   */
+  readonly missionBrief?: string;
 }
 
 /** When the goal mission's page checks must hold. */
@@ -520,9 +525,11 @@ async function adjudicatedRun(
     return explore({
       ...cfg,
       readOnly,
-      missionContext: hasChecks
-        ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
-        : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict",
+      missionContext: `${cfg.missionBrief === undefined ? "" : `${cfg.missionBrief}; `}${
+        hasChecks
+          ? "success is judged independently by user-supplied checks — your `done` is only a proposal, not the verdict"
+          : "no --success check was given: end with `report` once you can answer the goal from what you observed — a grounded answer is the verdict"
+      }`,
       // `held`: after every settled step, a quick look at the page checks — remembered once they all
       // held together. Advisory to the loop (it never changes its control flow); the verdict below uses it.
       ...(declared === null

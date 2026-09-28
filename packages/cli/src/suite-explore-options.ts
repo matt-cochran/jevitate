@@ -112,7 +112,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   allowShellHooks: { shape: "boolean", appliesTo: ["goal"] },
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
-  allowVacuousChecks: { shape: "boolean", appliesTo: ["goal"] },
+  allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
 } as const satisfies Record<string, SuiteExploreOption>;
 
 export type SuiteExploreOptionName = keyof typeof SUITE_EXPLORE_OPTIONS;
@@ -149,8 +149,9 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
   strategy: { key: "strategy", at: ["mission"] },
   goal: { key: "goal", at: ["goal", "mission"] },
   appClass: { key: "appClass", at: ["mission"] },
-  success: { key: "success", at: ["goal"] },
-  successWhen: { key: "successWhen", at: ["goal"] },
+  // #225: a usability mission item takes `success`/`successWhen` too (its job's completion checks).
+  success: { key: "success", at: ["goal", "mission"] },
+  successWhen: { key: "successWhen", at: ["goal", "mission"] },
   feature: { key: "feature", at: ["mission"] },
   route: { key: "routes", at: ["mission"] },
   allow: { key: "allow", at: ["target"] },

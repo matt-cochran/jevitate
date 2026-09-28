@@ -1735,7 +1735,7 @@ export function buildProgram(deps: CliDeps): Command {
     .option(
       "--success <spec>",
       [
-        "independent success check (repeatable; every one must hold). Kinds:",
+        "independent success check (repeatable; every one must hold; --strategy goal and usability). Kinds:",
         "urlIncludes:<text> | visible:<d> | textIncludes:<d>|<text> (case-insensitive) | count:<d>|min=<n>,max=<n>",
         "| valueEquals:<d>|<value> (a form control's value) | reloadThen:<check> (reload first: proves it persisted)",
         "| visual state (#148, read and decided by code): style:<d>|<prop><op><value> (computed style of every match;",
@@ -2237,6 +2237,20 @@ export function buildProgram(deps: CliDeps): Command {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
         return;
       }
+      // #225: success checks judge a goal / a usability job — every other strategy (and --feature) would
+      // silently ignore them, so they are refused up front, never dropped.
+      if (
+        (o.success.length > 0 || o.successWhen !== undefined || o.allowVacuousChecks === true) &&
+        (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))
+      ) {
+        emitExplore(
+          fail(
+            "E_EXPLORE_ARGS",
+            `--success, --success-when and --allow-vacuous-checks are supported only with --strategy goal or usability (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`,
+          ),
+        );
+        return;
+      }
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitExplore(fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
@@ -2525,6 +2539,23 @@ export function buildProgram(deps: CliDeps): Command {
           emitExplore(fail("E_UX_ARGS", "--app-class is required for --strategy usability"));
           return;
         }
+        // #225: --success is never ignored — an independent completion check on the job, parsed and
+        // validated exactly as for --strategy goal (same kinds, same --success-when / vacuous rules).
+        let uxSuccessChecks: SuccessCheck[];
+        try {
+          uxSuccessChecks = o.success.map(parseSuccessSpec);
+        } catch (err) {
+          emitExplore(fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
+          return;
+        }
+        if (o.successWhen !== undefined && o.successWhen !== "held" && o.successWhen !== "final") {
+          emitExplore(fail("E_EXPLORE_ARGS", `--success-when must be "held" or "final", got ${JSON.stringify(o.successWhen)}`));
+          return;
+        }
+        if (uxSuccessChecks.length === 0 && (o.successWhen !== undefined || o.allowVacuousChecks === true)) {
+          emitExplore(fail("E_EXPLORE_ARGS", "--success-when and --allow-vacuous-checks need at least one --success check"));
+          return;
+        }
         const uxAllowlist = resolveExploreAllowlist(o.url, o.allow);
         const uxBounds: Record<string, number> = {};
         if (o.maxActions !== undefined) uxBounds.maxActions = Number(o.maxActions);
@@ -2572,8 +2603,12 @@ export function buildProgram(deps: CliDeps): Command {
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withServerLog,
             ...withInvariants,
+            ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
+            ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
+            ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
           });
-          // UX findings are advisory (0); a broken run or an unavailable analysis is 2.
+          // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
+          // broken run or an unavailable analysis is 2.
           emitExplore(ok(result), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
