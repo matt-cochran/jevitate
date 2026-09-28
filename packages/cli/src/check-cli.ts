@@ -102,12 +102,32 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         if (o.json) emit(program, ok(result), true, result.exitCode);
         else {
           const out = program.configureOutput().writeOut;
+          const findingTitle = new Map(result.findings.map((f) => [f.key, f.title]));
           for (const i of result.items) {
-            out?.(`${i.verdict.toUpperCase().padEnd(7)} ${i.target} ${i.kind} ${i.name}${i.error === undefined ? "" : ` — ${i.error.message}`}\n`);
+            const reason =
+              i.error !== undefined
+                ? ` — ${i.error.message}`
+                : i.verdict === "failed" && i.gating.length > 0
+                  ? ` — ${i.gating.map((k) => findingTitle.get(k) ?? k).join("; ")}`
+                  : "";
+            out?.(`${i.verdict.toUpperCase().padEnd(7)} ${i.target} ${i.kind} ${i.name}${reason}\n`);
           }
-          if (result.usage !== undefined) out?.(`COST    ${formatUsageLine(result.usage)}\n`);
+          // #213: 0 calls is nothing to report (not $0 vs "unpriced" noise) — omit the line entirely.
+          if (result.usage !== undefined && result.usage.judgments + result.usage.generations > 0) {
+            out?.(`COST    ${formatUsageLine(result.usage)}\n`);
+          }
           if (result.budget.exceeded !== undefined) out?.(`BUDGET  ${result.budget.exceeded}\n`);
-          out?.(`${result.verdict.toUpperCase()}: ${result.summary.gatingFindings} gating finding(s) · ${result.jsonPath}\n`);
+          // #213: exit 2 (an item errored, or the budget ran out, but no gating finding) is never
+          // headed FAIL — that reads as a defect was found when the run simply proved nothing.
+          const headline =
+            result.exitCode === 0
+              ? `PASS: ${result.summary.gatingFindings} gating finding(s)`
+              : result.exitCode === 1
+                ? `FAIL: ${result.summary.gatingFindings} gating finding(s)`
+                : result.summary.errors > 0
+                  ? `ERROR: ${result.summary.errors} item(s) errored${result.budget.exceeded === undefined ? "" : " · budget exceeded"}`
+                  : `INCONCLUSIVE: ${result.budget.exceeded ?? "the budget was exceeded before every item ran"}`;
+          out?.(`${headline} · ${result.jsonPath}\n`);
           out?.(result.summary.gatingFindings > 0 ? "next: jevitate report (the findings by fingerprint) · jevitate verify-fix <fp> after a fix\n" : "next: jevitate report\n");
           process.exitCode = result.exitCode;
         }

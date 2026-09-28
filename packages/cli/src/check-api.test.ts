@@ -415,6 +415,21 @@ describe("check suites: viewport/device and the exploratory strategy (surface-wi
     expect(() => suite(0, {}, { missions: [{ strategy: "coverage", viewport: "375x812", device: "iPhone 13" }] })).toThrow(SuiteError);
   });
 
+  // #213: two verifyFix items that both omit `name` and share a fingerprint would otherwise both
+  // default to `verify-<fingerprint>`, colliding in the JUnit output (same classname AND name).
+  it("refuses (SuiteError) two verifyFix items with the same default name — give one an explicit name", () => {
+    const fp = "0123456789abcdef";
+    expect(() =>
+      suite(0, {}, { missions: [], verifyFix: [{ result: "a.result.json", fingerprint: fp }, { result: "b.result.json", fingerprint: fp }] }),
+    ).toThrow(SuiteError);
+    expect(() =>
+      suite(0, {}, { missions: [], verifyFix: [{ result: "a.result.json", fingerprint: fp }, { result: "b.result.json", fingerprint: fp }] }),
+    ).toThrow(/duplicate verifyFix name/);
+    // An explicit name on either one disambiguates it.
+    const s = suite(0, {}, { missions: [], verifyFix: [{ name: "a", result: "a.result.json", fingerprint: fp }, { result: "b.result.json", fingerprint: fp }] });
+    expect(s.targets[0]!.verifyFix.map((v) => v.name)).toEqual(["a", `verify-${fp}`]);
+  });
+
   it("each item runs under its own emulation, else the target's; exploratory runs the coverage runner as exploratory", async () => {
     const usage = new UsageTracker();
     const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };

@@ -210,6 +210,29 @@ describe("consolidate (#139)", () => {
     expect([legacy?.missionOutcome, legacy?.goalOutcome]).toEqual(["defects-found", "blocked"]);
   });
 
+  // #213: a verify-fix "still-reproduces" record's `source` is the ORIGINAL mission's
+  // `.result.json` — its evidence must be labeled `result`, never `recording` (that's the
+  // Recording file itself, a different artifact entirely).
+  it("#213: a still-reproducing verify-fix's evidence is labeled `result`, not `recording`", () => {
+    const run = runFromMissionResult("/r/verify-fp503.result.json", {
+      mode: "verify-fix",
+      missionOutcome: "defects-found",
+      exitCode: 1,
+      result: {
+        mode: "verify-fix",
+        verdict: "still-reproduces",
+        fingerprint: "fp503",
+        source: "/r/adversarial-2026-09-24T10-00-00-000Z.result.json",
+        title: "HTTP 503 from /api/items/:id",
+        identity: { category: "defect", signal: "http-5xx", route: "/settings", request: "503 /api/items/:id" },
+      },
+    });
+    expect(run?.observations).toHaveLength(1);
+    const evidence = run?.observations[0]?.evidence[0];
+    expect(evidence).toMatchObject({ result: "/r/adversarial-2026-09-24T10-00-00-000Z.result.json" });
+    expect(evidence).not.toHaveProperty("recording");
+  });
+
   it("refuses to read what is not a mission result", () => {
     expect(runFromMissionResult("/r/explore-x.json", { version: "1.0.0", site: "x", pages: [] })).toBeNull();
     expect(runFromMissionResult("/r/unknown-x.result.json", { missionOutcome: "clean", exitCode: 0, result: {} })).toBeNull();

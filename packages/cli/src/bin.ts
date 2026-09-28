@@ -5,6 +5,17 @@ import { resolveDataDir } from "./data-dir.js";
 import { installMissionKillSwitch } from "./kill-signal.js";
 import { EXIT_CODES } from "./exit-codes.js";
 
+// #213: `jevitate <cmd> | head -1` (or any reader that closes early) makes the next stdout/stderr
+// write fail EPIPE. Node has no default SIGPIPE handling and turns that into an uncaught exception
+// — a stack trace and a nonzero crash for a perfectly normal pipeline. Every command exits quietly
+// (0: the command's own output was never the failure) instead.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") process.exit(0);
+    throw err;
+  });
+}
+
 // Crash-safe SIGTERM/SIGINT (#94): installed FIRST, before anything else — in particular before any
 // browser can have launched. Playwright installs its own SIGTERM/SIGINT handler on a browser it
 // launches, and Node invokes same-signal listeners in registration order, so this must be the

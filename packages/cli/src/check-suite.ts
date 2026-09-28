@@ -518,6 +518,17 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
   const fixtures = r.string(v, "fixtures", path, true);
   const journeysDir = r.string(v, "journeysDir", path, true);
   const goals = r.list(v, "goals", path);
+  const verifyFix = r.list(v, "verifyFix", path).map((m, i) => verifyOf(r, m, `${path}.verifyFix[${i}]`));
+  // #213: two verifyFix items that omit `name` and share a fingerprint both default to
+  // `verify-<fingerprint>`, which collides in the JUnit output (same classname AND name). Fail
+  // closed rather than silently deduping the JUnit only — the suite itself is ambiguous.
+  const verifyNames = new Set<string>();
+  for (const vf of verifyFix) {
+    if (verifyNames.has(vf.name)) {
+      r.fail(`${path}.verifyFix`, `duplicate verifyFix name ${JSON.stringify(vf.name)} — give each verifyFix item (there is more than one for fingerprint ${JSON.stringify(vf.fingerprint)}) its own "name"`);
+    }
+    verifyNames.add(vf.name);
+  }
   return {
     name,
     url,
@@ -531,7 +542,7 @@ function targetOf(r: Reader, v: unknown, path: string): SuiteTarget {
     journeys: r.list(v, "journeys", path).map((j, i) => journeyOf(r, j, `${path}.journeys[${i}]`)),
     goals: goals.map((g, i) => goalOf(r, g, `${path}.goals[${i}]`, i)),
     missions: r.list(v, "missions", path).map((m, i) => missionOf(r, m, `${path}.missions[${i}]`)),
-    verifyFix: r.list(v, "verifyFix", path).map((m, i) => verifyOf(r, m, `${path}.verifyFix[${i}]`)),
+    verifyFix,
     ...(explore === undefined ? {} : { explore }),
   };
 }

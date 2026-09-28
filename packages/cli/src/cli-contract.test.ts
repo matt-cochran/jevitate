@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommanderError } from "commander";
@@ -93,6 +93,48 @@ describe("one exit-code table (#210)", () => {
     const r = await cli().run(["explore", "--strategy", "adversarial", "--url", URL, "--fake-ai", "--out", dir, "--json"]);
     expect(JSON.parse(r.out)).toMatchObject({ ok: false, error: { code: "E_EXPLORE_RUN" } });
     expect(r.code).toBe(2);
+  });
+
+  it("explore: an unparseable --url is 'not a valid URL' (64), never 'not an authorized origin'", async () => {
+    const r = await cli().run(["explore", "--url", "notaurl", "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--json"]);
+    const env = JSON.parse(r.out) as { ok: boolean; error?: { code: string; message: string } };
+    expect(env).toMatchObject({ ok: false, error: { code: "E_UNAUTHORIZED_EXPLORE_TARGET" } });
+    expect(env.error?.message).toMatch(/is not a valid URL/);
+    expect(env.error?.message).not.toMatch(/authorized origin/);
+    expect(r.code).toBe(64);
+  });
+
+  it("explore: --real and --fake-ai together are refused (64), never silently prefer one", async () => {
+    const r = await cli().run(["explore", "--url", URL, "--goal", "g", "--success", "urlIncludes:/x", "--real", "--fake-ai", "--json"]);
+    const env = JSON.parse(r.out) as { ok: boolean; error?: { code: string; message: string } };
+    expect(env).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+    expect(env.error?.message).toMatch(/--real and --fake-ai are mutually exclusive/);
+    expect(r.code).toBe(64);
+  });
+
+  it("profile status: an unknown profile is 64, never a silent 'missing' 0", async () => {
+    const r = await cli().run(["profile", "status", "nope", "--json"]);
+    const env = JSON.parse(r.out) as { ok: boolean; error?: { code: string; message: string } };
+    expect(env).toMatchObject({ ok: false, error: { code: "E_PROFILE_UNKNOWN" } });
+    expect(env.error?.message).toMatch(/unknown profile/);
+    expect(r.code).toBe(64);
+  });
+
+  it("regression capture --id <existing> is 64 (RegressionExistsError), never a silent overwrite", async () => {
+    const validRecording = join(dir, "flow.recording.json");
+    writeFileSync(
+      validRecording,
+      JSON.stringify({ version: "1.0", site: "https://shop.test", pages: [{ url: "/x", steps: [{ step: { kind: "click", target: { role: "button", name: "Go" }, expect: { kind: "visible", target: { testId: "next" } } } }] }] }),
+    );
+    const regressionsDir = join(dir, "regressions");
+    mkdirSync(regressionsDir, { recursive: true });
+    writeFileSync(join(regressionsDir, "dup.recording.json"), "{}");
+    writeFileSync(join(regressionsDir, "dup.meta.json"), "{}");
+    const r = await cli().run(["regression", "capture", "--from", validRecording, "--id", "dup", "--dir", regressionsDir, "--json"]);
+    const env = JSON.parse(r.out) as { ok: boolean; error?: { code: string; message: string } };
+    expect(env).toMatchObject({ ok: false, error: { code: "E_REGRESSION_EXISTS" } });
+    expect(env.error?.message).toMatch(/already exists.*--force/);
+    expect(r.code).toBe(64);
   });
 
   it("a commander parse error (unknown option, missing required option) is 64", async () => {

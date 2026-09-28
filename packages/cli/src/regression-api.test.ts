@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { runRegressionCapture, NoFailureToReproduceError } from "./regression-api.js";
+import { runRegressionCapture, NoFailureToReproduceError, RegressionExistsError } from "./regression-api.js";
 
 function fakeLocator(visible: boolean) {
   return { click: vi.fn(async () => {}), isVisible: vi.fn(async () => visible), count: vi.fn(async () => 1) /* the recorded target resolves uniquely */, innerText: vi.fn(async () => ""), fill: vi.fn(async () => {}), waitFor: vi.fn(async () => {}) };
@@ -72,6 +72,42 @@ test(
     expect((await readdir(regressionsDir)).sort()).toEqual(["bug-1.meta.json", "bug-1.recording.json"]);
   },
   20000,
+);
+
+// #213: a second capture at the SAME --id must never silently overwrite the first's committed
+// files — refused unless --force opts in.
+test(
+  "capture --id <existing> is refused (RegressionExistsError) unless --force",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cli-regr-exists-"));
+    const failingRecordingPath = join(dir, "input.json");
+    await writeFile(
+      failingRecordingPath,
+      JSON.stringify({
+        version: "1.0",
+        site: "https://example.test",
+        pages: [{ url: "/x", steps: [{ step: { kind: "click", target: { role: "button", name: "Go" }, expect: { kind: "visible", target: { testId: "next" } } } }] }],
+      }),
+    );
+    const regressionsDir = join(dir, "regressions");
+    const first = await runRegressionCapture({ failingRecordingPath, id: "dup", regressionsDir, attempts: 2, makeActor: makeFailingActor() });
+    expect(first).toMatchObject({ recordingPath: expect.stringContaining("dup.recording.json") });
+    const before = await readFile((first as { recordingPath: string }).recordingPath, "utf8");
+
+    await expect(
+      runRegressionCapture({ failingRecordingPath, id: "dup", regressionsDir, attempts: 2, makeActor: makeFailingActor() }),
+    ).rejects.toThrow(RegressionExistsError);
+    await expect(
+      runRegressionCapture({ failingRecordingPath, id: "dup", regressionsDir, attempts: 2, makeActor: makeFailingActor() }),
+    ).rejects.toThrow(/already exists.*--force/);
+    // Refused BEFORE anything ran: the first capture's files are untouched.
+    expect(await readFile((first as { recordingPath: string }).recordingPath, "utf8")).toBe(before);
+
+    // --force opts back in.
+    const second = await runRegressionCapture({ failingRecordingPath, id: "dup", regressionsDir, attempts: 2, makeActor: makeFailingActor(), force: true });
+    expect(second).toMatchObject({ recordingPath: expect.stringContaining("dup.recording.json") });
+  },
+  40000,
 );
 
 // #81 item 1: a Recording whose replay never fails carries no reproducible failure — capture

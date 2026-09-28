@@ -15,6 +15,7 @@ import {
   NoFailureToReproduceError,
   NoOracleInResultError,
   FingerprintMismatchError,
+  RegressionHardSignalOracleError,
 } from "./regression-api.js";
 
 /**
@@ -372,6 +373,32 @@ test("no usable oracle: the error names what WAS found (an engine refusal), not 
   await expect(
     runRegressionCapture({ failingRecordingPath: recordingPath, id: "x", regressionsDir: join(dir, "regressions"), resultPath, makeActor: neverCalledActor }),
   ).rejects.toThrow(/engine refusal/);
+});
+
+// #213: a --fingerprint that names one of the mission's OWN hard-signal defects (http-5xx, hang,
+// server-log, …) is refused with a message that explains WHY and points at the route that works
+// (the ledger) — never a generic "no usable oracle" that reads as the --result file being bad.
+test("a hard-signal defect (http-5xx) matched by --fingerprint points at 'ledger add', never a generic no-oracle refusal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cli-regr-hardsignal-"));
+  const recordingPath = join(dir, "r.json");
+  await writeFile(recordingPath, JSON.stringify(swapRecording));
+  const fp = "c".repeat(16);
+  const resultPath = join(dir, "r.result.json");
+  await writeFile(
+    resultPath,
+    JSON.stringify({
+      result: {
+        target: { seedUrl: "https://example.test", allowlist: ["https://example.test"] },
+        defects: [{ fingerprint: fp, kind: "http-5xx", repro: { recordingStepIndex: 0 } }],
+      },
+    }),
+  );
+  await expect(
+    runRegressionCapture({ failingRecordingPath: recordingPath, id: "x", regressionsDir: join(dir, "regressions"), resultPath, fingerprint: fp, makeActor: neverCalledActor }),
+  ).rejects.toThrow(RegressionHardSignalOracleError);
+  await expect(
+    runRegressionCapture({ failingRecordingPath: recordingPath, id: "x", regressionsDir: join(dir, "regressions"), resultPath, fingerprint: fp, makeActor: neverCalledActor }),
+  ).rejects.toThrow(/jevitate ledger add/);
 });
 
 test("a failed check that could not be parsed is named as such, not reported as 'no failed check'", async () => {

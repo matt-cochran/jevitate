@@ -31,6 +31,8 @@ export interface EvidenceRef {
   readonly url?: string;
   readonly transcript?: string;
   readonly recording?: string;
+  /** A persisted `<stem>.result.json` the finding was re-observed from (#213: never labeled "recording" — that's the Recording file itself). */
+  readonly result?: string;
   readonly screen?: string;
 }
 
@@ -413,7 +415,7 @@ function verifyObservations(result: Json): FindingObservation[] {
     observation(identity, {
       title: `${str(result.title) ?? signal} — verify-fix: ${verdict}`,
       occurrences: 1,
-      evidence: [{ ...(source === undefined ? {} : { recording: source }) }],
+      evidence: [{ ...(source === undefined ? {} : { result: source }) }],
       ...(source === undefined ? {} : { reproduce: verifyCommand(source, fingerprint) }),
       ...(verdict === "intermittent" ? { intermittent: true } : {}),
     }),
