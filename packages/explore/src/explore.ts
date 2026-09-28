@@ -664,6 +664,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     firstParty.observe(r.url(), r.headers());
   };
   page.on("request", onRequestSeen);
+  // #223: the main document's HTTP status per URL — an answer on a 404 / error page is no answer.
+  const documentStatus = new Map<string, number>();
+  const docKey = (u: string): string => u.split("#")[0] ?? u;
+  const onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
+    try {
+      if (!r.request().isNavigationRequest() || r.request().frame() !== page.mainFrame()) return;
+      if (documentStatus.size >= 500) documentStatus.clear();
+      documentStatus.set(docKey(r.url()), r.status());
+    } catch {
+      // a response whose frame is gone: nothing to record
+    }
+  };
+  page.on("response", onDocumentResponse);
   // #194: a write to a third-party origin is listed with its full URL and `thirdParty: true`.
   const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
@@ -1046,7 +1059,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // #207: a form field's current value is page content too (grounded as such, never as page text).
       const visibleText = await readPageText(page, secrets);
-      observed.add(snap.url, visibleText, controlFields(snap.controls), await readPageHeadings(page, secrets));
+      // #223: a rich-text (contenteditable) control's text is its value too, groundable like an input's.
+      const richFields: { label: string; value: string }[] = [];
+      for (const c of snap.controls.filter((x) => x.richText === true).slice(0, 5)) {
+        const t = (await readEditableText(page, c))?.trim() ?? "";
+        if (t !== "") richFields.push({ label: c.name.trim() || c.role || c.tag, value: redactText(t, secrets) });
+      }
+      observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
+        ...(await readPageHeadings(page, secrets)),
+        // #223: the controls' names (a quote made only of them is a label, not an answer) and the
+        // document's status (an answer on a 404 page is no answer).
+        controlNames: snap.controls.map((c) => c.name),
+        ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
+      });
       noteReplyText(snap.url, visibleText);
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded
@@ -1355,6 +1380,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 pages: replyPages ?? observed.pages(),
                 history,
                 secrets,
+                judge: cfg.judge,
               }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
           const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
@@ -1367,7 +1393,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         reportRejections += 1;
-        lastReportNotFound = verdict.answer === null && verdict.reason === NO_ANSWER_REASON;
+        // #223: an answer that is on the page but does not answer the question is no answer either.
+        lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
         history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
         record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
           answer: verdict.answer,
@@ -2074,6 +2101,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
   await readOnly?.disarm();
   page.off("request", onRequestSeen);
+  page.off("response", onDocumentResponse);
   const finished = recorder.tryFinish({ intent: cfg.goal });
   const cause = blockingCause();
   const finalOutcome: RunOutcome =
