@@ -1,8 +1,8 @@
 import { sessionLostReason } from "./session-check.js";
-import { chmod, writeFile } from "node:fs/promises";
-import { assertSessionFileOutsideProject, logsDirFor } from "./project-dir.js";
+import { writeFile } from "node:fs/promises";
+import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
-import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, UsageCounts } from "@jevitate/ai-core";
+import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import {
@@ -14,7 +14,6 @@ import {
   type CompareOp,
   type InvariantSpec,
   type Recording,
-  type RecordingEmulation,
   type StyleChannel,
   type StyleProperty,
   type TargetDescriptor,
@@ -73,30 +72,22 @@ import {
   type MissionOutcome,
 } from "@jevitate/domain";
 import {
-  currentEnvironment,
   draftForCrash,
   draftForDefect,
   draftForHang,
   hangOutcome,
-  isLoginLikeUrl,
-  summarizeTimings,
-  type DraftContext,
   type HangFinding,
   type TimingSummary,
-  type VerifySession,
 } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
-import { readCliVersion } from "./version.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import type { TargetConfig } from "./target-config.js";
-import { resolveDataDir } from "./data-dir.js";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { goalExitCode, missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
 import { finishHostHealth } from "./host-health-run.js";
-import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 import {
   applyServerLogOutcome,
   openServerLogRuntime,
@@ -106,36 +97,35 @@ import {
   type ServerLogsSummary,
   type TranscriptEntryWithLogs,
 } from "./log-correlation.js";
-import type { LogSourceSpec } from "./log-sources.js";
-import type { LogDefectMatcher, LogIgnoreMatcher } from "./log-lines.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
 import { observerSessions, persistedActors, type MissionActors } from "./mission-actors.js";
 
-/**
- * Backend log correlation (#142): already-validated `--log-source`/`--log-defect` specs, threaded
- * into every mission-type builder below the same way `invariants` is. `undefined`/empty ⇒ no
- * sources ⇒ `openServerLogRuntime` is a complete no-op (existing runs pay nothing).
- */
-export interface ServerLogOptions {
-  readonly sources: readonly LogSourceSpec[];
-  readonly logDefect: readonly LogDefectMatcher[];
-  readonly allowLogCmd?: boolean;
-  readonly drainMs?: number;
-  /** Raw `--log-source` specs (`--log-quiet-ok`, #169) allowed to deliver zero lines without making
-   *  `serverLogs.oracleOk` false — for a source the operator KNOWS is legitimately quiet. */
-  readonly quietOk?: readonly string[];
-  /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
-   *  correlation and the defect oracle. */
-  readonly logIgnore?: readonly LogIgnoreMatcher[];
-}
-
-export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {
-  serverLogs?: ServerLogsSummary;
-  serverLogDefects?: ServerLogDefect[];
-} {
-  if (runtimeResult === undefined) return {};
-  return { serverLogs: runtimeResult.summary, ...(runtimeResult.defects.length > 0 ? { serverLogDefects: runtimeResult.defects } : {}) };
-}
+import {
+  type ServerLogOptions,
+  serverLogResult,
+  type OverflowFlags,
+  recordingEmulation,
+  DRAFTS_ONLY,
+  NO_FILER,
+  draftContext,
+  freshSessionOpener,
+  currentUrlSafe,
+  assertSaveStorageStateOutsideProject,
+  persistStorageState,
+  browserVersionOf,
+  type MissionTarget,
+  declaredResult,
+} from "./explore-shared.js";
+export {
+  type ServerLogOptions,
+  serverLogResult,
+  type OverflowFlags,
+  currentUrlSafe,
+  assertSaveStorageStateOutsideProject,
+  persistStorageState,
+  type MissionTarget,
+  type ExploreCliDeps,
+} from "./explore-shared.js";
 
 /**
  * The programmatic surface behind `jevitate explore` — wires a real Playwright
@@ -255,142 +245,6 @@ export interface RunExplorationOptions {
    * opened only when a declared cross-actor check needs it, never driven by the model.
    */
   readonly actors?: MissionActors;
-}
-
-/**
- * Overflow/emulation CLI flags shared by every strategy (#149): `emulation` is validated and
- * resolved by `PlaywrightBrowserPort.open` itself (an unknown device or --viewport+--device
- * together refuses BEFORE any browser opens); `overflow` gates and configures the horizontal-
- * overflow hard signal (coverage only, for now).
- */
-export interface OverflowFlags {
-  readonly checkOverflow?: boolean;
-  readonly toleranceCss?: number;
-  readonly ignoreSelectors?: readonly string[];
-}
-
-/** The viewport/device emulation actually applied to a session — recorded on the Recording (#149). */
-function recordingEmulation(
-  resolved: { viewport: { width: number; height: number }; device?: string; deviceScaleFactor?: number; isMobile?: boolean; hasTouch?: boolean } | undefined,
-): RecordingEmulation | undefined {
-  if (resolved === undefined) return undefined;
-  return {
-    viewport: resolved.viewport,
-    ...(resolved.device === undefined ? {} : { device: resolved.device }),
-    ...(resolved.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: resolved.deviceScaleFactor }),
-    ...(resolved.isMobile === undefined ? {} : { isMobile: resolved.isMobile }),
-    ...(resolved.hasTouch === undefined ? {} : { hasTouch: resolved.hasTouch }),
-  };
-}
-
-/** Filing is off by default: drafts only, never a tracker call. */
-const DRAFTS_ONLY: FilingConfig = { enabled: false, jevitateRepo: "matt-cochran/jevitate" };
-const NO_FILER = (): IssueFilerPort => {
-  throw new Error("issue filing is enabled but no filer was configured");
-};
-
-function draftContext(
-  origin: string,
-  journal: MissionJournal,
-  secrets: readonly string[],
-  browserVersion: string | undefined,
-  engine: EngineInfo,
-): DraftContext {
-  return {
-    environment: currentEnvironment(origin, {
-      jevitateVersion: readCliVersion(),
-      commit: engine.commit,
-      builtAt: engine.builtAt,
-      ...(browserVersion === undefined ? {} : { browser: browserVersion }),
-    }),
-    recordingPath: journal.recordingPath,
-    transcriptPath: journal.transcriptPath,
-    secrets,
-  };
-}
-
-/**
- * Opens a FRESH browser session for replays (hang reproduction): a new context from the same port
- * and options — same authenticated storageState, never the session the finding was made in.
- */
-function freshSessionOpener(
-  portFactory: () => BrowserPort,
-  launch: Parameters<BrowserPort["open"]>[0],
-  allowlist: readonly string[],
-): () => Promise<VerifySession> {
-  return async () => {
-    const session = await portFactory().open(launch);
-    const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(session, [...allowlist]));
-    return { page: session.page, actor, close: () => session.close() };
-  };
-}
-
-/** `session.page.url()`, or `undefined` when reading it throws (a closed/crashed page/context). */
-export function currentUrlSafe(session: { page: { url(): string } }): string | undefined {
-  try {
-    return session.page.url();
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Writes the browser context's storageState (cookies + origin storage) to `file` when the caller
- * asked for one (CLI `--save-storage-state`, #82) — so a rotating refresh token stays usable across
- * runs instead of the `--storage-state` file it started from going stale on first use. Called from
- * every mission's `finally`, so a thrown error still reaches it (#159) — the context is still open at
- * that point, whatever failed inside the mission itself. A no-op when `file` is undefined.
- *
- * #159 — never persists a lost/logged-out session over a good file: when the CURRENT page looks
- * login-like (`isLoginLikeUrl`, the #82 signal), a live capture is skipped in favor of `snapshotter`'s
- * last known-good in-memory snapshot (refreshed after each settled step — see
- * `storage-state-snapshot.ts` — and itself never updated from a login-like page, so it always holds
- * the most recent GOOD state). The same fallback covers a live capture that simply fails (a
- * crashed/closed context after the page url could still be read). If neither a safe live capture nor
- * a snapshot is available, nothing is written — any existing file at `file` is left untouched. There
- * is no flag today for an operator to force the write anyway; see `saveStorageState`'s own doc.
- *
- * The file holds live session credentials: written with mode 0600 (owner read/write only), and its
- * contents are never logged either way.
- */
-/**
- * #195: refused BEFORE a browser opens — a `saveStorageState` inside a repo's `.jevitate/` (which
- * never holds sessions or secrets). `persistStorageState` re-checks at the write itself.
- */
-export function assertSaveStorageStateOutsideProject(file: string | undefined): void {
-  if (file !== undefined) assertSessionFileOutsideProject(file, "saveStorageState");
-}
-
-export async function persistStorageState(
-  session: { page: { url(): string }; saveStorageState(file: string): Promise<void> },
-  file: string | undefined,
-  snapshotter?: StorageStateSnapshotter,
-): Promise<void> {
-  if (file === undefined) return;
-  // #195: the final chokepoint for every caller — nothing is written inside a repo's .jevitate/;
-  // the refusal is thrown (the run reports it), never swallowed.
-  assertSessionFileOutsideProject(file, "saveStorageState");
-  const url = currentUrlSafe(session);
-  if (url === undefined || !isLoginLikeUrl(url)) {
-    try {
-      await session.saveStorageState(file);
-      await chmod(file, 0o600);
-      return;
-    } catch {
-      // A crashed/closed context, or a mid-write failure — fall back to the last known-good snapshot.
-    }
-  }
-  const fallback = snapshotter?.snapshot();
-  if (fallback === undefined) return;
-  await writeFile(file, fallback, { encoding: "utf8", mode: 0o600 });
-}
-
-function browserVersionOf(page: { context(): { browser(): { version(): string } | null } }): string | undefined {
-  try {
-    return page.context().browser()?.version();
-  } catch {
-    return undefined;
-  }
 }
 
 export interface RunExplorationResult {
@@ -1403,17 +1257,6 @@ export interface RunAdversarialCliMissionOptions {
   readonly overflow?: OverflowFlags;
 }
 
-/** The adversarial outcome plus where its Recording and decision transcript were written. */
-/** Where a mission ran — enough for `verify-fix` to replay one of its defects in a fresh session. */
-export interface MissionTarget {
-  readonly seedUrl: string;
-  readonly allowlist: string[];
-  /** Absolute path of the storageState file the run started from (never its contents). */
-  readonly storageStatePath?: string;
-  /** #147: every actor's name, role and storageState PATH (never its contents) — for verify-fix. */
-  readonly actors?: ReadonlyArray<{ readonly name: string; readonly storageStatePath: string; readonly role: "primary" | "observer" }>;
-}
-
 export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & {
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
@@ -1905,39 +1748,6 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
   }
-}
-
-/**
- * The declared-invariant fields of a persisted result (#86): the defects (top-level `defects`, where
- * `verify-fix` looks), the per-invariant report, and the spec itself so a later `verify-fix`
- * re-checks exactly what the run checked. Nothing at all when the run had no `--invariants`.
- */
-function declaredResult(
-  spec: InvariantSpec | undefined,
-  defects: readonly InvariantDefect[] | undefined,
-  report: readonly InvariantReport[] | undefined,
-): { defects?: InvariantDefect[]; invariants?: InvariantReport[]; invariantSpec?: InvariantSpec } {
-  if (spec === undefined) return {};
-  return { defects: [...(defects ?? [])], invariants: [...(report ?? [])], invariantSpec: spec };
-}
-
-/** Injectable wiring for the `explore` CLI command (all optional). */
-export interface ExploreCliDeps {
-  /** Injected issue filer (tests use a fake — nothing real is ever filed from a test). */
-  issueFiler?: () => IssueFilerPort;
-  /** Injected filing config file path (tests). Default `~/.jevitate/filing.json`. */
-  filingConfigPath?: string;
-  /** Injected per-target config file path (tests). Default `~/.jevitate/targets.json`. */
-  targetsConfigPath?: string;
-  /** Injected judgment gateway (tests). */
-  judge?: JudgmentPort;
-  /** Injected generation gateway (tests). */
-  gen?: GenerationPort;
-  /** Injected usage tracker (tests): injected gateways that record into it report known costs (#163). */
-  usage?: UsageTracker;
-  browserPortFactory?: () => BrowserPort;
-  env?: Record<string, string | undefined>;
-  localConfig?: Partial<Record<CredentialKey, string>>;
 }
 
 /**
