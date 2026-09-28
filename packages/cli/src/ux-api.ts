@@ -79,8 +79,8 @@ import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissionResult, writeUsageSidecar } from "./mission-journal.js";
 import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
-import { armMissionKillSwitch } from "./kill-signal.js";
-import { finishHostHealth, startHostHealth } from "./host-health-run.js";
+import { launchArmed } from "./launch-armed.js";
+import { finishHostHealth } from "./host-health-run.js";
 import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
@@ -89,7 +89,6 @@ import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageSta
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { UsabilityCapture } from "./usability-capture.js";
-import { StorageStateSnapshotter } from "./storage-state-snapshot.js";
 
 const DEFAULT_JUDGMENT_BUDGET = 40;
 
@@ -802,14 +801,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
-  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
-  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
   // #149: one signal finding per distinct fingerprint (route + element) — a wide table seen across
@@ -831,35 +822,42 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const screenshotDir = join(outDir, `usability-${stamp}.screens`);
   // A bound secret (or TOTP seed) is a run secret too: masked on screen, redacted everywhere.
   const secrets = [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)];
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // The screenshot capture needs the open page; until then a killed run has taken none.
+  let armedCapture: UsabilityCapture | undefined;
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
+  // Recording — so the killed run's result names the real file, and reports the live step list,
+  // the tokens spent so far and the screens already observed.
+  // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
+  const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
+    hostHealth: opts.hostHealth,
+    saveStorageState: opts.saveStorageState !== undefined,
+    open: () => port.open(launch),
+    mission: (hooks) => ({
+      // #220: the killed run's partial result carries the unified schema's common fields too.
+      strategy: "usability",
+      target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
+      recordingPath: journal.recordingPath,
+      hostHealth: hooks.hostHealth,
+      transcriptPath: journal.transcriptPath,
+      transcript: () => journal.transcript,
+      ...(runUsage === undefined ? {} : { usage: runUsage }),
+      partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: armedCapture === undefined ? [] : armedCapture.screenshots() }),
+      ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
+    }),
+  });
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const capture = new UsabilityCapture({
     page: session.page,
     screenshotDir,
     secrets,
     ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
   });
-  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
-  // whatever the journal has already flushed, and the process exits with the conventional code.
-  // #120: the transcript lives next to the REPORT (`usability-<stamp>.transcript.json`), not the
-  // Recording — so the killed run's result names the real file, and reports the live step list,
-  // the tokens spent so far and the screens already observed.
-  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
-  const runUsage = opts.usage?.scope();
-  // #159: see RunExplorationOptions.saveStorageState / runExploration's own doc comment.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: "usability",
-    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(runUsage === undefined ? {} : { usage: runUsage }),
-    partialReport: () => ({ screensObserved: collected.length, screenshotDir, screenshots: capture.screenshots() }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
-  });
+  armedCapture = capture;
   // The usability capture (screenshots) and the journal (crash-safe flush) are the EXISTING listener
   // chain; a server-log runtime (#142) is inserted in FRONT of it (never replacing it) so every step
   // still gets its screenshot/flush exactly as before, whether or not --log-source was given. #159:

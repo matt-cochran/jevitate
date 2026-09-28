@@ -6,11 +6,12 @@ import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
 import type { BrowserPort } from "@jevitate/playwright";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
 import { armedMissionCount } from "./kill-signal.js";
+import { runUsabilityMission } from "./ux-api.js";
 
 /**
  * #226 (3): a SIGTERM that lands while Chromium is still starting — seconds on a loaded host — used to
  * find no mission armed, so the CLI exited 143 with no output and no output dir. Every explore runner
- * now arms its kill switch BEFORE the browser launch (a signal then writes and prints the partial
+ * (goal, coverage, adversarial, feature, usability — all through `launchArmed`) now arms its kill switch BEFORE the browser launch (a signal then writes and prints the partial
  * result), and disarms it when the launch fails.
  */
 
@@ -52,6 +53,11 @@ const runners: Array<[string, (factory: () => BrowserPort, outDir: string) => Pr
     "feature",
     (browserPortFactory, outDir) =>
       runFeatureCliMission({ seedUrl: URL, allowlist: [URL], capability: "x", routeGlobs: ["/**"], judge, gen, browserPortFactory, outDir } as Parameters<typeof runFeatureCliMission>[0]),
+  ],
+  [
+    "usability",
+    (browserPortFactory, outDir) =>
+      runUsabilityMission({ url: URL, job: "look around", allowlist: [URL], appContext: { appClass: "consumer", job: "look around" }, judge, gen, browserPortFactory, outDir }),
   ],
 ];
 
