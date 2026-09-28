@@ -41,7 +41,8 @@ says so. Separating proposal from adjudication is what makes autonomous testing 
 
 **Demo:** the goal run from the README (`--success 'requestMade:PUT /api/profile'
 --success 'reloadThen:valueEquals:…'`) against an app whose save silently fails. Show the model
-proposing `done`, the network check failing, and the run ending `exhausted` with the reason.
+proposing `done`, a check failing, and the run ending `defects-found` (exit 1) with the reason:
+`goalOutcome: "failed"` naming the check, or the failing request when the save answered 5xx.
 
 ---
 

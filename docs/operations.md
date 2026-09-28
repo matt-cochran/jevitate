@@ -121,6 +121,42 @@ Filing uses the `gh` CLI when it is installed, otherwise the GitHub REST API wit
 searches for an open issue carrying the same fingerprint marker and comments on
 that one instead.
 
+## Bounded runs: the page watchdog
+
+A renderer that dies makes every pending browser operation fail at once, and the run ends
+`crashed` with the crash evidence. A renderer that stays alive but stops answering (frozen,
+starved on a loaded host, or wedged) is different: Playwright waits on it forever, and no
+per-step bound in a mission can see it. Two bounds keep such a run from idling until something
+kills it (#220), and a third bounds each click:
+
+- **Page watchdog.** Every mission page is probed with a trivial evaluate every few seconds
+  (every `min(5 s, limit / 3)`). A page that answers nothing for `JEVITATE_PAGE_UNRESPONSIVE_MS`
+  milliseconds (default `60000`, 60 s) is closed with a reason. The run then ends through its
+  crash path with `missionOutcome: "crashed"` (exit 2) and `failure.kind: "stalled"`, and
+  `failure.message` says why: `the page process stopped responding: no answer for 60s (renderer
+  frozen, starved or wedged); jevitate closed the page so the run ends instead of hanging`. It
+  never becomes a hang finding. The value must be a positive integer; any other value is refused
+  (`RangeError`) instead of silently meaning the default.
+- **Opening a browser context or page** is bounded to 60 s (`DEFAULT_OPEN_TIMEOUT_MS`, not
+  configurable). A browser that does not answer `newContext`/`newPage` in that time fails the
+  session with "did not finish within 60000ms: the browser is not answering" instead of hanging it.
+- **Click timeout.** The click an action performs (after the control passed its actionability
+  check) is bounded by `JEVITATE_CLICK_TIMEOUT_MS` milliseconds (default `5000`). In coverage and
+  exploratory runs a click that timed out is retried once before it counts as a failed action; a
+  frontier that ended because its actions kept timing out says so and names this variable. Raise it
+  (for example `JEVITATE_CLICK_TIMEOUT_MS=15000`) for an app whose controls are slow to respond or a
+  loaded CI runner. Like `JEVITATE_PAGE_UNRESPONSIVE_MS`, a value that is not a positive integer is
+  refused when the CLI starts (`error E_CLI_ENV: …`, exit 64) — a typo never silently means the
+  default (#213).
+
+Raise `JEVITATE_PAGE_UNRESPONSIVE_MS` only when a page legitimately blocks its main thread for
+more than 60 s at a time (a very heavy synchronous computation, or a slow emulated device on a
+slow CI runner), for example `JEVITATE_PAGE_UNRESPONSIVE_MS=180000`. If runs end `stalled` on a
+busy machine, first check the result's `hostHealth` (see [outcomes](./outcomes.md#a-starved-host-hosthealth-environmentdegraded)):
+a starved host is better fixed by running fewer missions at once than by a longer bound. An app
+whose server stops answering navigation is not this case: that ends `inconclusive` with
+`failure.kind: "target-unresponsive"` ([outcomes](./outcomes.md#an-app-that-stops-answering-target-unresponsive)).
+
 ## Where jevitate keeps things
 
 `jevitate init` creates the app repo's own `.jevitate/` at the git root. Commands find it by

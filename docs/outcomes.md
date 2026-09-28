@@ -183,7 +183,9 @@ A starved sample explains the 15 s after it. Then:
   defect or hang finding. A goal run that ends on one is `inconclusive`
   (`failure.kind: "degraded-environment"`);
 - a run most of whose steps (> 50%) ran starved is `inconclusive` with
-  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`/`blocked`/`failed`).
+  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`, `blocked`
+  or `failed` — a success check missed after the model's `done` is a miss a starved host can cause
+  too, so its `goalOutcome` and `missionOutcome` are both `inconclusive`, exit 2).
   A confirmed defect, a `succeeded` goal and a crash keep their outcome. So does a usability job whose
   completion code verified: its `--success` checks held, or its `done` was proven by save or sign-in
   signals. Only an ending the model alone judged (`verifiedBy: "grounded-judgment"`) is downgraded (#213).
