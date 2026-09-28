@@ -223,4 +223,64 @@ describe("jevitate check — served suite (#137)", () => {
     },
     240_000,
   );
+
+  it(
+    "#213: `ai: \"fake\"` — a usability item never crashes on a choice question without `done`, and a goal item is inconclusive, never a gating FAILED, on a healthy app",
+    async () => {
+      await writeFile(
+        join(dir, "suite-fake-ai.json"),
+        JSON.stringify({
+          version: 1,
+          name: "fake-ai-smoke",
+          ai: "fake",
+          budget: { maxActions: 30, maxMinutes: 5 },
+          targets: [
+            {
+              name: "imports",
+              url: `${origin}/app`,
+              goals: [{ name: "import", goal: "import something to raise the credit balance", success: ["urlIncludes:/done"] }],
+              missions: [{ name: "ux", strategy: "usability", goal: "understand the import flow", appClass: "consumer" }],
+            },
+          ],
+        }),
+      );
+      const lines: string[] = [];
+      const program = buildProgram({
+        profiles: new ProfileManager("/unused"),
+        journeysDir: join(dir, "journeys"),
+        explore: { browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(dir, "no-targets.json") },
+      });
+      program.configureOutput({ writeOut: (s) => lines.push(s) });
+      program.exitOverride();
+      process.exitCode = undefined;
+      await program.parseAsync(["check", "--suite", join(dir, "suite-fake-ai.json"), "--out", join(dir, "out-fake-ai"), "--json"], { from: "user" });
+      const exitCode = process.exitCode;
+      process.exitCode = undefined;
+      const env = JSON.parse(lines.join("")) as { ok: boolean; data: CheckResult };
+      expect(env.ok).toBe(true);
+      const r = env.data;
+      // #213 item 2: never a gating FAILED (exit 1) — the fake judge's own driving (it always
+      // proposes `done` at once) proves nothing about whether the goal was reached, so it is
+      // reported inconclusive, not FAILED. `2` ("no gating finding, but an item errored") is the
+      // documented, expected non-failure outcome for a fake-ai smoke against a healthy app.
+      expect(exitCode).toBe(2);
+      expect(r.exitCode).toBe(2);
+      expect(r.summary.gatingFindings).toBe(0);
+      expect(r.findings.filter((f) => f.gating)).toEqual([]);
+      const goalItem = r.items.find((i) => i.kind === "goal");
+      expect(goalItem).toMatchObject({ name: "import", status: "error", outcome: "inconclusive", verdict: "error" });
+      expect((goalItem as { error?: { type?: string; message?: string } }).error?.type).toBe("inconclusive");
+      expect((goalItem as { error?: { type?: string; message?: string } }).error?.message).toMatch(/goal not verified.*--fake-ai/);
+      // #213 item 1 repro: pre-fix, the fake judge threw "fake judge: question 'grade::0' does not
+      // offer 'done'" the moment the quality grader graded a rubric-flagged candidate — surfaced as
+      // this item's own error, never a process crash (the runner is called inside a try/catch per
+      // item). Assert that specific crash is gone, whatever the item's own (advisory) outcome is.
+      const uxItem = r.items.find((i) => i.kind === "mission");
+      expect(uxItem).toBeDefined();
+      expect(uxItem?.error?.message).not.toMatch(/does not offer 'done'/);
+      // Whatever the usability item found is advisory — it never appears in `gating` above.
+      expect(uxItem?.gating).toEqual([]);
+    },
+    240_000,
+  );
 });

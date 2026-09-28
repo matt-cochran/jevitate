@@ -275,9 +275,42 @@ describe("check gating (#137)", () => {
       return { ...result, actions: 2, resultPath };
     }) as unknown as CheckRunners["goal"];
     const s = suite(0, {}, { goals: [{ name: "cart", goal: "check out", success: ["urlIncludes:/done"] }] });
-    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "fake" });
+    // #213: this folding test is about `--real`'s canonical verdict — a real judgment IS trusted to
+    // gate. The `--fake-ai` case (never gates on the judge) is covered separately below.
+    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "real" });
     expect(r.items.map((i) => [i.name, i.status, i.outcome, i.goalOutcome, i.verdict])).toEqual([["cart", "ran", "defects-found", "failed", "failed"]]);
     expect(r.exitCode).toBe(1);
+  });
+
+  it("#213: `ai: \"fake\"` never gates a goal on the fake judge's own ending — it is honestly inconclusive, not FAILED", async () => {
+    const usage = new UsageTracker();
+    const gw: CheckGateways = { judge: {} as CheckGateways["judge"], gen: {} as CheckGateways["gen"], usage };
+    const goal = (async (o: { goal: string; outDir?: string }) => {
+      const resultPath = join(o.outDir ?? dir, `explore-2026-09-24T10-00-00-000Z.result.json`);
+      const result = {
+        strategy: "goal",
+        missionOutcome: "defects-found",
+        goalOutcome: "failed",
+        outcome: "failed",
+        stop: "done",
+        checks: [{ check: "urlIncludes:/done", passed: false, detail: "url was /cart" }],
+        target: { seedUrl: URL0 },
+      };
+      writeFileSync(resultPath, JSON.stringify({ missionOutcome: "defects-found", exitCode: 1, result }));
+      return { ...result, actions: 2, resultPath };
+    }) as unknown as CheckRunners["goal"];
+    const s = suite(0, {}, { goals: [{ name: "cart", goal: "check out", success: ["urlIncludes:/done"] }] });
+    const r = await runCheck({ suite: s, outDir: join(dir, "out"), journeysDir: dir, runners: { goal }, gateways: async () => gw, aiMode: "fake" });
+    expect(r.items.map((i) => [i.name, i.status, i.outcome, i.verdict]))
+      .toEqual([["cart", "error", "inconclusive", "error"]]);
+    expect(r.items[0]?.error).toMatchObject({ type: "inconclusive" });
+    expect(r.items[0]?.error?.message).toMatch(/goal not verified.*--fake-ai/);
+    // No hard `goal-check` finding, so nothing gates: exit 2 (an item errored), never 1.
+    expect(r.findings.filter((f) => f.gating)).toEqual([]);
+    expect(r.exitCode).toBe(2);
+    // The result file itself is stamped `aiMode: "fake"` — read back by `@jevitate/findings`.
+    const raw = JSON.parse(readFileSync(r.items[0]?.resultPath ?? "", "utf8")) as { result: { aiMode?: string } };
+    expect(raw.result.aiMode).toBe("fake");
   });
 });
 
