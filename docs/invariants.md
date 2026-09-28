@@ -97,12 +97,18 @@ pass: it is counted in the result's `invariants` report.
   { "id": "no-billing-403", "never": { "response": { "url": "/api/v1/tool/billing/**", "status": "403" } } }
   ```
 
-  `status` is an exact code (`"403"` or `403`) or a class (`"4xx"`); `method` (`"GET"`,
-  `"POST"`, …) optionally narrows it. `url` is a glob (`**` any run, `*` any run without `/`):
-  when it starts with `/` it matches the response URL's **path** (with or without its query
-  string); otherwise it must match the **whole URL** (`"https://api.example.test/v1/**"`).
+  `status` is an exact code (`"403"` or `403`) or a class (`"4xx"`); `method` (one of `GET`,
+  `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, case-insensitive) optionally narrows it —
+  anything else (`"FETCH"`, a typo) is refused at load time, not silently accepted and never
+  matched. `url` is a glob (`**` any run, `*` any run without `/`): when it starts with `/` it
+  matches the response URL's **path** (with or without its query string) against ANY authorized
+  origin; otherwise it must match the **whole URL** (`"https://api.example.test/v1/**"`).
   Only responses from the mission's authorized origins are ever matched — the start URL's
-  own origin unless `--allow` names others — so a third-party 403 never fires it. Every
+  own origin unless `--allow` names others — so a third-party 403 never fires it, and a `url`
+  whose literal (wildcard-free) origin is not on that allowlist is refused at load time (it could
+  never fire): use a leading `/` path glob to match on any authorized origin instead, or add
+  `--allow <origin>`. A wildcarded host (`"https://*.example.test/**"`) is left unchecked — it may
+  still resolve onto an authorized origin at request time. Every
   matching response is evidence: method, full URL (redacted), status and the step it
   happened in (`GET https://app.example.test/api/v1/tool/billing/summary?ws=7 → 403 (step 0:
   page load)`); the violation's `responses` lists them as `{ method, url, status, step }`,
@@ -120,10 +126,12 @@ e.g. legitimately absent, `optional: true`) is never re-polled: it is reported a
 an absent observable never stalls an action for the whole `withinMs` window.
 
 **Refusals and results.** A file that does not validate is refused before any browser
-opens, with the path of the problem, e.g. `inv.json: invariants[2].require: unknown observable "balanse"`.
-So is a probe that is not a GET/HEAD or not on an authorized origin, and any unknown key.
-`--invariants` can be repeated, and it works with the goal, coverage, exploratory,
-adversarial and `--feature` missions. Each violation's defect carries:
+opens, with the path of EVERY problem, e.g. `inv.json: invariants[2].require: unknown observable
+"balanse"; inv.json: invariants[3].id: duplicate invariant id "x"` — a duplicate invariant id, an
+unknown observable and an unrelated type error are all reported together, never just the first one
+found (a type error used to hide the others). So is a probe that is not a GET/HEAD or not on an
+authorized origin, and any unknown key. `--invariants` can be repeated, and it works with the goal,
+coverage, exploratory, adversarial and `--feature` missions. Each violation's defect carries:
 
 - the invariant's `id` and expression,
 - the before and after values (redacted),

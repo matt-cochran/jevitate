@@ -374,25 +374,57 @@ describe("changed-route matching", () => {
 });
 
 describe("suite validation", () => {
+  const refuse = (raw: unknown): string => {
+    try {
+      parseSuite(raw, "s.json");
+    } catch (e) {
+      expect(e).toBeInstanceOf(SuiteError);
+      return (e as Error).message;
+    }
+    throw new Error("accepted");
+  };
+
   it("refuses a typo'd field, a goal without success checks or a bad budget, and resolves paths against the suite file", () => {
-    const refuse = (raw: unknown) => {
-      try {
-        parseSuite(raw, "s.json");
-      } catch (e) {
-        expect(e).toBeInstanceOf(SuiteError);
-        return (e as Error).message;
-      }
-      throw new Error("accepted");
-    };
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, jouneys: [] }] })).toBe(
       "s.json: $.targets[0].jouneys: unknown field (allowed: name, url, allow, storageState, secretFields, fixtures, invariants, journeysDir, journeys, goals, missions, verifyFix, viewport, device; and explore's options by camelCase name, e.g. deny, apiPrefix, logSource)",
     );
     expect(refuse({ version: 1, targets: [{ name: "a", url: URL0, goals: [{ goal: "g" }] }] })).toMatch(/goals\[0\]\.success: at least one success check/);
-    expect(refuse({ version: 2, targets: [] })).toBe("s.json: $.version: must be 1");
-    expect(refuse({ version: 1, budget: { maxActions: -1 }, targets: [] })).toBe("s.json: $.budget.maxActions: must be a positive integer");
+    expect(refuse({ version: 2, targets: [{ name: "a", url: URL0 }] })).toBe("s.json: $.version: must be 1");
+    expect(refuse({ version: 1, budget: { maxActions: -1 }, targets: [{ name: "a", url: URL0 }] })).toBe("s.json: $.budget.maxActions: must be a positive integer");
     mkdirSync(join(dir, "inv"));
     const ok = parseSuite({ version: 1, targets: [{ name: "a", url: URL0, invariants: ["inv/x.json"] }] }, join(dir, "s.json"));
     expect(ok.targets[0]?.invariants).toEqual([join(dir, "inv/x.json")]);
+  });
+
+  it("#213: reports every problem, not just the first — a bad root field, a bad budget field and a target's own bad field all together", () => {
+    const msg = refuse({
+      version: 2,
+      budget: { maxActions: -1 },
+      targets: [
+        { name: "a", url: URL0, jouneys: [] },
+        { name: "b", url: "not-a-url" },
+      ],
+    });
+    expect(msg).toContain("s.json: $.version: must be 1");
+    expect(msg).toContain("s.json: $.budget.maxActions: must be a positive integer");
+    expect(msg).toContain("s.json: $.targets[0].jouneys: unknown field");
+    expect(msg).toContain("s.json: $.targets[1].url: not a URL");
+  });
+
+  it("#213: within one target, an invalid goal's problem does not hide an invalid mission's — both sibling items are validated independently", () => {
+    const msg = refuse({
+      version: 1,
+      targets: [
+        {
+          name: "a",
+          url: URL0,
+          goals: [{ goal: "g" }],
+          missions: [{ strategy: "bogus" }],
+        },
+      ],
+    });
+    expect(msg).toContain("$.targets[0].goals[0].success: at least one success check is required");
+    expect(msg).toContain("$.targets[0].missions[0].strategy: must be one of");
   });
 });
 

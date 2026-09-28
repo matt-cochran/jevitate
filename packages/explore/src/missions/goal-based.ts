@@ -915,9 +915,10 @@ async function evaluateChecks(
       return { check: describeCheck(check), passed, detail: `${passed ? "held" : "did not hold"} ${when} (${seen})` };
     }
     if (passed) return { check: describeCheck(check), passed, detail: `held ${when}` };
-    // #113 — a `textIncludes` mismatch is otherwise invisible ("did not hold" alone doesn't say
-    // whether the text is wrong or just differently cased). What was actually read, bounded and
-    // redacted (page text is untrusted, and may carry a secret) — never a full-page dump.
+    // #113/#213 — a `textIncludes` or `valueEquals` mismatch (including a failing
+    // `reloadThen:valueEquals`) is otherwise invisible ("did not hold" alone doesn't say whether the
+    // text/value is wrong or just differently cased). What was actually read, bounded and redacted
+    // (page text or a form value is untrusted, and may carry a secret) — never a full-page dump.
     const read = await readAssertionText(actor, assertion);
     const detail =
       read === null ? `did not hold ${when}` : `did not hold ${when} (read: ${quoteRead(redactText(read, cfg.secrets ?? []))})`;

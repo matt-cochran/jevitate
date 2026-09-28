@@ -207,3 +207,10 @@ test("readAssertionText: null for a target that did not resolve, or for any othe
   const actor = actorWithPage(fakePage(fakeLocator()));
   await expect(readAssertionText(actor as any, { kind: "urlIncludes", text: "/inbox" })).resolves.toBeNull();
 });
+
+test("readAssertionText: #213 — the current value a failed valueEquals read, for enriching a reloadThen:valueEquals failure detail", async () => {
+  const locator = fakeLocator({ inputValue: vi.fn(async () => "old-value"), count: vi.fn(async () => 1) });
+  const actor = actorWithPage(fakePage(locator));
+  const a: Assertion = { kind: "valueEquals", target: { testId: "last-name" }, value: "Litmus" };
+  await expect(readAssertionText(actor as any, a)).resolves.toBe("old-value");
+});

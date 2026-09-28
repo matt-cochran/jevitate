@@ -759,13 +759,13 @@ async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Promise<Pre
   };
 }
 
-/** The item's setup, a refusal naming the target and item otherwise (before anything runs). */
-function setupOrRefuse(p: PreparedTarget, label: string, run: () => ItemSetup): ItemSetup {
+/** The item's setup, a refusal naming its path-precise location (#213: like every other suite refusal), before anything runs. */
+function setupOrRefuse(label: string, run: () => ItemSetup): ItemSetup {
   try {
     return run();
   } catch (e) {
     const fixtures = e instanceof FixtureSpecError || e instanceof UnboundSetupRefError ? "fixtures: " : "";
-    throw new CheckPreflightError(`target ${p.target.name}: ${label}: ${fixtures}${errorMessage(e)}`);
+    throw new CheckPreflightError(`${label}: ${fixtures}${errorMessage(e)}`);
   }
 }
 
@@ -786,7 +786,7 @@ function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | 
   const out: Planned[] = [];
   const skip = (routes: readonly string[] | undefined): string | undefined =>
     changed === undefined || changed.length === 0 || affectedBy(routes, changed) ? undefined : `not affected by --changed-routes ${changed.join(",")}`;
-  for (const p of prepared) {
+  prepared.forEach((p, ti) => {
     const t = p.target;
     for (const sj of t.journeys) {
       const j = p.journeys.get(sj.id);
@@ -794,19 +794,19 @@ function plan(prepared: readonly PreparedTarget[], changed: readonly string[] | 
       const s = skip(routes);
       out.push({ t: p, kind: "journey", name: sj.id, journey: sj, needsAi: false, ...(s === undefined ? {} : { skipped: s }) });
     }
-    for (const g of t.goals) {
+    t.goals.forEach((g, gi) => {
       const s = skip(g.routes ?? [pathOf(g.url ?? t.url)]);
       const texts = { [`goal ${g.name} url`]: g.url, [`goal ${g.name}`]: g.goal, [`goal ${g.name} success`]: g.success };
-      const setup = setupOrRefuse(p, `goal ${g.name}`, () => itemSetup(p, g, "goal", opts, { url: g.url ?? t.url, texts }));
+      const setup = setupOrRefuse(`$.targets[${ti}].goals[${gi}]`, () => itemSetup(p, g, "goal", opts, { url: g.url ?? t.url, texts }));
       out.push(...perPersona({ t: p, kind: "goal", name: g.name, goal: g, needsAi: true, setup, ...(s === undefined ? {} : { skipped: s }) }));
-    }
+    });
     const missions = t.missions.length === 0 && t.goals.length === 0 && p.invariants !== undefined ? [invariantSweep()] : t.missions;
-    for (const m of missions) {
-      const setup = setupOrRefuse(p, `mission ${m.name}`, () => itemSetup(p, m, m.strategy, opts));
+    missions.forEach((m, mi) => {
+      const setup = setupOrRefuse(`$.targets[${ti}].missions[${mi}]`, () => itemSetup(p, m, m.strategy, opts));
       out.push(...perPersona({ t: p, kind: "mission", name: m.name, strategy: m.strategy, mission: m, needsAi: m.strategy !== "feature", setup }));
-    }
+    });
     for (const v of t.verifyFix) out.push({ t: p, kind: "verify-fix", name: v.name, verify: v, needsAi: false });
-  }
+  });
   return out;
 }
 

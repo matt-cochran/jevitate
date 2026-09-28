@@ -444,6 +444,22 @@ describe("never.response (#195): an app response status on the mission's own tra
     ).toMatch(/a never invariant is global/);
     // `responseStatus` (the --success check's name) is not a never key: refused, never ignored.
     expect(refusal({ invariants: [{ id: "a", never: { responseStatus: "403" } }] }).join()).toMatch(/invariants\[0\]\.never/);
+    // #213: "FETCH" is alphabetic but not a real HTTP method — refused, not silently accepted.
+    expect(refusal(spec({ url: "/api/**", status: "403", method: "FETCH" })).join()).toMatch(/never\.response\.method.*must be one of GET/);
+  });
+
+  it("#213: refuses a never.response.url whose literal origin is not authorized (it can never fire — declared-invariants.ts filters by isAuthorizedExploreTarget first)", () => {
+    expect(refusal(spec({ url: "http://evil.test/api/**", status: "403" })).join()).toMatch(
+      /never\.response\.url: origin http:\/\/evil\.test is not an authorized origin.*can never fire/,
+    );
+    // A leading "/" path glob matches on ANY authorized origin: always reachable, never refused.
+    expect(validateInvariantSpec(spec({ url: "/api/**", status: "403" }), ALLOW).invariants[0]?.never).toBeDefined();
+    // The authorized origin itself: fine.
+    expect(validateInvariantSpec(spec({ url: "http://app.test/api/**", status: "403" }), ALLOW).invariants[0]?.never).toBeDefined();
+    // A wildcarded host may still resolve onto an authorized origin at request time: left unchecked.
+    expect(validateInvariantSpec(spec({ url: "https://*.app.test/api/**", status: "403" }), ALLOW).invariants[0]?.never).toBeDefined();
+    // Without --url/--allow (no allowlist to check against) the rule is not statically refusable.
+    expect(validateInvariantSpec(spec({ url: "http://evil.test/api/**", status: "403" }), {}).invariants[0]?.never).toBeDefined();
   });
 
   it("matches an exact code or a class", () => {
@@ -454,5 +470,37 @@ describe("never.response (#195): an app response status on the mission's own tra
     expect(matchesResponseStatus("4XX", 403)).toBe(true);
     expect(matchesResponseStatus("4xx", 500)).toBe(false);
     expect(matchesResponseStatus("2xx", 204)).toBe(true);
+  });
+});
+
+describe("#213: every problem is reported, not just the first (zod skips a superRefine once a sibling field aborts)", () => {
+  it("reports a duplicate invariant id and an unknown observable alongside an unrelated schema (type) error", () => {
+    const raw = {
+      observe: { balance: { dom: { selector: "#b", number: true } } },
+      invariants: [
+        { id: "dup", require: "balance > 0" },
+        { id: "dup", require: "nope > 0" },
+        // A genuine schema error: `settle` on a `never` invariant is refused by the schema itself.
+        { id: "bad-settle", never: { pageText: "x" }, settle: { withinMs: 1000 } },
+      ],
+    };
+    const problems = refusal(raw).join("\n");
+    expect(problems).toMatch(/invariants\[1\]\.id: duplicate invariant id "dup"/);
+    expect(problems).toMatch(/invariants\[1\]\.require: unknown observable "nope"/);
+    expect(problems).toMatch(/invariants\[2\]\.settle: settle applies to a require invariant only/);
+  });
+
+  it("reports an unknown observable in one invariant and a duplicate id between two OTHER invariants together", () => {
+    const raw = {
+      observe: { balance: { dom: { selector: "#b", number: true } } },
+      invariants: [
+        { id: "a", require: "ghost > 0" },
+        { id: "b", require: "balance > 0" },
+        { id: "b", require: "balance > 1" },
+      ],
+    };
+    const problems = refusal(raw).join("\n");
+    expect(problems).toMatch(/invariants\[0\]\.require: unknown observable "ghost"/);
+    expect(problems).toMatch(/invariants\[2\]\.id: duplicate invariant id "b"/);
   });
 });

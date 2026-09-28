@@ -271,7 +271,7 @@ describe("per-item sessions (#195)", () => {
   it("refuses a missing item storage state before anything runs", async () => {
     await expect(
       runCheck({ suite: suiteOf({ missions: [{ name: "m", strategy: "feature", feature: "a", storageState: "nope.json" }] }), outDir: join(dir, "out"), journeysDir: dir, runners: recordingRunners([]) }),
-    ).rejects.toThrow(/target shop: mission m: storage state not found: .*nope\.json/);
+    ).rejects.toThrow(/\$\.targets\[0\]\.missions\[0\]: storage state not found: .*nope\.json/);
   });
 });
 
@@ -308,7 +308,8 @@ describe("a suite never carries a literal secret (#195)", () => {
     await runCheck({ ...base, suite: suiteOf(item("goal", { secret: ["env:SUITE_SECRET"] })), env: ENV });
     expect(calls[0]?.o.secrets).toEqual(["s3cr3t-value"]);
     await expect(runCheck({ ...base, suite: suiteOf(item("goal", { secret: ["env:SUITE_SECRET"] })), env: {} })).rejects.toThrow(
-      "target shop: goal g: secret env:SUITE_SECRET: environment variable SUITE_SECRET is not set",
+      // #213: path-precise, matching every other suite refusal (`$.targets[0]…`), not the target/item name.
+      "$.targets[0].goals[0]: secret env:SUITE_SECRET: environment variable SUITE_SECRET is not set",
     );
   });
 });

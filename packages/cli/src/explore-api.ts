@@ -1931,9 +1931,17 @@ export interface ExploreCliDeps {
  *   attr:<descriptor>|<name>=<value> | attr:<descriptor>|<name> (present) | attr:<descriptor>|!<name> (absent)
  *   flashed:<descriptor>|class=<cls>|attr=<name>|animation [|withinMs=<n>] — a match GAINED the
  *                                        class / attribute / an animation after the last user input
- * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css, or a CSS
- * selector starting with `[`, `#` or `.` (`[data-testid=x]` is read as `testId=x`). In
- * `textIncludes` / `valueEquals` the LAST `|` separates the descriptor from the text.
+ * where <descriptor> is `k=v` pairs joined by `;` over testId/role/name/label/text/css
+ * (`css=h1`, `label=Display name`, `role=button;name=Save`) — key=value always wins, so a `=` is
+ * never read as CSS or text. With no `=` at all, a descriptor starting with `[`, `#` or `.` is CSS
+ * verbatim (`[data-testid=x]` becomes `testId=x`); any OTHER bare descriptor is read as CSS too, but
+ * only when it is a lowercase-only, syntactically valid CSS selector (#213: `h1`, `main h1`, `body`,
+ * `div.card`, `ul > li` — tag names, combinators, classes, ids, attributes, pseudo-classes; every
+ * character lowercase is what tells a real selector apart from an accessible-name phrase like
+ * `Display name`, which is never guessed at as either CSS or text). Anything that is not a valid
+ * key=value spec and not a lowercase CSS selector is refused with a hint naming the key=value forms
+ * (`css=`, `label=`, `testId=`, `role=`, `text=`) and an example. In `textIncludes` / `valueEquals`
+ * the LAST `|` separates the descriptor from the text.
  */
 export function parseAssertionSpec(spec: string): Assertion {
   const ci = spec.indexOf(":");
@@ -2182,10 +2190,12 @@ function parseDescriptorSpec(s: string): TargetDescriptor {
       (d as Record<string, string>)[k] = v;
     }
   }
-  if (!(d.testId || d.role || d.label || d.text || d.css)) {
-    throw new Error(`descriptor spec ${JSON.stringify(s)} has no usable selector`);
-  }
-  return d;
+  if (d.testId || d.role || d.label || d.text || d.css) return d;
+  // #213: no key=value pair matched — a bare, lowercase, syntactically valid CSS selector (a tag
+  // name or a combination of them) is read as CSS; anything else is refused with a hint, never a
+  // silent guess between CSS and text.
+  if (looksLikeBareCssSelector(raw)) return { css: raw };
+  throw new Error(`descriptor spec ${JSON.stringify(s)} has no usable selector — ${DESCRIPTOR_HINT}`);
 }
 
 /**
@@ -2197,3 +2207,25 @@ export function resolveExploreAllowlist(url: string, allow: readonly string[]): 
   if (allow.length > 0) return [...allow];
   return normalizeAllowlist([url]);
 }
+
+/**
+ * A conservative CSS-selector grammar check for a BARE (no `=`, no leading `[`/`#`/`.`) `--success`
+ * descriptor (#213). It deliberately does not implement the full CSS grammar — its only job is to
+ * tell a genuine selector (`h1`, `main h1`, `body`, `div.card`, `ul > li`) apart from a plain
+ * accessible-name phrase (`Display name`). HTML tag names, classes, ids and pseudo-classes are
+ * conventionally lowercase; requiring the WHOLE string to be lowercase is the disambiguator — a
+ * descriptor with any uppercase letter is never read as CSS, no matter its shape.
+ */
+const CSS_IDENT = "[a-z][a-z0-9-]*";
+const CSS_ATTR = `\\[${CSS_IDENT}(?:[~^$*|]?=(?:"[^"]*"|'[^']*'|${CSS_IDENT}))?\\]`;
+const CSS_PSEUDO = `::?${CSS_IDENT}(?:\\([^()]*\\))?`;
+const CSS_QUALIFIER = `(?:\\.${CSS_IDENT}|#${CSS_IDENT}|${CSS_ATTR}|${CSS_PSEUDO})`;
+const CSS_COMPOUND = `(?:(?:\\*|${CSS_IDENT})${CSS_QUALIFIER}*|${CSS_QUALIFIER}+)`;
+const BARE_CSS_SELECTOR_RE = new RegExp(`^${CSS_COMPOUND}(?:(?:\\s*[>+~]\\s*|\\s+)${CSS_COMPOUND})*$`);
+
+function looksLikeBareCssSelector(raw: string): boolean {
+  return raw !== "" && !/[^\x20-\x7e]/.test(raw) && !/[A-Z]/.test(raw) && BARE_CSS_SELECTOR_RE.test(raw);
+}
+
+const DESCRIPTOR_HINT =
+  'use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, or text=<text> (e.g. "css=h1" or "label=Display name")';

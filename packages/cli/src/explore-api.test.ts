@@ -137,6 +137,27 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     expect(() => parseAssertionSpec("visible:foo=bar")).toThrow(/no usable selector/);
   });
 
+  it("#213: a bare, lowercase, syntactically valid CSS selector is read as CSS", () => {
+    // The issue's own repro: textIncludes:h1|… used to be rejected as having no usable selector.
+    expect(parseAssertionSpec("textIncludes:h1|Welcome")).toEqual({
+      kind: "textIncludes",
+      target: { css: "h1" },
+      text: "Welcome",
+    });
+    expect(parseAssertionSpec("visible:main h1")).toEqual({ kind: "visible", target: { css: "main h1" } });
+    expect(parseAssertionSpec("visible:body")).toEqual({ kind: "visible", target: { css: "body" } });
+    expect(parseAssertionSpec("visible:div.card")).toEqual({ kind: "visible", target: { css: "div.card" } });
+    expect(parseAssertionSpec("visible:ul > li")).toEqual({ kind: "visible", target: { css: "ul > li" } });
+  });
+
+  it("#213: a bare descriptor that is not valid lowercase CSS is refused with a key=value hint, never guessed as text or CSS", () => {
+    // "Display name" — an accessible-name phrase, not a tag name: the capital letters refuse it.
+    expect(() => parseAssertionSpec("visible:Display name")).toThrow(
+      /no usable selector — use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, or text=<text>/,
+    );
+    expect(() => parseAssertionSpec("visible:Save button")).toThrow(/no usable selector/);
+  });
+
   it("parses valueEquals (a form control's value) with key=value or CSS-selector descriptors", () => {
     expect(parseAssertionSpec("valueEquals:label=Last name|Litmus")).toEqual({
       kind: "valueEquals",
