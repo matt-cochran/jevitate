@@ -20,14 +20,7 @@ import {
   type InvariantSpec,
 } from "@jevitate/recording";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
-import {
-  envCredentialStore,
-  MissingCredentialError,
-  OpenRouterGenerationGateway,
-  UsageTracker,
-  type JudgmentPort,
-  type GenerationPort,
-} from "@jevitate/ai-core";
+import { envCredentialStore, MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import {
   FixtureNotFoundError,
@@ -53,8 +46,6 @@ import {
   assertSessionFileOutsideProject,
   initProjectDir,
   logsDirFor,
-  logsRoot,
-  resultDirsFor,
   type ProjectInitReport,
 } from "./project-dir.js";
 import { sitePolicyKey, withSiteGate } from "./site-gate-cli.js";
@@ -70,14 +61,12 @@ import {
   UnknownMissionTargetError,
   type MissionTargetAuthFlags,
 } from "./mission-api.js";
-import { startMcpServer } from "./mcp-api.js";
 import { FsMissionQueueStore } from "@jevitate/missions";
 import { drainMissionQueue, needsModel, realQueuedMissionExecutor, type DrainReport } from "./mission-queue-runner.js";
 import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
 import { registerLedgerCommands } from "./ledger-cli.js";
 import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
-import { realOpenRouterCall } from "./openrouter-call.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
@@ -102,7 +91,6 @@ import {
   type MissionFixtures,
 } from "./mission-fixtures.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
-import { startUiServer } from "./ui-api.js";
 import { registerAiCommands, realSecureIO } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
@@ -123,12 +111,7 @@ import {
   formatVerifyFixHuman,
 } from "./cli-output.js";
 import { detectRuntimes, resolveInstallTargetPaths, installSkills, type RuntimeId } from "./init-skills.js";
-import {
-  registerMcp,
-  resolveMcpTargetPaths,
-  renderPrintConfig,
-  type McpHarness,
-} from "./init-mcp.js";
+import { registerMcp, resolveMcpTargetPaths } from "./init-mcp.js";
 import { loadManifest } from "@jevitate/skills";
 import {
   runExploration,
@@ -183,7 +166,6 @@ import {
   resolveJourneysDir,
   resolveRegressionsDir,
   resolveMissionTargetsDir,
-  resolveInboxDir,
   resolveSourceApiDeps,
   resolveApprovedBy,
   makeRealBrowserActor,
@@ -206,13 +188,12 @@ import {
   EXPLORE_STRATEGIES,
   EXPLORE_OUTCOME_HELP,
   GatewaySelectionError,
-  DEFAULT_EXPLORE_CATALOG,
-  DEFAULT_EXPLORE_CONSTRAINTS,
   buildExploreGateways,
   fakeDoneJudge,
 } from "./cli-shared.js";
 import { registerLogsCommands } from "./logs-cli.js";
 import { registerUxCommands } from "./ux-cli.js";
+import { registerServeCommands } from "./serve-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
@@ -3180,100 +3161,7 @@ export function buildProgram(deps: CliDeps): Command {
       }
     });
 
-  // Additive: `jevitate mcp` (Ticket #20) — start an MCP stdio server that
-  // exposes ONLY `@jevitate/mcp-facade`'s allowlisted tools (never the raw
-  // browser primitives in FORBIDDEN_TOOLS). This is the subcommand form of the
-  // MCP server (single-bundle deployment — no separate published package).
-  // The server owns stdin/stdout as the MCP protocol channel, so on success it
-  // blocks and writes NOTHING to stdout; only a setup failure (before the
-  // transport connects) emits a JSON envelope.
-  program
-    .command("mcp")
-    .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
-    .option(
-      "--print-config <harness>",
-      "print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing",
-    )
-    .action(async function (this: Command) {
-      const { dir, printConfig } = this.opts<{ dir?: string; printConfig?: string }>();
-
-      // `--print-config <harness>` is the universal escape hatch: render the
-      // exact registration snippet and exit WITHOUT starting the server (safe:
-      // no writes, no stdio takeover). An unknown harness is a fail envelope.
-      if (printConfig !== undefined) {
-        const harness = printConfig as McpHarness;
-        if (harness !== "claude" && harness !== "cursor" && harness !== "codex" && harness !== "json") {
-          emitJson(
-            program,
-            fail("E_MCP_PRINT_CONFIG", `--print-config must be one of claude | cursor | codex | json (got '${printConfig}')`),
-          );
-          return;
-        }
-        program.configureOutput().writeOut?.(`${renderPrintConfig(harness)}\n`);
-        process.exitCode = 0;
-        return;
-      }
-
-      try {
-        // Credential store + generation gateway for the allowlisted
-        // `ai_generate_text` tool. The gateway is the REAL OpenRouter adapter:
-        // the key is read only inside it (Authorization header only), every
-        // outbound payload passes the never-to-model guard, and the facade's
-        // preflight returns a typed `setup_required` when the key is absent —
-        // so no `--real/--fake` flag is needed for the non-interactive server.
-        const aiStore = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
-        const generationGateway =
-          deps.ai?.gateway ??
-          new OpenRouterGenerationGateway({
-            store: aiStore,
-            catalog: deps.ai?.catalog ?? DEFAULT_EXPLORE_CATALOG,
-            constraints: deps.ai?.constraints ?? DEFAULT_EXPLORE_CONSTRAINTS,
-            call: await realOpenRouterCall(),
-          });
-        await startMcpServer({
-          journeysDir: resolveJourneysDir(deps, dir),
-          sitePolicyDbPath: resolveDbPath(deps),
-          missionTargetsDir: resolveMissionTargetsDir(deps),
-          missionQueueDir: resolveDataDir(["missions", "queue"]),
-          recordingsDir: logsRoot(),
-          resultDirsFor: (resultId: string) => resultDirsFor(resultId),
-          inboxDir: resolveInboxDir(deps),
-          credentialStore: aiStore,
-          generationGateway,
-        });
-      } catch (err) {
-        emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
-      }
-    });
-
-  // Additive: `jevitate ui` (Task 8) — starts the local, loopback-only HTTP
-  // HITL approval dashboard (ui-api.ts's `startUiServer`). Resolves the SAME
-  // inbox dir `jevitate mcp`'s inbox tools serve (resolveInboxDir), so the
-  // two commands agree on where approvals/handbacks/reviews live. On success
-  // it prints the bound URL (carrying the capability token) and stays alive —
-  // the open HTTP server keeps the process running, the same way `mcp`'s open
-  // stdio transport does.
-  program
-    .command("ui")
-    .description("start the local HITL approval dashboard (loopback-only HTTP server)")
-    .option("--port <n>", "explicit port (fails on conflict; default 4180, retries on conflict)", intArg({ min: 0, max: 65535 }))
-    .option("--no-open", "do not open the dashboard URL in the default browser")
-    .option("--inbox-dir <path>", "inbox store directory (default: ~/.jevitate/inbox — same dir `jevitate mcp` serves)")
-    .action(async function (this: Command) {
-      const o = this.opts<{ port?: string; open?: boolean; inboxDir?: string }>();
-      try {
-        const start = deps.ui?.startUiServer ?? startUiServer;
-        const handle = await start({
-          inboxDir: resolveInboxDir(deps, o.inboxDir),
-          open: o.open ?? true,
-          ...(o.port !== undefined ? { port: Number(o.port) } : {}),
-        });
-        program.configureOutput().writeOut?.(`${handle.url}\n`);
-      } catch (err) {
-        emitJson(program, fail("E_UI_SERVE", String(err instanceof Error ? err.message : err)));
-      }
-    });
+  registerServeCommands(program, deps);
 
   registerUxCommands(program, deps);
 
