@@ -11,7 +11,7 @@ command's codes only as a reminder; this is the reference.
 |---|---|---|
 | `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
 | `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
-| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error. It proves nothing. |
+| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
 | `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |

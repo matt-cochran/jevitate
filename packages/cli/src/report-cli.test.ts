@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { ProfileManager } from "@jevitate/daemon";
 import { buildProgram } from "./program.js";
+import { registerReportCommands } from "./report-cli.js";
 import { readBaseline, resolveRunRefs, tagBaseline } from "./report-api.js";
 
 /**
@@ -255,5 +257,63 @@ describe("jevitate diff and --baseline (#138)", () => {
     const { out, code } = await cli(["diff", "nope", "adversarial-2026-09-22T10-00-00-000Z", "--dir", results, "--json"]);
     expect(code).toBe(64);
     expect(JSON.parse(out)).toMatchObject({ ok: false, error: { code: "E_REPORT_INPUT" } });
+  });
+});
+
+/**
+ * #227: `baseline tag` / `list` / `show` used to print the raw JSON envelope without `--json` (list
+ * did not even read the flag). `registerReportCommands` is exercised directly (not `buildProgram`,
+ * whose `CliDeps` has no `baselinesDir` override) so these never touch the real `~/.jevitate`.
+ */
+describe("baseline tag / list / show: a human summary without --json (#227)", () => {
+  let baselines: string;
+  beforeEach(() => {
+    baselines = join(dir, "baselines");
+  });
+
+  async function baselineCli(args: string[]): Promise<{ out: string; code: number | undefined }> {
+    const lines: string[] = [];
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    registerReportCommands(program, { missionTargetsDir: join(dir, "targets"), baselinesDir: baselines });
+    process.exitCode = undefined;
+    await program.parseAsync(args, { from: "user" });
+    const code = typeof process.exitCode === "number" ? process.exitCode : undefined;
+    process.exitCode = undefined;
+    return { out: lines.join(""), code };
+  }
+
+  it("baseline list: no baselines yet, a next step (never raw JSON)", async () => {
+    const { out, code } = await baselineCli(["baseline", "list"]);
+    expect(out).toBe("no baselines yet — tag one with `jevitate baseline tag <name> <runs...>`\n");
+    expect(out).not.toMatch(/^\{/);
+    expect(code).toBe(0);
+    const json = await baselineCli(["baseline", "list", "--json"]);
+    expect(JSON.parse(json.out)).toEqual({ v: 1, ok: true, data: [] });
+  });
+
+  it("baseline tag / list / show: a human summary, never the raw envelope", async () => {
+    const { adv1 } = seed();
+    const tagged = await baselineCli(["baseline", "tag", "release-1", adv1, "--dir", results]);
+    expect(tagged.code).toBe(0);
+    expect(tagged.out).toMatch(/^TAGGED: release-1 · 1 run\(s\)/);
+    expect(tagged.out).toContain("PATH");
+    expect(tagged.out).toContain("next: jevitate report --baseline release-1");
+    expect(tagged.out).not.toMatch(/^\{/m);
+
+    const list = await baselineCli(["baseline", "list"]);
+    expect(list.out).toContain("1 baseline(s)");
+    expect(list.out).toContain("release-1");
+    expect(list.out).not.toMatch(/^\{/m);
+
+    const shown = await baselineCli(["baseline", "show", "release-1"]);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toMatch(/^release-1 /);
+    expect(shown.out).toContain("next: jevitate report --baseline release-1");
+    expect(shown.out).not.toMatch(/^\{/m);
+
+    const shownJson = await baselineCli(["baseline", "show", "release-1", "--json"]);
+    expect(JSON.parse(shownJson.out)).toMatchObject({ ok: true, data: { name: "release-1" } });
   });
 });

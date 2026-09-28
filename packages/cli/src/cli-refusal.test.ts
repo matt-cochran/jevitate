@@ -310,3 +310,41 @@ describe("#218: every command refuses unusable input with 64 and a human error (
     });
   }
 });
+
+/**
+ * #227: extends the walk above to a command's SUCCESS path — without --json, it must be human text,
+ * never the raw `{v, ok, data}` envelope (regression #1/#2 of #227: `regression capture`/`run` and
+ * `baseline tag`/`show`/`list` used to print it unconditionally; `journey list`/`source list` on an
+ * empty dir printed nothing at all). Limited to the "a listing" REFUSALS-exempt commands — the ones
+ * that succeed with no fixture beyond an empty tmp dir, so this needs no browser/model/network.
+ */
+describe("#227: a listing command's SUCCESS output without --json is human text, never JSON", () => {
+  // A function, like `REFUSALS()` above: `dir` (module-level `let`) is only assigned in `beforeAll`,
+  // after this describe block's own body already ran at collection time.
+  const LISTINGS = (): ReadonlyArray<{ readonly path: string; readonly argv: readonly string[] }> => [
+    { path: "journey list", argv: ["journey", "list", "--dir", join(dir, "journeys-empty")] },
+    { path: "source list", argv: ["source", "list"] },
+    { path: "ledger list", argv: ["ledger", "list", "--dir", join(dir, "ledger-empty")] },
+    { path: "mission target list", argv: ["mission", "target", "list", "--dir", join(dir, "targets-empty")] },
+  ];
+
+  for (const path of ["journey list", "source list", "ledger list", "mission target list"]) {
+    it(`${path}: success without --json is human text, never raw JSON`, async () => {
+      const argv = LISTINGS().find((l) => l.path === path)!.argv;
+      const r = await run(argv);
+      expect(r.code, `${path}: exit code`).toBe(0);
+      expect(r.err, `${path}: nothing on stderr`).toBe("");
+      expect(r.out, `${path}: never raw JSON`).not.toMatch(/^\{/m);
+      const withJson = await run([...argv, "--json"]);
+      expect(withJson.code, `${path} --json: exit code`).toBe(0);
+      expect(() => JSON.parse(withJson.out), `${path} --json: exactly one envelope line`).not.toThrow();
+    });
+  }
+
+  it("journey list / source list: an empty listing is a next-step line, never silence (#227 item 2)", async () => {
+    const journeys = await run(["journey", "list", "--dir", join(dir, "journeys-empty-2")]);
+    expect(journeys.out).toBe("no journeys yet — record one with `jevitate record` (see jevitate record --help)\n");
+    const sources = await run(["source", "list"]);
+    expect(sources.out).toBe("no sources yet — add one with `jevitate source add <name> <gitUrl>`\n");
+  });
+});
