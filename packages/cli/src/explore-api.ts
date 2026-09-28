@@ -9,13 +9,11 @@ import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } 
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import {
   runGoalBasedMission,
-  authorJourney,
   assertAuthorizedExploreTarget,
   resolveMissionFixture,
   type Bounds,
   type GoalBasedOutcome,
   type StopReason,
-  type AuthorJourneyResult,
   type TranscriptEntry,
   type RunAnswer,
   type RunOutcome,
@@ -29,7 +27,6 @@ import {
   Http5xxOracle,
   secretFieldSecrets,
 } from "@jevitate/explore";
-import { FsJourneyStore } from "@jevitate/journey";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import {
   foldGoalOutcome,
@@ -80,6 +77,8 @@ import {
   type MissionTarget,
   declaredResult,
 } from "./explore-shared.js";
+
+export { type AuthorViaBrowserArgs, type RunAuthorJourneyOptions, runAuthorJourney } from "./explore-author.js";
 
 export {
   type RunCoverageMissionOptions,
@@ -669,148 +668,5 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     await observers?.close().catch(() => undefined);
     await persistStorageState(session, opts.saveStorageState, snapshotter);
     await closeQuietly(session);
-  }
-}
-
-/**
- * Arguments handed to the authoring step of `runAuthorJourney`. Kept separate
- * from `RunAuthorJourneyOptions` so tests can inject `authorImpl` (a fake
- * authoring step) without opening a real browser.
- */
-export interface AuthorViaBrowserArgs {
-  readonly url: string;
-  readonly origin: string;
-  readonly goal: string;
-  readonly successAssertion: Assertion;
-  readonly allowlist: readonly string[];
-  readonly judge?: JudgmentPort;
-  readonly gen?: GenerationPort;
-  readonly bounds?: Partial<Bounds>;
-  readonly takes: number;
-  readonly journeyId: string;
-  readonly journeyName: string;
-  readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
-  /**
-   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
-   * the deterministic authenticated pre-step. Contains live session cookies: it is
-   * handed only to the browser, never to a model or a Recording.
-   */
-  readonly storageState?: string;
-}
-
-export interface RunAuthorJourneyOptions {
-  readonly url: string;
-  readonly goal: string;
-  readonly successAssertion: Assertion;
-  readonly allowlist: readonly string[];
-  /** Where the authored Journey is persisted (via `FsJourneyStore`). */
-  readonly journeysDir: string;
-  readonly journeyId: string;
-  readonly journeyName: string;
-  /** Total takes incl. discovery. Default 1 (single-take MVP). */
-  readonly takes?: number;
-  readonly judge?: JudgmentPort;
-  readonly gen?: GenerationPort;
-  readonly bounds?: Partial<Bounds>;
-  readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
-  /**
-   * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
-   * the deterministic authenticated pre-step. Contains live session cookies: it is
-   * handed only to the browser, never to a model or a Recording.
-   */
-  readonly storageState?: string;
-  /**
-   * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
-   * which drives a real Playwright-backed actor through `authorJourney`.
-   */
-  readonly authorImpl?: (args: AuthorViaBrowserArgs) => Promise<AuthorJourneyResult>;
-}
-
-/**
- * The programmatic surface behind `jevitate explore author-journey` — drives
- * the goal-based exploration mission and feeds its take(s) through RxD's
- * diff/postdoc pipeline (`@jevitate/explore`'s `authorJourney`) to author a
- * parameterized, replayable, UNPROMOTED Journey, then persists it under the
- * journeys store. Additive: the record-by-demonstration authoring path is
- * untouched.
- *
- * The authorized-target guard runs FIRST (fail-closed), before any browser is
- * opened. The authoring step is injectable (`authorImpl`) so it is unit-testable
- * without a browser.
- */
-export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<AuthorJourneyResult> {
-  // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
-  const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
-
-  const impl = opts.authorImpl ?? authorViaBrowser;
-  const result = await impl({
-    url: opts.url,
-    origin,
-    goal: opts.goal,
-    successAssertion: opts.successAssertion,
-    allowlist: opts.allowlist,
-    judge: opts.judge,
-    gen: opts.gen,
-    bounds: opts.bounds,
-    takes: opts.takes ?? 1,
-    journeyId: opts.journeyId,
-    journeyName: opts.journeyName,
-    browserPortFactory: opts.browserPortFactory,
-    browser: opts.browser,
-      ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  });
-
-  if (result.outcome === "authored") {
-    // #170: a Journey authored behind a login (--storage-state) declares it, so a run without a
-    // storage state fails fast as a configuration error instead of a gating step-1 assertion.
-    const journey =
-      opts.storageState !== undefined && result.journey.metadata.requiresAuth !== true
-        ? { ...result.journey, metadata: { ...result.journey.metadata, requiresAuth: true } }
-        : result.journey;
-    await new FsJourneyStore(opts.journeysDir).put(journey);
-    return journey === result.journey ? result : { ...result, journey };
-  }
-  return result;
-}
-
-/** Default authoring step: opens a real browser, builds an actor, authors. */
-async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourneyResult> {
-  if (!args.judge || !args.gen) {
-    throw new Error("runAuthorJourney: judge and gen gateways are required to drive the authoring mission");
-  }
-  const judge = args.judge;
-  const gen = args.gen;
-
-  const portFactory = args.browserPortFactory ?? (() => new PlaywrightBrowserPort());
-  const port = portFactory();
-  const session = await port.open({
-    headless: true,
-    allowedOrigins: [...args.allowlist],
-    baseUrl: args.origin,
-    ...args.browser,
-    ...(args.storageState !== undefined ? { storageState: args.storageState } : {}),
-  });
-
-  try {
-    const actor = CastActor.named("author").whoCan(new BrowseTheWeb(session, [...args.allowlist]));
-    return await authorJourney({
-      goal: args.goal,
-      successAssertion: args.successAssertion,
-      allowlist: args.allowlist,
-      startUrl: args.url,
-      bounds: args.bounds,
-      actor,
-      judgment: judge,
-      generation: gen,
-      takes: args.takes,
-      journeyId: args.journeyId,
-      journeyName: args.journeyName,
-    });
-  } finally {
-    await session.close();
   }
 }
