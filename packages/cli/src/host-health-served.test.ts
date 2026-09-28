@@ -100,6 +100,48 @@ describe("a starved host is told apart from app findings (#203)", () => {
   );
 
   it(
+    "#213: a goal whose success check did not hold on a starved host is inconclusive, and still names the check",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jev-host-starved-failed-"));
+      /** Proposes `done` at once and answers the goal question yes: the run ends on the check. */
+      const doneAtOnce: JudgmentPort = {
+        async systemOne({ questions }) {
+          const out: Record<string, Answer> = {};
+          for (const [key, q] of Object.entries(questions)) {
+            if (q.kind === "noul") out[key] = { kind: "noul", value: true, probability: 0.95 };
+            else if (q.kind === "score") out[key] = { kind: "score", value: 0.1 };
+            else out[key] = { kind: "choice", value: q.options.includes("done") ? "done" : (q.options[0] ?? ""), confidence: 0.9 };
+          }
+          return out;
+        },
+      };
+      try {
+        const r = await runExploration({
+          url: `${origin}/moving`,
+          goal: "open Alpha",
+          allowlist: [origin],
+          judge: doneAtOnce,
+          gen: new FakeGenerationGateway({}),
+          successAssertion: { kind: "urlIncludes", text: "/never" },
+          bounds: { maxDecisions: 2, maxActions: 2 },
+          outDir,
+          hostHealth: fakeHost(STARVED),
+        });
+        expect(r.missionOutcome).toBe("inconclusive");
+        expect(r.failure?.kind).toBe("degraded-environment");
+        // One sentence with the peak readings, then what the run would have ended as — the check named.
+        expect(r.failure?.message).toMatch(/^\d+\/\d+ steps ran on a starved host \(peak load 3\.50?\/core.*\), so the run proves nothing about the app; otherwise it would have ended \w+: .*urlIncludes:\/never did not hold/);
+        expect(r.failure?.message).not.toMatch(/degraded-environment —/);
+        expect(r.checks?.some((c) => !c.passed)).toBe(true);
+        expect(MissionResultSchema.safeParse(JSON.parse(JSON.stringify(r))).success).toBe(true);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  it(
     "coverage on a calm host: a frontier drained by timed-out actions is insufficient-coverage, never exhausted",
     async () => {
       const outDir = await mkdtemp(join(tmpdir(), "jev-host-drained-"));

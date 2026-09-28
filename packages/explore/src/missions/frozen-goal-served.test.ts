@@ -25,6 +25,9 @@ const held: ServerResponse[] = [];
 /** The slow-but-answering app: every response is late by this much (the API one past the request bound). */
 const SLOW_PAGE_MS = 1_000;
 const SLOW_API_MS = 7_000;
+/** #213: the first /cold load answers after this — past the test's 3s page-load timeout, but it answers. */
+const COLD_FIRST_MS = 5_000;
+let coldHits = 0;
 
 const html = (body: string): string => `<!doctype html><html><body>${body}</body></html>`;
 
@@ -52,6 +55,13 @@ beforeAll(async () => {
           html(`<h1>Slow</h1><p id="s">loading</p><script>fetch("/api/slow").then(() => { document.getElementById("s").textContent = "ready"; });</script>`),
         );
       }, SLOW_PAGE_MS);
+      return;
+    }
+    if (path === "/cold") {
+      // A cold start: the FIRST load answers late (past the page-load timeout), every later one at once.
+      coldHits += 1;
+      const late = coldHits === 1 ? COLD_FIRST_MS : 0;
+      setTimeout(() => res.writeHead(200, { "content-type": "text/html" }).end(html(`<h1>Cold</h1>`)), late);
       return;
     }
     if (path === "/api/slow") {
@@ -178,5 +188,60 @@ describe("#230 — a backend that freezes mid-GOAL ends target-unresponsive, nev
       expect(health.findings()).toEqual([expect.objectContaining({ kind: "environment-degraded", finding: "hang", advisory: true })]);
     },
     300_000,
+  );
+});
+
+/**
+ * #213 item 5 — a start page that does not load in time on a STARVED host is the host, not the
+ * target: `degraded-environment` (an `environment-degraded` page-load-timeout), never
+ * `target-unreachable` (which a persona matrix read as an access difference). On a calm host (no
+ * sampler) the same timeout stays `target-unreachable`.
+ */
+describe("#213 — a page-load timeout on a starved host is degraded-environment, not target-unreachable", () => {
+  async function coldGoal(hostHealth?: HostHealthSampler) {
+    coldHits = 0;
+    return withSession(
+      "cold-goal-",
+      async (session) => {
+        session.page.setDefaultNavigationTimeout(3_000);
+        const actor = CastActor.named("cold").whoCan(new BrowseTheWeb(session, [origin]));
+        return runGoalBasedMission({
+          actor,
+          judge: new ScriptedJudge([{ op: "done" }]),
+          gen: new FakeGenerationGateway(),
+          goal: "open the cold page",
+          allowlist: [origin],
+          startUrl: `${origin}/cold`,
+          successAssertion: { kind: "visible", target: { text: "Cold" } },
+          oracleTimeoutMs: 200,
+          ...FAST,
+          ...(hostHealth === undefined ? {} : { hostHealth }),
+        });
+      },
+      origin,
+    );
+  }
+
+  it(
+    "starved host: inconclusive / degraded-environment with a page-load-timeout environment-degraded entry",
+    async () => {
+      const health = starvedHost();
+      const result = await coldGoal(health);
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.run.failure?.kind).toBe("degraded-environment");
+      expect(result.run.failure?.message).toMatch(/start page did not load in time.*not an app or access finding/);
+      expect(health.findings()).toEqual([expect.objectContaining({ kind: "environment-degraded", finding: "page-load-timeout", advisory: true })]);
+    },
+    120_000,
+  );
+
+  it(
+    "calm host (no sampler): the same timeout stays target-unreachable",
+    async () => {
+      const result = await coldGoal();
+      expect(result.outcome).toBe("inconclusive");
+      expect(result.run.failure?.kind).toBe("target-unreachable");
+    },
+    120_000,
   );
 });

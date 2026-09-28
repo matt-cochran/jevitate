@@ -44,6 +44,15 @@ export const STARVED_LOAD_PER_CORE = 2;
  */
 export const STARVED_EVENT_LOOP_LAG_MS = 500;
 
+/**
+ * #213: the event-loop delay histogram also measures the driver's OWN synchronous work (a big
+ * snapshot diff, a JSON write) — 506ms of lag at 0.70 load/core is self-inflicted, not the host.
+ * Lag counts as starvation only when the CPU corroborates it: at least one runnable task per core
+ * (load/core ≥ 1), i.e. no idle core the driver could have run on. With spare cores (or no load
+ * reading) lag alone never blames the host.
+ */
+export const LAG_CORROBORATING_LOAD_PER_CORE = 1;
+
 /** Renders that form the run's own baseline (the median of the first few, before any trend is judged). */
 export const RENDER_BASELINE_RENDERS = 3;
 /** Recent renders the trend looks at (their median — one slow route alone is never "the host"). */
@@ -126,7 +135,9 @@ function starvationOf(host: HostPressure, lagMs: number): string | null {
   if (host.loadPerCore !== undefined && host.loadPerCore > STARVED_LOAD_PER_CORE) {
     return `load ${fmt(host.loadPerCore)}/core > ${STARVED_LOAD_PER_CORE}`;
   }
-  if (lagMs > STARVED_EVENT_LOOP_LAG_MS) return `driver event-loop lag ${Math.round(lagMs)}ms > ${STARVED_EVENT_LOOP_LAG_MS}ms`;
+  if (lagMs > STARVED_EVENT_LOOP_LAG_MS && host.loadPerCore !== undefined && host.loadPerCore >= LAG_CORROBORATING_LOAD_PER_CORE) {
+    return `driver event-loop lag ${Math.round(lagMs)}ms > ${STARVED_EVENT_LOOP_LAG_MS}ms at load ${fmt(host.loadPerCore)}/core`;
+  }
   return null;
 }
 
@@ -141,7 +152,8 @@ export class HostHealthSampler {
   readonly #samples: HealthSample[] = [];
   readonly #renders: number[] = [];
   readonly #findings: EnvironmentDegraded[] = [];
-  readonly #causes = new Set<string>();
+  /** Distinct starvation causes, one per KIND of signal (#213: never one entry per load reading). */
+  readonly #causes = new Map<string, string>();
   #timer: ReturnType<typeof setInterval> | undefined;
   #count = 0;
   #peakLoad: number | null = null;
@@ -229,7 +241,7 @@ export class HostHealthSampler {
     const starved = this.starvedNow();
     if (starved === null) return;
     this.#degradedSteps += 1;
-    this.#causes.add(starved);
+    this.#noteCause(starved);
     if (!entry.actOk && entry.origin !== "engine" && entry.op !== null && /timeout/i.test(entry.reason ?? "")) {
       this.markDegraded({ finding: "click-timeout", detail: entry.reason ?? "", step: entry.step }, starved);
     }
@@ -237,7 +249,7 @@ export class HostHealthSampler {
 
   /** Records a finding the host's starvation explains (advisory; never a defect/hang). */
   markDegraded(f: { readonly finding: DegradedFindingKind; readonly detail: string; readonly step?: number }, cause: string): void {
-    this.#causes.add(cause);
+    this.#noteCause(cause);
     this.#findings.push({
       kind: "environment-degraded",
       finding: f.finding,
@@ -271,9 +283,15 @@ export class HostHealthSampler {
       steps: this.#steps,
       degradedSteps: this.#degradedSteps,
       degraded: this.degraded,
-      starvation: [...this.#causes].slice(0, MAX_LISTED_CAUSES),
+      starvation: [...this.#causes.values()].slice(0, MAX_LISTED_CAUSES),
       attribution: this.#attribute ? "on" : "off",
     };
+  }
+
+  /** Keeps the first cause of each kind (`load …/core`, `driver event-loop lag …`): readings differ, the kind does not. */
+  #noteCause(cause: string): void {
+    const kind = cause.replace(/\d+(?:\.\d+)?/g, "#");
+    if (!this.#causes.has(kind)) this.#causes.set(kind, cause);
   }
 
   #record(s: HealthSample): void {
@@ -299,26 +317,52 @@ export class HostHealthSampler {
   }
 }
 
+/** One sentence naming the host's peak readings (#213: never a list of per-sample readings). */
+export function starvedHostSentence(health: HostHealthSummary): string {
+  const peaks: string[] = [];
+  if (health.peakLoadPerCore !== null) peaks.push(`peak load ${fmt(health.peakLoadPerCore)}/core`);
+  if (health.minFreeMemoryBytes !== null) peaks.push(`min free memory ${Math.round(health.minFreeMemoryBytes / 1024 ** 2)} MiB`);
+  // Lag and renders only when they were a starvation-sized reading (a 2ms lag is noise, not evidence).
+  if (health.peakEventLoopLagMs !== null && health.peakEventLoopLagMs > STARVED_EVENT_LOOP_LAG_MS) {
+    peaks.push(`peak driver event-loop lag ${Math.round(health.peakEventLoopLagMs)}ms`);
+  }
+  if (
+    health.slowestRenderMs !== null &&
+    health.baselineRenderMs !== null &&
+    health.slowestRenderMs >= RENDER_SLOWDOWN_FLOOR_MS &&
+    health.slowestRenderMs >= RENDER_SLOWDOWN_FACTOR * health.baselineRenderMs
+  ) {
+    peaks.push(`slowest render ${Math.round(health.slowestRenderMs)}ms vs a ${Math.round(health.baselineRenderMs)}ms baseline`);
+  }
+  return `${health.degradedSteps}/${health.steps} steps ran on a starved host${peaks.length === 0 ? "" : ` (${peaks.join(", ")})`}`;
+}
+
 /**
  * The run-level verdict rule (#203): a run most of whose steps ran on a starved host proved nothing,
  * so an outcome that would read as a pass or an app-level "could not" (`clean`, a goal's
  * `exhausted`/`blocked`/`failed`) becomes `inconclusive` with reason `degraded-environment`. A confirmed
  * defect, a `succeeded` goal (a positive proof holds whatever the host), a crash or an already
  * inconclusive run keep their outcome.
+ *
+ * `opts.verified` (#213): the ending was proven by code (a usability job whose completion the
+ * independent checks / save signals verified) — a positive proof, kept like a `succeeded` goal.
+ * `opts.wouldHaveBeen` (#213): the ending's own reason (e.g. the failed success check) — kept in the
+ * degraded reason, so a starved `failed` goal still names the check that did not hold.
  */
 export function degradedEnvironmentOutcome<O extends string>(
   outcome: O,
   health: HostHealthSummary,
+  opts: { readonly verified?: boolean; readonly wouldHaveBeen?: string } = {},
 ): { readonly outcome: O | "inconclusive"; readonly failure?: { kind: "degraded-environment"; message: string } } {
   // #209: a goal's `failed` (a check missed after the model's done) is a miss a starved host can cause too.
   const overridable = outcome === "clean" || outcome === "exhausted" || outcome === "blocked" || outcome === "failed";
-  if (!health.degraded || !overridable) return { outcome };
-  const causes = health.starvation.length === 0 ? "" : `: ${health.starvation.join("; ")}`;
+  if (!health.degraded || !overridable || opts.verified === true) return { outcome };
+  const own = opts.wouldHaveBeen === undefined || opts.wouldHaveBeen === "" ? "" : `; otherwise it would have ended ${outcome}: ${opts.wouldHaveBeen}`;
   return {
     outcome: "inconclusive",
     failure: {
       kind: "degraded-environment",
-      message: `degraded-environment — ${health.degradedSteps}/${health.steps} steps ran on a starved host${causes}; a starved run proves nothing about the app`,
+      message: `${starvedHostSentence(health)}, so the run proves nothing about the app${own}`,
     },
   };
 }

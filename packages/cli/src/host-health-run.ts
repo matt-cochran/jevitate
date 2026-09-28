@@ -25,10 +25,14 @@ export interface HostHealthVerdict<O extends string> {
  * Takes the closing sample and applies the run-level rule: most steps starved → `inconclusive`
  * (`degraded-environment`), never `clean` (see `degradedEnvironmentOutcome`).
  */
-export async function finishHostHealth<O extends string>(health: HostHealthSampler, outcome: O): Promise<HostHealthVerdict<O>> {
+export async function finishHostHealth<O extends string>(
+  health: HostHealthSampler,
+  outcome: O,
+  opts: Parameters<typeof degradedEnvironmentOutcome>[2] = {},
+): Promise<HostHealthVerdict<O>> {
   await health.sample();
   const hostHealth = health.summary();
-  const verdict = degradedEnvironmentOutcome(outcome, hostHealth);
+  const verdict = degradedEnvironmentOutcome(outcome, hostHealth, opts);
   return {
     outcome: verdict.outcome,
     ...(verdict.failure === undefined ? {} : { failure: verdict.failure }),

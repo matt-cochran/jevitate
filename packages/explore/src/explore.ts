@@ -783,7 +783,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // no crash report is built for it, so no issue is ever drafted from it.
       firstNavFailed = true;
       stop = "inconclusive";
-      failure = { kind: "target-unreachable", message: `target unreachable (${describeUnreachable(message, firstNavNetError)})` };
+      const cause = describeUnreachable(message, firstNavNetError);
+      failure = { kind: "target-unreachable", message: `target unreachable (${cause})` };
+      // #213: a bare load TIMEOUT (no network error) on a starved host is the host, not the target —
+      // unless a fresh request for the page gets no response at all either (#230: the app is down).
+      if (cause === "timed out before any response" && cfg.hostHealth !== undefined) {
+        const judged = await cfg.hostHealth.judge();
+        if (judged.starved !== null && (await targetStoppedAnswering({ pageUrl: cfg.startUrl }).catch(() => null)) === null) {
+          const detail = `the start page did not load in time (${cause})`;
+          cfg.hostHealth.markDegraded({ finding: "page-load-timeout", detail, step: 0 }, judged.starved);
+          failure = {
+            kind: "degraded-environment",
+            message: `environment-degraded page load (${detail}) while the host was starved: ${judged.starved} — not an app or access finding`,
+          };
+        }
+      }
     } finally {
       page.off("requestfailed", onFirstNavRequestFailed);
     }

@@ -221,6 +221,10 @@ export function formatMultiRunHuman(result: unknown): string {
     const text = statuses.map(([p, ss]) => `${arr(ss).map(String).join("/")} for ${p}`).join("; ");
     lines.push(`${tag("DIFF")}${request}: ${text}  (advisory${rbac.has(request) ? ": RBAC candidate" : ""})`);
   }
+  // #213: a persona whose runs never observed the app is not compared — never read as an access difference.
+  for (const n of arr(diff?.notCompared).filter(isRecord)) {
+    lines.push(`${tag("DIFF")}${str(n.persona) ?? "?"}: not compared — its runs never observed the app (${str(n.reason) ?? "environment"})`);
+  }
   for (const f of findings) {
     lines.push(`${tag("FINDING")}${[str(f.fingerprint) ?? "(no fingerprint)", str(f.kind) ?? "", str(f.stability) ?? "", str(f.title) ?? ""].filter((p) => p !== "").join("  ")}`);
   }

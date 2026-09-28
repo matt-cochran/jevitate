@@ -173,7 +173,7 @@ run's own baseline. The thresholds (`packages/explore/src/host-health.ts`) are:
 |---|---|
 | admission sample | over the browser pool's own thresholds (memory pressure, < 400 MiB available, CPU PSI > 80%) |
 | load average | > 2 runnable tasks per core (every task gets ≤ half a core) |
-| driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) |
+| driver event-loop lag | > 500 ms (longer than the settle rule's quiet window) **and** load ≥ 1 runnable task per core. The lag histogram also counts the driver's own synchronous work, so lag with idle cores (e.g. 506 ms at 0.70/core) is self-inflicted and never counts (#213) |
 | render trend | the median of the last 3 renders ≥ 5x the run's baseline (median of its first 3) and ≥ 3 s |
 
 A starved sample explains the 15 s after it. Then:
@@ -183,12 +183,24 @@ A starved sample explains the 15 s after it. Then:
   defect or hang finding. A goal run that ends on one is `inconclusive`
   (`failure.kind: "degraded-environment"`);
 - a run most of whose steps (> 50%) ran starved is `inconclusive` with
-  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`/`blocked`).
-  A confirmed defect, a `succeeded` goal and a crash keep their outcome.
+  `failure.kind: "degraded-environment"` instead of `clean` (goal: instead of `exhausted`/`blocked`/`failed`).
+  A confirmed defect, a `succeeded` goal and a crash keep their outcome. So does a usability job whose
+  completion code verified: its `--success` checks held, or its `done` was proven by save or sign-in
+  signals. Only an ending the model alone judged (`verifiedBy: "grounded-judgment"`) is downgraded (#213).
+- the degraded reason is one sentence with the peak readings, followed by what the run would have
+  ended as without the starved host. A goal whose check didn't hold still names that check (#213):
+  `3/4 steps ran on a starved host (peak load 3.50/core, min free memory 6144 MiB), so the run proves
+  nothing about the app; otherwise it would have ended failed: success check … did not hold`.
+- a start page that doesn't load in time (a bare timeout, not a network error) while the host is
+  starved is `degraded-environment` with an `environmentDegraded` `page-load-timeout` entry, not
+  `target-unreachable`. This holds when a fresh request for the page still answers. A page that
+  doesn't answer at all stays `target-unreachable` (#230). In a persona matrix, a persona whose runs
+  never observed the app is left out of the persona diff (`diff.notCompared`, printed as `DIFF
+  <persona>: not compared — …`), so a starved load never reads as an access difference (#213).
 
 Every result carries `hostHealth`: `peakLoadPerCore`, `minFreeMemoryBytes`,
 `peakEventLoopLagMs`, `slowestRenderMs` (and the `baselineRenderMs` it is judged against),
-`steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes, and `attribution`.
+`steps`/`degradedSteps`, `degraded`, the distinct `starvation` causes (one per kind of signal, not one per reading), and `attribution`.
 `JEVITATE_HOST_STARVATION=off` keeps the sampling and the summary but never attributes a finding to
 the host (`attribution: "off"`) — for a harness that guarantees a quiet host itself.
 
