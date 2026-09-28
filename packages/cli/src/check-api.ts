@@ -60,6 +60,7 @@ import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import type { CheckSuite, SuiteBudget, SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { loadRunFile, resolveBaseline, scanRuns, summarizeRun, type RunSummary } from "./report-api.js";
+import { GOAL_ONLY_OUTCOMES } from "@jevitate/domain";
 
 /**
  * `jevitate check --suite <file>` (#137): jevitate as a CI regression gate. Runs every suite item
@@ -395,9 +396,16 @@ interface Stamp {
   readonly engine: EngineInfo;
   readonly targetBuild?: string;
   readonly suite: { readonly name: string; readonly target: string; readonly item: string };
+  /**
+   * #213: stamped on a goal result run under `--fake-ai`/`ai:"fake"` — read back by
+   * `@jevitate/findings` to keep the fake judge's OWN "goal not reached" ending out of the hard,
+   * gating `goal-check` findings (a genuine hard signal it observed along the way, e.g. an
+   * invariant violation or a 5xx, still gates: it never depended on the judge).
+   */
+  readonly aiMode?: "real" | "fake";
 }
 
-/** Adds the check's stamp (engine, target build, suite item) to a result the runner already wrote. */
+/** Adds the check's stamp (engine, target build, suite item, ai mode) to a result the runner already wrote. */
 function stampResultFile(path: string, stamp: Stamp): void {
   const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
   if (!isRecord(raw)) return;
@@ -407,6 +415,7 @@ function stampResultFile(path: string, stamp: Stamp): void {
       engine: raw.result.engine ?? stamp.engine,
       suite: stamp.suite,
       ...(stamp.targetBuild === undefined ? {} : { targetBuild: stamp.targetBuild }),
+      ...(stamp.aiMode === undefined ? {} : { aiMode: stamp.aiMode }),
     };
   } else {
     raw.stamp = { engine: stamp.engine, target: stamp.suite.target, item: stamp.suite.item, ...(stamp.targetBuild === undefined ? {} : { targetBuild: stamp.targetBuild }) };
@@ -986,7 +995,27 @@ async function execute(item: Planned, ctx: ExecContext, remaining: number | unde
         ...(setup?.actors === undefined ? {} : { actors: setup.actors }),
         ...(fx === undefined ? {} : { fixtures: fx }),
       });
-      stampResultFile(r.resultPath, stamp);
+      stampResultFile(r.resultPath, { ...stamp, ...(ctx.opts.aiMode === "fake" ? { aiMode: "fake" as const } : {}) });
+      // #213: `--fake-ai`'s judge is a deterministic stand-in (it always proposes `done`) — it
+      // cannot prove a goal was reached OR missed, so the goal's own judgment-driven ending
+      // (`succeeded`/`failed`/`exhausted`/`blocked`: `GOAL_ONLY_OUTCOMES`) is honestly inconclusive
+      // under it, never a gating FAILED. A genuine hard signal the run hit along the way (an
+      // invariant violation, a 5xx, a hang, a crash — `goalOutcome` holding a shared
+      // `MissionOutcome` directly, not a goal-only one) never depended on the judge and still
+      // gates. `succeeded` needs no override: it is the clean case.
+      if (ctx.opts.aiMode === "fake" && (GOAL_ONLY_OUTCOMES as readonly string[]).includes(r.goalOutcome) && r.goalOutcome !== "succeeded") {
+        return {
+          status: "error",
+          resultPath: r.resultPath,
+          outcome: "inconclusive",
+          goalOutcome: r.goalOutcome,
+          actions: r.actions,
+          error: {
+            type: "inconclusive",
+            message: `goal not verified: --fake-ai has no real judgment (the goal ended '${r.goalOutcome}') — use --real to gate on this goal`,
+          },
+        };
+      }
       // #217: the canonical verdict gates; the goal's own ending rides beside it.
       const executed = missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
       return { ...executed, goalOutcome: r.goalOutcome, actions: r.actions };

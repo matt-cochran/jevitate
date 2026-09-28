@@ -3936,10 +3936,15 @@ async function buildExploreGateways(
 }
 
 /**
- * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It answers EVERY
- * question it is asked (whatever the mission names it): a choice picks `done` when offered (else
- * fails closed), a noul answers "no", a score answers 0. `usage` (#100) is optional: when supplied,
- * every call reports 1 judgment at 0 tokens.
+ * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It is TOTAL and
+ * deterministic: it answers EVERY question it is asked, whatever the mission or rubric names it
+ * (#213) — a choice offering `done` picks `done` (so the goal/coverage loop stops at once, and
+ * will not drive to a goal); a choice that does NOT offer `done` (e.g. the UX quality grader's
+ * label set, `grade::0`) deterministically picks its first listed option instead of throwing; a
+ * noul answers "no"; a score answers 0. It never throws on a question SHAPE it does not
+ * specifically know about — only on a malformed one (a choice with no options at all), which is a
+ * bug upstream, not an unknown question. `usage` (#100) is optional: when supplied, every call
+ * reports 1 judgment at 0 tokens.
  */
 export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
   return {
@@ -3947,10 +3952,13 @@ export function fakeDoneJudge(usage?: UsageSink): JudgmentPort {
       const out: Record<string, Answer> = {};
       for (const [name, q] of Object.entries(args.questions)) {
         switch (q.kind) {
-          case "choice":
-            if (!q.options.includes("done")) throw new Error(`fake judge: question '${name}' does not offer 'done'`);
-            out[name] = { kind: "choice", value: "done", confidence: 1 };
+          case "choice": {
+            // #213: total over every choice family, not just the goal/coverage loop's `done`.
+            const value = q.options.includes("done") ? "done" : q.options[0];
+            if (value === undefined) throw new Error(`fake judge: question '${name}' offers no options`);
+            out[name] = { kind: "choice", value, confidence: 1 };
             break;
+          }
           case "noul":
             out[name] = { kind: "noul", value: false, probability: 0 };
             break;
