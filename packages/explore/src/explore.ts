@@ -84,7 +84,7 @@ import { resolveMissionFixture } from "./fixture.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, describeFailure, describeUnreachable, isUnreachableTarget } from "./mission-failure.js";
+import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "./mission-failure.js";
 import {
   EMPTY_STATUS,
   describeStatus,
@@ -2054,7 +2054,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
       // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
       failure = describeFailure(e, crashWatch.signals());
-      stop = "crashed";
+      // #226: the app stopped answering navigation (a frozen backend) — nothing in the engine broke:
+      // `inconclusive` with the typed `target-unresponsive` reason, never `crashed`.
+      stop = isTargetUnresponsive(failure) ? "inconclusive" : "crashed";
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.

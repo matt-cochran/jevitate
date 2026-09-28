@@ -127,6 +127,11 @@ export type MissionFailureKind =
   /** The run could not reach (or stay on) the page it was asked to test — e.g. the start URL redirects elsewhere. */
   | "target-unreachable"
   /**
+   * #226: the app stopped answering mid-run — a navigation it was asked for got no response (e.g. its
+   * server froze). Never an engine crash and never a hang finding of the browser: `inconclusive`.
+   */
+  | "target-unresponsive"
+  /**
    * The run found nothing but exercised too little of its target for that to mean `clean` — the ONE
    * name (#209) for a coverage/exploratory frontier drained by timed-out actions (#203), one that only
    * followed global navigation, a `--feature` run that exercised nothing relevant, and an adversarial

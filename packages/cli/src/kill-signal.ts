@@ -66,7 +66,7 @@ export interface KillableMission {
    */
   readonly transcript?: () => readonly TranscriptEntry[] | undefined;
   /** The run's host-health summary so far (#203): a killed run's result carries it like every other result. */
-  readonly hostHealth?: () => HostHealthSummary;
+  readonly hostHealth?: () => HostHealthSummary | undefined;
   /** The run's usage tracker: the tokens already spent are part of the killed run's result (#120). */
   readonly usage?: { snapshot(): UsageCounts; calls?(): ReturnType<UsageLedger["calls"]> };
   /**

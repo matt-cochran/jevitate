@@ -58,3 +58,23 @@ describe("describeFailure — a page the liveness watchdog closed (#220)", () =>
     expect(describeFailure(new Error("closed"), base).kind).toBe("page-closed");
   });
 });
+
+describe("describeFailure — a navigation the app never answered (#226)", () => {
+  const live = { pageCrashed: false, pageClosed: false, browserDisconnected: false };
+  const gotoTimeout = (): Error => {
+    const e = new Error('page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to "http://127.0.0.1:4000/app?token=s3cret", waiting until "load"\n');
+    e.stack = `${e.message}\n    at Object.performAs (interactions.ts:13:20)`;
+    return e;
+  };
+  it("is a typed target-unresponsive failure with a plain reason naming the path — no stack, no query, no raw Playwright text", () => {
+    const f = describeFailure(gotoTimeout(), live);
+    expect(f).toEqual({ kind: "target-unresponsive", message: "the app stopped responding to navigation to /app (timed out before any response)" });
+  });
+  it("a network error on a reload is the same ending; a non-navigation timeout (a click) stays an exception", () => {
+    expect(describeFailure(new Error("page.reload: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:4000/"), live).kind).toBe("target-unresponsive");
+    expect(describeFailure(new Error("locator.click: Timeout 30000ms exceeded."), live).kind).toBe("exception");
+  });
+  it("crash evidence still wins", () => {
+    expect(describeFailure(gotoTimeout(), { ...live, pageCrashed: true }).kind).toBe("page-crash");
+  });
+});

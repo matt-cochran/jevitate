@@ -141,23 +141,64 @@ function nextHint(fingerprint: string | undefined, resultPath: string | undefine
   return "next: jevitate report";
 }
 
-/** `explore --repeat/--persona`'s aggregate (multi-run) result. */
+/** A verdict with a goal run's own ending beside it: `clean (goal: succeeded)`. */
+function verdictText(v: Record<string, unknown>): string {
+  const outcome = str(v.missionOutcome) ?? str(v.outcome) ?? "unknown";
+  const goal = str(v.goalOutcome);
+  return goal === undefined || goal === outcome ? outcome : `${outcome} (goal: ${goal})`;
+}
+
+/**
+ * `explore --repeat/--persona`'s aggregate (multi-run) result (#226: the #217 contract): the canonical
+ * verdict as the headline (a goal's own ending beside it, never in its place), why it is what it is,
+ * each persona's verdict and each run's with its reason, the persona diff's status differences, the
+ * agreed and flaky findings, and the find-out answer(s).
+ */
 export function formatMultiRunHuman(result: unknown): string {
   if (!isRecord(result)) return "";
   const findings = arr(result.findings).filter(isRecord);
   const flaky = arr(result.flaky).filter(isRecord);
+  const cells = arr(result.cells).filter(isRecord);
+  const personas = cells.filter((c) => str(c.persona) !== undefined);
+  const outcome = str(result.missionOutcome) ?? str(result.outcome) ?? "unknown";
   const lines = [
-    `${(str(result.outcome) ?? "unknown").toUpperCase()}: ${str(result.strategy) ?? "explore"} ×${String(result.repeat ?? "?")} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`,
+    `${outcome.toUpperCase()}: ${str(result.strategy) ?? "explore"} ×${String(result.repeat ?? "?")}${personas.length > 0 ? ` · ${personas.length} personas` : ""} · ${findings.length} agreed finding(s) · ${flaky.length} flaky`,
   ];
+  const goal = str(result.goalOutcome);
+  if (goal !== undefined) lines.push(`${tag("GOAL")}${goal}`);
   // #220: why the multi-run is inconclusive (interrupted, runs pending, or a run broke).
   const reason = str(result.reason);
   if (reason !== undefined) lines.push(`${tag("REASON")}${reason}`);
+  for (const c of personas) lines.push(`${tag("PERSONA")}${str(c.persona)}  ${verdictText(c)}`);
+  const answers: Array<{ label: string; text: string }> = [];
+  for (const c of cells) {
+    const persona = str(c.persona);
+    for (const r of arr(c.runs).filter(isRecord)) {
+      const label = `${persona === undefined ? "" : `${persona} `}run ${String(r.index ?? "?")}`;
+      const why = str(r.reason);
+      lines.push(`${tag("RUN")}${label}  ${verdictText(r)}${why === undefined ? "" : `  ${why}`}`);
+      const answer = answerLine(r.answer);
+      if (answer !== undefined) answers.push({ label, text: answer });
+    }
+  }
+  const diff = isRecord(result.diff) ? result.diff : undefined;
+  const rbac = new Set(arr(diff?.rbacCandidates).filter(isRecord).map((c) => str(c.request)));
+  for (const d of arr(diff?.statusDiffs).filter(isRecord)) {
+    const request = str(d.request) ?? "";
+    const statuses = isRecord(d.statuses) ? Object.entries(d.statuses) : [];
+    const text = statuses.map(([p, ss]) => `${arr(ss).map(String).join("/")} for ${p}`).join("; ");
+    lines.push(`${tag("DIFF")}${request}: ${text}  (advisory${rbac.has(request) ? ": RBAC candidate" : ""})`);
+  }
   for (const f of findings) {
     lines.push(`${tag("FINDING")}${[str(f.fingerprint) ?? "(no fingerprint)", str(f.kind) ?? "", str(f.stability) ?? "", str(f.title) ?? ""].filter((p) => p !== "").join("  ")}`);
   }
   for (const f of flaky) {
     lines.push(`${tag("FLAKY")}${[str(f.fingerprint) ?? "(no fingerprint)", str(f.kind) ?? "", str(f.stability) ?? "", str(f.title) ?? ""].filter((p) => p !== "").join("  ")}`);
   }
+  // #216/#226: the find-out answer — once when every run found the same one, else per run.
+  const distinct = new Set(answers.map((a) => a.text));
+  if (personas.length === 0 && distinct.size === 1) lines.push(`${tag("ANSWER")}${answers[0]!.text}`);
+  else for (const a of answers) lines.push(`${tag("ANSWER")}${a.label}: ${a.text}`);
   const resultPath = str(result.resultPath);
   if (resultPath !== undefined) lines.push(`${tag("RESULT")}${resultPath}`);
   lines.push("next: jevitate report");

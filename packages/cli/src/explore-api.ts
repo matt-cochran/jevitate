@@ -551,6 +551,50 @@ export function withServerCause(reason: string | undefined, outcome: GoalBasedOu
   return cause === undefined ? reason : `${reason}; server: ${cause}`;
 }
 
+/**
+ * #226: what the kill switch reads from a run it armed BEFORE the host sampler and the browser exist
+ * (Chromium can take seconds to start on a loaded host — a signal then must still write the partial
+ * result): the host-health summary and the storageState snapshot, once `attach`ed.
+ */
+interface ArmedRunState {
+  readonly hostHealth: () => HostHealthSummary | undefined;
+  readonly snapshot: () => string | undefined;
+  attach(health: { summary(): HostHealthSummary }, snapshotter: StorageStateSnapshotter): void;
+}
+
+function armedRunState(): ArmedRunState {
+  let health: { summary(): HostHealthSummary } | undefined;
+  let snapshotter: StorageStateSnapshotter | undefined;
+  return {
+    hostHealth: () => health?.summary(),
+    snapshot: () => snapshotter?.snapshot(),
+    attach(h, s) {
+      health = h;
+      snapshotter = s;
+    },
+  };
+}
+
+/**
+ * Starts the run's host sampler and opens its browser, with the kill switch already armed (#226). A
+ * failure to open disarms it (the command reports that error itself) and stops the sampler.
+ */
+async function openArmed<S>(
+  disarm: () => void,
+  hostHealth: Parameters<typeof startHostHealth>[0],
+  open: () => Promise<S>,
+): Promise<{ health: Awaited<ReturnType<typeof startHostHealth>>; session: S }> {
+  let health: Awaited<ReturnType<typeof startHostHealth>> | undefined;
+  try {
+    health = await startHostHealth(hostHealth);
+    return { health, session: await open() };
+  } catch (e) {
+    health?.stop();
+    disarm();
+    throw e;
+  }
+}
+
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
@@ -583,12 +627,31 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     ...opts.emulation,
     ...(primaryState !== undefined ? { storageState: primaryState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
+  const outDir = opts.outDir ?? logsDirFor();
+  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
+  // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
+  // itself creates `outDir` synchronously (mkdirSync).
+  const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
+  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
+  // whatever the journal has already flushed, and the process exits with the conventional code.
+  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
+  const runUsage = opts.usage?.scope();
+  // #226: armed BEFORE the host sampler and the browser launch — a signal while Chromium starts (seconds
+  // on a loaded host) still writes and prints the partial result instead of exiting 143 with nothing.
+  const armed = armedRunState();
+  const disarmKillSwitch = armMissionKillSwitch({
+    // #220: the killed run's partial result carries the unified schema's common fields too.
+    strategy: "goal",
+    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}) },
+    recordingPath: journal.recordingPath,
+    hostHealth: armed.hostHealth,
+    transcriptPath: journal.transcriptPath,
+    transcript: () => journal.transcript,
+    ...(runUsage === undefined ? {} : { usage: runUsage }),
+    ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: armed.snapshot } }),
   });
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const { health, session } = await openArmed(disarmKillSwitch, opts.hostHealth, () => port.open(launch));
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   // #147: each observer in its OWN fresh context (only its own storageState), opened on first use.
@@ -596,33 +659,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     opts.actors === undefined || opts.actors.observers.length === 0
       ? undefined
       : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
-
-  const outDir = opts.outDir ?? logsDirFor();
-  const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
-  // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
-  // itself creates `outDir` synchronously (mkdirSync) — no `await` here, so there is no gap between
-  // the browser opening and the kill switch arming below for a SIGTERM/SIGINT to land in unarmed.
-  const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
-  // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
-  // whatever the journal has already flushed, and the process exits with the conventional code.
-  // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
-  const runUsage = opts.usage?.scope();
   // #159: refreshed after each settled step below; the kill switch writes whatever this holds
   // synchronously on SIGTERM/SIGINT (it cannot await a live capture — see kill-signal.ts).
   const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
-  const disarmKillSwitch = armMissionKillSwitch({
-    // #220: the killed run's partial result carries the unified schema's common fields too.
-    strategy: "goal",
-    target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}) },
-    recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
-    transcriptPath: journal.transcriptPath,
-    transcript: () => journal.transcript,
-    ...(runUsage === undefined ? {} : { usage: runUsage }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
-  });
+  armed.attach(health, snapshotter);
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
@@ -1107,39 +1147,34 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
-
-  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
-  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
-
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
-  // `MissionJournal` creates `outDir` synchronously (mkdirSync) — no `await` between the browser
-  // opening and the kill switch arming below, so there is no gap for a signal to land in unarmed.
+  // `MissionJournal` creates `outDir` synchronously (mkdirSync).
   const journal = new MissionJournal(join(outDir, `coverage-${stamp}.json`));
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
-  // #159: see runExploration's own doc comment on the equivalent lines.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
+  // #226: armed before the browser launch — see runExploration.
+  const armed = armedRunState();
   const disarmKillSwitch = armMissionKillSwitch({
     // #220: the killed run's partial result carries the unified schema's common fields too.
     strategy: opts.strategy ?? "coverage",
     target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
+    hostHealth: armed.hostHealth,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
+    ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: armed.snapshot } }),
   });
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const { health, session } = await openArmed(disarmKillSwitch, opts.hostHealth, () => port.open(launch));
+
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
+  // #159: see runExploration's own doc comment on the equivalent lines.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
+  armed.attach(health, snapshotter);
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
@@ -1452,33 +1487,30 @@ export async function runAdversarialCliMission(
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await port.open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
-  // #159: see runExploration's own doc comment on the equivalent lines.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
+  // #226: armed before the browser launch — see runExploration.
+  const armed = armedRunState();
   const disarmKillSwitch = armMissionKillSwitch({
     // #220: the killed run's partial result carries the unified schema's common fields too.
     strategy: "adversarial",
     target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
+    hostHealth: armed.hostHealth,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
     ...(runUsage === undefined ? {} : { usage: runUsage }),
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
+    ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: armed.snapshot } }),
   });
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const { health, session } = await openArmed(disarmKillSwitch, opts.hostHealth, () => port.open(launch));
+  // #159: see runExploration's own doc comment on the equivalent lines.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
+  armed.attach(health, snapshotter);
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
@@ -1720,35 +1752,31 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     ...opts.emulation,
     ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
   };
-  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
-  const health = await startHostHealth(opts.hostHealth);
-  const session = await portFactory().open(launch).catch((e: unknown) => {
-    health.stop();
-    throw e;
-  });
-  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
-  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
-
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
-  // #159: see runExploration's own doc comment on the equivalent lines.
-  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
+  // #226: armed before the browser launch — see runExploration.
+  const armed = armedRunState();
   const disarmKillSwitch = armMissionKillSwitch({
     // #220: the killed run's partial result carries the unified schema's common fields too.
     strategy: "feature",
     target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
     recordingPath: journal.recordingPath,
-    hostHealth: () => health.summary(),
+    hostHealth: armed.hostHealth,
     transcriptPath: journal.transcriptPath,
     transcript: () => journal.transcript,
-    ...(opts.saveStorageState === undefined
-      ? {}
-      : { storageState: { path: opts.saveStorageState, snapshot: () => snapshotter.snapshot() } }),
+    ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: armed.snapshot } }),
   });
+  // #203: the run's host-health sampler — started (one sample taken) before the browser opens.
+  const { health, session } = await openArmed(disarmKillSwitch, opts.hostHealth, () => portFactory().open(launch));
+  // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
+  const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
+  // #159: see runExploration's own doc comment on the equivalent lines.
+  const snapshotter = new StorageStateSnapshotter(session, opts.saveStorageState !== undefined);
+  armed.attach(health, snapshotter);
   const serverLog = openServerLogRuntime({
     sources: opts.serverLog?.sources ?? [],
     logDefect: opts.serverLog?.logDefect ?? [],
