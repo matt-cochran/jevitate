@@ -33,6 +33,7 @@ import { contentHash, type MissionFailure } from "@jevitate/domain";
 import type { SettleConfig, TimingConfig } from "../settle-config.js";
 import { outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
+import { isAuthorizedExploreTarget } from "../authorized-targets.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
@@ -816,6 +817,8 @@ async function runInductionFrontier(
           ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
           ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
           ...(params.hostHealth === undefined ? {} : { hostHealth: params.hostHealth }),
+          // #230: an app that stopped answering ends the run target-unresponsive, never a hang finding.
+          liveness: { pageUrl: sessions.page.url(), authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist) },
           // Re-detected with the SAME perception bounds the mission used.
           perceive: {
             ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),

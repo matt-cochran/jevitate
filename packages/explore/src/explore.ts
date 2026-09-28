@@ -86,7 +86,7 @@ import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "./mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering } from "./mission-failure.js";
 import {
   EMPTY_STATUS,
   describeStatus,
@@ -478,6 +478,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     };
     stop = "inconclusive";
   };
+  /**
+   * #230: before a hang/no-progress is a finding (or blamed on a starved host), did the app itself
+   * stop answering? Throws `TargetUnresponsiveError` (→ `inconclusive` / `target-unresponsive`).
+   */
+  const livenessOf = () => ({
+    pageUrl: page.url(),
+    authorized: (u: string) => isAuthorizedExploreTarget(u, cfg.allowlist),
+  });
   const now = (): number => Date.now();
 
   const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
@@ -862,6 +870,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           snapshot: snap,
           timing: perception.timing,
         });
+        await assertTargetAnswering(livenessOf());
         const judged = await judgeHost();
         if (judged.starved !== null) {
           degradedStop(perception.hang.kind === "ui-no-progress" ? "no-progress" : "hang", `${perception.hang.kind}: ${perception.hang.detail}`, judged.starved);
@@ -1017,6 +1026,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               snapshot: again.snapshot,
               timing: again.timing,
             });
+            await assertTargetAnswering(livenessOf());
             const judged = await judgeHost();
             if (judged.starved !== null) {
               degradedStop(stuck.kind === "ui-no-progress" ? "no-progress" : "hang", `${stuck.kind}: ${stuck.detail}`, judged.starved);
@@ -2166,6 +2176,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
+  }
+
+  // #230: a no-progress stop on an app that stopped answering is `target-unresponsive` — before the
+  // host is blamed for it (#203).
+  if (stop === "no-progress") {
+    const unresponsive = await targetStoppedAnswering(livenessOf()).catch(() => null);
+    if (unresponsive !== null) {
+      failure = { kind: "target-unresponsive", message: unresponsive };
+      stop = "inconclusive";
+    }
   }
 
   // #203: a no-progress stop met while the host was starved is the host, not the app.

@@ -140,6 +140,27 @@ listed. A page whose main-thread probe gets no answer while a document is still 
 the app, not hung: it is given the render ceiling, and a navigation still unanswered after it is a
 `request-pending` hang on that document, never `main-thread-unresponsive`.
 
+A freeze usually shows up first as a hang (a click's request or navigation that never answers) or a
+no-progress stop, not as a failed navigation. Before any hang or no-progress stop becomes a finding
+— and before it is blamed on a starved host — the run asks the app directly (#230), the same way in
+goal, usability, adversarial, coverage/exploratory and feature runs:
+
+- **The probe:** one fresh, cookie-less `GET` from outside the page, for the page the run is on (its
+  origin and path; the query is dropped so a one-shot token isn't re-sent). That page already answered
+  once. Any HTTP response counts as an answer, whatever its status. The probe waits up to 10 s.
+- **The app stopped answering** when that probe gets no response at all within 10 s, or the
+  connection is refused. The run ends `inconclusive` / `target-unresponsive` with a plain reason
+  (`the app stopped responding on /app (a fresh request for it got no response within 10s)`).
+  There's no hang finding, no `environment-degraded` entry and no `next: verify-fix` or `ledger add`
+  hint. This rule wins over host starvation: a starved host makes a live server **slow**, but it
+  doesn't make it withhold every response for 10 s.
+- **The machine is too slow** when the app answers the probe, however late. The hang stands as a
+  finding, or it's `environment-degraded` on a starved host (below). A single stuck endpoint on a
+  server that still serves the page is a real `request-pending` hang, not `target-unresponsive`. So
+  is a separately hosted API that freezes while the page's own server keeps answering.
+- **Inconclusive probes don't count.** A probe that fails for any other reason (a TLS or DNS quirk
+  of the probe itself) proves nothing, and the finding is judged as before.
+
 ### A starved host (`hostHealth`, `environmentDegraded`)
 
 On a saturated machine (parallel builds, a busy CI runner) a run's hangs, click timeouts and
