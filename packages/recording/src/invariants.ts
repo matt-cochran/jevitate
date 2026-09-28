@@ -9,6 +9,43 @@ import {
   type StyleProperty,
   type TargetDescriptor,
 } from "./schema.js";
+import {
+  expressionObservables,
+  parseInvariantExpression,
+  type ExprNode,
+} from "./invariants/expression.js";
+import { parseJsonPath } from "./invariants/json-path.js";
+import { globRegex, matchesPattern, patternRegex } from "./invariants/patterns.js";
+import {
+  ACTION_OPS,
+  ACTOR_NAME_RE,
+  INVARIANT_HTTP_METHODS,
+  INVARIANT_ID_RE,
+  MAX_BUDGETS,
+  MAX_INVARIANTS,
+  MAX_OBSERVABLES,
+  MAX_SETTLE_WITHIN_MS,
+  MIN_SETTLE_POLL_MS,
+  OBSERVABLE_NAME_RE,
+  type ActionOp,
+  type InvariantSettle,
+  type InvariantWhen,
+} from "./invariants/shared.js";
+import {
+  CAPTURE_GATE_RE,
+  CAPTURE_REF_RE,
+  httpMethodField,
+  JsonPathStringSchema,
+  MAX_EXPRESSION_CHARS,
+  OpSchema,
+  RESERVED,
+  TextPatternSchema,
+} from "./invariants/internal.js";
+
+export * from "./invariants/expression.js";
+export * from "./invariants/json-path.js";
+export * from "./invariants/patterns.js";
+export * from "./invariants/shared.js";
 
 /**
  * App-declared invariants (#86): a CLOSED, declarative spec a caller hands to a dispatch
@@ -50,41 +87,6 @@ import {
  * — with a precise path like `invariants[2].require: unknown observable "balanse"` — before any
  * browser work. The browser-side evaluation lives in `@jevitate/explore`.
  */
-
-/** A declared observable name: an identifier that is not one of the expression's keywords. */
-export const OBSERVABLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED = new Set(["before", "after", "delta", "contains", "null", "true", "false"]);
-/** An invariant id: same path-safe format as mission/journey ids (it keys a fingerprint). */
-export const INVARIANT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** Bounds on the eventual-consistency window (`settle`). */
-export const MAX_SETTLE_WITHIN_MS = 10 * 60_000;
-export const MIN_SETTLE_POLL_MS = 250;
-/** An actor name (#147): the same format as a `--persona` name. */
-export const ACTOR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-/** `${capture.<name>}` in a probe path or a `deniedAs.open` (#147). */
-const CAPTURE_REF_RE = /\$\{capture\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
-/** A `when.after` naming a capture (#147). */
-const CAPTURE_GATE_RE = /^capture\.([A-Za-z_][A-Za-z0-9_]*)$/;
-/** Hard caps on a spec's size (it is caller input on the MCP path). */
-export const MAX_OBSERVABLES = 64;
-export const MAX_INVARIANTS = 64;
-/** A budget-declaration cap (#150): a run's spend axes are few by design, not a general-purpose list. */
-export const MAX_BUDGETS = 8;
-const MAX_EXPRESSION_CHARS = 1_000;
-
-/**
- * The HTTP methods a `network`/`never.response`/`capture.network` `method` may name (#213: a spec
- * used to accept anything alphabetic — `"FETCH"` parsed fine and then just never matched a real
- * request). Case-insensitive; the declared-invariants monitor already `.toUpperCase()`s both sides.
- */
-export const INVARIANT_HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
-const HTTP_METHOD_MSG = `must be one of ${INVARIANT_HTTP_METHODS.join(", ")} (case-insensitive)`;
-const httpMethodField = (): z.ZodOptional<z.ZodString> =>
-  z
-    .string()
-    .refine((m) => (INVARIANT_HTTP_METHODS as readonly string[]).includes(m.toUpperCase()), HTTP_METHOD_MSG)
-    .optional();
 
 export interface DomObservable {
   /** A CSS selector (shorthand for `target: { css }`). Exactly one of `selector` / `target`. */
@@ -172,28 +174,6 @@ export interface ProbeObservable {
 }
 
 export type ObservableSpec = { dom: DomObservable } | { network: NetworkObservable } | { probe: ProbeObservable };
-
-/** When a `require`/`always` invariant is checked. Every given field must match. Absent ⇒ after every action. */
-export interface InvariantWhen {
-  /**
-   * `"action"` (the default), or `"capture.<name>"` (#147): a CROSS-ACTOR check, run ONCE, right
-   * after that capture is first bound from the primary's run (then `when` takes no other key).
-   */
-  after?: "action" | `capture.${string}`;
-  /** The acted control's accessible name: `"/regex/flags"` or an exact string. */
-  control?: { name: string };
-  /** The route the action was taken on (path glob, e.g. `/billing/**`). */
-  route?: string;
-  /** Only these action ops (click, type, select, send, …). */
-  op?: string[];
-}
-
-export interface InvariantSettle {
-  /** Re-check a violated invariant until it holds or this window closes (ms). */
-  withinMs: number;
-  /** Interval between re-checks (ms). Default 1000. */
-  pollMs?: number;
-}
 
 /**
  * #195 — `never.response`: an app response on the mission's OWN traffic (the primary's page) that
@@ -313,449 +293,7 @@ export interface InvariantSpec {
   budget?: BudgetDeclaration[];
 }
 
-// === Expression language ===
-
-export type ExprNode =
-  | { readonly t: "num"; readonly v: number }
-  | { readonly t: "lit"; readonly v: null | boolean }
-  | { readonly t: "obs"; readonly fn: "before" | "after" | "delta"; readonly name: string }
-  | { readonly t: "neg"; readonly e: ExprNode }
-  /** `!x` (#147): Kleene negation — unknown stays unknown. */
-  | { readonly t: "not"; readonly e: ExprNode }
-  /** `contains(list, x)` (#147): a list (`[*]` path) or text holds the value. */
-  | { readonly t: "contains"; readonly l: ExprNode; readonly r: ExprNode }
-  | { readonly t: "bin"; readonly op: BinOp; readonly l: ExprNode; readonly r: ExprNode };
-
-export type BinOp = "+" | "-" | "*" | "/" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||" | "->";
-
-export class InvariantExpressionError extends Error {
-  constructor(
-    message: string,
-    readonly at: number,
-  ) {
-    super(message);
-    this.name = "InvariantExpressionError";
-  }
-}
-
-type Tok = { k: "num"; v: number; at: number } | { k: "id"; v: string; at: number } | { k: "op"; v: string; at: number };
-
-const OPS = ["->", "&&", "||", "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "/", "(", ")", "!", ","];
-
-function tokenize(src: string): Tok[] {
-  const out: Tok[] = [];
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i] as string;
-    if (/\s/.test(c)) {
-      i += 1;
-      continue;
-    }
-    const num = /^\d+(\.\d+)?/.exec(src.slice(i));
-    if (num !== null) {
-      out.push({ k: "num", v: Number(num[0]), at: i });
-      i += num[0].length;
-      continue;
-    }
-    const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
-    if (id !== null) {
-      out.push({ k: "id", v: id[0], at: i });
-      i += id[0].length;
-      continue;
-    }
-    const op = OPS.find((o) => src.startsWith(o, i));
-    if (op === undefined) throw new InvariantExpressionError(`unexpected character ${JSON.stringify(c)} at ${i}`, i);
-    out.push({ k: "op", v: op, at: i });
-    i += op.length;
-  }
-  return out;
-}
-
-/**
- * Parses an invariant expression into an AST. Throws `InvariantExpressionError` (with the offset)
- * on anything outside the grammar — there is no escape hatch to code.
- */
-export function parseInvariantExpression(src: string): ExprNode {
-  if (src.length > MAX_EXPRESSION_CHARS) throw new InvariantExpressionError(`expression longer than ${MAX_EXPRESSION_CHARS} chars`, 0);
-  const toks = tokenize(src);
-  let p = 0;
-  const peek = (): Tok | undefined => toks[p];
-  const isOp = (v: string): boolean => {
-    const t = peek();
-    return t !== undefined && t.k === "op" && t.v === v;
-  };
-  const expectOp = (v: string): void => {
-    const t = peek();
-    if (t === undefined || t.k !== "op" || t.v !== v) {
-      throw new InvariantExpressionError(`expected "${v}" at ${t === undefined ? src.length : t.at}`, t?.at ?? src.length);
-    }
-    p += 1;
-  };
-  const binary = (next: () => ExprNode, ops: readonly BinOp[]): ExprNode => {
-    let l = next();
-    for (;;) {
-      const t = peek();
-      if (t === undefined || t.k !== "op" || !ops.includes(t.v as BinOp)) return l;
-      p += 1;
-      l = { t: "bin", op: t.v as BinOp, l, r: next() };
-    }
-  };
-  const primary = (): ExprNode => {
-    const t = peek();
-    if (t === undefined) throw new InvariantExpressionError("unexpected end of expression", src.length);
-    if (t.k === "num") {
-      p += 1;
-      return { t: "num", v: t.v };
-    }
-    if (t.k === "op" && t.v === "(") {
-      p += 1;
-      const e = impl();
-      expectOp(")");
-      return e;
-    }
-    if (t.k === "op" && t.v === "-") {
-      p += 1;
-      return { t: "neg", e: primary() };
-    }
-    if (t.k === "op" && t.v === "!") {
-      p += 1;
-      return { t: "not", e: primary() };
-    }
-    if (t.k === "id") {
-      p += 1;
-      if (t.v === "contains") {
-        expectOp("(");
-        const l = impl();
-        expectOp(",");
-        const r = impl();
-        expectOp(")");
-        return { t: "contains", l, r };
-      }
-      if (t.v === "null") return { t: "lit", v: null };
-      if (t.v === "true") return { t: "lit", v: true };
-      if (t.v === "false") return { t: "lit", v: false };
-      if (t.v === "before" || t.v === "after" || t.v === "delta") {
-        expectOp("(");
-        const arg = peek();
-        if (arg === undefined || arg.k !== "id" || RESERVED.has(arg.v)) {
-          throw new InvariantExpressionError(`${t.v}() takes one observable name (at ${arg?.at ?? src.length})`, arg?.at ?? src.length);
-        }
-        p += 1;
-        expectOp(")");
-        return { t: "obs", fn: t.v, name: arg.v };
-      }
-      return { t: "obs", fn: "after", name: t.v };
-    }
-    throw new InvariantExpressionError(`unexpected "${t.v}" at ${t.at}`, t.at);
-  };
-  const mul = (): ExprNode => binary(primary, ["*", "/"]);
-  const add = (): ExprNode => binary(mul, ["+", "-"]);
-  const cmp = (): ExprNode => {
-    const l = add();
-    const t = peek();
-    if (t !== undefined && t.k === "op" && ["==", "!=", "<", "<=", ">", ">="].includes(t.v)) {
-      p += 1;
-      return { t: "bin", op: t.v as BinOp, l, r: add() };
-    }
-    return l;
-  };
-  const and = (): ExprNode => binary(cmp, ["&&"]);
-  const or = (): ExprNode => binary(and, ["||"]);
-  // `->` is right-associative: a -> b -> c  ≡  a -> (b -> c).
-  const impl = (): ExprNode => {
-    const l = or();
-    if (isOp("->")) {
-      p += 1;
-      return { t: "bin", op: "->", l, r: impl() };
-    }
-    return l;
-  };
-  if (toks.length === 0) throw new InvariantExpressionError("empty expression", 0);
-  const ast = impl();
-  const rest = peek();
-  if (rest !== undefined) throw new InvariantExpressionError(`unexpected "${rest.v}" at ${rest.at}`, rest.at);
-  return ast;
-}
-
-/** Visits every node of an expression (pre-order). */
-export function walkExpression(ast: ExprNode, visit: (n: ExprNode) => void): void {
-  visit(ast);
-  if (ast.t === "neg" || ast.t === "not") walkExpression(ast.e, visit);
-  else if (ast.t === "bin" || ast.t === "contains") {
-    walkExpression(ast.l, visit);
-    walkExpression(ast.r, visit);
-  }
-}
-
-/** Every observable (or capture) name an expression reads. */
-export function expressionObservables(ast: ExprNode): string[] {
-  const out = new Set<string>();
-  walkExpression(ast, (n) => {
-    if (n.t === "obs") out.add(n.name);
-  });
-  return [...out];
-}
-
-/** A snapshotted observable value. `UNKNOWN` = it could not be read (never a violation, never a pass). */
-export const UNKNOWN: unique symbol = Symbol("unknown");
-export type ObservedValue = number | string | boolean | null;
-/** A `[*]` JSON path's values (#147): only `contains()` reads it; it is never shown item by item. */
-export type ObservedList = readonly ObservedValue[];
-export type EvalValue = ObservedValue | ObservedList | typeof UNKNOWN;
-
-export interface ExpressionEnv {
-  readonly before: (name: string) => EvalValue;
-  readonly after: (name: string) => EvalValue;
-}
-
-/** Three-valued evaluation: `true` holds, `false` is violated, `UNKNOWN` could not be decided. */
-export function evaluateInvariantExpression(ast: ExprNode, env: ExpressionEnv): boolean | typeof UNKNOWN {
-  const v = evalNode(ast, env);
-  return typeof v === "boolean" ? v : UNKNOWN;
-}
-
-function evalNode(n: ExprNode, env: ExpressionEnv): EvalValue {
-  switch (n.t) {
-    case "num":
-      return n.v;
-    case "lit":
-      return n.v;
-    case "obs": {
-      if (n.fn === "before") return env.before(n.name);
-      if (n.fn === "after") return env.after(n.name);
-      const a = env.after(n.name);
-      const b = env.before(n.name);
-      if (a === UNKNOWN || b === UNKNOWN) return UNKNOWN;
-      if (a === null || b === null) return null;
-      return typeof a === "number" && typeof b === "number" ? a - b : UNKNOWN;
-    }
-    case "neg": {
-      const v = evalNode(n.e, env);
-      if (v === UNKNOWN || v === null) return v;
-      return typeof v === "number" ? -v : UNKNOWN;
-    }
-    case "not": {
-      const v = asBool(evalNode(n.e, env));
-      return v === UNKNOWN ? UNKNOWN : !v;
-    }
-    case "contains":
-      return evalContains(evalNode(n.l, env), evalNode(n.r, env));
-    case "bin":
-      return evalBin(n.op, n.l, n.r, env);
-  }
-}
-
-/**
- * `contains(haystack, needle)`: a list holds an item equal to the needle (ids compare as text, so
- * `42` matches `"42"`), or a text includes it. A missing (`null`) haystack holds nothing; a missing
- * needle decides nothing.
- */
-function evalContains(hay: EvalValue, needle: EvalValue): EvalValue {
-  if (hay === UNKNOWN || needle === UNKNOWN || needle === null || Array.isArray(needle)) return UNKNOWN;
-  if (hay === null) return false;
-  const want = String(needle);
-  if (Array.isArray(hay)) return hay.some((item) => item !== null && String(item) === want);
-  if (typeof hay === "string") return want !== "" && hay.includes(want);
-  return UNKNOWN;
-}
-
-function evalBin(op: BinOp, ln: ExprNode, rn: ExprNode, env: ExpressionEnv): EvalValue {
-  if (op === "&&" || op === "||" || op === "->") {
-    const l = asBool(evalNode(ln, env));
-    // Kleene logic: a decided left side can settle the result without the right one.
-    if (op === "&&" && l === false) return false;
-    if (op === "||" && l === true) return true;
-    if (op === "->" && l === false) return true;
-    const r = asBool(evalNode(rn, env));
-    if (op === "&&") return l === true && r === true ? true : r === false ? false : UNKNOWN;
-    if (op === "||") return r === true ? true : l === false && r === false ? false : UNKNOWN;
-    // ->: l is true or unknown here.
-    return r === true ? true : l === true && r === false ? false : UNKNOWN;
-  }
-  const l = evalNode(ln, env);
-  const r = evalNode(rn, env);
-  if (l === UNKNOWN || r === UNKNOWN) return UNKNOWN;
-  // A list is only ever read through contains().
-  if (Array.isArray(l) || Array.isArray(r)) return UNKNOWN;
-  if (op === "==") return l === r;
-  if (op === "!=") return l !== r;
-  if (l === null || r === null) return op === "+" || op === "-" || op === "*" || op === "/" ? null : UNKNOWN;
-  if (typeof l !== "number" || typeof r !== "number") return UNKNOWN;
-  switch (op) {
-    case "+":
-      return l + r;
-    case "-":
-      return l - r;
-    case "*":
-      return l * r;
-    case "/":
-      return r === 0 ? UNKNOWN : l / r;
-    case "<":
-      return l < r;
-    case "<=":
-      return l <= r;
-    case ">":
-      return l > r;
-    case ">=":
-      return l >= r;
-  }
-  return UNKNOWN;
-}
-
-function asBool(v: EvalValue): boolean | typeof UNKNOWN {
-  return typeof v === "boolean" ? v : UNKNOWN;
-}
-
-// === JSON path (tiny subset) ===
-
-/** `[*]` (#147): every element of an array. */
-export const JSON_PATH_EACH: { readonly each: true } = Object.freeze({ each: true as const });
-export type JsonPathSegment = string | number | typeof JSON_PATH_EACH;
-
-/** `$`, `.key`, `[n]`, `["key"]`, `[*]` — nothing else (no filters, no recursive descent, no script). */
-export function parseJsonPath(src: string): JsonPathSegment[] {
-  if (!src.startsWith("$")) throw new Error(`a JSON path starts with "$", got ${JSON.stringify(src)}`);
-  const out: JsonPathSegment[] = [];
-  let i = 1;
-  while (i < src.length) {
-    const rest = src.slice(i);
-    const key = /^\.([A-Za-z_$][A-Za-z0-9_$-]*)/.exec(rest);
-    if (key !== null) {
-      out.push(key[1] as string);
-      i += key[0].length;
-      continue;
-    }
-    const idx = /^\[(\d+)\]/.exec(rest);
-    if (idx !== null) {
-      out.push(Number(idx[1]));
-      i += idx[0].length;
-      continue;
-    }
-    if (rest.startsWith("[*]")) {
-      out.push(JSON_PATH_EACH);
-      i += 3;
-      continue;
-    }
-    const quoted = /^\["([^"\\]*)"\]/.exec(rest);
-    if (quoted !== null) {
-      out.push(quoted[1] as string);
-      i += quoted[0].length;
-      continue;
-    }
-    throw new Error(`unsupported JSON path syntax at ${i} in ${JSON.stringify(src)}`);
-  }
-  return out;
-}
-
-/** Does a JSON path fan out (`[*]`)? Its value is then a list (`readJsonPathList`). */
-export function jsonPathHasEach(path: readonly JsonPathSegment[]): boolean {
-  return path.some((seg) => seg === JSON_PATH_EACH);
-}
-
-/**
- * Reads a fanned-out JSON path (`$.items[*].id`) into the list of scalars it reaches — objects and
- * missing members are skipped. `undefined` when the path's fixed prefix (before the first `[*]`)
- * is missing.
- */
-export function readJsonPathList(value: unknown, path: readonly JsonPathSegment[]): ObservedValue[] | undefined {
-  let cur: unknown[] = [value];
-  let fanned = false;
-  for (const seg of path) {
-    const next: unknown[] = [];
-    for (const v of cur) {
-      if (v === null || typeof v !== "object") continue;
-      if (seg === JSON_PATH_EACH) {
-        if (Array.isArray(v)) next.push(...(v as unknown[]));
-      } else if (typeof seg === "number") {
-        if (Array.isArray(v) && seg < v.length) next.push(v[seg]);
-      } else if (typeof seg === "string" && !Array.isArray(v) && Object.prototype.hasOwnProperty.call(v, seg)) {
-        next.push((v as Record<string, unknown>)[seg]);
-      }
-    }
-    if (seg === JSON_PATH_EACH) {
-      if (!fanned && !cur.some((v) => Array.isArray(v))) return undefined;
-      fanned = true;
-    } else if (!fanned && next.length === 0) return undefined;
-    cur = next;
-  }
-  return cur.filter((v): v is ObservedValue => v === null || typeof v === "number" || typeof v === "string" || typeof v === "boolean");
-}
-
-/** Reads a JSON path; `undefined` when a segment is missing. Only scalars come back (objects → undefined). */
-export function readJsonPath(value: unknown, path: readonly JsonPathSegment[]): ObservedValue | undefined {
-  // A fanned-out path read as one value is its size ("the list grew").
-  if (jsonPathHasEach(path)) return readJsonPathList(value, path)?.length;
-  let cur: unknown = value;
-  for (const seg of path) {
-    if (cur === null || typeof cur !== "object" || typeof seg === "object") return undefined;
-    if (typeof seg === "number") {
-      if (!Array.isArray(cur)) return undefined;
-      cur = cur[seg];
-    } else {
-      if (Array.isArray(cur) || !Object.prototype.hasOwnProperty.call(cur, seg)) return undefined;
-      cur = (cur as Record<string, unknown>)[seg];
-    }
-  }
-  if (cur === null || typeof cur === "number" || typeof cur === "string" || typeof cur === "boolean") return cur;
-  // A collection's size is the one non-scalar read that is useful ("the list grew").
-  if (Array.isArray(cur)) return cur.length;
-  return undefined;
-}
-
-// === Patterns and globs ===
-
-/** `"/re/flags"` → a RegExp; anything else → null (a literal). Throws on an invalid regex. */
-export function patternRegex(src: string): RegExp | null {
-  const m = /^\/(.*)\/([a-z]*)$/s.exec(src);
-  if (m === null) return null;
-  return new RegExp(m[1] as string, m[2]);
-}
-
-/** Does `text` match a pattern: a `/regex/` searches, a literal must equal (`exact`) or be contained. */
-export function matchesPattern(pattern: string, text: string, exact: boolean): boolean {
-  const re = patternRegex(pattern);
-  if (re !== null) {
-    re.lastIndex = 0;
-    return re.test(text);
-  }
-  return exact ? text.trim() === pattern.trim() : text.includes(pattern);
-}
-
-/** A URL/path glob → RegExp: `**` any run, `*` any run without `/`, everything else literal. */
-export function globRegex(glob: string): RegExp {
-  let out = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i] as string;
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        out += ".*";
-        i += 1;
-      } else out += "[^/]*";
-    } else out += c.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${out}$`);
-}
-
 // === Schema ===
-
-const TextPatternSchema = z
-  .string()
-  .min(1)
-  .superRefine((s, ctx) => {
-    try {
-      patternRegex(s);
-    } catch (e) {
-      ctx.addIssue({ code: "custom", message: `invalid regex: ${e instanceof Error ? e.message : String(e)}` });
-    }
-  });
-
-const JsonPathStringSchema = z.string().superRefine((s, ctx) => {
-  try {
-    parseJsonPath(s);
-  } catch (e) {
-    ctx.addIssue({ code: "custom", message: e instanceof Error ? e.message : String(e) });
-  }
-});
 
 const DomObservableSchema = z
   .object({
@@ -870,20 +408,6 @@ const BudgetDeclarationSchema = z
     onUnreadable: z.enum(["stop", "continue"]).optional(),
   })
   .strict();
-
-/**
- * The action-op vocabulary `when.op` / `capture.*.after.op` may name (#124, #176): every op the
- * explore engine can gate an invariant around (`packages/explore/src/actions.ts` `OPS`), minus the
- * loop-control pseudo-ops (`done`, `report`, `blocked`, `edit_text` — never the op an app-declared
- * invariant is written against). An unknown name (a natural but unsupported guess like `"navigate"`
- * or `"scroll"`) used to validate fine and then never fire (#176) — now it is refused up front.
- */
-export const ACTION_OPS = ["click", "type", "send", "select", "upload", "scroll_up", "scroll_down", "wait", "reload"] as const;
-export type ActionOp = (typeof ACTION_OPS)[number];
-
-const OpSchema = z.enum(ACTION_OPS, {
-  error: (issue) => `unknown op ${JSON.stringify(issue.input)} (expected one of ${ACTION_OPS.join(", ")})`,
-});
 
 const WhenSchema = z
   .object({
