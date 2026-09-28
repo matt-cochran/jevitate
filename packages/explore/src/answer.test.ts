@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { NO_ANSWER_REASON, ObservedPages, answerNotFoundReason, controlFields, goalAsksForReply, groundAnswer, headingHint, pagesContext } from "./answer.js";
+import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
+import {
+  ANSWER_FITS_QUESTION,
+  NO_ANSWER_REASON,
+  ObservedPages,
+  answerNotFoundReason,
+  controlFields,
+  errorPageReason,
+  goalAsksForReply,
+  groundAnswer,
+  headingHint,
+  pagesContext,
+  quoteIsOnlyControlNames,
+  reportAnswer,
+} from "./answer.js";
 
 const pages = [
   { url: "http://app.test/settings", text: "Settings\nPlan: Pro\nDesign Partner pricing: book one interview per month." },
@@ -222,5 +236,69 @@ describe("#216 — the heading hint for a null answer", () => {
     expect(headingHint(page)).toContain('main heading is "Tenant B roadmap"');
     expect(headingHint({ url: "http://app.test/", text: "x" })).toBeNull();
     expect(headingHint(undefined)).toBeNull();
+  });
+});
+
+describe("#223 — on the page is not the same as answering", () => {
+  const list = { url: "http://app.test/items", text: "Items\nNo items yet.\nTitle\nCreate item", heading: "Items", controls: ["Title", "Create item"] };
+  const title = "Find out the title of this item";
+
+  it("a quote made only of controls' names is rejected as no answer — unless the goal asks about controls", () => {
+    for (const quote of ["Create item", "Title Create item", "“Create item.”"]) {
+      const v = groundAnswer({ answer: "Create item", claims: [{ claim: "The title is Create item", quote }] }, [list], { goal: title });
+      expect(v.accept).toBe(false);
+      expect(!v.accept && v.notAnswer).toBe(true);
+      expect(!v.accept && v.reason).toMatch(/only a control's label/);
+    }
+    const v = groundAnswer({ answer: "Create item", claims: [{ claim: "The button says Create item", quote: "Create item" }] }, [list], {
+      goal: "What does the button on the items page say?",
+    });
+    expect(v.accept).toBe(true);
+  });
+
+  it("content a control repeats (an h1 a breadcrumb link repeats) is still content", () => {
+    const page = { url: "http://app.test/items/1", text: "Roadmap review\nRoadmap review\nOwner: b", controls: ["Roadmap review"] };
+    expect(quoteIsOnlyControlNames("Roadmap review", page)).toBe(false);
+    expect(quoteIsOnlyControlNames("Roadmap review", { ...page, text: "Roadmap review\nOwner: b" })).toBe(true);
+  });
+
+  it("an error page (status ≥ 400, or a not-found / 404 heading or title) grounds no answer, and gets no heading hint", () => {
+    const notFound = { url: "http://app.test/items/2", text: "Item not found\nBack to items", heading: "Item not found", controls: ["Back to items"] };
+    expect(errorPageReason(notFound)).toMatch(/Item not found/);
+    expect(errorPageReason({ url: "u", text: "x", status: 404 })).toBe("the page it is on answered HTTP 404");
+    expect(errorPageReason({ url: "u", text: "x", title: "404 — Page not found" })).not.toBeNull();
+    for (const heading of ["Error log settings", "Top 500 companies", "Errors this week", "Quarterly roadmap"]) {
+      expect(errorPageReason({ url: "u", text: "x", heading })).toBeNull();
+    }
+    const v = groundAnswer({ answer: "Item not found", claims: [{ claim: "The title is Item not found", quote: "Item not found" }] }, [notFound], { goal: title });
+    expect(!v.accept && v.notAnswer).toBe(true);
+    expect(headingHint(notFound)).toBeNull();
+    // A goal about the error itself may quote it.
+    expect(groundAnswer({ answer: "Item not found", claims: [{ claim: "The error says Item not found", quote: "Item not found" }] }, [notFound], { goal: "What error does the page show?" }).accept).toBe(true);
+  });
+
+  it("a textarea / contenteditable value quoted as 'Label: value' grounds despite the value's own trailing full stop", () => {
+    const profile = { url: "http://app.test/profile", text: "Profile\nBio", fields: [{ label: "Bio", value: "Loves hiking, tea, and analytical engines." }] };
+    const v = groundAnswer(
+      { answer: "Loves hiking, tea, and analytical engines.", claims: [{ claim: "The current bio text on the profile is 'Loves hiking, tea, and analytical engines.'", quote: "Bio: Loves hiking, tea, and analytical engines." }] },
+      [profile],
+      { goal: "what is the current bio text on the profile?" },
+    );
+    expect(v.accept).toBe(true);
+    expect(v.accept && v.answer.evidence[0]).toMatchObject({ source: "control-value", control: "Bio" });
+  });
+
+  it("Jev can veto a grounded answer, never approve an ungrounded one; an unusable judgment leaves code's verdict", async () => {
+    const page = { url: "http://app.test/items/1", text: "Roadmap review\nOwner: tenant b", heading: "Roadmap review" };
+    const gen = new FakeGenerationGateway({ "goal.answer": { answer: "tenant b", claims: [{ claim: "The owner is tenant b", quote: "Owner: tenant b" }] } });
+    const input = { goal: "Find out who owns this item", url: page.url, pages: [page], history: [] };
+    const no = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: false, probability: 0.05 } });
+    const vetoed = await reportAnswer(gen, { ...input, judge: no });
+    expect(!vetoed.accept && vetoed.notAnswer).toBe(true);
+    const yes = new FakeJudgmentGateway({ [ANSWER_FITS_QUESTION]: { kind: "noul", value: true, probability: 0.99 } });
+    expect((await reportAnswer(gen, { ...input, judge: yes })).accept).toBe(true);
+    expect((await reportAnswer(gen, { ...input, judge: new FakeJudgmentGateway({}) })).accept).toBe(true); // throws → no veto
+    const bad = new FakeGenerationGateway({ "goal.answer": { answer: "tenant c", claims: [{ claim: "The owner is tenant c", quote: "Owner: tenant c" }] } });
+    expect((await reportAnswer(bad, { ...input, judge: yes })).accept).toBe(false);
   });
 });
