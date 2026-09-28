@@ -172,6 +172,9 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
     cases: [
       ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--storage-state", missing],
       ["--url", URL0, "--strategy", "coverage", "--fake-ai", "--invariants", missing],
+      // #225: usability honours --success — so an unparseable one (or --success-when without one) is refused, never ignored.
+      ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--success", "nonsense:x"],
+      ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--success-when", "held"],
     ],
   },
   "verify-fix": { base: ["--result", missing, "--fingerprint", FP], cases: [["--result", missing, "--fingerprint", FP], []] },

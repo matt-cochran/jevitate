@@ -1,0 +1,6 @@
+---
+"@jevitate/cli": patch
+"jevitate": patch
+---
+
+Usability runs recognise a completed save, and honour `--success` (#225). **Done-recognition:** the goal judgment now sees the page's form fields and their current values (a field's value is never in the page text, yet it is where a form shows what was saved — non-secret values only, never a bound secret or a message composer). Code evidence is preferred over the judgment's probability: when the run submitted its typed values, every write the submit fired finished 2xx, a success notice ("Saved") and no failure shows, and the page still displays each saved value, `done` is accepted as `verifiedBy: "save-signals"` — if the advisory scope head says the whole goal is that save (the #188 sign-in pattern). A save answered by a 4xx/5xx is never such evidence, even when the page says "Saved". **`--success` for `--strategy usability`** (and a usability suite mission's `success`/`successWhen`, `allowVacuousChecks`): an independent completion check with a goal run's semantics — it grounds `done`, the #202 vacuous rules apply, and the verdict folds like a goal run's (`goalOutcome`, `checks`, `checkWarnings` in the result; a failed check is `defects-found`, exit 1). It used to be silently ignored; an unparseable one, or `--success-when`/`--allow-vacuous-checks` without one, is now refused (64).

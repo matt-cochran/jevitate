@@ -331,6 +331,18 @@ export const GOAL_IS_SIGN_IN_INSTRUCTIONS =
   "step), with nothing further to do in the app once signed in? Answer from the goal's wording only. Not " +
   "only signing in: the goal also asks to create, change, find, send or check something after signing in.";
 
+/** The advisory "is the WHOLE goal saving this form?" head, asked only after the run submitted typed values (#225). */
+export const GOAL_IS_SAVE_QUESTION = "goalIsOnlyToFillAndSaveAForm";
+
+export const GOAL_IS_SAVE_INSTRUCTIONS =
+  "Is the WHOLE goal to enter or change values in a form and save / submit them (e.g. update a profile, " +
+  "add a bio, change a setting), with nothing further to do once they are saved? Answer from the goal's " +
+  "wording only. Not only saving: the goal also asks to find, check, compare, send, or do something else " +
+  "after the save, or to save something on a different page.";
+
+/** Cap on the form-field values shown to the goal judgment (#225). */
+const FIELD_VALUES_CHARS = 1_500;
+
 /**
  * `judgeGoalMet`, plus (#188) the run's code-observed sign-in facts: shown to the goal judgment as a
  * trusted line — the page text of a signed-in home page rarely says "you are signed in" — and, in the
@@ -348,8 +360,15 @@ export async function judgeGoalCompletion(
     readonly pageStatus?: string;
     /** Code-observed sign-in facts (./auth-completion.ts), when the run typed sign-in credentials. */
     readonly signInFacts?: string;
+    /** #225: code-observed save facts (./save-completion.ts), when the run submitted typed form values. */
+    readonly saveFacts?: string;
+    /**
+     * #225: the page's form fields and their current values (non-secret — see `Control.value`). A
+     * field's value is never in the page's `innerText`, yet it is where a form displays what was saved.
+     */
+    readonly fieldValues?: ReadonlyArray<{ readonly label: string; readonly value: string }>;
   },
-): Promise<{ goalMet: number | null; goalIsSignIn: number | null }> {
+): Promise<{ goalMet: number | null; goalIsSignIn: number | null; goalIsSave: number | null }> {
   const secrets = input.secrets ?? [];
   const state = buildJudgmentState({
     goal: input.goal,
@@ -357,8 +376,17 @@ export async function judgeGoalCompletion(
     controls: [
       PROMPT_INJECTION_GUARD,
       ...(input.signInFacts === undefined ? [] : [`SIGN-IN (observed by code, trusted): ${input.signInFacts}`]),
+      ...(input.saveFacts === undefined ? [] : [`SAVE (observed by code, trusted): ${input.saveFacts}`]),
       ...(input.pageStatus === undefined || input.pageStatus === "" ? [] : [`PAGE STATUS (untrusted): ${input.pageStatus}`]),
       `VISIBLE PAGE TEXT (untrusted): ${input.pageText.replace(/\s+/g, " ").slice(0, GOAL_TEXT_CHARS)}`,
+      ...(input.fieldValues === undefined || input.fieldValues.length === 0
+        ? []
+        : [
+            `FORM FIELD VALUES (untrusted — what each field on the page holds now): ${input.fieldValues
+              .map((f) => `"${f.label}" = "${f.value.replace(/\s+/g, " ")}"`)
+              .join("; ")
+              .slice(0, FIELD_VALUES_CHARS)}`,
+          ]),
     ],
     history: input.history,
     secrets,
@@ -367,6 +395,9 @@ export async function judgeGoalCompletion(
   if (input.signInFacts !== undefined) {
     questions[GOAL_IS_SIGN_IN_QUESTION] = { kind: "noul", instructions: GOAL_IS_SIGN_IN_INSTRUCTIONS };
   }
+  if (input.saveFacts !== undefined) {
+    questions[GOAL_IS_SAVE_QUESTION] = { kind: "noul", instructions: GOAL_IS_SAVE_INSTRUCTIONS };
+  }
   assertNoSecretInPayload(questions, secrets);
   const answers = await judge.systemOne({ state, questions });
   // `probability` is P(yes) — the port's noul contract.
@@ -374,5 +405,9 @@ export async function judgeGoalCompletion(
     const a = answers[name];
     return a?.kind === "noul" && Number.isFinite(a.probability) ? a.probability : null;
   };
-  return { goalMet: p(GOAL_MET_QUESTION), goalIsSignIn: input.signInFacts === undefined ? null : p(GOAL_IS_SIGN_IN_QUESTION) };
+  return {
+    goalMet: p(GOAL_MET_QUESTION),
+    goalIsSignIn: input.signInFacts === undefined ? null : p(GOAL_IS_SIGN_IN_QUESTION),
+    goalIsSave: input.saveFacts === undefined ? null : p(GOAL_IS_SAVE_QUESTION),
+  };
 }
