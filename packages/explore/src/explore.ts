@@ -85,6 +85,7 @@ import { describeTextEdit } from "@jevitate/interpreter";
 import { resolveMissionFixture } from "./fixture.js";
 import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
+import { demoOverlayFor } from "./demo-overlay.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
@@ -303,6 +304,12 @@ export interface ExploreConfig {
    * (or writing) past a met goal. Its result is code's verdict, never the model's.
    */
   readonly successMetNow?: () => Promise<string | null>;
+  /**
+   * #245: show the on-page demo overlay (step, strategy, what is about to happen and why, a brief
+   * highlight of the target, a final outcome banner) — for a watched (headed) demo. Invisible to
+   * jevitate itself (see `demo-overlay.ts`); absent/false injects nothing. Never changes the run.
+   */
+  readonly demoOverlay?: boolean;
 }
 
 export interface ExploreRun {
@@ -491,6 +498,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
   const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
   const history: string[] = [];
+  /** #245: the demo overlay (null unless `demoOverlay`) — display only, never an input to the loop. */
+  const overlay = demoOverlayFor(cfg.demoOverlay, secrets);
+  const overlayWhy = `goal: ${cfg.goal}`;
 
   let stop: StopReason = "exhausted";
   let failure: MissionFailure | undefined;
@@ -1537,6 +1547,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
 
       const control = decision.control;
+      if (overlay !== null && (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait" || decision.op === "reload")) {
+        await overlay.announce(page, { step: transcript.nextStep, strategy: "goal", op: decision.op, why: overlayWhy });
+      }
       if (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait") {
         // No recorded mutation — but visible to history (J-4), and an idle streak is a stuck signal.
         let changed: boolean;
@@ -1719,6 +1732,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           continue;
         }
       }
+      // #245: the demo overlay says what is about to happen and highlights the target (display only) —
+      // before the action's attribution window opens, so its brief pause never counts as the action's.
+      if (overlay !== null) {
+        await overlay.announce(
+          page,
+          { step: transcript.nextStep, strategy: "goal", op: decision.op, target: control.name || control.summary, why: overlayWhy },
+          control,
+        );
+      }
+
       const at = now();
       const risk = safety.riskOf(control);
       effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
@@ -2238,6 +2261,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   }
   const fired = effectLog.entries();
   effectLog.close();
+  if (overlay !== null) {
+    const banner = finalOutcome.status === "completed" ? `jevitate · done — ${stop}` : `jevitate · ${stop} — ${finalOutcome.reason}`;
+    await overlay.finish(banner, finalOutcome.status === "completed", page);
+  }
   return {
     sideEffects: fired.sideEffects,
     ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),

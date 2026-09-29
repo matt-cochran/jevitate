@@ -75,6 +75,7 @@ import {
   type InvariantViolation,
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
+import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -264,6 +265,8 @@ export interface AdversarialMissionParams {
   readonly now?: () => number;
   /** Registered secret values: redacted out of the transcript and the Recording. */
   readonly secrets?: readonly string[];
+  /** #245: show the on-page demo overlay (display only; invisible to the run). Default off: nothing injected. */
+  readonly demoOverlay?: boolean;
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /**
@@ -447,6 +450,16 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
 }
 
 export async function runAdversarialMission(params: AdversarialMissionParams): Promise<AdversarialOutcome> {
+  const overlay = demoOverlayFor(params.demoOverlay, params.secrets ?? []);
+  const out = await runAdversarialHunt(params, overlay);
+  await overlay?.finish(
+    `jevitate · adversarial — ${out.stop}: ${out.defects.length} defect${out.defects.length === 1 ? "" : "s"}`,
+    out.defects.length === 0 && out.stop !== "crashed",
+  );
+  return out;
+}
+
+async function runAdversarialHunt(params: AdversarialMissionParams, overlay: DemoOverlay | null): Promise<AdversarialOutcome> {
   // Guardrail #1 — authorize the target origin BEFORE anything else runs.
   const origin = assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
   const bounds = resolveBounds(params.bounds);
@@ -1455,6 +1468,16 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             stop = "budget";
             break;
           }
+        }
+        // #245: the demo overlay says what is about to happen and highlights the target (display only).
+        // A step racing an unsettled earlier one (a double submit) gets the panel only — no highlight
+        // pause, so the overlay never lets the earlier action settle and change what the misuse tests.
+        if (overlay !== null) {
+          await overlay.announce(
+            sessions.page,
+            { step: transcript.nextStep, strategy: `adversarial · ${ran}`, op: s.op, target: s.control === null ? null : s.control.name || s.control.summary, why: s.note },
+            pendingEarlier ? null : s.control,
+          );
         }
         // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
         const actedOn = sessions.page.url();

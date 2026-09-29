@@ -141,7 +141,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (301 exports)
+# @jevitate/explore (306 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -167,7 +167,11 @@
   DEFAULT_VERIFY_REPLAYS: const (number)
   DEFERRED_EFFECT_MAX_MS: const (number)
   DEGRADED_STEP_MAJORITY: const (number)
+  DEMO_HIGHLIGHT_MS: const (number)
+  DEMO_OVERLAY_ATTR: const (string)
+  DEMO_OVERLAY_HIDE_STYLE: const (string)
   DESTRUCTIVE: object
+  DemoOverlay: class
   EXPLORE: const (string)
   FORM_MISUSE_STRATEGIES: array
   FORM_TEXT_MAX_CHARS: const (number)
@@ -289,6 +293,7 @@
   defaultLoadPerCore: function
   defectTitle: function
   degradedEnvironmentOutcome: function
+  demoOverlayFor: function
   describeAction: function
   describeAssertionSpec: function
   describeCheck: function
