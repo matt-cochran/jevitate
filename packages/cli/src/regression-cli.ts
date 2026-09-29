@@ -44,7 +44,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture")))))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
-    .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
+    .option("--dir <path>", "regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)")
     .option("--attempts <n>", "reproduction attempts before labeling flaky", positiveIntArg, 3)
     .option("--summary <text>", "optional human-readable bug summary recorded in the meta sidecar")
     .option(
@@ -174,7 +174,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   // (`@jevitate/regression`) previously had none of.
   withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(regression.command("run")))))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
-    .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
+    .option("--dir <path>", "regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)", positiveIntArg)
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option("--json", "emit a JSON envelope")

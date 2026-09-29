@@ -1362,7 +1362,7 @@ jevitate regression capture [options]
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | regressions directory (default: ~/.jevitate/regressions) |  |  |  |  |
+| `--dir <path>` | regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions) |  |  |  |  |
 | `--fingerprint <fp>` | pin the required failure — a structural step signature (alone, restricts --from to failing at exactly that step), or (with --result, #119/#129) a defect/invariant fingerprint from the mission's own findings; with --result alone, cross-checks the derived oracle |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--force` | overwrite an existing regression id's committed files (default: refused, #213) | `false` |  |  |  |
@@ -1399,7 +1399,7 @@ jevitate regression run [options] <id>
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | regressions directory (default: ~/.jevitate/regressions) |  |  |  |  |
+| `--dir <path>` | regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |

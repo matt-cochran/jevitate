@@ -714,7 +714,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: ~/.jevitate/regressions)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)
     - flags=--fingerprint <fp> required=true mandatory=false negate=false variadic=false default=null description=pin the required failure — a structural step signature (alone, restricts --from to failing at exactly that step), or (with --result, #119/#129) a defect/invariant fingerprint from the mission's own findings; with --result alone, cross-checks the derived oracle
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--force required=false mandatory=false negate=false variadic=false default=false description=overwrite an existing regression id's committed files (default: refused, #213)
@@ -740,7 +740,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: ~/.jevitate/regressions)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
