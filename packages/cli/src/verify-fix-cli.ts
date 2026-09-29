@@ -1,3 +1,4 @@
+import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
@@ -14,7 +15,11 @@ import {
   type CliDeps,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
-  browserLaunchFromFlags,
+  browserRunFromFlags,
+  withDemoFlags,
+  withScreenshotsFlag,
+  type ScreenshotsFlags,
+  type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
   emulationFromFlags,
@@ -26,15 +31,18 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
   // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
   // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
   // 4 intermittent (fired on some but not all replays — never reported as fixed) · 64 usage error.
-  withEmulationFlags(
+  withScreenshotsFlag(withEmulationFlags(
     withFixtureFlags(
-      withBrowserLaunchFlags(
-        program
-          .command("verify-fix")
-          .description("replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay"),
+      withDemoFlags(
+        withBrowserLaunchFlags(
+          program
+            .command("verify-fix")
+            .description("replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay"),
+        ),
+        { recordVideo: true },
       ),
     ),
-  )
+  ))
     .argument("[fingerprint]", "the defect/hang fingerprint to verify (same as --fingerprint)")
     .option("--result <path>", "the mission's <stem>.result.json (written next to its Recording); default: the fingerprint's ledger entry (#195)")
     .option("--fingerprint <fp>", "the defect/hang fingerprint to verify")
@@ -82,8 +90,10 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
+          DemoFlags &
           FixtureFlags &
-          EmulationFlags
+          EmulationFlags &
+          ScreenshotsFlags
       >();
       // #230: the re-check hint carries the same --result the user passed (never the ledger
       // fallback's own path, which formatVerifyFixHuman never sees).
@@ -105,8 +115,13 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
         return;
       }
       let verifyFixEmulation: EmulationSpec | undefined;
+      // #245: demo mode, resolved (a headed run without a display refused) before any browser opens.
+      let browser: ReturnType<typeof browserRunFromFlags>;
       const fingerprint = o.fingerprint ?? positional;
+      let screenshots: ScreenshotsSpec | undefined;
       try {
+        screenshots = parseScreenshotsArg(o.screenshots);
+        browser = browserRunFromFlags(o, deps.explore?.env ?? process.env);
         verifyFixEmulation = emulationFromFlags(o);
         if (fingerprint === undefined) throw new Error("a fingerprint is required: verify-fix <fp> or --fingerprint <fp>");
         if (o.fingerprint !== undefined && positional !== undefined && o.fingerprint !== positional) {
@@ -131,7 +146,8 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           fixtureFlags: o,
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
-          browser: browserLaunchFromFlags(o),
+          browser,
+          ...(screenshots === undefined ? {} : { screenshots }),
           ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });

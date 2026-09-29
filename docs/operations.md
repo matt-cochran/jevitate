@@ -167,10 +167,11 @@ walking up from the working directory.
 | `journeys/`: named Journeys; shared ones as git submodules under `journeys/<shared>/` | `credentials.json`, `config.json`, `targets.json` |
 | `regressions/`: committed regression artifacts | `profiles/`, browser storage states, the site-policy `db.sqlite` |
 | `baselines/`: `baseline tag` snapshots | `inbox/`, `missions/` (the queue), `trust/`, `sources/` (clones) |
+| `environments.json`: named environments for `--env` ([journeys](./journeys.md#environments---env)) | per-environment sessions and secret fields, in `targets.json` by origin |
 | `logs/<date>/`: run output (not committed) | `journeys/` and `logs/` when you are not in a repo |
 
 `.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`
-out of git, along with any secret or machine-local file that might be copied there: credentials,
+and unapproved Journey annotation drafts (`journeys/.drafts/`) out of git, along with any secret or machine-local file that might be copied there: credentials,
 config, targets, the policy database, profiles and storage states, the inbox and queue, trust
 decisions, source clones, `.env` files, HAR captures and traces.
 
@@ -202,6 +203,80 @@ flags:
 ```bash
 jevitate journey run checkout --browser-channel chrome --browser-arg=--lang=de
 ```
+
+## Demo mode: watching a run
+
+Headless is the default everywhere, `check` and CI included; demo mode is opt-in (#245). The flags
+are resolved in one place (`packages/cli/src/browser-run-options.ts`), so every browser a run opens
+— the mission's own, hang-replay sessions, `--actor` observers, verify-fix replays — is shown and
+recorded the same way.
+
+| Flag | What it does | Commands |
+| --- | --- | --- |
+| `--headed` / `JEVITATE_HEADED=1` | A visible Chromium window | `explore` (every strategy), `journey run`, `journey demo`, `demo`, `demo approve`, `verify-fix`, `regression capture`, `regression run` |
+| `--slow-mo <ms>` | Playwright `slowMo`: each browser operation is delayed this long. A non-negative integer (else exit 64). With `--headed` and no `--slow-mo`: 250 | the same |
+| `--record-video [dir]` | A Playwright video of each browser context. Works headless too | `explore`, `journey run`, `verify-fix` |
+| `--no-overlay` | With `--headed`: hide the on-page overlay (step, intent, target highlight, outcome banner) | `explore` |
+| `--screenshots [mode\|dir]` | Masked screenshots + an `index.md` contact sheet (#251) | `explore`, `journey run\|annotate\|demo`, `verify-fix` |
+| `--evidence-video` | Per defect: a captioned repro clip + before/at screenshots (#250) | `explore` (a `check` item: `evidenceVideo`) |
+
+- **Videos.** A run's videos go in its own folder, `<run>.videos/`, next to the run's result (or
+  under `--record-video <dir>`): `explore-<stamp>.videos/`, `usability-<stamp>.videos/`,
+  `verify-fix-<stamp>.videos/` beside the mission result, `journey-<id>-<stamp>.videos/` in the logs
+  dir. The run closes its browser contexts before it writes its result, so every listed video is
+  complete. The paths are in the result as `videoPaths` (an additive field of the unified result
+  schema, `schemaVersion` 1) and in the human summary as `VIDEO` lines. A run killed by
+  SIGINT/SIGTERM lists the files already there, but cannot wait for a context to close, so its last
+  video may be truncated.
+- **No display.** `--headed` needs one: on Linux, with neither `DISPLAY` nor `WAYLAND_DISPLAY` set
+  (WSL2 without WSLg, a CI container), the command is refused before any browser launches —
+  `error E_EXPLORE_ARGS: --headed needs a display …` (exit 64) — and suggests `--record-video`.
+- **Several windows.** `--repeat`, `--persona` and `--actor` runs open more than one browser; with
+  `--headed` each is shown and a one-line warning is printed on stderr. Nothing is refused.
+- **Never headed:** `mission run` (what MCP `queue_exploration` feeds) runs unattended and takes no
+  demo flags; `load run` and `source run` stay headless too. In a `check` suite an item opts in with
+  its own `headed`/`slowMo`/`recordVideo`/`overlay` options (see [CI](ci.md)).
+
+## Evidence clips and screenshots
+
+- **Defect evidence (`--evidence-video`, #250).** After the run, each defect's minimal repro
+  Recording — the one `verify-fix` replays — is replayed in a fresh session with the overlay and a
+  video. Every step is captioned (its objective, else its label, else a value-free description);
+  the failing step is marked with the actual signal (`Save → server returned 500 (PUT /api/profile)`,
+  `invariant \`x\` violated`, a console error, an overflow…) and whether this replay saw it fire again.
+  Two screenshots — just before the failing step and at it, the failing element highlighted — have
+  the overlay hidden. Files: `<run>.evidence/<fingerprint>/{clip.webm,before-step-N.png,at-step-N.png}`
+  beside the result; the result gets `defects[].evidence.{videoPath, screenshots[], failingStep,
+  signal, reproduced}` (additive, `schemaVersion` 1), the human summary `CLIP`/`SHOT` lines, the issue
+  draft a "Repro clip and screenshots" section, and `report` / `check` (JUnit `attachment`
+  properties + `[[ATTACHMENT|…]]`, SARIF `attachments` and `relatedLocations`) link them. At most 5
+  defects per run get a clip (hard ones first). A run with mission fixtures or cross-actor observers
+  is not replayed here (`skipped` says why): use `verify-fix --record-video`, which restores them.
+  In `check`, an item that records video (`recordVideo`) gets evidence by default
+  (`evidenceVideo: false` turns it off).
+- **Before/after (`verify-fix --record-video`).** `evidence.before` is the run's own clip of the
+  defect (when the run had `--evidence-video`), `evidence.after` a captioned replay of the same steps
+  now, ending on the verdict.
+- **Screenshots (`--screenshots`, #251).** `screens` (default): one per distinct screen,
+  deduplicated by the page-state fingerprint coverage uses (url template + control table; a typed
+  value is not a new screen); `steps`: one per step. `screens:<dir>`, `steps:<dir>` or `<dir>` pick
+  the folder (default `<run>.screenshots/` beside the result). Each image is the viewport after the
+  step acted, overlay hidden. `index.md` lists each image with its step, route and what happened.
+  The result lists `screenshotPaths`, `screenshotIndex` and, when a capture was refused,
+  `screenshotsSkipped` (additive). A `check` item takes `screenshots` with the same values.
+- **Secrets are masked in pixels.** Every registered secret (`--secret`, secret fields, a Journey's
+  secret parameters) shown on the page — in a text node, a non-password field's value, or an
+  attribute such as `title` — is painted over by a display-only layer: a closed-shadow-root host on
+  `<html>` (the overlay's technique; the page's own DOM is never changed) that re-measures before
+  every paint, so video frames are covered too. Before and after every screenshot, and at every step
+  of a clip, the mask is proven (each occurrence under a painted box, the layer attached, visible,
+  on top). **Fail closed:** a screenshot that cannot be proven is not written (`screenshotsSkipped` /
+  `captureSkips` say why); a clip whose mask failed at any step is deleted. Not covered: a secret
+  drawn on a canvas, inside a closed shadow root, or under a modal/popover/fullscreen top layer
+  (the last is detected and refused).
+- **GitHub issues.** GitHub's API cannot upload media. Drafts and filed issues *link* to the files:
+  commit them under the repo's `.jevitate/` or publish them as CI artifacts and link those. With
+  `--evidence-video --file-issues`, drafts are filed after their media is attached.
 
 ## How it's packaged
 

@@ -103,10 +103,12 @@ export function targetAllowlist(target: MissionTarget): string[] {
 /**
  * The mission strategies a queued mission can express (#117). Each maps onto an existing CLI
  * runner: `goal-based` → `explore --strategy goal`, `coverage` → `explore --strategy coverage`,
- * `adversarial` → `explore --strategy adversarial`, `feature` → `explore --feature`. A usability
- * review needs an app class and a persona the request cannot carry, so it is not queueable.
+ * `adversarial` → `explore --strategy adversarial`, `feature` → `explore --feature`, `exploratory`
+ * (#255) → `explore --strategy exploratory` (the novelty-first coverage frontier). A usability
+ * review needs an app class and UX calibration the request does not carry, so it is not queueable:
+ * it runs directly (`explore --strategy usability`, MCP `run_exploration`).
  */
-export const MISSION_STRATEGIES = ["goal-based", "coverage", "adversarial", "feature"] as const;
+export const MISSION_STRATEGIES = ["goal-based", "coverage", "exploratory", "adversarial", "feature"] as const;
 export type MissionStrategy = (typeof MISSION_STRATEGIES)[number];
 
 /**
@@ -161,7 +163,28 @@ export interface MissionRequest {
    * schema only enforces the string shape and the mutual exclusivity.
    */
   device?: string;
+  /**
+   * #255: record a video of the run's browser context (headless too), written next to its result
+   * (`videoPaths` on the result). A boolean only — a queued mission never names a path.
+   */
+  recordVideo?: boolean;
+  /**
+   * #255/#251: masked screenshots + `index.md` next to the result — one per distinct screen
+   * (`screens`) or one per step (`steps`). A mode only — never a directory.
+   */
+  screenshots?: (typeof QUEUED_SCREENSHOT_MODES)[number];
+  /** #255/#250: per defect, a captioned evidence clip of its minimal repro + before/at screenshots. */
+  evidenceVideo?: boolean;
+  /**
+   * #255: a persona NAME from the operator's `~/.jevitate/targets.json` entry for the target's
+   * origin (`personas.<name>`): the queued mission runs from that persona's session and secret
+   * fields. A name only — the session itself is the operator's, never the request's.
+   */
+  persona?: string;
 }
+
+/** #255: the screenshot modes a queued mission may ask for (`--screenshots [mode]`, never a dir). */
+export const QUEUED_SCREENSHOT_MODES = ["screens", "steps"] as const;
 
 /**
  * Which fields each strategy takes. `goal-based` is unchanged: exactly one of goal/feature/route plus
@@ -209,6 +232,10 @@ const MissionRequestFields = {
   invariants: InvariantSpecSchema.optional(),
   viewport: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict().optional(),
   device: z.string().min(1).optional(),
+  recordVideo: z.boolean().optional(),
+  screenshots: z.enum(QUEUED_SCREENSHOT_MODES).optional(),
+  evidenceVideo: z.boolean().optional(),
+  persona: z.string().regex(SAFE_ID_RE, "persona must be a name (letters, digits, '.', '_', '-'), never a path").optional(),
 };
 
 export const MissionRequestSchema: z.ZodType<MissionRequest> = z

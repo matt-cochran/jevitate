@@ -100,8 +100,17 @@ describe("MissionRequestSchema", () => {
   });
 
   it("rejects an unsupported strategy value (a usability review needs inputs the request cannot carry)", () => {
-    for (const strategy of ["usability", "induction", "exploratory"]) {
+    for (const strategy of ["usability", "induction"]) {
       expect(() => MissionRequestSchema.parse({ ...baseRequest, strategy })).toThrow();
+    }
+  });
+
+  it("#255: accepts exploratory, media capture (booleans / a screenshot mode — never a path) and a persona NAME", () => {
+    expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy: "exploratory", route: "/x/**" })).not.toThrow();
+    const media = { target: "demo-shop", strategy: "coverage", recordVideo: true, screenshots: "steps", evidenceVideo: true, persona: "admin" };
+    expect(MissionRequestSchema.parse(media)).toMatchObject(media);
+    for (const bad of [{ screenshots: "/tmp/x" }, { screenshots: true }, { recordVideo: "/tmp/v" }, { persona: "../admin" }, { persona: "a/b" }, { evidenceVideo: "yes" }]) {
+      expect(() => MissionRequestSchema.parse({ target: "demo-shop", strategy: "coverage", ...bad }), JSON.stringify(bad)).toThrow();
     }
   });
 

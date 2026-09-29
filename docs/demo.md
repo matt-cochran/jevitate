@@ -102,6 +102,12 @@ jevitate verify-fix --result "$RESULT" --fingerprint "$FP_500" --json | jq '.dat
 
 To run it again from scratch: `rm -rf demo-runs demo-regressions` (both are git-ignored).
 
+Evidence for the PR: add `--evidence-video` to step 1 and each defect gets a captioned repro clip
+(the Save step marked "server returned 500 (PUT /demo/api/profile)") plus before/at screenshots,
+linked from the result (`defects[].evidence`) and the issue drafts. `verify-fix --record-video`
+in step 5 then gives the before/after pair. See
+[operations: evidence clips and screenshots](./operations.md#evidence-clips-and-screenshots).
+
 ## Expected sequence
 
 Recorded from a real run of the commands above (engine `0.1.0`, commit `098cdeb`; the timestamp
@@ -161,6 +167,19 @@ Things worth pointing out in the output:
 
 ## Recording the launch GIF or video
 
+The README GIF and the website video (`docs/assets/demo.gif`, `demo.mp4`, `demo.webm`,
+`demo-poster.png`) are rendered by `pnpm demo:render` (`scripts/render-demo.mjs`, about 9 to 10 minutes for a full run).
+It starts the example app on a free port, runs `journey demo` (the user saves "Zoë 😀" and sees
+"Saved"), the adversarial `explore --evidence-video` (the HTTP 500's evidence clip marks the Save click:
+"server returned 500 (PUT /demo/api/profile)"), `verify-fix`, `regression capture`/`run`, then
+restarts the app with the fix for `verify-fix --record-video` and the passing regression. It cuts the
+real clips together with an intro, one interstitial and an end card whose lines come from the
+commands' verdicts, and stops if any verdict differs. It needs a built CLI and `ffmpeg` on `PATH`
+(with libx264 and libvpx-vp9); without ffmpeg it refuses and renders nothing. `--keep` keeps the
+recording and `--compose-only <dir>` re-cuts it without re-running.
+
+For a hand-made terminal recording instead:
+
 Target: 20 to 30 seconds, a 1280×720 or larger terminal, a large font (18 pt or more), and a dark
 theme with high contrast. Don't show your home directory, other projects or any keys.
 
@@ -184,6 +203,8 @@ theme with high contrast. Don't show your home directory, other projects or any 
    README. Save them as `docs/assets/demo.mp4`, `docs/assets/demo.gif` and a still
    `docs/assets/demo-poster.png`. Then replace the demo placeholder at the top of the README (and
    the website's demo slot, `public/demo/`) with them.
+
+To capture the browser side without a screen recorder, add `--record-video` (headless, WebM listed in the result's `videoPaths`) or `--headed --slow-mo 400` to the explore command; see [operations: demo mode](./operations.md#demo-mode-watching-a-run).
 
 Tools that work well: [asciinema](https://asciinema.org) with [agg](https://github.com/asciinema/agg)
 for a terminal-only GIF, or any screen recorder for the two-pane version. Record real output only.

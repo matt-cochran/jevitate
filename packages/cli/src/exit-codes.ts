@@ -69,9 +69,16 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_UX_QUALITY_POLICY",
   "E_UX_NO_APP_CONTEXT",
   "E_JOURNEY_REQUIRES_AUTH",
+  "E_ENV_ORIGIN_REFUSED", // #247: a Journey step on an origin the chosen environment does not allow
   "E_PROFILE_UNKNOWN", // `profile status` named a profile that was never created
   "E_REGRESSION_EXISTS", // `regression capture --id` already exists; needs --force
   "E_REGRESSION_HARD_SIGNAL", // `regression capture --fingerprint` names a hard-signal defect; use the ledger instead
+  "E_JOURNEY_ANNOTATIONS_STALE", // `journey annotate --approve`: the Journey changed since the draft; re-draft
+  "E_DEMO_PRODUCTION_ENV", // #249: `demo` refuses an environment flagged production: true
+  "E_DEMO_EXISTS", // #249: `demo` would overwrite an existing Journey / pending demo draft
+  "E_HUMAN_APPROVAL_REQUIRED", // #254: `inbox approve`/`cancel` — human-only, in `jevitate ui` (MCP's human_approval_required)
+  "E_INBOX_INPUT_PENDING", // #254: `inbox command` would consume a human's unread input; pass --reveal to receive it
+  "E_MISSION_QUEUE_REFUSED", // #254: `mission queue` — unknown/unpromoted target, bad shape, over-ceiling budget, invalid invariants
 ]);
 
 /** True when a refused command's error code is a usage/input error (exit 64). */

@@ -78,6 +78,15 @@ describe("project data dir", () => {
     const again = readFileSync(ignorePath, "utf8");
     initProjectDir(repo);
     expect(readFileSync(ignorePath, "utf8")).toBe(again);
+    // #246: a project initialised before drafts existed gains `journeys/.drafts/` exactly once on re-init.
+    const preDrafts = PROJECT_GITIGNORE.filter((l) => l !== "journeys/.drafts/");
+    expect(preDrafts).toHaveLength(PROJECT_GITIGNORE.length - 1);
+    writeFileSync(ignorePath, `${preDrafts.join("\n")}\n`);
+    expect(initProjectDir(repo).created).toEqual([`${ignorePath} (journeys/.drafts/)`]);
+    const upgraded = readFileSync(ignorePath, "utf8");
+    expect(upgraded.split("\n").filter((l) => l.trim() === "journeys/.drafts/")).toHaveLength(1);
+    expect(initProjectDir(repo).created).toEqual([]);
+    expect(readFileSync(ignorePath, "utf8")).toBe(upgraded);
     const loose = join(root, "loose");
     mkdirSync(loose);
     expect(initProjectDir(loose)).toMatchObject({ dir: null, created: [] });

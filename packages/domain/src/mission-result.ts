@@ -34,6 +34,15 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *    `environmentDegraded` — findings (a hang, a click timeout, a no-progress stop) met while the host
  *    was starved: advisory, never a defect or hang finding, never failing the run. Both are additive
  *    (schemaVersion 1): every result written since #203 carries them; older results parse without.
+ *  - `videoPaths` — #245, additive (schemaVersion 1): the Playwright videos a `--record-video` run
+ *    wrote (every browser context it opened, oldest first), finalized before the result is written.
+ *    Absent when the run did not record.
+ *  - `screenshotPaths` / `screenshotIndex` / `screenshotsSkipped` — #251, additive (schemaVersion 1):
+ *    a `--screenshots` run's masked images (one per distinct screen, or per step), its `index.md`
+ *    contact sheet, and any capture refused because its secret mask could not be proven.
+ *  - `defects[].evidence` — #250, additive (schemaVersion 1): an `--evidence-video` run's per-defect
+ *    captioned repro clip (`videoPath`) and key screenshots (`screenshots`: before and at the failing
+ *    step), or why it has none (`skipped`).
  *
  * Everything else on a result is strategy-specific (a goal run's `checks`/`answer`, a coverage run's
  * `coverage`, an adversarial run's `advisories`/`scope`, a usability run's `report`): the schema lets
@@ -67,6 +76,14 @@ export const ResultDefectSchema = z.looseObject({
   /** Reported, never gated on (a usability run's `server-log` defect, a `judgment-flagged-state` — #214). */
   advisory: z.literal(true).optional(),
   repro: z.looseObject({ recordingStepIndex: z.number().int() }).optional(),
+  /** #250 — additive: the defect's captioned repro clip and key screenshots (`--evidence-video`). */
+  evidence: z
+    .looseObject({
+      videoPath: z.string().min(1).optional(),
+      screenshots: z.array(z.string().min(1)),
+      skipped: z.string().optional(),
+    })
+    .optional(),
 });
 export type ResultDefect = z.infer<typeof ResultDefectSchema>;
 
@@ -168,6 +185,12 @@ export const MissionResultSchema = z
     /** #203 — additive: optional so results written before it still parse. */
     hostHealth: HostHealthSummarySchema.optional(),
     environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
+    /** #245 — additive: the run's `--record-video` files (absent when it did not record). */
+    videoPaths: z.array(z.string().min(1)).optional(),
+    /** #251 — additive: the run's `--screenshots` images, contact sheet and refused captures. */
+    screenshotPaths: z.array(z.string().min(1)).optional(),
+    screenshotIndex: z.string().min(1).optional(),
+    screenshotsSkipped: z.array(z.looseObject({ step: z.number().int(), reason: z.string() })).optional(),
   })
   .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
     message: "goalOutcome is present on every goal result and on no other",
@@ -212,4 +235,9 @@ export interface MissionResultCore {
   /** #203: every result written now carries the host's health and its environment-degraded findings. */
   readonly hostHealth: HostHealthSummary;
   readonly environmentDegraded: readonly EnvironmentDegraded[];
+  /** #245: the run's `--record-video` files (absent when it did not record). */
+  readonly videoPaths?: readonly string[];
+  /** #251: the run's `--screenshots` images and contact sheet (absent without the flag). */
+  readonly screenshotPaths?: readonly string[];
+  readonly screenshotIndex?: string;
 }

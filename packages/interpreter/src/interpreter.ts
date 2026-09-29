@@ -14,6 +14,32 @@ import type { RecordingSink } from "./sink.js";
  * than importing runtime internals from run-step.ts) keeps this a pure,
  * side-effect-free pre-flight check.
  */
+/**
+ * #246: an optional per-step observer — called around each top-level step the interpreter runs
+ * (`beforeStep` just before it acts, `afterStep` once it finished, whatever the outcome). It sees the
+ * actor (to read the page) and the step, and can never change the replay: its errors are swallowed,
+ * and the step, its values and the vars are exactly what they would be without it. Used by
+ * `journey annotate` to capture before/after page evidence; absent by default (zero behavior change).
+ */
+export interface StepObserver {
+  beforeStep?(ctx: { readonly actor: Actor; readonly index: number; readonly recorded: RecordedStep }): Promise<void>;
+  afterStep?(ctx: {
+    readonly actor: Actor;
+    readonly index: number;
+    readonly recorded: RecordedStep;
+    readonly outcome: "done" | "awaiting_human" | "failed";
+  }): Promise<void>;
+}
+
+async function observe(fn: (() => Promise<void>) | undefined): Promise<void> {
+  if (fn === undefined) return;
+  try {
+    await fn();
+  } catch {
+    // An observer never changes the replay (see StepObserver).
+  }
+}
+
 const SUPPORTED_FOREACH_CHILD_KINDS = new Set(["click", "extract"]);
 
 /**
@@ -34,10 +60,13 @@ export class RecordingInterpreter {
    * `targetTimeoutMs`: how long a recorded target may take to appear before the step fails as
    * `replay-target-not-found` / `ambiguous` (default 15s).
    */
-  constructor(private readonly options: { readonly targetTimeoutMs?: number } = {}) {}
+  constructor(private readonly options: { readonly targetTimeoutMs?: number; readonly observer?: StepObserver } = {}) {}
 
-  #targetOpts(): ResolveTargetOptions {
-    return this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs };
+  #targetOpts(): ResolveTargetOptions & { observer?: StepObserver } {
+    return {
+      ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
+      ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
+    };
   }
 
   /**
@@ -213,10 +242,11 @@ async function runFlat(
   flat: RecordedStep[],
   vars: Map<string, string>,
   lastIndex: number,
-  targetOpts: ResolveTargetOptions,
+  runOpts: ResolveTargetOptions & { observer?: StepObserver },
   sink?: RecordingSink,
   startIndex = 0,
 ): Promise<InterpretResult> {
+  const { observer, ...targetOpts } = runOpts;
   // A transient-state check (#148) needs the flash recorder BEFORE the action that triggers it.
   if (flat.slice(startIndex, lastIndex + 1).some((r) => stepAssertions(r.step).some((a) => a.kind === "flashed"))) {
     await installFlashRecorder(actor.ability(BrowseTheWebToken).session.page);
@@ -225,16 +255,23 @@ async function runFlat(
   let lastSunkStepEndedAt = runStartedAt;
   for (let i = startIndex; i <= lastIndex; i++) {
     let outcome;
+    const recorded = flat[i] as RecordedStep;
+    await observe(observer?.beforeStep && (() => observer.beforeStep!({ actor, index: i, recorded })));
     const stepStartedAt = performance.now();
     try {
       outcome = await runStep(actor, flat[i], vars, i, targetOpts);
     } catch (err) {
+      await observe(observer?.afterStep && (() => observer.afterStep!({ actor, index: i, recorded, outcome: "failed" })));
       const message = err instanceof Error ? err.message : String(err);
       return err instanceof ReplayTargetError
         ? { outcome: "failed", at: i, error: message, reason: err.kind }
         : { outcome: "failed", at: i, error: message };
     }
     const stepEndedAt = performance.now();
+    await observe(
+      observer?.afterStep &&
+        (() => observer.afterStep!({ actor, index: i, recorded, outcome: outcome.kind === "awaiting_human" ? "awaiting_human" : "done" })),
+    );
     if (outcome.kind === "awaiting_human") {
       return { outcome: "awaiting_human", at: i, prompt: outcome.prompt, resume: outcome.resume };
     }

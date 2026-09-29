@@ -3,7 +3,7 @@
  * (#231): deps and path resolution, JSON/human output, browser/emulation flags, AI gateway selection.
  */
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
 import { Command } from "commander";
 import type { ProfileManager } from "@jevitate/daemon";
@@ -53,6 +53,8 @@ import { type RunResolvedJourney } from "./source-run-api.js";
 import { FsTrustStore, FsAckStore, DEFAULT_LOCK_PATH, type GitExec, type GhPort } from "@jevitate/sources";
 import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
 import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
+import { nonNegativeIntArg } from "./cli-args.js";
+import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
 export interface RecordCliDeps {
@@ -74,6 +76,11 @@ export interface CliDeps {
    */
   logs?: { readonly autoPrune: boolean; readonly logsRoot?: string; readonly configPath?: string };
   journeysDir?: string;
+  /**
+   * Optional, additive (#247): the environments file `--env` reads (default: the repo's
+   * `.jevitate/environments.json`, found from the working directory).
+   */
+  environmentsFile?: string;
   /** Optional, additive: overrides the mission-targets store directory
    *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
    *  resolves promoted targets from. */
@@ -95,7 +102,11 @@ export interface CliDeps {
   /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
   explore?: ExploreCliDeps;
   /** Optional, additive: `mission run` wiring — tests inject the executor so no browser opens. */
-  missions?: { execute?: QueuedMissionExecutor };
+  missions?: {
+    execute?: QueuedMissionExecutor;
+    /** Optional, additive (#255): the mission queue directory (default ~/.jevitate/missions/queue) — `mission run/queue/result` and `jevitate mcp`. */
+    queueDir?: string;
+  };
   /** Optional, additive: `jevitate record` wiring (see record-api.ts). */
   record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted
@@ -138,6 +149,14 @@ export const DEFAULT_INBOX_DIR = resolveDataDir(["inbox"]);
 
 export function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
+}
+
+/** #247: where `--env` reads environments and per-origin sessions from (test seams; real defaults). */
+export function environmentSeams(deps: CliDeps): { environmentsFile?: string; targetsFile?: string } {
+  return {
+    ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+    ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
+  };
 }
 
 /**
@@ -211,19 +230,20 @@ export async function makeRealBrowserActor(
   site: string,
   storageState?: string,
   emulation?: EmulationSpec,
-  browser?: BrowserLaunchOptions,
+  browser?: BrowserRunOptions,
   portFactory: () => BrowserPort = () => new PlaywrightBrowserPort(),
+  /** #247: an environment's allowed origins (default: just `site`). */
+  allowedOrigins: readonly string[] = [site],
 ): Promise<{ actor: Actor; close: () => Promise<void> }> {
   const port = portFactory();
   const session = await port.open({
-    ...browser,
-    headless: true,
-    allowedOrigins: [site],
+    ...sessionLaunchOptions(browser),
+    allowedOrigins: [...allowedOrigins],
     baseUrl: site,
     ...emulation,
     ...(storageState !== undefined ? { storageState } : {}),
   });
-  const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
+  const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [...allowedOrigins]));
   return {
     actor,
     close: () => session.close(),
@@ -262,6 +282,77 @@ export function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOpti
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
   };
   return Object.keys(launch).length > 0 ? launch : undefined;
+}
+
+/** Raw commander values of the demo-mode flags (#245). `overlay` is `--no-overlay`'s attribute. */
+export interface DemoFlags {
+  headed?: boolean;
+  slowMo?: number;
+  recordVideo?: boolean | string;
+  overlay?: boolean;
+}
+
+/** Which demo-mode flags a command takes: every one shows (`--headed`/`--slow-mo`); some record and overlay. */
+export interface DemoFlagSet {
+  /** `--record-video [dir]` — the command lists the videos in its result. */
+  readonly recordVideo?: boolean;
+  /** `--no-overlay` — the command runs an explore mission (the overlay lives in `@jevitate/explore`). */
+  readonly overlay?: boolean;
+}
+
+/**
+ * Adds the demo-mode flags (#245) to a browser-driving command. Headless stays the default; these
+ * are all opt-in and resolved by `browserRunFromFlags` (which also reads `JEVITATE_HEADED`).
+ */
+export function withDemoFlags(cmd: Command, set: DemoFlagSet = {}): Command {
+  cmd
+    .option("--headed", `show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display${set.recordVideo === true ? " — else use --record-video" : ""}`)
+    .option("--slow-mo <ms>", `slow every browser operation by this many ms (default ${HEADED_DEFAULT_SLOW_MO_MS} with --headed, else 0)`, nonNegativeIntArg);
+  if (set.recordVideo === true) {
+    cmd.option("--record-video [dir]", "record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths");
+  }
+  if (set.overlay === true) cmd.option("--no-overlay", "with --headed: hide the on-page overlay (step, intent, target highlight, outcome banner)");
+  return cmd;
+}
+
+/** Raw commander value of `--screenshots [mode|dir]` (#251). */
+export interface ScreenshotsFlags {
+  screenshots?: boolean | string;
+}
+
+/**
+ * #251: `--screenshots [mode|dir]` — masked screenshots of the run (one per distinct screen, or
+ * `steps`: one per step) plus an `index.md` contact sheet; parsed by `parseScreenshotsArg`.
+ */
+export function withScreenshotsFlag(cmd: Command): Command {
+  return cmd.option(
+    "--screenshots [mode|dir]",
+    "masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths",
+  );
+}
+
+/**
+ * The runner's `browser` option for the parsed `--browser-*` and demo flags, or `undefined` when none
+ * were given. `--headed` (or `JEVITATE_HEADED=1`) without a display throws `HeadedWithoutDisplayError`
+ * HERE — before any browser launches — which every command reports as its usage error (exit 64).
+ */
+export function browserRunFromFlags(
+  o: BrowserLaunchFlags & DemoFlags,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): BrowserRunOptions | undefined {
+  const headed = o.headed === true || headedFromEnv(env);
+  assertHeadedDisplay(headed, env, platform);
+  const run: BrowserRunOptions = {
+    ...browserLaunchFromFlags(o),
+    ...(headed ? { headed: true } : {}),
+    ...(o.slowMo === undefined ? {} : { slowMo: o.slowMo }),
+    ...(o.recordVideo === undefined || o.recordVideo === false
+      ? {}
+      : { recordVideo: typeof o.recordVideo === "string" ? { dir: resolvePath(o.recordVideo) } : {} }),
+    ...(o.overlay === false ? { overlay: false } : {}),
+  };
+  return Object.keys(run).length > 0 ? run : undefined;
 }
 
 /** `{ browser }` for the parsed `--browser-*` flags, or `{}` when none were given — spread into a runner's options. */
@@ -526,6 +617,38 @@ export async function buildExploreGateways(
   }
   throw new GatewaySelectionError(
     "no gateway selected — pass --real for live Jev+OpenRouter (after `jevitate ai setup`), or --fake-ai for a deterministic pipeline smoke",
+  );
+}
+
+/**
+ * #246: the generation gateway ALONE (`journey annotate` drafts text and asks no judgment
+ * question, so it needs no Jev key). Same selection rules as `buildExploreGateways`: injected (tests)
+ * wins, `--real` is fail-closed on the OpenRouter key, `--fake-ai` is the deterministic fake, the two
+ * are exclusive, and no selection is a refusal — never a silent fake.
+ */
+export async function buildGenerationGateway(
+  deps: CliDeps,
+  opts: { real: boolean; fakeAi: boolean },
+): Promise<{ gen: GenerationPort; usage: UsageTracker }> {
+  if (opts.real && opts.fakeAi) {
+    throw new GatewaySelectionError("--real and --fake-ai are mutually exclusive — pass one, not both");
+  }
+  const usage = deps.explore?.usage ?? new UsageTracker(resolveUsagePricing(deps.explore?.env ?? process.env));
+  if (deps.explore?.gen) return { gen: deps.explore.gen, usage };
+  if (opts.real) {
+    const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
+    requireKeys("generation", store); // fail-closed
+    const gen = new OpenRouterGenerationGateway({
+      store,
+      catalog: DEFAULT_EXPLORE_CATALOG,
+      constraints: DEFAULT_EXPLORE_CONSTRAINTS,
+      call: await realOpenRouterCall(usage),
+    });
+    return { gen: new RetryingGenerationPort(gen), usage };
+  }
+  if (opts.fakeAi) return { gen: new FakeGenerationGateway(undefined, usage), usage };
+  throw new GatewaySelectionError(
+    "no gateway selected — pass --real for live OpenRouter generation (after `jevitate ai setup generation`), or --fake-ai for a deterministic pipeline smoke",
   );
 }
 

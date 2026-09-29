@@ -2,18 +2,16 @@ import { Command } from "commander";
 import { envCredentialStore, OpenRouterGenerationGateway } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import { fail } from "./envelope.js";
-import { logsRoot, resultDirsFor } from "./project-dir.js";
 import { startMcpServer } from "./mcp-api.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
 import { startUiServer } from "./ui-api.js";
 import { intArg } from "./cli-args.js";
 import { renderPrintConfig, type McpHarness } from "./init-mcp.js";
-import { resolveDataDir } from "./data-dir.js";
+import { mcpToolDeps } from "./mcp-cli-bridge.js";
+import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import {
   type CliDeps,
-  resolveDbPath,
   resolveJourneysDir,
-  resolveMissionTargetsDir,
   resolveInboxDir,
   emitJson,
   DEFAULT_EXPLORE_CATALOG,
@@ -21,7 +19,7 @@ import {
 } from "./cli-shared.js";
 
 /** Registers the long-running servers: `jevitate mcp` and `jevitate ui`. */
-export function registerServeCommands(program: Command, deps: CliDeps): void {
+export function registerServeCommands(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
   // Additive: `jevitate mcp` (Ticket #20) — start an MCP stdio server that
   // exposes ONLY `@jevitate/mcp-facade`'s allowlisted tools (never the raw
   // browser primitives in FORBIDDEN_TOOLS). This is the subcommand form of the
@@ -32,7 +30,7 @@ export function registerServeCommands(program: Command, deps: CliDeps): void {
   program
     .command("mcp")
     .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
       "--print-config <harness>",
       "print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing",
@@ -73,17 +71,11 @@ export function registerServeCommands(program: Command, deps: CliDeps): void {
             constraints: deps.ai?.constraints ?? DEFAULT_EXPLORE_CONSTRAINTS,
             call: await realOpenRouterCall(),
           });
-        await startMcpServer({
-          journeysDir: resolveJourneysDir(deps, dir),
-          sitePolicyDbPath: resolveDbPath(deps),
-          missionTargetsDir: resolveMissionTargetsDir(deps),
-          missionQueueDir: resolveDataDir(["missions", "queue"]),
-          recordingsDir: logsRoot(),
-          resultDirsFor: (resultId: string) => resultDirsFor(resultId),
-          inboxDir: resolveInboxDir(deps),
-          credentialStore: aiStore,
-          generationGateway,
-        });
+        // #254: the same default stores the CLI's `inbox`/`mission queue`/`mission result` read (mcpToolDeps).
+        // #255: the CLI-mirroring tools run the SAME program in process, over the same journeys dir.
+        const journeysDir = resolveJourneysDir(deps, dir);
+        const runCli = makeInProcessCliRunner(() => buildProgram({ ...deps, journeysDir }));
+        await startMcpServer(mcpToolDeps(deps, { journeysDir, credentialStore: aiStore, generationGateway, runCli }));
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
       }

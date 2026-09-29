@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { envCredentialStore } from "@jevitate/ai-core";
+import { envCredentialStore, FEATURE_KEYS, type Feature } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import { ok, fail } from "./envelope.js";
 import { initProjectDir, type ProjectInitReport } from "./project-dir.js";
@@ -7,7 +7,8 @@ import { realSecureIO } from "./ai-cli.js";
 import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js";
 import { formatInitKeysHuman } from "./cli-output.js";
 import { detectRuntimes, resolveInstallTargetPaths, installSkills, type RuntimeId } from "./init-skills.js";
-import { registerMcp, resolveMcpTargetPaths } from "./init-mcp.js";
+import { registerMcp, resolveMcpTargetPaths, type McpInstallReport } from "./init-mcp.js";
+import { initNextSteps, environmentHint } from "./init-next-steps.js";
 import { loadManifest } from "@jevitate/skills";
 import { resolveDataDir } from "./data-dir.js";
 import { type CliDeps, emitJson, emitCommandResult } from "./cli-shared.js";
@@ -84,6 +85,23 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
         // (both here and in the --json envelope) rather than in the exit code, so a script that
         // only checks the exit code still sees init as having done its job; a caller that cares
         // about keys reads the summary/envelope, same as `jevitate ai status`.
+        // The "try this next" block, tailored to what is set up now (keys, MCP, the repo's
+        // environments). Additive in --json (`data.nextSteps`); keys are checked by NAME only.
+        const keysReady =
+          data.keys !== undefined
+            ? Object.values(data.keys as KeyCollectionReport).every((r) => (r.missing ?? []).length === 0)
+            : (() => {
+                const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
+                return (Object.keys(FEATURE_KEYS) as Feature[]).every((f) => FEATURE_KEYS[f].every((k) => store.detect(k)));
+              })();
+        const projectDir = (data.project as ProjectInitReport | undefined)?.dir ?? null;
+        data.nextSteps = initNextSteps({
+          keysReady,
+          ...environmentHint(projectDir),
+          ...(data.mcp !== undefined ? { mcp: data.mcp as McpInstallReport[] } : {}),
+          skills: data.skills !== undefined,
+          dryRun: dryRun === true,
+        });
         const envelope = ok(data);
         if (json) {
           emitJson(program, envelope);
@@ -105,7 +123,8 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
                 : `project: ${project.dir} (${project.created.length} ${dryRun === true ? "would create" : "created"})\n`,
             );
           }
-          out?.("next: jevitate explore --url <url> --goal \"<goal>\" --real (see jevitate explore --help)\n");
+          out?.(`next steps${(data.project as ProjectInitReport | undefined)?.dir == null ? "" : " (app URLs: .jevitate/environments.json)"}:\n`);
+          for (const line of data.nextSteps as string[]) out?.(`  ${line}\n`);
           process.exitCode = 0;
         }
       } catch (err) {

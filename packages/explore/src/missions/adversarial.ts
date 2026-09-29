@@ -75,6 +75,7 @@ import {
   type InvariantViolation,
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
+import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -264,6 +265,8 @@ export interface AdversarialMissionParams {
   readonly now?: () => number;
   /** Registered secret values: redacted out of the transcript and the Recording. */
   readonly secrets?: readonly string[];
+  /** #245: show the on-page demo overlay (display only; invisible to the run). Default off: nothing injected. */
+  readonly demoOverlay?: boolean;
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /**
@@ -447,6 +450,16 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
 }
 
 export async function runAdversarialMission(params: AdversarialMissionParams): Promise<AdversarialOutcome> {
+  const overlay = demoOverlayFor(params.demoOverlay, params.secrets ?? []);
+  const out = await runAdversarialHunt(params, overlay);
+  await overlay?.finish(
+    `jevitate · adversarial — ${out.stop}: ${out.defects.length} defect${out.defects.length === 1 ? "" : "s"}`,
+    out.defects.length === 0 && out.stop !== "crashed",
+  );
+  return out;
+}
+
+async function runAdversarialHunt(params: AdversarialMissionParams, overlay: DemoOverlay | null): Promise<AdversarialOutcome> {
   // Guardrail #1 — authorize the target origin BEFORE anything else runs.
   const origin = assertAuthorizedExploreTarget(params.seedUrl, params.allowlist);
   const bounds = resolveBounds(params.bounds);
@@ -861,12 +874,44 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
   };
 
   /**
+   * #250 — when each action of the current Recording segment FIRED (wall clock, the signal
+   * collector's), with its transcript step and its last Recording step index: an HTTP 5xx is
+   * attributed by when its request STARTED (`PageSignalCollector.requestStartOf`), the way
+   * `Http5xxOracle` attributes it for the other strategies.
+   */
+  const fired = new WeakMap<RunRecorder, Array<{ readonly at: number; readonly step: number; readonly index: number }>>();
+  const markFired = (at: number, step: number): void => {
+    if (recorder.stepCount === 0) return;
+    const list = fired.get(recorder) ?? [];
+    list.push({ at, step, index: recorder.stepCount - 1 });
+    fired.set(recorder, list);
+  };
+  /** The action whose request an `http-5xx` finding answered; undefined when it cannot tell. */
+  const requestOrigin = (f: StepFinding): { readonly step: number; readonly recordingStepIndex: number } | undefined => {
+    const own = f.signals.filter((x) => x.kind === "http-5xx");
+    const signal = own.find((x) => signalFingerprint(x) === f.fingerprint) ?? (f.kind === "http-5xx" ? own[0] : undefined);
+    const started = signal === undefined ? undefined : collector.requestStartOf(signal);
+    if (started === undefined) return undefined;
+    const list = fired.get(recorder) ?? [];
+    let hit: (typeof list)[number] | undefined;
+    for (const e of list) if (e.at <= started) hit = e;
+    if (hit !== undefined) return { step: hit.step, recordingStepIndex: hit.index };
+    // Started before this segment's first action: its page load (the navigation, Recording step 0).
+    const first = list[0];
+    return first === undefined || recorder.stepCount === 0 ? undefined : { step: Math.max(1, first.step - 1), recordingStepIndex: 0 };
+  };
+
+  /**
    * Folds one step's findings into the deduped defect set — called AFTER the step is in the
    * transcript, so a new defect's repro includes the step that surfaced it. A known fingerprint
    * (or one seen in a known defect's cascade) only counts an occurrence.
    */
-  const fold = async (step: number, findings: readonly StepFinding[]): Promise<void> => {
+  const fold = async (drainedAt: number, findings: readonly StepFinding[]): Promise<void> => {
     for (const f of findings) {
+      // #250: an HTTP 5xx belongs to the action whose request it answered, not to the step that
+      // drained it (a submit left pending while the next step ran blamed that next step).
+      const origin = requestOrigin(f);
+      const step = origin === undefined ? drainedAt : Math.min(drainedAt, origin.step);
       const known = [...defects.values()].find((d) => d.fingerprint === f.fingerprint || d.related.has(f.fingerprint));
       if (known !== undefined) {
         if (!known.occurrenceSteps.includes(step)) known.occurrenceSteps.push(step);
@@ -886,11 +931,14 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
         occurrenceSteps: [step],
         // The repro is the ordered steps; their timing stays in the run transcript (not copied per defect).
         repro: {
-          steps: transcript.entries().map((e): TranscriptEntry => {
-            const { timing: _timing, ...step } = e;
-            return step;
-          }),
-          recordingStepIndex: Math.max(0, recorder.stepCount - 1),
+          steps: transcript
+            .entries()
+            .filter((e) => e.step <= step)
+            .map((e): TranscriptEntry => {
+              const { timing: _timing, ...entry } = e;
+              return entry;
+            }),
+          recordingStepIndex: origin?.recordingStepIndex ?? Math.max(0, recorder.stepCount - 1),
         },
         triage,
       });
@@ -1456,6 +1504,16 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
             break;
           }
         }
+        // #245: the demo overlay says what is about to happen and highlights the target (display only).
+        // A step racing an unsettled earlier one (a double submit) gets the panel only — no highlight
+        // pause, so the overlay never lets the earlier action settle and change what the misuse tests.
+        if (overlay !== null) {
+          await overlay.announce(
+            sessions.page,
+            { step: transcript.nextStep, strategy: `adversarial · ${ran}`, op: s.op, target: s.control === null ? null : s.control.name || s.control.summary, why: s.note },
+            pendingEarlier ? null : s.control,
+          );
+        }
         // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
         const actedOn = sessions.page.url();
         if (declared !== null && !armed) {
@@ -1463,10 +1521,15 @@ export async function runAdversarialMission(params: AdversarialMissionParams): P
           armed = true;
         }
         const at = now();
+        const firedAt = Date.now();
+        const firedStep = transcript.nextStep;
         safety.mark(transcript.nextStep, s.op, s.control);
         const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
-        if (result.ok) recordAction(s, value, at, result.submittedVia);
+        if (result.ok) {
+          recordAction(s, value, at, result.submittedVia);
+          markFired(firedAt, firedStep);
+        }
         if (result.ok) cov.acted(stepSnap.url, s.control);
         // #155 — a submit click counts as submitted only when it actually sent a request (a write
         // or a navigation); one the browser blocked with native validation never reached the

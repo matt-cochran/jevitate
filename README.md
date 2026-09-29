@@ -16,9 +16,8 @@ confirm a fix and commits it as a regression you can run in CI.
 **Nondeterministic discovery. Deterministic verification.** A model may suggest what to try next.
 It never decides whether your software passed.
 
-<!-- DEMO: replace this block with the recording once it exists (see docs/demo.md, "Recording the launch GIF or video"):
-<p align="center"><img src="docs/assets/demo.gif" alt="Jevitate finds an HTTP 500 behind a form that says Saved, reproduces it, commits a regression, and verifies the fix" width="800"></p>
--->
+<p align="center"><img src="docs/assets/demo.gif" alt="A real Jevitate run on the example app: a profile form says Saved while the server returns HTTP 500; Jevitate's evidence clip marks the failing Save, and after the fix verify-fix reports it fixed" width="800"></p>
+
 > **Demo:** a 2-minute, no-API-key walkthrough is in [docs/demo.md](./docs/demo.md). A form says
 > "Saved" while the server returns HTTP 500. Jevitate finds it, reproduces it 3/3, commits it as a
 > regression, and verifies the fix.
@@ -38,47 +37,72 @@ and hands each one back as a deterministic artifact.
 
 ## Quick start
 
-Needs Node.js 20+. This first run needs **no API keys**: the adversarial mission plans its misuse
-in code.
+Needs Node.js 20+ and an app running locally (examples use `http://localhost:3000`).
+
+**1. Install**
 
 ```bash
 npm install -g @jevitate/cli
 npx playwright install chromium          # the browser Jevitate drives
+```
 
-# Point it at a form in an app you're running locally, and try to break it:
+**2. Set up the repo**. Run this from your app's repository:
+
+```bash
+jevitate init
+```
+
+It creates `.jevitate/` (Journeys, regressions, baselines, logs, and an example
+`environments.json`), installs [agent skills](./docs/agents.md) for Claude Code, Codex, Cursor
+and `AGENTS.md`, registers the MCP server, and asks for any missing keys (`TYPESAFE_API_KEY` for
+Jev's judgment, `OPENROUTER_API_KEY` for text generation). Keys are optional for step 3. Without a
+terminal (CI, a coding agent), `init` never prompts: it reports which keys are missing, and you
+add them later with `jevitate ai setup <generation|judgment>`. It ends with a short **next steps**
+list that fits what it set up.
+
+**3. First run: try to break a form.** No keys needed, because the adversarial mission plans its
+misuse in code:
+
+```bash
 jevitate explore --strategy adversarial --url http://localhost:3000/settings --fake-ai
 ```
 
 It double-submits, feeds empty, boundary, long, unicode and invalid values, cancels and reloads
-mid-edit, and acts while a save is still pending. It then prints a short summary: the outcome
-(`clean`, `defects-found`, `inconclusive`, …), each defect with its fingerprint, the result file
-and a `next:` step. The full result (each defect's evidence, the paths of its Recording, transcript
-and ready-to-file issue drafts) is written under `.jevitate/logs/<date>/` (see [where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things));
-add `--json` to print it as a JSON envelope instead. The exit code is the outcome ([table below](#mission-outcomes-and-exit-codes)).
+mid-edit, and acts while a save is still pending. It prints the outcome (`clean`,
+`defects-found`, `inconclusive`, …), each defect with its fingerprint, the result file and a
+`next:` step. The full result (evidence, the Recording, a ready-to-file issue draft) goes under
+`.jevitate/logs/<date>/` ([where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things)).
+`--json` prints it as a JSON envelope instead. The exit code is the outcome
+([table below](#mission-outcomes-and-exit-codes)).
 
-- Jevitate only visits the `--url`'s origin. Add `--allow <origin>` for each origin the app needs
-  (include the app's own origin too, since `--allow` replaces the default).
+- Jevitate only visits the `--url`'s origin. Add `--allow <origin>` for each origin the app needs,
+  and include the app's own origin too, since `--allow` replaces the default.
 - `--fake-ai` swaps the mission's advisory model calls for deterministic stand-ins. Nothing it
   reports depends on them.
 - Logged-in app? Add `--storage-state auth.json` ([authentication](./docs/authentication.md)).
 
-**Goal-directed runs** use a model to decide what to do next. Set up keys once
-(`TYPESAFE_API_KEY` for Jev, `OPENROUTER_API_KEY` for text generation):
+With keys, a **goal-directed run** reaches an end state, and code checks it:
 
 ```bash
-jevitate init        # prompts for missing keys; installs agent skills; registers the MCP server
 jevitate explore --url http://localhost:3000/profile --goal "set the last name to Litmus and save" \
   --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus' \
   --real
 ```
 
-`jevitate init` only prompts for keys at a real terminal. Run without a TTY (CI, a coding agent —
-see below), it never prompts: it completes the rest of init and reports which keys are still
-missing, in both the human summary and the `--json` envelope. Set the keys yourself (or via env
-vars) and configure them with `jevitate ai setup <generation|judgment>`.
+It succeeds only if the save request was sent and the value survived a reload. The model saying
+"done" doesn't count.
 
-The run succeeds only if the save request was sent and the value survived a reload, checked by
-code. The model saying "done" doesn't count.
+**4. Next steps**
+
+| To | Run | Docs |
+| --- | --- | --- |
+| keep a flow as a replayable Journey | `jevitate explore-author-journey --url <url> --goal "…" --success "…" --id checkout --name Checkout --real`, then `jevitate journey promote checkout` | [journeys](./docs/journeys.md) |
+| record a flow by clicking through it | `jevitate record --url <url>` | [journeys](./docs/journeys.md#record-a-flow-by-demonstration) |
+| replay it anywhere | `jevitate journey run checkout --env staging` | [environments](./docs/journeys.md#environments---env) |
+| make a narrated demo | `jevitate demo "Save your display name" --env local --success "…" --real` | [demos](./docs/journeys.md#demo-an-aspect-from-a-one-line-request) |
+| prove a fix, with evidence | `jevitate verify-fix --result <run>.result.json --fingerprint <fp> --record-video` | [verification](./docs/verification.md) |
+| gate CI | `jevitate check --suite jevitate-suite.json` (JUnit + SARIF; exit 1 = a gating finding) | [ci](./docs/ci.md) |
+| let your coding agent drive | ask it in plain words. The skills and MCP tools `init` installed do the rest | [agents](./docs/agents.md) |
 
 ## See it work
 
@@ -100,6 +124,74 @@ jevitate regression run saved-means-stored --dir demo-regressions   # reproduces
 # ...fix the bug, restart the app...
 jevitate regression run saved-means-stored --dir demo-regressions   # fixed (exit 0)
 ```
+
+### Watch it run (demo mode)
+
+Every run is headless by default, CI included. To show an audience what jevitate does, open a
+visible browser and slow it down, or record it:
+
+```bash
+# A visible Chromium, each browser operation slowed by 250 ms (override with --slow-mo <ms>):
+jevitate explore --strategy adversarial --url http://127.0.0.1:5190/demo/profile --fake-ai --headed
+
+# Headless, recorded: the videos are listed in the result (videoPaths) and the summary (VIDEO)
+jevitate explore --strategy adversarial --url http://127.0.0.1:5190/demo/profile --fake-ai --record-video
+```
+
+`--headed` (or `JEVITATE_HEADED=1`), `--slow-mo <ms>` and `--record-video [dir]` work on every
+`explore` strategy, `journey run` and `verify-fix`; `regression capture|run` take `--headed` and
+`--slow-mo`. A headed explore run also shows an on-page overlay (hide it with `--no-overlay`).
+`--headed` needs a display: without one (no `DISPLAY`/`WAYLAND_DISPLAY` on Linux; WSL2 needs WSLg)
+it is refused (exit 64) — use `--record-video` instead. See
+[operations: demo mode](./docs/operations.md#demo-mode-watching-a-run).
+
+Evidence for a defect, and screenshots of any run:
+
+```bash
+# Per defect: its minimal repro replayed with captions, the failing step marked with the actual
+# signal ("Save → server returned 500 (PUT /api/profile)"), a clip + before/at screenshots
+# (defects[].evidence; linked from the issue draft, report, JUnit and SARIF)
+jevitate explore --url http://127.0.0.1:5190/demo/profile --goal "save the profile" --fake-ai --evidence-video
+
+# One masked screenshot per distinct screen (or `--screenshots steps`: one per step) + index.md
+jevitate journey run my-journey --screenshots
+```
+
+`--screenshots [screens|steps|<dir>]` works on every `explore` strategy, `journey run|annotate|demo`
+and `verify-fix`; `verify-fix --record-video` gives a before/after clip pair. Registered secrets are
+masked in the pixels of every clip and screenshot (a capture whose mask cannot be proven is skipped,
+never written). See [operations: evidence and screenshots](./docs/operations.md#evidence-clips-and-screenshots).
+
+## Journeys, environments and demos
+
+A **Journey** is a replayable, typed flow you author from a goal, record by demonstration, or get
+from `explore`. It runs the same on every machine, self-heals under policy and loads as a test in
+CI ([Journeys](./docs/journeys.md)).
+
+```bash
+# Intent: why, not only what. Drafts goals, success criteria and per-step objectives on playback;
+# nothing is written until you review and approve.
+jevitate journey annotate checkout --real
+jevitate journey annotate checkout --approve
+
+# Environments: a Journey knows no host. Name yours in .jevitate/environments.json (committed, no
+# secrets), then pick one per run. A step on any other origin is refused before a browser opens.
+jevitate journey run checkout --env staging
+jevitate regression run saved-means-stored --base-url http://localhost:3000
+
+# A narrated demo of a Journey: video + .vtt subtitles + a Markdown guide with screenshots
+jevitate journey demo checkout --env staging --video demos/checkout.webm --guide demos/checkout.md
+
+# Or from a one-line request: explore -> minimize -> author -> annotate -> DRAFT demo
+jevitate demo "check out with a saved card" --env staging --success 'urlIncludes:/order/confirmed' --real
+jevitate demo approve <id>          # the one human approval: renders the final demo, promotes the Journey
+```
+
+Existing Journeys keep working unchanged: intent fields and environments are optional.
+`--env`/`--base-url` work on `journey run|annotate`, `regression run` and `load run`. Sessions and
+secret fields per environment live in `~/.jevitate/targets.json`, never in the repo. `demo` refuses
+an environment flagged `production: true`. Details: [Journeys](./docs/journeys.md#annotate-a-journey-draft-its-intent-then-approve-it),
+[environments](./docs/journeys.md#environments---env), [demos](./docs/journeys.md#demo-a-journey-video-subtitles-and-a-step-by-step-guide).
 
 ## Why Jevitate?
 
@@ -143,6 +235,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | **Real apps** | storage-state logins, bound secrets and TOTP, fixtures that reset state around every replay, repeat-and-vote, persona and multi-actor runs ([auth](./docs/authentication.md), [fixtures](./docs/fixtures.md), [multi-run](./docs/multi-run.md)) |
 | **Evidence** | hangs (confirmed by replay), page timing, backend log correlation, redacted issue drafts ([exploration](./docs/exploration.md), [operations](./docs/operations.md)) |
 | **Journeys** | author a replayable flow from a goal, replay, self-heal under policy, load-test, share ([Journeys](./docs/journeys.md)) |
+| **Demos** | `journey demo` renders a Journey as a narrated video, `.vtt` subtitles and a step-by-step guide; `demo "<aspect>" --env <name> --success <check>` explores, minimizes, annotates and drafts one from a one-line request, and `demo approve <id>` promotes it ([demos](./docs/journeys.md#demo-an-aspect-from-a-one-line-request)) |
 | **Usability review** | ranked, cited findings grounded in what the run observed. Advisory, never a gate |
 
 ## Use it from your coding agent
@@ -160,10 +253,30 @@ Run non-interactively like this, `init` never prompts for keys — it reports wh
 and exits 0 regardless, since the rest of init (skills, MCP registration) still succeeded. Set the
 keys separately with `jevitate ai setup <generation|judgment>`.
 
-The MCP server exposes an allowlist of domain tools (`queue_exploration`, `get_mission_result`,
-`verify_fix`, `run_journey`, …). Raw browser tools such as `browser_click` or `page_evaluate` are
-forbidden. An agent can ask for a mission, but it never drives the page. See
-[agents and MCP](./docs/agents.md).
+The MCP server exposes an allowlist of domain tools (`run_journey`, `queue_exploration`,
+`get_mission_result`, `verify_fix`, `annotate_journey`, `create_demo`, `run_check`, …). MCP is a
+convenience for agents that could run the CLI anyway, so every CLI command is reachable over MCP and
+every MCP tool from the CLI; the tools that mirror a command run it in process with typed, closed
+arguments and confined paths. Only `mcp`, `ui`, `init`, `ai setup`, `record` and trusting a source
+stay off MCP, each for a stated reason. Raw browser tools such as `browser_click` or `page_evaluate`
+are forbidden: an agent asks for a mission or a Journey, it never drives the page. Approving or
+cancelling an inbox item stays human-only, in `jevitate ui`. See [agents and MCP](./docs/agents.md).
+
+## Queue missions and read the inbox from the CLI
+
+Everything an agent can do over MCP you can do from the shell, over the same stores
+(`~/.jevitate/missions/`, `~/.jevitate/inbox`):
+
+```bash
+jevitate mission queue spa --strategy coverage --route '/settings/**'   # enqueue against a promoted target
+jevitate mission run                                                    # drain the queue
+jevitate mission result <id>                                            # status + typed result; exits with its contract code
+jevitate inbox list                                                     # also: show, command, queue-retrieval, queue-action, health
+```
+
+`inbox command <id>` is burn-after-read like MCP's `get_command`: unread human input needs
+`--reveal`, which consumes and prints it. Approving or cancelling an inbox item stays human-only
+(`jevitate ui`). Flags: [docs/cli.md](./docs/cli.md).
 
 ## Safety
 
@@ -227,6 +340,7 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 ## Documentation
 
 - [Docs index](./docs/README.md): every reference page
+- Full command reference: [docs/cli.md](./docs/cli.md)
 - [Demo](./docs/demo.md) · [How it works](./docs/how-it-works.md) · [Safety](./docs/safety.md)
 - [Changelog](./CHANGELOG.md) · [Releasing](./RELEASING.md)
 - Website: [jevitate.com](https://jevitate.com)

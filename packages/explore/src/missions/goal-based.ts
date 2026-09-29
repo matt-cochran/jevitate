@@ -28,6 +28,8 @@ import {
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { goalAsksForChange } from "../read-only.js";
+import { demoOverlayFor } from "../demo-overlay.js";
+import { secretFieldSecrets } from "../secret-fields.js";
 
 /**
  * The goal-based exploratory mission (P1's first mission).
@@ -326,8 +328,15 @@ async function adjudicated(
   capture: RequestCapture | null,
 ): Promise<GoalBasedResult> {
   const declared = declaredInvariants(cfg, page);
-  const result = await adjudicatedRun(cfg, checks, page, capture, declared);
-  return declared === null ? result : declared.fold(result);
+  const run = await adjudicatedRun(cfg, checks, page, capture, declared);
+  const result = declared === null ? run : declared.fold(run);
+  // #245: the mission's own verdict (success checks included) is the demo's final banner.
+  await demoOverlayFor(cfg.demoOverlay, [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)])?.finish(
+    `jevitate · goal — ${result.outcome}${result.reason === undefined ? "" : `: ${result.reason}`}`,
+    result.outcome === "succeeded",
+    page,
+  );
+  return result;
 }
 
 /**

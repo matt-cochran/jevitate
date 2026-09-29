@@ -1,0 +1,6 @@
+---
+"@jevitate/cli": minor
+"jevitate": minor
+---
+
+Journeys can now say why, not only what (#246). Every new field is optional and additive, so an existing Journey validates and runs unchanged. At the Journey level they are `metadata.goal`, `persona`, `role`, `preconditions` (linked to fixtures and hooks), `successCriteria` (each with an optional code `check`) and `parameters` (`secret: true` marks a value for redaction). Each step gets `objective` and `expectedResult`. A new command, `jevitate journey annotate <id> --real|--fake-ai`, replays the Journey, reads the redacted page before and after each step, and drafts the missing objectives and expected results, plus the goal and success criteria, into `.jevitate/journeys/.drafts/<id>.annotations.json`. It never writes the Journey. `journey annotate <id> --approve` is the human gate: it shows the diff, then writes the reviewed draft. It refuses a draft made against a Journey that has changed since (`E_JOURNEY_ANNOTATIONS_STALE`, exit 64). A secret parameter's value is redacted in the `journey run` output, in annotate's evidence, drafts and output, and in anything sent to a model. `journey run` also reports how many steps lack an objective; this is informational and never fails. See docs/journeys.md, "Journey format reference" and "Annotate a Journey".

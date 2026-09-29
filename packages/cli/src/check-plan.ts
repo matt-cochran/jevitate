@@ -8,6 +8,7 @@ import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
+import { assertHeadedDisplay } from "./browser-run-options.js";
 import { effectiveExploreOptions, type ExploreItemKind, type SuiteExploreOptions } from "./suite-explore-options.js";
 import { FixtureSpecError, SETUP_REF, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
 import { parseSuccessSpec, resolveExploreAllowlist, type ServerLogOptions } from "./explore-api.js";
@@ -16,8 +17,10 @@ import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-fil
 import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { type EngineInfo } from "./engine.js";
+import { applyJourneyEnvironment, isEnvironmentError, resolveJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
+import { parseScreenshotsArg } from "./run-screenshots.js";
 
 // ── changed routes ───────────────────────────────────────────────────────────
 
@@ -140,6 +143,8 @@ export interface PreparedTarget {
   readonly serverLog?: ServerLogOptions;
   readonly config?: TargetConfig;
   readonly journeys: Map<string, Journey>;
+  /** #247: each Journey item that names an `env`/`baseUrl`, and the environment it resolved to at preflight. */
+  readonly environments?: ReadonlyMap<SuiteJourney, ResolvedJourneyEnvironment>;
   readonly goals: Map<string, SuccessCheck[]>;
   /** The target's `secretFields`, resolved from the environment at preflight (#170). */
   readonly secretFields: readonly SecretField[];
@@ -225,6 +230,10 @@ function itemSetup(
   const t = p.target;
   const env = opts.env ?? process.env;
   const x = effectiveExploreOptions(t.explore, item.explore, kind);
+  // #245: a headed item without a display is refused here, before anything runs (use recordVideo).
+  assertHeadedDisplay(x.headed === true, env);
+  // #251: an unusable `screenshots` value is refused at preflight, before anything runs.
+  parseScreenshotsArg(x.screenshots, "screenshots");
   let storageState = sessionOf(t, item.storageState);
   if (item.storageState !== undefined && item.storageState !== null && !existsSync(item.storageState)) {
     throw new Error(`storage state not found: ${item.storageState}`);
@@ -386,15 +395,32 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     }
   }
   const journeys = new Map<string, Journey>();
+  const environments = new Map<SuiteJourney, ResolvedJourneyEnvironment>();
   if (t.journeys.length > 0) {
     const registry = new JourneyRegistry(new FsJourneyStore(t.journeysDir ?? opts.journeysDir));
     for (const sj of t.journeys) {
       const j = await registry.get(sj.id);
       if (j === null || j === undefined) throw new CheckPreflightError(`target ${t.name}: unknown Journey ${JSON.stringify(sj.id)}`);
       if (!j.metadata.promoted) throw new CheckPreflightError(`target ${t.name}: Journey ${sj.id} is not promoted`);
+      // #247: an item's `env`/`baseUrl` — resolved and the Journey rebased onto it now, so an unknown
+      // environment or a step on an origin it does not allow refuses the suite before anything runs.
+      let env: ResolvedJourneyEnvironment | undefined;
+      try {
+        env = resolveJourneyEnvironment({
+          ...(sj.env === undefined ? {} : { env: sj.env }),
+          ...(sj.baseUrl === undefined ? {} : { baseUrl: sj.baseUrl }),
+          ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }),
+          targets: opts.targetsConfig ?? {},
+        });
+        applyJourneyEnvironment(j, env);
+      } catch (e) {
+        if (!isEnvironmentError(e)) throw e;
+        throw new CheckPreflightError(`target ${t.name}: Journey ${sj.id}: ${e.message}`);
+      }
+      if (env !== undefined) environments.set(sj, env);
       let origin: string;
       try {
-        origin = new URL(j.recording.site).origin;
+        origin = new URL(env?.baseUrl ?? j.recording.site).origin;
       } catch {
         throw new CheckPreflightError(`target ${t.name}: Journey ${sj.id} has no site origin (${JSON.stringify(j.recording.site)})`);
       }
@@ -442,6 +468,7 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     target: t,
     allowlist,
     journeys,
+    ...(environments.size === 0 ? {} : { environments }),
     goals,
     ...(invariants === undefined ? {} : { invariants }),
     ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),

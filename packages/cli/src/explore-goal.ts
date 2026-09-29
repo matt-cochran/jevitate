@@ -3,7 +3,10 @@ import { sessionLostReason } from "./session-check.js";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
+import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
@@ -82,8 +85,16 @@ export interface RunExplorationOptions {
   readonly outDir?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  readonly browser?: BrowserRunOptions;
+  /** #251 `--screenshots`: masked screenshots (one per distinct screen, or per step) + `index.md`. */
+  readonly screenshots?: ScreenshotsSpec;
+  /**
+   * #250 `--evidence-video`: after the result is written, each defect's minimal repro is replayed
+   * with captions (the failing step marked) into a masked clip + before/at screenshots, attached as
+   * `defects[].evidence` (and to its issue draft).
+   */
+  readonly evidenceVideo?: boolean;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -184,6 +195,8 @@ export interface RunExplorationResult {
   readonly actions: number;
   /** Every Recording the run wrote (#195: one list on every strategy) — a goal run writes one. */
   readonly recordingPaths: string[];
+  /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
+  readonly videoPaths?: string[];
   /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
   readonly recordingPath: string;
   /**
@@ -338,21 +351,32 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     throw new Error("runExploration: storageState must be the primary actor's own");
   }
   const primaryState = opts.actors?.primary.storageState ?? opts.storageState;
-  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
+  // paint; `--screenshots` captures after each step (the Recording path names their folder).
+  const capture = runCaptureFor({
+    recordsVideo: opts.browser?.recordVideo !== undefined,
+    screenshots: opts.screenshots,
+    secrets: secrets ?? [],
+    artifactPath: () => journal.recordingPath,
+    title: `goal: ${opts.goal}`,
+  });
+  const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
-  const launch = {
-    headless: true,
-    allowedOrigins: [...opts.allowlist],
-    baseUrl: origin,
-    ...opts.browser,
-    ...opts.emulation,
-    ...(primaryState !== undefined ? { storageState: primaryState } : {}),
-  };
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
   // itself creates `outDir` synchronously (mkdirSync).
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
+  // #245: every session this run opens (mission, observers, hang replays) is shown/recorded alike.
+  const videoDir = runVideoDir(opts.browser, journal.recordingPath);
+  const shown = sessionLaunchOptions(opts.browser, videoDir);
+  const launch = {
+    ...shown,
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+    ...opts.emulation,
+    ...(primaryState !== undefined ? { storageState: primaryState } : {}),
+  };
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
@@ -370,6 +394,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       hostHealth: hooks.hostHealth,
       transcriptPath: journal.transcriptPath,
       transcript: () => journal.transcript,
+      ...(videoDir === undefined ? {} : { videoDir }),
       ...(runUsage === undefined ? {} : { usage: runUsage }),
       ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
     }),
@@ -380,7 +405,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const observers =
     opts.actors === undefined || opts.actors.observers.length === 0
       ? undefined
-      : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
+      : observerSessions(portFactory, { ...shown, allowedOrigins: [...opts.allowlist], baseUrl: origin }, opts.actors.observers);
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
@@ -395,11 +420,17 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // #159: every settled step also refreshes the in-memory storageState snapshot (cheap no-op when
   // `--save-storage-state` was not given — `snapshotter.noteSettledStep` checks `enabled` itself).
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    capture.noteEntry(session.page, entry);
     health.noteStep(entry);
     http5xx.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
+  // #159/#245: persisted and closed once — early (before the result is written) when recording video.
+  const closeSession = closeOnce(async () => {
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
+    await closeQuietly(session);
+  });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
@@ -436,6 +467,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(observers === undefined ? {} : { observers }),
       ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
       hostHealth: health,
+      demoOverlay: demoOverlayOf(opts.browser),
     });
     await observers?.close();
 
@@ -453,7 +485,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
     const loggedOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
     // #208: an HTTP 5xx is a hard-signal defect — `defects-found` even when the goal's checks held.
-    const httpDefects = http5xx.defects(mission.transcript);
+    const httpDefects = http5xx.defects(mission.transcript, mission.recording.pages.flatMap((p) => p.steps)[0]?.step.kind === "navigate" ? 1 : 0);
     const hardOutcome = applyHttp5xxGoalOutcome(loggedOutcome, httpDefects);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
     // #213: a starved `failed` goal keeps the check that did not hold in its degraded reason.
@@ -485,6 +517,9 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       opts.issueFiler ?? NO_FILER,
       iso,
     );
+    // #245: every context closed (videos finalized) before the result naming them is written.
+    const shotFields = await capture.finish();
+    const videos = await finalizeVideos(videoDir, closeSession);
 
     const result: RunExplorationResult = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
@@ -512,6 +547,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       actions: mission.run.actions,
       recordingPaths: [journal.recordingPath],
       recordingPath: journal.recordingPath,
+      ...videos,
+      ...shotFields,
       transcriptPath: journal.transcriptPath,
       transcript: serverLogRun?.transcript ?? mission.transcript,
       exitCode: goalExitCode(goalOutcome),
@@ -571,7 +608,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, result.missionOutcome, result.exitCode, result, runUsage);
-    return result;
+    return await withRunEvidence(result, evidenceOf(opts, secrets ?? []));
   } finally {
     disarmKillSwitch();
     health.stop();
@@ -579,7 +616,6 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
     await observers?.close().catch(() => undefined);
-    await persistStorageState(session, opts.saveStorageState, snapshotter);
-    await closeQuietly(session);
+    await closeSession();
   }
 }

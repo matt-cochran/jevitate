@@ -1,6 +1,6 @@
 ---
 name: jevitate-sources
-description: Manage Jevitate's distributed Journey sources — add/list/pull/update/remove git-backed sources, trust individual Journeys (content-hash-bound), run a trusted remote Journey through the run-gate, and publish a local promoted Journey up to a source — via `jevitate source ...` and `jevitate journey publish`. Use when sharing Journeys across repos or trusting/running a third-party Journey; use jevitate-run-journey for an already-local Journey.
+description: Share Journeys across repos and teams with jevitate's git-backed sources. Covers add/list/pull/update/remove (`jevitate source ...`, MCP `sources`), human-only trust of a single Journey (content-hash-bound), running a trusted remote Journey through the run-gate (`source run`), and publishing a promoted local Journey (`journey publish`, MCP `publish_journey`). Use for third-party or shared Journeys. For a Journey already in this repo, use jevitate-run-journey.
 ---
 
 You add, trust, run, and publish federated Journeys across git-backed sources.
@@ -26,6 +26,11 @@ invokable surface, not a programmatic-only capability.
   `fill`/`select`/`press`/`handback`, or a navigate that could leave
   `declaredOrigins` — is conservatively `"risky"` and needs `source trust`
   before it can run.
+
+- Simpler, for Journeys your own team shares: mount a Journeys repo as a git submodule under
+  `.jevitate/journeys/<name>/`. Its Journeys appear as `<name>/<id>` in `journey list`/`find`/`run`,
+  `check` and the MCP tools, and the submodule pin is reviewed like code. Use sources (below) for
+  third-party Journeys that need Terms of Use and per-Journey trust.
 
 ## The source manifest shape
 
@@ -118,9 +123,9 @@ its root, or `source add`/`source update` refuse with `E_SOURCE_INVALID_MANIFEST
 - Never widen a Journey's declared origins on publish beyond what the human
   authorized just to make coverage pass.
 
-## Known gaps
+## MCP
 
-- There is no MCP-tool surface over federated sources yet — the
-  `find_capabilities`/`run_journey` MCP tools operate over the LOCAL promoted
-  store, not remote sources. Federated add/trust/run/publish are CLI-only today;
-  drive the `jevitate source ...` commands directly.
+- The `sources` tool takes `add`/`list`/`pull`/`update`/`remove`/`run` as its `action` (the same
+  gate and refusals as the CLI), and `publish_journey` mirrors `journey publish`. Accepting a
+  source's Terms of Use (`source add --accept-tou`) and `source trust` are CLI-only on purpose:
+  they are the human's consent, so tell the human the command instead of looking for a tool.

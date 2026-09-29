@@ -52,7 +52,7 @@ jevitate explore --url http://localhost:5173/imports --goal "import https://exam
   item — only its size is shown in a finding.
   Visual state: `read: "inViewport"` (the first match's visible fraction, 0..1),
   `read: { "attr": "<name>" }`, or `read: { "style": "<prop>", "channel": "alpha", "reduce": "min" }`
-  (a computed style from the allowlist above; with a `channel` it is a number, and `reduce`
+  (a computed style from a fixed allowlist of properties; with a `channel` it is a number, and `reduce`
   `first`/`min`/`max` picks across matches). For example, a heat map whose highlights must stay
   visible: `"heatAlpha": { "dom": { "selector": "[data-heat]", "read": { "style": "background-color",
   "channel": "alpha", "reduce": "min" } } }` with `"require": "heatSpans >= 1 -> heatAlpha > 0"`.
@@ -119,7 +119,7 @@ pass: it is counted in the result's `invariants` report.
 - `always`: an assertion that must hold after every action.
 
 The expression language is small: `before(x)`, `after(x)` (or just `x`), `delta(x)`,
-`+ - * /`, `== != < <= > >=`, `&&`, `||`, `->` (implication), `null`, `true` and `false`.
+`contains(list, x)`, `+ - * /`, `== != < <= > >=`, `&&`, `||`, `!`, `->` (implication), `null`, `true` and `false`.
 `settle` re-checks a **violated** `require` until it holds or `withinMs` passes, and only
 then counts the violation. An **unknown** result (an observable that could not be read —
 e.g. legitimately absent, `optional: true`) is never re-polled: it is reported at once, so

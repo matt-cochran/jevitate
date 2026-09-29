@@ -4,8 +4,10 @@ import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { parseScreenshotsArg } from "./run-screenshots.js";
 import { resolveRouteScope } from "@jevitate/explore";
 import { type SuiteExploreOptions } from "./suite-explore-options.js";
+import { type BrowserRunOptions } from "./browser-run-options.js";
 import { substituteSetupRefs } from "./mission-fixtures.js";
 import { type ConsolidatedDefect } from "@jevitate/findings";
 import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
@@ -15,6 +17,7 @@ import { loadRunFile } from "./report-api.js";
 import { GOAL_ONLY_OUTCOMES } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
+import { applyJourneyEnvironment } from "./environments.js";
 
 // ── execution ────────────────────────────────────────────────────────────────
 
@@ -56,6 +59,17 @@ function bounds(maxActions: number | undefined, maxDecisions: number | undefined
   return Object.keys(b).length > 0 ? b : undefined;
 }
 
+/** A goal/mission item's `browser` (#245): the check's launch options plus the item's demo-mode options. */
+function itemBrowser(base: BrowserRunOptions | undefined, x: SuiteExploreOptions): BrowserRunOptions | undefined {
+  const demo: BrowserRunOptions = {
+    ...(x.headed === true ? { headed: true } : {}),
+    ...(x.slowMo === undefined ? {} : { slowMo: x.slowMo }),
+    ...(x.recordVideo === undefined ? {} : { recordVideo: { dir: x.recordVideo } }),
+    ...(x.overlay === false ? { overlay: false } : {}),
+  };
+  return Object.keys(demo).length === 0 ? base : { ...base, ...demo };
+}
+
 export async function execute(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
   const { opts, runners } = ctx;
   const t = item.t.target;
@@ -69,10 +83,19 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
   const setup = item.setup;
   const x: SuiteExploreOptions = setup?.x ?? {};
   const session = setup !== undefined ? setup.storageState : sessionOf(t, item.journey?.storageState ?? item.verify?.storageState);
+  // #245: an item's demo mode (headed/slowMo/recordVideo/overlay) on top of the check's launch flags.
+  const browser = itemBrowser(opts.browser, x);
+  // #251: an item's `screenshots` (validated at preflight); #250: `evidenceVideo`, on by default
+  // when the item records video — each defect's captioned repro clip + key screenshots, attached to
+  // the result (and so to JUnit, SARIF and report.md).
+  const screenshots = parseScreenshotsArg(x.screenshots, "screenshots");
+  const evidenceOn = x.evidenceVideo ?? browser?.recordVideo !== undefined;
   const common = {
+    ...(screenshots === undefined ? {} : { screenshots }),
+    ...(evidenceOn ? { evidenceVideo: true } : {}),
     outDir: ctx.resultsDir,
     ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-    ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+    ...(browser === undefined ? {} : { browser }),
     ...(session === undefined ? {} : { storageState: session }),
     ...(x.saveStorageState === undefined ? {} : { saveStorageState: x.saveStorageState }),
   };
@@ -110,10 +133,14 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
   const targetSafety = config?.safety === undefined ? {} : { safety: config.safety };
 
   if (item.kind === "journey" && item.journey !== undefined) {
-    const j = item.t.journeys.get(item.journey.id);
-    if (j === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
+    const stored = item.t.journeys.get(item.journey.id);
+    if (stored === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
     const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
     const sj = item.journey;
+    // #247: the item's environment (resolved and checked at preflight); its session when the item and target name none.
+    const environment = item.t.environments?.get(sj);
+    const j = applyJourneyEnvironment(stored, environment);
+    const journeySession = session ?? (sj.storageState === null ? undefined : environment?.storageState);
     const r = await withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({
       ...(siteGate === undefined ? {} : { siteGate }),
       dir: t.journeysDir ?? opts.journeysDir,
@@ -123,8 +150,9 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
       // #170: the item's session (default: the target's), exactly as `journey run --storage-state` (#118), and its fixtures.
-      ...(session === undefined ? {} : { storageState: session }),
-      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, session), site) }),
+      ...(journeySession === undefined ? {} : { storageState: journeySession }),
+      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site) }),
+      ...(environment === undefined ? {} : { environment }),
     }));
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);

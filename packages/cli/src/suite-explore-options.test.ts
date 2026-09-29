@@ -144,10 +144,19 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     // a hook outliving the timeout fails the setup: the runner is never reached
     hookTimeoutMs: { kind: "goal", set: 50, with: { before: "sleep 1", allowShellHooks: true } },
     allowVacuousChecks: { kind: "goal", set: true },
+    // #245: demo mode reaches the runner's `browser` option
+    headed: { kind: "coverage", set: true },
+    slowMo: { kind: "feature", set: 100 },
+    recordVideo: { kind: "goal", set: "videos" },
+    overlay: { kind: "usability", set: false, with: { headed: true } },
+    // #251/#250: capture modes reach the runner as `screenshots` / `evidenceVideo`
+    screenshots: { kind: "goal", set: "steps" },
+    evidenceVideo: { kind: "coverage", set: true },
   };
 }
 
-const ENV = { SUITE_SECRET: "s3cr3t-value", SUITE_TOTP: "JBSWY3DPEHPK3PXP" };
+// DISPLAY: a headed item (#245) needs a display; without one it is refused at preflight.
+const ENV = { SUITE_SECRET: "s3cr3t-value", SUITE_TOTP: "JBSWY3DPEHPK3PXP", DISPLAY: ":99" };
 
 function item(kind: ExploreItemKind, opts: Record<string, unknown>): { goals?: unknown[]; missions?: unknown[] } {
   if (kind === "goal") return { goals: [{ name: "g", goal: "do it", success: ["urlIncludes:/done"], ...opts }] };

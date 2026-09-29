@@ -74,6 +74,18 @@ export interface TargetConfig {
   /** Raw `--log-ignore` specs (a `/regex/` or a plain substring), evaluated the same way as the CLI
    *  flag (#169 item 3). */
   readonly logIgnore?: readonly string[];
+  /**
+   * #247: one session per persona on this origin (an environment's origin, `--env`): each persona's
+   * own storageState path (relative to this file) and `env:VAR` secret-field specs. Never committed:
+   * the repo's `.jevitate/environments.json` refuses any session or secret key.
+   */
+  readonly personas?: Readonly<Record<string, TargetPersona>>;
+}
+
+/** A persona's session on one origin (#247). */
+export interface TargetPersona {
+  readonly storageState?: string;
+  readonly secretFields?: readonly string[];
 }
 
 const SECRET_FIELD_SPEC = /^(label|testId|type|id|name)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
@@ -106,6 +118,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     secretFields?: string[];
     logQuietOk?: string[];
     logIgnore?: string[];
+    personas?: Record<string, TargetPersona>;
   } = {};
   if (o.storageState !== undefined) {
     if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
@@ -136,6 +149,23 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
       }
     });
     out.secretFields = specs;
+  }
+  if (o.personas !== undefined) {
+    if (o.personas === null || typeof o.personas !== "object" || Array.isArray(o.personas)) throw new TargetConfigError(`${where}.personas must be an object keyed by persona name`);
+    const personas: Record<string, TargetPersona> = {};
+    for (const [name, pv] of Object.entries(o.personas as Record<string, unknown>)) {
+      const pw = `${where}.personas.${name}`;
+      if (pv === null || typeof pv !== "object" || Array.isArray(pv)) throw new TargetConfigError(`${pw} must be an object { storageState?, secretFields? }`);
+      const po = pv as Record<string, unknown>;
+      for (const k of Object.keys(po)) if (k !== "storageState" && k !== "secretFields") throw new TargetConfigError(`${pw}.${k}: unknown key (allowed: storageState, secretFields)`);
+      // The same validation as the origin's own storageState/secretFields.
+      const parsed = parseTarget({ ...(po.storageState === undefined ? {} : { storageState: po.storageState }), ...(po.secretFields === undefined ? {} : { secretFields: po.secretFields }) }, pw, baseDir);
+      personas[name] = {
+        ...(parsed.storageState === undefined ? {} : { storageState: parsed.storageState }),
+        ...(parsed.secretFields === undefined ? {} : { secretFields: parsed.secretFields }),
+      };
+    }
+    out.personas = personas;
   }
   if (o.fixtures !== undefined) {
     if (typeof o.fixtures !== "string" || o.fixtures === "") throw new TargetConfigError(`${where}.fixtures must be a file path`);
@@ -286,5 +316,6 @@ export function resolveTargetConfig(
     ...(base.secretFields === undefined ? {} : { secretFields: base.secretFields }),
     ...(base.logQuietOk === undefined ? {} : { logQuietOk: base.logQuietOk }),
     ...(base.logIgnore === undefined ? {} : { logIgnore: base.logIgnore }),
+    ...(base.personas === undefined ? {} : { personas: base.personas }),
   };
 }

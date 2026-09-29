@@ -16,7 +16,7 @@ export { installFlashRecorder, readFlashes, type FlashQuery, type FlashResult } 
 export { applyTextEdit, describeTextEdit } from "./rich-text.js";
 export { runStep } from "./run-step.js";
 export type { StepOutcome } from "./outcome.js";
-export { RecordingInterpreter } from "./interpreter.js";
+export { RecordingInterpreter, type StepObserver } from "./interpreter.js";
 export type { InterpretResult } from "./interpret-result.js";
 export { BufferingSink } from "./sink.js";
 export type { RecordingSink, ToRecordingOptions } from "./sink.js";

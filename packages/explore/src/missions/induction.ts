@@ -48,6 +48,7 @@ import { reachFrontierState } from "../coverage/reach.js";
 import { ChromeTracker } from "../feature/relevance.js";
 import { StallWatchdog, StalledError } from "../stall-watchdog.js";
 import { isNavControl } from "../coverage/nav.js";
+import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import {
   assessCoverageSufficiency,
   resolveCoverageSufficiencyThresholds,
@@ -238,6 +239,8 @@ export interface InductionMissionParams {
   readonly secrets?: readonly string[];
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
+  /** #245: show the on-page demo overlay (display only; invisible to the run). Default off: nothing injected. */
+  readonly demoOverlay?: boolean;
   /**
    * `coverage` (default): the exhaustive breadth sweep. `exploratory`: novelty-seeking — the control
    * that appeared most recently is tried first, following what each action revealed (#115).
@@ -389,7 +392,9 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   // `declared` above is non-null whenever `params.invariants` is given, whatever its `invariants` array.
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
-  const result = { ...(await runInductionFrontier(params, declared, safety, budget)), ...safety.result() };
+  const overlay = demoOverlayFor(params.demoOverlay, params.secrets ?? []);
+  const result = { ...(await runInductionFrontier(params, declared, safety, budget, overlay)), ...safety.result() };
+  await overlay?.finish(`jevitate · coverage — ${result.outcome}`, result.outcome === "exhausted" || result.outcome === "cap" || result.outcome === "budget");
   // #195: the shared end-of-run path — a never.response hit to the LAST action is never lost.
   if (declared !== null) await finishDeclaredRun(declared);
   return {
@@ -404,6 +409,7 @@ async function runInductionFrontier(
   declared: Declared | null,
   safety: MissionSafety,
   budget: BudgetMonitor | null,
+  overlay: DemoOverlay | null = null,
 ): Promise<InductionRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
@@ -729,6 +735,20 @@ async function runInductionFrontier(
           });
         }
         continue;
+      }
+      // #245: the demo overlay says what is about to happen and highlights the target (display only).
+      if (overlay !== null) {
+        await overlay.announce(
+          sessions.page,
+          {
+            step: transcript.nextStep,
+            strategy: "coverage",
+            op: item.op,
+            target: liveControl.name || liveControl.summary,
+            why: "map every reachable state of the app",
+          },
+          liveControl,
+        );
       }
       const actedOn = snap.url;
       watchdog.during(`acting on "${liveControl.name || item.op}"`);

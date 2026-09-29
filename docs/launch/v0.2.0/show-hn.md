@@ -30,7 +30,7 @@ So Jevitate splits the two jobs:
 
 - **What to try next** can be nondeterministic. In goal runs, a judgment model (Jev, from
   TypeSafe) picks among the controls the code enumerated. Adversarial, coverage and feature runs
-  plan their actions in code: form misuse, boundary and unicode values, acting while a save is
+  plan their actions in code (as do exploratory runs): form misuse, boundary and unicode values, acting while a save is
   pending, breadth-first or novelty-first state frontiers.
 - **Whether it failed** is decided only by code, from evidence the browser produced: HTTP 5xx,
   uncaught exceptions, console errors, failed requests, hangs (confirmed by replaying them), your
@@ -58,7 +58,12 @@ Other things that turned out to matter in real use:
   refused by default. Secrets are redacted before any model call, and a bound password is typed by
   code while the model sees a placeholder.
 - **Agents.** There's an MCP server with an allowlist of domain tools (queue a mission, read a
-  result, verify a fix). Raw `browser_click`-style tools are deliberately forbidden.
+  result, verify a fix). Raw `browser_click`-style tools are deliberately forbidden. Every CLI
+  command is reachable over MCP and the reverse, checked by a test.
+- **Showing your work.** `--headed` opens a visible browser, `--record-video` records any run, and
+  `--evidence-video` attaches a captioned clip and before/at screenshots to each defect, with the
+  failing step marked (secrets are masked in the pixels). `journey demo` turns a Journey into a
+  narrated video with subtitles and a Markdown guide.
 
 Limitations: goal and usability runs need API keys and cost money per model call; it's
 Chromium-only; runs against one stateful account should be sequential; a hard-signal defect like
@@ -84,6 +89,9 @@ as a defect by default?
 - **"Cost?"** Keyless for adversarial, coverage and feature runs with `--fake-ai`. Goal runs
   report `usage` with the full run cost: Jev calls are priced by default from a dated built-in
   price table (or your own prices), and `priced: partial` says when any call could not be priced.
+- **"Can it make demo videos?"** Yes, for a Journey (`journey demo`: video, `.vtt` subtitles,
+  Markdown guide) or from a one-line request (`demo "<aspect>" --env staging`), which drafts a demo
+  and promotes nothing until a human runs `demo approve`. It refuses production environments.
 - **"Is it safe to run on production?"** It's designed for apps you're authorized to test. It
   refuses destructive and paid clicks by default and lists every write request it fires, but
   staging is the right place.

@@ -111,6 +111,11 @@ relative paths resolve against the suite file):
   anything runs.
 - `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
   Journeys follow the site policy for their origin ([site policies](./journeys.md#site-policies)).
+  A Journey's object form takes `env` (a name from `.jevitate/environments.json`) and/or `baseUrl`
+  (an origin) to run it against that environment instead of its recorded site, exactly as
+  `journey run --env`/`--base-url` ([environments](./journeys.md#environments---env)); the
+  environment's origin must be on the target's allowlist. An unknown environment, or a step on an
+  origin the environment does not allow, refuses the suite before anything runs.
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
   frontier from `url`. To lint the files themselves in an earlier, browser-free CI step, run
@@ -178,6 +183,7 @@ boolean, and a number is a JSON number.
 | Scope and coverage | `scope` (`"app"`), `minControlCoverage`, `requireFormSubmit` | `scope`: coverage, exploratory; the others: adversarial |
 | Overflow (#149) | `checkOverflow`, `ignoreOverflow` | coverage, exploratory, adversarial, usability |
 | Usability | `show`, `minConfidence`, `maxFindingsPerPage` | usability |
+| Demo mode (#245) | `headed`, `slowMo` (ms), `recordVideo` (a directory, resolved against the suite file), `overlay` (`false` = `--no-overlay`) | every goal and mission |
 
 - An item that sets an option that does not apply to it is refused, naming the path
   (`$.targets[0].missions[1].fixture: does not apply to a coverage mission item`), just as
@@ -198,6 +204,16 @@ boolean, and a number is a JSON number.
   `explore --persona` for the RBAC diff). An item with `actor`, `persona` or `personas` cannot also
   set its own `storageState`.
 - Journey and `verifyFix` items take `storageState` too (a path, or `null`).
+- **Demo mode is per item and off by default (#245).** A check stays headless, CI included:
+  `JEVITATE_HEADED` does not apply to `check`. An item (or a target default) sets `headed: true`
+  to show its browser — refused at preflight when there is no display, like `--headed` — or
+  `recordVideo: "videos"` to record it headless; the item's result then lists `videoPaths`.
+- **Evidence and screenshots (#250/#251).** An item that records video also gets each defect's
+  captioned repro clip and before/at screenshots (`evidenceVideo`, default on with `recordVideo`;
+  `false` turns it off). JUnit carries them as `attachment` properties and `[[ATTACHMENT|path]]`
+  lines, SARIF as `attachments`/`relatedLocations` — upload the `results/` folder as a CI artifact
+  so the links resolve. `screenshots: "steps"` (or `"screens"`, `"<dir>"`) adds masked screenshots
+  and an `index.md` to the item's result.
 - `saveStorageState` (like `explore --save-storage-state`) is refused when it resolves inside a
   repo's `.jevitate/`, which never holds sessions or secrets: write it under `~/.jevitate/` or
   outside the repo.

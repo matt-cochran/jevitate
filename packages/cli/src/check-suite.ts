@@ -75,6 +75,10 @@ export interface SuiteJourney {
   readonly routes?: readonly string[];
   /** The item's own session (`null`: none, whatever the target's); default: the target's. */
   readonly storageState?: string | null;
+  /** #247: a named environment (`.jevitate/environments.json`) to run the Journey against; default: its recorded site. */
+  readonly env?: string;
+  /** #247: an origin to run the Journey against (with `env`, replaces its baseUrl). */
+  readonly baseUrl?: string;
 }
 
 /** What goal and mission items may set beyond their own fields (#195). */
@@ -299,7 +303,7 @@ const NO_LITERAL = "a suite never carries a literal secret; the value is read fr
  */
 export const SUITE_FIELDS = {
   target: ["name", "url", "allow", "storageState", "secretFields", "fixtures", "invariants", "journeysDir", "journeys", "goals", "missions", "verifyFix", "viewport", "device"],
-  journey: ["id", "params", "routes", "viewport", "device", "storageState"],
+  journey: ["id", "params", "routes", "viewport", "device", "storageState", "env", "baseUrl"],
   goal: ["name", "goal", "success", "url", "successWhen", "routes", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields", "fixtures"],
   mission: ["name", "strategy", "url", "routes", "feature", "goal", "appClass", "success", "successWhen", "maxActions", "maxDecisions", "viewport", "device", "storageState", "secretFields"],
   verifyFix: ["name", "result", "fingerprint", "replays", "storageState"],
@@ -437,11 +441,15 @@ function journeyOf(r: Reader, v: unknown, path: string): SuiteJourney {
   if (!isRecord(params) || !Object.values(params).every((p) => typeof p === "string")) r.fail(`${path}.params`, "must be an object of string values");
   const routes = r.strings(v, "routes", path);
   const emulation = r.emulation(v, path);
+  const env = r.string(v, "env", path, true);
+  const baseUrl = r.url(v, "baseUrl", path, true);
   return {
     id: r.string(v, "id", path),
     params: params as Record<string, string>,
     ...(routes.length === 0 ? {} : { routes }),
     ...(emulation === undefined ? {} : { emulation }),
+    ...(env === undefined ? {} : { env }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
     ...storageStateOf(r, v, path),
   };
 }

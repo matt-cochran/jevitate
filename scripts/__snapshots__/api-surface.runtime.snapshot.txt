@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (79 exports)
+# @jevitate/ai-core (85 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -24,8 +24,14 @@
   GoalAnswerInput: object
   GoalAnswerOutput: object
   JEV_PRICE_TABLE: object
+  JOURNEY_GOAL_INSTRUCTIONS: const (string)
+  JOURNEY_STEP_INSTRUCTIONS: const (string)
   JevJudgmentGateway: class
   JevResponseError: class
+  JourneyGoalInput: object
+  JourneyGoalOutput: object
+  JourneyStepInput: object
+  JourneyStepOutput: object
   MAX_CHOICE_OPTIONS: const (number)
   MissingCredentialError: class
   ModelConstraintsSchema: object
@@ -141,7 +147,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (301 exports)
+# @jevitate/explore (307 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -167,7 +173,11 @@
   DEFAULT_VERIFY_REPLAYS: const (number)
   DEFERRED_EFFECT_MAX_MS: const (number)
   DEGRADED_STEP_MAJORITY: const (number)
+  DEMO_HIGHLIGHT_MS: const (number)
+  DEMO_OVERLAY_ATTR: const (string)
+  DEMO_OVERLAY_HIDE_STYLE: const (string)
   DESTRUCTIVE: object
+  DemoOverlay: class
   EXPLORE: const (string)
   FORM_MISUSE_STRATEGIES: array
   FORM_TEXT_MAX_CHARS: const (number)
@@ -282,6 +292,7 @@
   controlFields: function
   controlKey: function
   controlRisk: function
+  coverageStateFingerprint: function
   coveredByInterceptors: function
   currentEnvironment: function
   decide: function
@@ -289,6 +300,7 @@
   defaultLoadPerCore: function
   defectTitle: function
   degradedEnvironmentOutcome: function
+  demoOverlayFor: function
   describeAction: function
   describeAssertionSpec: function
   describeCheck: function
@@ -525,12 +537,23 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (6 exports)
+# @jevitate/journey (17 exports)
+  AnnotationDraftMismatchError: class
+  AnnotationDraftSchema: object
+  AnnotationDraftStepSchema: object
   FsJourneyStore: class
   JourneyRegistry: class
   JourneySchema: object
   ParamValidationError: class
+  SECRET_PARAM_NAME_RE: object
+  applyAnnotationDraft: function
   deriveParamSchema: function
+  describeStep: function
+  flatJourneySteps: function
+  formatAnnotationChanges: function
+  intentCoverage: function
+  secretParamNames: function
+  secretParamValues: function
   validateParams: function
 
 # @jevitate/load (8 exports)
@@ -567,7 +590,7 @@
   queueExploration: function
   runJourney: function
 
-# @jevitate/missions (16 exports)
+# @jevitate/missions (17 exports)
   BudgetExceedsCeilingError: class
   FsMissionQueueStore: class
   FsMissionTargetStore: class
@@ -577,6 +600,7 @@
   MissionTargetRegistry: class
   MissionTargetSchema: object
   QUEUED_MISSION_STATUSES: array
+  QUEUED_SCREENSHOT_MODES: array
   QueuedMissionSchema: object
   SAFE_ID_RE: object
   SECRET_FIELD_SPEC_RE: object

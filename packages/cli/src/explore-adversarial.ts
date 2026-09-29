@@ -2,7 +2,10 @@
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
+import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec } from "@jevitate/recording";
 import type { HostHealthSampler } from "@jevitate/explore";
@@ -96,11 +99,18 @@ export interface RunAdversarialCliMissionOptions {
   readonly usage?: UsageTracker;
   /** Step/action budget (CLI `--max-decisions` / `--max-actions`). */
   readonly bounds?: Partial<Bounds>;
-  readonly headless?: boolean;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  readonly browser?: BrowserRunOptions;
+  /** #251 `--screenshots`: masked screenshots (one per distinct screen, or per step) + `index.md`. */
+  readonly screenshots?: ScreenshotsSpec;
+  /**
+   * #250 `--evidence-video`: after the result is written, each defect's minimal repro is replayed
+   * with captions (the failing step marked) into a masked clip + before/at screenshots, attached as
+   * `defects[].evidence` (and to its issue draft).
+   */
+  readonly evidenceVideo?: boolean;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -156,6 +166,8 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly defects: Array<AdversarialDefect | ServerLogDefect>;
   /** Every Recording the run wrote (#195: one list on every strategy) — an adversarial run writes one. */
   readonly recordingPaths: string[];
+  /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
+  readonly videoPaths?: string[];
   readonly target: MissionTarget;
   /** One ready-to-file draft per defect (and per crash), written next to the Recording. */
   readonly issues: FindingsIssues;
@@ -198,20 +210,30 @@ export async function runAdversarialCliMission(
   startRouteGlobs(opts.seedUrl);
   // #149: refused BEFORE any browser opens.
   const resolvedEmulation = resolveEmulation(opts.emulation);
-  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
+  // paint; `--screenshots` captures after each step (the Recording path names their folder).
+  const capture = runCaptureFor({
+    recordsVideo: opts.browser?.recordVideo !== undefined,
+    screenshots: opts.screenshots,
+    secrets: opts.secrets ?? [],
+    artifactPath: () => journal.recordingPath,
+    title: `adversarial run of ${opts.seedUrl}`,
+  });
+  const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
-  const launch = {
-    headless: opts.headless ?? true,
-    allowedOrigins: [...opts.allowlist],
-    baseUrl: origin,
-    ...opts.browser,
-    ...opts.emulation,
-    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  };
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `adversarial-${artifactStamp(iso)}.json`));
+  // #245: the mission session and every hang-replay session are shown/recorded alike.
+  const videoDir = runVideoDir(opts.browser, journal.recordingPath);
+  const launch = {
+    ...sessionLaunchOptions(opts.browser, videoDir),
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+    ...opts.emulation,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+  };
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
   // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
@@ -225,6 +247,7 @@ export async function runAdversarialCliMission(
       target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
       recordingPath: journal.recordingPath,
       hostHealth: hooks.hostHealth,
+      ...(videoDir === undefined ? {} : { videoDir }),
       transcriptPath: journal.transcriptPath,
       transcript: () => journal.transcript,
       ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -241,14 +264,21 @@ export async function runAdversarialCliMission(
     onTranscriptEntry: journal.onTranscriptEntry,
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    capture.noteEntry(session.page, entry);
     health.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
+  // #159/#245: persisted and closed once — early (before the result is written) when recording video.
+  const closeSession = closeOnce(async () => {
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
+    await closeQuietly(session);
+  });
   try {
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
       hostHealth: health,
+      demoOverlay: demoOverlayOf(opts.browser),
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
@@ -307,12 +337,17 @@ export async function runAdversarialCliMission(
       opts.issueFiler ?? NO_FILER,
       iso,
     );
+    // #245: every context closed (videos finalized) before the result naming them is written.
+    const shotFields = await capture.finish();
+    const videos = await finalizeVideos(videoDir, closeSession);
     const result = {
       ...outcome,
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "adversarial" as const,
       missionOutcome,
       recordingPaths: [journal.recordingPath],
+      ...videos,
+      ...shotFields,
       // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
       recording:
         resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
@@ -338,12 +373,11 @@ export async function runAdversarialCliMission(
       ...(host.failure === undefined || outcome.failure !== undefined ? {} : { failure: host.failure }),
       ...host.fields,
     };
-    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) };
+    return await withRunEvidence({ ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) }, evidenceOf(opts, opts.secrets ?? []));
   } finally {
     disarmKillSwitch();
     health.stop();
     await serverLog?.abort();
-    await persistStorageState(session, opts.saveStorageState, snapshotter);
-    await closeQuietly(session);
+    await closeSession();
   }
 }

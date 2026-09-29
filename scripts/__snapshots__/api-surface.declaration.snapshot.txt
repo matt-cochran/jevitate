@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (126 exports)
+# @jevitate/ai-core (132 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -55,6 +55,12 @@
   JevPricing: interface
   JevResponseError: class
   jittered: function
+  JOURNEY_GOAL_INSTRUCTIONS: variable
+  JOURNEY_STEP_INSTRUCTIONS: variable
+  JourneyGoalInput: variable
+  JourneyGoalOutput: variable
+  JourneyStepInput: variable
+  JourneyStepOutput: variable
   JudgmentPort: interface
   JudgmentState: interface
   MAX_CHOICE_OPTIONS: variable
@@ -235,7 +241,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (472 exports)
+# @jevitate/explore (481 exports)
   act: function
   ActArgs: interface
   ActResult: interface
@@ -308,6 +314,7 @@
   CoverageReport: interface
   CoverageScope: interface
   CoverageScopeDeparture: interface
+  coverageStateFingerprint: other
   CoverageSufficiency: interface
   CoverageSufficiencyThresholds: interface
   CoverageThresholds: interface
@@ -342,6 +349,14 @@
   DEFERRED_EFFECT_MAX_MS: variable
   DEGRADED_STEP_MAJORITY: variable
   degradedEnvironmentOutcome: function
+  DEMO_HIGHLIGHT_MS: variable
+  DEMO_OVERLAY_ATTR: variable
+  DEMO_OVERLAY_HIDE_STYLE: variable
+  DemoCaption: interface
+  DemoCardTone: type-alias
+  DemoOverlay: class
+  demoOverlayFor: function
+  DemoOverlayIntent: interface
   describeAction: function
   describeAssertionSpec: function
   describeCheck: function
@@ -790,7 +805,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (46 exports)
+# @jevitate/interpreter (47 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -830,6 +845,7 @@
   runStep: other
   SizeBounds: other
   sizeViolation: other
+  StepObserver: other
   StepOutcome: other
   styleChannel: other
   stylesOf: other
@@ -838,16 +854,35 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (11 exports)
+# @jevitate/journey (30 exports)
+  AnnotationChange: interface
+  AnnotationDraft: type-alias
+  AnnotationDraftMismatchError: class
+  AnnotationDraftSchema: variable
+  AnnotationDraftStep: type-alias
+  AnnotationDraftStepSchema: variable
+  applyAnnotationDraft: function
   deriveParamSchema: function
+  describeStep: function
+  FlatJourneyStep: interface
+  flatJourneySteps: function
+  formatAnnotationChanges: function
   FsJourneyStore: class
+  intentCoverage: function
+  IntentCoverage: interface
   Journey: interface
   JourneyMetadata: interface
+  JourneyParameter: interface
+  JourneyPrecondition: interface
   JourneyRegistry: class
   JourneySchema: variable
   JourneyStore: interface
+  JourneySuccessCriterion: interface
   ParamSchema: interface
   ParamValidationError: class
+  SECRET_PARAM_NAME_RE: variable
+  secretParamNames: function
+  secretParamValues: function
   SecretRef: interface
   validateParams: function
 
@@ -905,7 +940,7 @@
   QueueExplorationResult: interface
   runJourney: function
 
-# @jevitate/missions (26 exports)
+# @jevitate/missions (27 exports)
   Budget: type-alias
   BudgetExceedsCeilingError: class
   ClaimOwner: interface
@@ -925,6 +960,7 @@
   MissionTargetSchema: variable
   MissionTargetStore: interface
   QUEUED_MISSION_STATUSES: variable
+  QUEUED_SCREENSHOT_MODES: variable
   QueuedMission: interface
   QueuedMissionSchema: variable
   QueuedMissionStatus: type-alias

@@ -248,6 +248,12 @@ export interface RealExecutorOptions {
   /** Builds fresh gateways (and a fresh usage tracker) per model-driven mission. */
   readonly gateways: () => Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }>;
   readonly browserPortFactory?: () => BrowserPort;
+  /**
+   * Launch options only — typed `BrowserLaunchOptions`, never the demo-mode `BrowserRunOptions`
+   * (#245): a queued mission (what MCP `queue_exploration` feeds) runs unattended, so it is always
+   * headless and overlay-free; `mission run` takes no --headed flag. It records a video only when
+   * the queued request itself asked (`recordVideo`, #255 — next to its result, never a path).
+   */
   readonly browser?: BrowserLaunchOptions;
   /**
    * `~/.jevitate/targets.json`, by origin (#142 follow-up): a queued mission NEVER carries its own
@@ -283,6 +289,7 @@ function queuedAuth(
   target: MissionTarget,
   targets: Readonly<Record<string, TargetConfig>> | undefined,
   env: Readonly<Record<string, string | undefined>>,
+  persona?: string,
 ): QueuedAuth {
   let config: TargetConfig = {};
   if (targets !== undefined) {
@@ -291,6 +298,28 @@ function queuedAuth(
     } catch {
       config = {};
     }
+  }
+  // #255: a queued persona NAME selects the operator's `personas.<name>` session for this origin
+  // (targets.json) — it wins over the target's default session. Unknown: the mission fails, never
+  // silently runs as the default user.
+  if (persona !== undefined) {
+    const p = config.personas?.[persona];
+    if (p === undefined) {
+      const known = Object.keys(config.personas ?? {});
+      throw new Error(
+        `persona '${persona}' is not declared for ${target.authorizedOrigin} in ~/.jevitate/targets.json (personas)` +
+          (known.length === 0 ? "" : ` — known personas: ${known.join(", ")}`),
+      );
+    }
+    if (p.storageState !== undefined && !existsSync(p.storageState)) {
+      throw new Error(`targets.json persona '${persona}' for ${target.authorizedOrigin}: storageState not found: ${p.storageState}`);
+    }
+    const secretFields = (p.secretFields ?? []).map((s) => parseSecretField(s, "value", env));
+    return {
+      ...(p.storageState === undefined ? {} : { storageState: p.storageState }),
+      secretFields,
+      ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
+    };
   }
   const fromRecord = target.storageState !== undefined;
   const storageState = target.storageState ?? config.storageState;
@@ -371,7 +400,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
     const withSafety = config?.safety === undefined ? {} : { safety: config.safety };
     // #175: the operator's session for this target (never the request's): every strategy starts
     // from its storage state; a goal mission also types its secret fields and runs its fixtures.
-    const auth = queuedAuth(target, opts.targets, opts.env ?? process.env);
+    const auth = queuedAuth(target, opts.targets, opts.env ?? process.env, mission.persona);
     const withStorageState = {
       ...(auth.storageState === undefined ? {} : { storageState: auth.storageState }),
       ...(auth.saveStorageState === undefined ? {} : { saveStorageState: auth.saveStorageState }),
@@ -389,6 +418,13 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
           };
     if (missionEmulation !== undefined) resolveEmulation(missionEmulation);
     const withEmulation = missionEmulation === undefined ? {} : { emulation: missionEmulation };
+    // #255: the media a queued mission asked for — always next to its result (a request never names
+    // a path), still headless and overlay-free.
+    const withMedia = {
+      ...(mission.recordVideo === true ? { browser: { ...opts.browser, recordVideo: {} } } : {}),
+      ...(mission.screenshots === undefined ? {} : { screenshots: { mode: mission.screenshots } }),
+      ...(mission.evidenceVideo === true ? { evidenceVideo: true } : {}),
+    };
     if (mission.strategy === "feature" || (mission.strategy === "goal-based" && mission.feature !== undefined)) {
       const r = await runFeatureCliMission({
         ...common,
@@ -402,6 +438,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
+        ...withMedia,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -409,9 +446,10 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
       throw new Error("a goal-based mission with only a route has no runner: queue it as strategy coverage or adversarial with that route");
     }
     const { judge, gen, usage } = await opts.gateways();
-    if (mission.strategy === "coverage") {
+    if (mission.strategy === "coverage" || mission.strategy === "exploratory") {
       const r = await runCoverageMission({
         ...common,
+        strategy: mission.strategy,
         url: target.baseUrl,
         allowlist,
         judge,
@@ -424,6 +462,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
+        ...withMedia,
       });
       return { resultPath: r.resultPath, missionOutcome: r.missionOutcome, exitCode: r.exitCode };
     }
@@ -443,6 +482,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
+        ...withMedia,
       });
       return { resultPath: r.resultPath, missionOutcome: r.outcome, exitCode: r.exitCode };
     }
@@ -483,6 +523,7 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         ...withServerLog,
         ...withEmulation,
         ...withStorageState,
+        ...withMedia,
         ...(auth.secretFields.length === 0 ? {} : { secretFields: auth.secretFields }),
         ...(fx === undefined ? {} : { fixtures: fx }),
       });

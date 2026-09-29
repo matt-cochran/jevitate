@@ -6,6 +6,7 @@ import { deriveParamSchema } from "@jevitate/journey";
 import type { Journey, JourneyMetadata } from "@jevitate/journey";
 import { runGoalBasedMission } from "../missions/goal-based.js";
 import type { Bounds } from "../bounds.js";
+import type { SafetyConfig } from "../safety.js";
 import { ValueCapturingGenerationPort } from "./value-capturing-generation-port.js";
 import { autoDecidePostdoc } from "./auto-decide.js";
 
@@ -27,6 +28,11 @@ export interface AuthorJourneyRequest {
   takes?: number;
   journeyId: string;
   journeyName: string;
+  /**
+   * The shared safety policy (#116) for the exploration (#249: the target's `safety` from
+   * targets.json). Absent: the built-in policy — paid, destructive and session-ending controls refused.
+   */
+  safety?: SafetyConfig;
 }
 
 export type AuthorJourneyResult =
@@ -56,6 +62,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     actor: req.actor,
     judge: req.judgment,
     gen: discoveryGeneration,
+    ...(req.safety === undefined ? {} : { safety: req.safety }),
   });
   if (discovery.outcome !== "succeeded") {
     return { outcome: "not-reached", reason: `discovery mission ${discovery.outcome}` };
@@ -84,6 +91,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
       actor: req.actor,
       judge: req.judgment,
       gen: replayGeneration,
+      ...(req.safety === undefined ? {} : { safety: req.safety }),
     });
     if (replay.outcome !== "succeeded") continue;
     authoringTakes.push({ recording: replay.recording, values: replayGeneration.capturedValues(replay.recording) });

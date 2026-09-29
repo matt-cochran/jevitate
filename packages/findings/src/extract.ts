@@ -27,6 +27,8 @@ import {
 export interface EvidenceRef {
   readonly step?: number;
   readonly screenshot?: string;
+  /** #250: a captioned repro clip of the finding (`defects[].evidence.videoPath`). */
+  readonly video?: string;
   readonly request?: string;
   readonly url?: string;
   readonly transcript?: string;
@@ -239,10 +241,19 @@ function defectObservation(d: Json, ctx: Ctx): FindingObservation | null {
     ...(request.url === undefined ? {} : { request: request.url }),
     ...(ctx.transcript === undefined ? {} : { transcript: ctx.transcript }),
   };
-  const evidence =
+  const found =
     steps.length > 0
       ? stepEvidence(steps, base)
       : [...(inv === undefined ? [] : strings(inv.evidence).slice(0, 5).map((request) => ({ ...base, request }))), ...(reproStep === undefined ? [base] : [{ ...base, step: reproStep }])];
+  // #250: the defect's captioned repro clip and key screenshots come first (what CI shows as artifacts).
+  const media = isRecord(d.evidence) ? d.evidence : undefined;
+  const mediaStep = num(media?.failingStep);
+  const video = str(media?.videoPath);
+  const evidence: EvidenceRef[] = [
+    ...(video === undefined ? [] : [{ video, ...(mediaStep === undefined ? {} : { step: mediaStep }) }]),
+    ...strings(media?.screenshots).slice(0, 4).map((screenshot) => ({ screenshot, ...(mediaStep === undefined ? {} : { step: mediaStep }) })),
+    ...found,
+  ];
   return observation(identity, {
     title: str(d.title) ?? `${kind} on ${route ?? "(unknown route)"}`,
     related: strings(d.related),

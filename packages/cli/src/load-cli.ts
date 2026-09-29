@@ -7,6 +7,7 @@ import { withSiteGate } from "./site-gate-cli.js";
 import { withEngine } from "./engine.js";
 import { finiteNumberArg, positiveIntArg } from "./cli-args.js";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveDbPath,
@@ -19,14 +20,15 @@ import {
   emulationFromFlags,
   collectParam,
   emitJson,
+  environmentSeams,
 } from "./cli-shared.js";
 
 /** Registers `jevitate load run`. */
 export function registerLoadCommands(program: Command, deps: CliDeps): void {
   const load = program.command("load").description("run a promoted Journey as a load test");
 
-  withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>")))
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+  withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>"))))
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
     // via a `fail` envelope rather than commander's `.requiredOption` — which
@@ -47,7 +49,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
     )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, journeyId: string) {
-      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState, json, ...emulationFlags } = this.opts<{
+      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         authorizedOrigin: string[];
@@ -56,7 +58,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         seed: string;
         storageState?: string;
         json?: boolean;
-      } & EmulationFlags>();
+      } & EmulationFlags & EnvironmentFlags>();
       if (authorizedOrigin.length === 0) {
         emitJson(
           program,
@@ -64,6 +66,16 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         );
         return;
       }
+      // #247: --env/--base-url choose where the load runs (unknown env / bad file → 64, nothing opened).
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const storageState = storageStateFlag ?? environment?.storageState;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_LOAD_RUN_ARGS", `storage state not found: ${storageState}`));
         return;
@@ -89,6 +101,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
+          ...(environment === undefined ? {} : { environment }),
         })).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
@@ -98,7 +111,9 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           process.exitCode = 0;
         }
       } catch (err) {
-        if (err instanceof UnknownLoadJourneyError) {
+        if (isEnvironmentError(err)) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof UnknownLoadJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));

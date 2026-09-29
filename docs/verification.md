@@ -9,7 +9,7 @@ to it and the step to replay up to. Three commands use it:
 | --- | --- | --- |
 | `jevitate verify-fix --result <result.json> --fingerprint <fp>` | does this finding still happen? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent · 64 unusable input |
 | `jevitate regression capture --from <recording.json> --result <result.json> --fingerprint <fp> --id <id>` | commit this failure as a standalone regression | 0 committed · non-zero refused (with the reason) |
-| `jevitate regression run <id>` | does the committed regression still fail? | 0 fixed · 1 reproduces |
+| `jevitate regression run <id>` | does the committed regression still fail? | 0 fixed · 1 reproduces · 2 inconclusive |
 | `jevitate ledger add <result.json> <fp> [--ticket X]` | keep what is needed to re-check this finding later | 0 stored · 64 refused (with the reason) |
 | `jevitate ledger verify [fp...]` / `jevitate verify-fix <fp>` | is every finding in the ledger (or this one) still fixed? | 0 fixed · 1 still reproduces · 2 inconclusive · 4 intermittent · 64 unusable input |
 
@@ -54,7 +54,9 @@ regression instead, declare the rule it breaks as an [invariant](./invariants.md
 `regression run <id>` replays the committed files and re-evaluates the same oracle: `reproduces`
 (exit 1) while the bug is there, `fixed` (exit 0) once it is gone. Pass `--storage-state` to
 either command for an authenticated app, and `--fixtures` to capture when the failing run started
-from [fixtures](./fixtures.md).
+from [fixtures](./fixtures.md). Both take `--headed` and `--slow-mo <ms>` to watch the replay;
+`regression run` also takes `--env <name>` / `--base-url <origin>` to replay against another
+[environment](./journeys.md#environments---env).
 
 ## Keeping findings verifiable: the ledger
 
@@ -115,7 +117,12 @@ A single clean replay is not evidence of a fix (#74): an intermittent signal can
 once. `verify-fix` replays the defect's repro `--replays` times (default 3), each in a fresh
 session; only absence across EVERY replay that reached the defect's step is `fixed`.
 
-The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same, always with the default replay count.
+The MCP tool `verify_fix` (`{ id, fingerprint }`, plus `replays`, `recordVideo`, `screenshots`, `storageState`, …) does the same.
+
+`verify-fix` also takes `--headed`, `--slow-mo <ms>`, `--record-video [dir]` (the result lists
+`videoPaths`) and `--screenshots [screens|steps|dir]`. With `--record-video` it writes before/after
+evidence for the defect (`evidence.before`/`evidence.after`; see
+[operations](./operations.md#evidence-clips-and-screenshots)).
 
 ## Replay finds the recorded element exactly
 

@@ -25,10 +25,25 @@ into every agent runtime it detects:
 `--targets claude-code,codex,cursor` forces targets, `--skip-skills` / `--skip-keys` / `--skip-mcp`
 skip a step, and a file you have edited is never overwritten without `--force`.
 
-The skills: `jevitate-explore` (run a bounded exploration mission), `jevitate-mission-scope`
-(read a diff and decide what to test), `jevitate-record`, `jevitate-run-journey`,
-`jevitate-sources`, `jevitate-load-test` and `jevitate-ux-review`. Their source is
-[`packages/skills/skills/`](../packages/skills/skills).
+The skills (each one's description tells the agent when to use it):
+
+| Skill | For |
+| --- | --- |
+| `jevitate-getting-started` | the entry point: checks setup, gets a first result, picks the skill, MCP vs CLI, exit codes, human-only approvals |
+| `jevitate-explore` | bounded exploration: goal, find-out, coverage, adversarial, feature; authoring a Journey from it |
+| `jevitate-mission-scope` | a diff or PR → what to test, which Journeys to run, which gaps to explore |
+| `jevitate-run-journey` | find and replay a promoted Journey (`--env`, video, screenshots, self-heal) |
+| `jevitate-record` | a flow the person clicks through, and post-processing the takes |
+| `jevitate-demo` | `demo "<aspect>"` / `demo approve`, `journey annotate`, `journey demo`, environments |
+| `jevitate-verify-fix` | `verify-fix`, evidence clips and screenshots, the ledger, `regression capture`/`run` |
+| `jevitate-ci-check` | `check --suite` (JUnit, SARIF, exit codes), baselines, `report`, `diff` |
+| `jevitate-ux-review`, `jevitate-load-test`, `jevitate-sources` | usability review, load tests, shared/third-party Journeys |
+
+Their source is [`packages/skills/skills/`](../packages/skills/skills). Every `jevitate` command and
+flag a skill shows is checked against the real CLI, and every tool it names against the MCP
+allowlist (`packages/cli/src/skills-cli-drift.test.ts`). After setup, `init` prints a short
+**next steps** list based on what it found (keys, MCP registration, `.jevitate/environments.json`).
+With `--json`, the list is in `data.nextSteps`.
 
 ## 2. The MCP server
 
@@ -41,21 +56,80 @@ a snippet yourself without writing anything:
 jevitate mcp --print-config claude   # or: cursor | codex | json
 ```
 
-The server exposes an allowlist of domain tools and nothing else:
+The server exposes an allowlist of domain tools and nothing else. MCP is a convenience for agents
+that could run the CLI themselves, so **every CLI command is reachable over MCP** (and every MCP
+tool from the CLI), except the few listed below with the reason:
 
-| Tool | What it does |
+| Tool | What it does | Same thing from the CLI |
+| --- | --- | --- |
+| `find_capabilities`, `list_journeys` | search promoted Journeys; list every Journey in the store | `journey find`, `journey list` |
+| `run_journey` | run a promoted Journey: `params`, `storageState`, `env`/`baseUrl`, `headed`/`slowMo`, `recordVideo` → `videoPaths`, `screenshots` → `screenshotPaths`, `viewport`/`device`, `fixtures`, `selfHeal` (+ `real`/`fakeAi`) | `journey run` |
+| `annotate_journey` | draft each step's objective/expected result into a reviewable draft; `approve: true` applies the reviewed draft (refused if the Journey changed) | `journey annotate` (`--approve`) |
+| `demo_journey` | replay a Journey as a narrated demo: `video` (.webm + .vtt) and/or `guide` (.md + screenshots) | `journey demo` |
+| `promote_journey`, `publish_journey` | promote a local Journey; publish one to a registered source | `journey promote`, `journey publish` |
+| `create_demo`, `approve_demo` | demo one aspect on a named, non-production environment as a DRAFT; approve it (renders the final demo, promotes the Journey) | `demo "<aspect>"` / `demo create`, `demo approve` |
+| `author_journey` | explore toward a goal and author an unpromoted Journey from the verified path | `explore-author-journey` |
+| `queue_exploration`, `run_queued_missions`, `get_mission_result` | queue a bounded mission against a promoted target (`goal-based`/`coverage`/`exploratory`/`adversarial`/`feature`; `recordVideo`, `screenshots`, `evidenceVideo`, `persona`), drain the queue once, read its typed result | `mission queue`, `mission run`, `mission result` |
+| `run_exploration` | run `explore` directly (every strategy, including `usability`), within its budget | `explore` |
+| `verify_fix` | re-check a finding: `replays`, `recordVideo` (before/after evidence), `screenshots`, `storageState`, `viewport`/`device` (+ `allowEmulationOverride`), `invariants`, `fixtures` | `verify-fix` |
+| `run_check`, `get_report`, `diff_runs`, `baselines` | the CI gate; the deduped defect report; a run diff; named baselines (`list`/`show`/`tag`) | `check`, `report`, `diff`, `baseline …` |
+| `ledger`, `regressions` | the repro ledger (`add`/`list`/`verify`); committed regressions (`capture`/`run`) | `ledger …`, `regression …` |
+| `mission_targets` | the targets missions may run against (`add`/`list`/`update`/`promote`) | `mission target …` |
+| `run_load_test`, `ux_review`, `validate_invariants` | a load test of a Journey; an offline UX review of a Recording; validate invariant files | `load run`, `ux`, `invariants validate` |
+| `recordings`, `sources`, `site_policy`, `profiles`, `prune_logs`, `get_ai_status` | Recording tools (`diff`/`fit`/`postdoc`/`promote`); Journey sources (`add`/`list`/`pull`/`update`/`remove`/`run`); site policies (`get`/`set`/`simulate`); profiles (`create`/`status`); log retention; which keys are configured (never a value) | `recording …`, `source …`, `site policy …`/`site simulate`, `profile …`, `logs prune`, `ai status` |
+| `queue_retrieval`, `queue_action`, `get_command`, `cancel_command`, `approve_action` | the command queue (`approve_action` and cancelling are human-only and refuse over MCP) | `inbox queue-retrieval`, `inbox queue-action`, `inbox command`; `inbox cancel` / `inbox approve` refuse the same way (approve or cancel in `jevitate ui`) |
+| `list_incoming`, `get_thread` | site-integration reads | `inbox list`, `inbox show` |
+| `get_site_health` | health, including the engine build identity | `inbox health` |
+| `ai_generate_text` | model-assisted text, gated on configured keys | `ai generate` |
+
+Not reachable over MCP, on purpose:
+
+| CLI command | Why |
 | --- | --- |
-| `find_capabilities`, `run_journey` | find and run promoted Journeys with typed parameters |
-| `queue_exploration`, `get_mission_result`, `verify_fix` | queue a bounded mission against a promoted target, read its typed result, re-check a finding |
-| `queue_retrieval`, `queue_action`, `get_command`, `cancel_command`, `approve_action` | the command queue (`approve_action` and cancelling are human-only and refuse over MCP) |
-| `list_incoming`, `get_thread` | site-integration reads |
-| `get_site_health` | health, including the engine build identity |
-| `ai_generate_text` | model-assisted text, gated on configured keys |
+| `mcp` | the MCP server itself |
+| `ui` | the local human dashboard — where a person approves or cancels inbox items |
+| `init` | local machine setup: harness config, skills, interactive key entry |
+| `ai setup` | interactive secret entry: a key never passes through a model |
+| `record` | a person clicks through the app while it records (`author_journey` is the agent's way) |
+| `source trust` (and `source add --accept-tou`) | trusting a third-party Journey, or accepting a source's Terms of Use, is a person's decision |
+
+**How the CLI-mirroring tools work.** Each tool that mirrors a CLI command takes typed, closed
+arguments named after the command's flags (`--storage-state` → `storageState`, a family's command
+in `action`), runs that very command in process and returns `{exitCode, data}` — the command's own
+JSON envelope data and exit code, so validation, redaction and exit codes are the CLI's. Exit 0/1/3/4
+are answers (1 = defects / still reproduces); exit 2 (proved nothing) and every refusal are MCP
+error results — never a pass — as `{error: "invalid_args" | "refused", code: "E_…", message,
+exitCode}`. An unknown argument or a wrong type is `invalid_args` before anything runs.
+
+**What MCP adds on top of the CLI's checks.** Every path argument must resolve (following symlinks)
+inside the project the server runs in or `~/.jevitate/`, and a storage state never under a repo's
+`.jevitate/`. A few flags are the operator's call and are never MCP arguments: shell hooks
+(`--before`/`--after`/`--allow-shell-hooks`), the browser binary and switches (`--browser-*`),
+which environment variable a secret is read from (`--secret`, `--secret-field`, `--totp`),
+server-log sources (`--log-source`, `--allow-log-cmd`, …), re-sending paid/destructive hang writes
+and store directories (`--dir`, …). Operators set those in `~/.jevitate/targets.json` or on the CLI.
+`packages/cli/src/mcp-cli-parity.test.ts` checks all of this against the real command tree in both
+directions: a new command or flag without an MCP decision fails the build.
+
+**Long runs.** A run on one Journey, finding or suite (`run_journey`, `verify_fix`,
+`annotate_journey`, `demo_journey`, `create_demo`, `run_check`, `regressions`, …) returns when it is
+done, like the CLI. Open-ended exploration of a promoted target is queue + poll:
+`queue_exploration` → `run_queued_missions` (or `jevitate mission run`) → `get_mission_result`.
 
 Raw browser tools (`browser_click`, `browser_fill`, `page_evaluate`, `run_selector`,
 `navigate_url`, `get_dom`, `get_cookies`) are forbidden: an agent can ask for a mission or a
 Journey, never drive the page directly. The served tool list is checked against the allowlist in
 [`packages/mcp-facade`](../packages/mcp-facade).
+
+Every MCP tool has a CLI command (the table's last column), and a test fails when a new tool has
+none. The `inbox` and `mission queue`/`mission result` commands call the same handlers the server does, over the same stores
+(`~/.jevitate/inbox`, `~/.jevitate/missions/`), so what one queues the other sees, and the CLI never
+prints more than MCP returns. `inbox command <id>` keeps `get_command`'s burn-after-read. If a human handed back
+input that hasn't been read, it refuses (`E_INBOX_INPUT_PENDING`, exit 64) and consumes nothing;
+`--reveal` consumes the input and prints it, exactly as `get_command` returns it. Each command takes
+`--json` for the `{v, ok, data}` envelope. `mission result` exits with the result's own code
+(0 clean · 1 defects · 2 broken run · 3 hang · 4 intermittent). A mission that is still queued or
+running, or that could not run, exits 2, because it proves nothing yet.
 
 ## Queued missions (MCP)
 
@@ -70,15 +144,22 @@ unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
 jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \
   --api-origin http://127.0.0.1:18582 --base-url http://127.0.0.1:5193/settings --json
 jevitate mission target promote spa --json          # a human act: only promoted targets are queueable
+jevitate mission queue spa --strategy coverage --route '/settings/**' --json   # what queue_exploration does
 jevitate mission run --once --real --json           # drain what is queued now (--watch keeps polling)
+jevitate mission result <missionId>                 # what get_mission_result reports
 ```
 
 A mission may reach only its target's `--authorized-origin` plus its `--api-origin`s (each a bare
 http(s) origin — the queued-mission form of a second `explore --allow`); the target is re-resolved
 (promoted-only) when the mission runs. Queueable strategies: `goal-based` (a goal and a
-`successAssertion`), `coverage` and `adversarial` (an optional in-scope `route` glob), and
-`feature` (a `feature` name, optional `route`). A usability review needs an app class the request
-cannot carry, so it is CLI-only. Without `--real`/`--fake-ai`, model-driven missions stay queued
+`successAssertion`), `coverage`, `exploratory` and `adversarial` (an optional in-scope `route`
+glob), and `feature` (a `feature` name, optional `route`). A usability review needs an app class
+the request cannot carry, so it is not queueable; run it directly (`explore --strategy usability`,
+MCP `run_exploration`). A queued mission may ask for media next to its result — `recordVideo`,
+`evidenceVideo`, `screenshots: screens | steps` (`--record-video`, `--evidence-video`,
+`--screenshots [mode]`), never a path — and a `persona` name from `~/.jevitate/targets.json` for the
+target's origin (`--persona`); an unknown persona fails the mission, never runs as the default
+session. Without `--real`/`--fake-ai`, model-driven missions stay queued
 (reported as `skipped`) and only feature missions run. The exit code is 2 only when a mission could
 not run at all; each mission's own outcome is in its result
 ([exit codes](./outcomes.md#exit-codes)). A drain killed mid-mission records

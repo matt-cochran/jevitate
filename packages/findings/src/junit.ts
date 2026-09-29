@@ -22,6 +22,11 @@ export interface GateCase {
   readonly detail?: string;
   /** Path of the result the case was read from. */
   readonly resultPath?: string;
+  /**
+   * #250: media to attach (a defect's repro clip and screenshots) — one `attachment` property each,
+   * and the `[[ATTACHMENT|path]]` lines in `<system-out>` that Jenkins/GitLab render as artifacts.
+   */
+  readonly attachments?: readonly string[];
 }
 
 /** XML 1.0 text/attribute escape; strips characters XML 1.0 cannot carry at all. */
@@ -53,14 +58,19 @@ function attrs(a: Record<string, string | number>): string {
 
 function testcase(c: GateCase): string {
   const open = `    <testcase ${attrs({ classname: c.classname, name: c.name, time: c.timeSec })}`;
-  const props =
-    c.resultPath === undefined ? "" : `      <properties>\n        <property ${attrs({ name: "result", value: c.resultPath })}/>\n      </properties>\n`;
+  const attachments = [...new Set(c.attachments ?? [])];
+  const propList = [
+    ...(c.resultPath === undefined ? [] : [`        <property ${attrs({ name: "result", value: c.resultPath })}/>`]),
+    ...attachments.map((a) => `        <property ${attrs({ name: "attachment", value: a })}/>`),
+  ];
+  const props = propList.length === 0 ? "" : `      <properties>\n${propList.join("\n")}\n      </properties>\n`;
+  const out = attachments.length === 0 ? "" : `\n      <system-out>${attachments.map((a) => xmlEscape(`[[ATTACHMENT|${a}]]`)).join("\n")}</system-out>`;
   const body = c.detail === undefined ? "" : xmlEscape(c.detail);
   const tag = c.status === "failed" ? "failure" : c.status === "error" ? "error" : c.status === "skipped" ? "skipped" : undefined;
-  if (tag === undefined) return props === "" ? `${open}/>` : `${open}>\n${props}    </testcase>`;
+  if (tag === undefined) return props === "" && out === "" ? `${open}/>` : `${open}>\n${props}${out === "" ? "" : `${out.slice(1)}\n`}    </testcase>`;
   const detailAttrs = attrs({ message: c.message ?? c.status, ...(c.type === undefined ? {} : { type: c.type }) });
   const inner = body === "" ? `      <${tag} ${detailAttrs}/>` : `      <${tag} ${detailAttrs}>${body}</${tag}>`;
-  return `${open}>\n${props}${inner}\n    </testcase>`;
+  return `${open}>\n${props}${inner}${out}\n    </testcase>`;
 }
 
 export function renderJUnit(name: string, cases: readonly GateCase[], timestamp?: string): string {

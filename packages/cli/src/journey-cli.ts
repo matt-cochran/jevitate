@@ -7,13 +7,18 @@ import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { withSiteGate } from "./site-gate-cli.js";
+import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
+import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
+import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
 import { withEngine } from "./engine.js";
 import { publishJourneyToSource, realGhPort, NotPromotedError, NoDeclaredOriginsError } from "./source-api.js";
 import { UnknownSourceError, EmbeddedSecretError, UndeclaredOriginError } from "@jevitate/sources";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveDbPath,
@@ -21,18 +26,23 @@ import {
   resolveSourceApiDeps,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
-  browserOption,
+  browserRunFromFlags,
+  withDemoFlags,
+  withScreenshotsFlag,
+  type ScreenshotsFlags,
+  type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
   emulationFromFlags,
   collectParam,
   emitJson,
+  environmentSeams,
   writeRawResult,
   GatewaySelectionError,
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|publish`. */
+/** Registers `jevitate journey`: `list|find|run|promote|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -46,7 +56,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
    */
   journey
     .command("list")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -79,7 +89,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   // forbidden dependency.
   journey
     .command("find <query>")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, query: string) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -108,8 +118,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       }
     });
 
-  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>"))))
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true })))
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
       "--storage-state <file>",
@@ -126,8 +136,24 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const fixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState, selfHeal, real, fakeAi, json, ...emulationFlags } = this.opts<{
+      const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
+      // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const ownFixtureFlags = this.opts<FixtureFlags>();
+      // The environment's fixtures/hooks apply when the flags name none (hooks still need --allow-shell-hooks).
+      const fixtureFlags: FixtureFlags = {
+        ...ownFixtureFlags,
+        ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
+        ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
+      };
+      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -135,10 +161,28 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
-      } & EmulationFlags>();
+      } & EmulationFlags & ScreenshotsFlags>();
+      // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
+      const storageState = storageStateFlag ?? environment?.storageState;
 
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      // #245: demo mode, resolved (a headed run without a display refused) before any browser opens.
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      // #251: an unusable --screenshots value is a usage error (64), before any browser opens.
+      let screenshots: ScreenshotsSpec | undefined;
+      try {
+        screenshots = parseScreenshotsArg(this.opts<ScreenshotsFlags>().screenshots);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       let journeyRunEmulation: EmulationSpec | undefined;
@@ -193,32 +237,43 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           policy,
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
-          ...browserOption(this.opts<BrowserLaunchFlags>()),
+          ...(browser === undefined ? {} : { browser }),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
+          ...(screenshots === undefined ? {} : { screenshots }),
           ...(storageState !== undefined ? { storageState } : {}),
-          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
+          ...(environment === undefined ? {} : { environment }),
+          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
+          // #247: under an environment, its allowed origins.
           fixtures: (site) => {
             const fx = buildMissionFixtures(fixtureFlags, {
-              allowlist: [site],
+              allowlist: environment === undefined ? [site] : environment.allowedOrigins,
               baseUrl: site,
               ...(storageState !== undefined ? { storageState } : {}),
+              ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
             });
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
         })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
-        const envelope = ok(result);
+        // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
+        const intent = await journeyIntentCoverage(resolveJourneysDir(deps, dir), id);
+        if (intent !== undefined && intent.withoutObjective > 0 && !json) {
+          program.configureOutput().writeErr?.(
+            `note: ${intent.withoutObjective} of ${intent.steps} step(s) have no objective — draft them with \`jevitate journey annotate ${id}\`\n`,
+          );
+        }
+        const envelope = ok(intent === undefined ? result : { ...result, intent });
         if (json) {
           emitJson(program, envelope);
           // "ok" and "healed" (a recovered run) are both successes; only
           // "quarantined" is a non-zero exit.
           if (result.outcome === "quarantined") process.exitCode = 1;
         } else {
-          writeRawResult(program, result);
+          writeRawResult(program, envelope.data);
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
-        if (err instanceof SiteGateRefusedError) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
@@ -249,7 +304,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   journey
     .command("promote <id>")
     .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -271,6 +326,12 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       }
     });
 
+  // #246 — draft a Journey's intent on playback; `--approve` is the human gate that writes it.
+  registerJourneyAnnotateCommand(journey, program, deps);
+
+  // #248 — replay a Journey as a narrated demo: video + subtitles and/or a step-by-step guide.
+  registerJourneyDemoCommand(journey, program, deps);
+
   // #19 — publish a promoted local Journey to a registered distributed source.
   // Preserves every publish-side guard in `@jevitate/sources` (promoted-only,
   // secret-references-only, declared-origin coverage); writes onto a NEW
@@ -278,7 +339,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   journey
     .command("publish <id>")
     .requiredOption("--to <source>", "registered source name to publish into")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--declare-origin <origin>", "origin this Journey is authorized for (repeatable; default: derived from navigate steps)", (v: string, prev: string[]) => [...prev, v], [] as string[])
     .option("--as <id>", "publish under a different id than the local one")
     .option("--json", "emit a JSON envelope")

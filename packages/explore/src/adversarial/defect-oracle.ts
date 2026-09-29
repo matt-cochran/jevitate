@@ -32,7 +32,8 @@ export type DefectSignal =
    */
   | { kind: "console-error"; detail: string; pageUrl?: string; correlatedStatus?: number; correlatedUrl?: string }
   | { kind: "page-error"; detail: string; pageUrl?: string }
-  | { kind: "http-5xx"; detail: string; url: string; status: number }
+  /** `method` (#250): the request's HTTP method, when known — evidence only, never in the fingerprint. */
+  | { kind: "http-5xx"; detail: string; url: string; status: number; method?: string }
   | { kind: "failed-request"; detail: string; url: string }
   /**
    * Horizontal-overflow (#149): pure DOM geometry (`packages/explore/src/overflow.ts`'s
@@ -107,6 +108,8 @@ const MAX_RECENT_RESPONSES = 50;
 
 export class PageSignalCollector {
   private buffer: DefectSignal[] = [];
+  /** When each signal's request STARTED (this collector's clock) — see `requestStartOf`. */
+  private readonly startedAt = new WeakMap<DefectSignal, number>();
 
   /**
    * `allowlist` (#208): the run's authorized origins — a 5xx from a THIRD-PARTY origin (#194,
@@ -115,13 +118,14 @@ export class PageSignalCollector {
    */
   constructor(page: Page, now: () => number = Date.now, allowlist?: readonly string[]) {
     const responseSeen = new WeakSet<Request>();
+    const requestStarted = new WeakMap<Request, number>();
     const firstParty = allowlist === undefined ? undefined : new FirstPartyOrigins(allowlist);
-    if (firstParty !== undefined) {
-      page.on("request", (r) => {
-        const headers = requestHeadersOf(r);
-        if (headers !== undefined) firstParty.observe(r.url(), headers);
-      });
-    }
+    page.on("request", (r) => {
+      requestStarted.set(r, now());
+      if (firstParty === undefined) return;
+      const headers = requestHeadersOf(r);
+      if (headers !== undefined) firstParty.observe(r.url(), headers);
+    });
     // Every response seen recently, for correlating a console error to WHAT it was about (#88): the
     // same request (its URL quoted in the message) or, failing that, the nearest one in time.
     const recent: Array<{ status: number; url: string; at: number }> = [];
@@ -168,8 +172,12 @@ export class PageSignalCollector {
       responseSeen.add(response.request());
       noteResponse(response.status(), redactUrl(response.url()));
       // The shared HTTP 5xx rule (#208): the same signal every strategy records.
-      const signal = http5xxSignalOf(response, firstParty, firstParty === undefined ? undefined : requestHeadersOf(response.request()));
-      if (signal !== null) this.buffer.push(signal);
+      const request = response.request();
+      const signal = http5xxSignalOf(response, firstParty, firstParty === undefined ? undefined : requestHeadersOf(request), methodOf(request));
+      if (signal === null) return;
+      const started = requestStarted.get(request);
+      if (started !== undefined) this.startedAt.set(signal, started);
+      this.buffer.push(signal);
     });
     page.on("requestfailed", (request) => {
       const errorText = request.failure()?.errorText ?? "request failed";
@@ -188,10 +196,29 @@ export class PageSignalCollector {
     });
   }
 
+  /**
+   * When the request behind a drained `http-5xx` signal STARTED (this collector's clock), or
+   * undefined when unknown (#250). A mission attributes the signal to the action that fired the
+   * request by it — not to whichever step happened to drain the buffer (a submit left pending while
+   * the next step ran would otherwise blame that next step).
+   */
+  requestStartOf(signal: DefectSignal): number | undefined {
+    return this.startedAt.get(signal);
+  }
+
   /** Everything buffered since the last drain; clears the buffer. */
   drain(): DefectSignal[] {
     const out = this.buffer;
     this.buffer = [];
     return out;
+  }
+}
+
+/** A request's method without throwing (a stub request may not expose it). */
+function methodOf(r: { method?: () => string } | undefined): string | undefined {
+  try {
+    return typeof r?.method === "function" ? r.method() : undefined;
+  } catch {
+    return undefined;
   }
 }

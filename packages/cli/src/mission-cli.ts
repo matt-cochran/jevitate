@@ -20,6 +20,7 @@ import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { positiveIntArg } from "./cli-args.js";
 import { resolveDataDir } from "./data-dir.js";
+import { registerMissionQueueCommands } from "./mission-queue-cli.js";
 import {
   type CliDeps,
   resolveMissionTargetsDir,
@@ -31,7 +32,7 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate mission`: `target add|update|list|promote` and `run` (drains the mission queue). */
+/** Registers `jevitate mission`: `target add|update|list|promote`, `run` (drains the mission queue), `queue` and `result` (#254). */
 export function registerMissionCommands(program: Command, deps: CliDeps): void {
   // Additive: `mission target` — register/list/promote exploration mission
   // targets (Ticket #21). Wires the real fs-backed `@jevitate/missions`
@@ -238,7 +239,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         if (!(err instanceof MissingCredentialError || err instanceof GatewaySelectionError)) throw err;
         gatewayRefusal = err.message;
       }
-      const queue = new FsMissionQueueStore(o.dir ?? resolveDataDir(["missions", "queue"]));
+      const queue = new FsMissionQueueStore(o.dir ?? deps.missions?.queueDir ?? resolveDataDir(["missions", "queue"]));
       const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
       // #142 follow-up: ~/.jevitate/targets.json's per-origin logSources/logDefect/allowLogCmd — a
       // queued mission never carries its own (never an MCP argument); this is the operator's only
@@ -287,4 +288,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_MISSION_RUN", String(err instanceof Error ? err.message : err)));
       }
     });
+
+  // #254: `mission queue` / `mission result` — MCP queue_exploration / get_mission_result from the CLI.
+  registerMissionQueueCommands(program, mission, deps);
 }

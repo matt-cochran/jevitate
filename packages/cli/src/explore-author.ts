@@ -1,8 +1,10 @@
 /** Journey authoring behind `jevitate explore-author-journey`: a model-driven run that authors a promotable Journey. */
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { sessionLaunchOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion } from "@jevitate/recording";
+import type { SafetyConfig } from "@jevitate/explore";
 import {
   authorJourney,
   assertAuthorizedExploreTarget,
@@ -37,6 +39,8 @@ export interface AuthorViaBrowserArgs {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** The exploration's safety policy (#249: the target's targets.json `safety`). Absent: the built-in one. */
+  readonly safety?: SafetyConfig;
 }
 
 export interface RunAuthorJourneyOptions {
@@ -62,6 +66,8 @@ export interface RunAuthorJourneyOptions {
    * handed only to the browser, never to a model or a Recording.
    */
   readonly storageState?: string;
+  /** The exploration's safety policy (#249: the target's targets.json `safety`). Absent: the built-in one. */
+  readonly safety?: SafetyConfig;
   /**
    * Test seam: override the authoring step. Defaults to `authorViaBrowser`,
    * which drives a real Playwright-backed actor through `authorJourney`.
@@ -101,6 +107,7 @@ export async function runAuthorJourney(opts: RunAuthorJourneyOptions): Promise<A
     browserPortFactory: opts.browserPortFactory,
     browser: opts.browser,
       ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+    ...(opts.safety === undefined ? {} : { safety: opts.safety }),
   });
 
   if (result.outcome === "authored") {
@@ -127,10 +134,9 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
   const portFactory = args.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const session = await port.open({
-    headless: true,
+    ...sessionLaunchOptions(args.browser),
     allowedOrigins: [...args.allowlist],
     baseUrl: args.origin,
-    ...args.browser,
     ...(args.storageState !== undefined ? { storageState: args.storageState } : {}),
   });
 
@@ -148,6 +154,7 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
       takes: args.takes,
       journeyId: args.journeyId,
       journeyName: args.journeyName,
+      ...(args.safety === undefined ? {} : { safety: args.safety }),
     });
   } finally {
     await session.close();

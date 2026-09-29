@@ -75,4 +75,9 @@ reported as clean. For example, an adversarial run that exercised too little of 
 | `packages/mcp-facade` | the MCP tool allowlist; raw browser tools are forbidden |
 | `packages/ai-core`, `secrets` | model gateways, redaction, credentials, usage accounting |
 | `packages/journey`, `load`, `sources`, `recorder` | Journeys, load testing, distributed sources, recording by demonstration |
+| `packages/domain`, `application` | pure domain rules (pacing, throttles, quiet hours, mission outcome, crash attribution, issue filing) and the ports the rest implement |
+| `packages/missions`, `inbox` | mission targets and the mission queue; the human-in-the-loop inbox store |
+| `packages/runtime`, `daemon`, `storage-sqlite` | Journey runner and self-heal, per-profile daemon, SQLite storage for site policies, budgets and activity |
+| `packages/skills` | skill manifests and frontmatter for coding-agent installs |
+| `packages/jevitate-cli-alias` | the bare `jevitate` alias of `@jevitate/cli` (the only other published package) |
 | `apps/example-site` | the fixture app the tests and the [demo](./demo.md) run against |

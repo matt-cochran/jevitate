@@ -71,6 +71,64 @@
     - flags=--suite <file> required=true mandatory=true negate=false variadic=false default=null description=the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget)
     - flags=--target-build <id> required=true mandatory=false negate=false variadic=false default=null description=the target's build/commit id, stamped on every result
 
+# demo
+  description: demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
+
+# demo approve
+  description: the one human approval of a DRAFT demo: shows the Journey and its annotations, renders the final demo (no DRAFT marks) on the environment it was made on, then applies the annotations and promotes the Journey; a replay that no longer works promotes nothing (exit 1)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir)
+    - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# demo create
+  description: explore a named non-production environment toward <aspect> (checked by --success), minimize the path to its essential steps (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide); nothing is promoted until `demo approve <id>` (also: jevitate demo "<aspect>")
+  arguments:
+    - name=aspect required=true variadic=false default=null
+  options:
+    - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=the named environment to demo on (.jevitate/environments.json); required, and never one flagged production: true
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
+    - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
+    - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey id (default: demo-<aspect slug>)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on explored actions
+    - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on model decisions
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir)
+    - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
+    - flags=--persona <name> required=true mandatory=false negate=false variadic=false default=null description=the persona whose session (~/.jevitate/targets.json personas) the demo runs as
+    - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways (requires keys)
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
+    - flags=--start <path> required=true mandatory=false negate=false variadic=false default=null description=the app path exploration starts from (default /)
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist
+    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=independent success check that proves the aspect was shown, e.g. textIncludes:testId=status|Saved (required)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
 # diff
   description: classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
   arguments:
@@ -101,6 +159,7 @@
     - flags=--check-overflow required=false mandatory=false negate=false variadic=false default=null description=check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory (a defect), adversarial (a defect) or usability (a signal finding). On by default whenever --viewport/--device emulates a viewport narrower than 1024px
     - flags=--deny <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: replay its minimal repro with captions + the failing step marked, record a masked clip and before/at screenshots (defects[].evidence; linked from drafts)
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--feature <name> required=true mandatory=false negate=false variadic=false default=null description=run the capability-scoped feature-testing mission (instead of --goal/--success)
     - flags=--file-issues required=false mandatory=false negate=false variadic=false default=null description=file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only
@@ -109,6 +168,7 @@
     - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=natural-language goal / job (required for --strategy goal and usability)
     - flags=--hang-replay-writes required=false mandatory=false negate=false variadic=false default=null description=let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed)
     - flags=--hang-replays <n> required=true mandatory=false negate=false variadic=false default=null description=fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--ignore-no-progress <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard)
     - flags=--ignore-overflow <selector> required=true mandatory=false negate=false variadic=false default=[] description=a CSS selector (repeatable) whose overflow is intentional — excluded from the horizontal-overflow signal, like --ignore-no-progress
@@ -128,6 +188,7 @@
     - flags=--min-agreement <k> required=true mandatory=false negate=false variadic=false default=null description=with --repeat: runs a finding (and the outcome) must recur in to count (default: a majority of N)
     - flags=--min-confidence <n> required=true mandatory=false negate=false variadic=false default=null description=(--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3
     - flags=--min-control-coverage <ratio> required=true mandatory=false negate=false variadic=false default=null description=adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive
+    - flags=--no-overlay required=false mandatory=false negate=true variadic=false default=null description=with --headed: hide the on-page overlay (step, intent, target highlight, outcome banner)
     - flags=--no-require-form-submit required=false mandatory=false negate=true variadic=false default=null description=adversarial: do not require a submitted form for a clean result (default: required when the target has a form)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=directory to write the emitted Recording
     - flags=--paid <pattern> required=true mandatory=false negate=false variadic=false default=[] description=an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze|Draft|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it
@@ -135,6 +196,7 @@
     - flags=--personas <file> required=true mandatory=false negate=false variadic=false default=null description=personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState"}]}
     - flags=--read-rpc <glob> required=true mandatory=false negate=false variadic=false default=[] description=a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways (requires keys)
+    - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths
     - flags=--repeat <n> required=true mandatory=false negate=false variadic=false default=null description=run the mission N times, one after another, each in a fresh browser context, and vote (#141): findings seen in fewer than --min-agreement runs are reported as flaky, not counted
     - flags=--reply-ceiling-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms)
     - flags=--reply-max-chars <n> required=true mandatory=false negate=false variadic=false default=null description=conversational pages: cap on each generated chat message (goal and usability; default 300)
@@ -142,11 +204,13 @@
     - flags=--route <glob> required=true mandatory=false negate=false variadic=false default=[] description=in-scope route glob (repeatable), e.g. /thread/** — for --feature it replaces the default scope (the start URL's route and everything under it); it widens --strategy adversarial/coverage/exploratory beyond the start URL's route
     - flags=--save-storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but never over a good file with a session that already looks lost/logged-out; the last known-good state is used instead, or nothing is written if none was ever captured.
     - flags=--scope <mode> required=true mandatory=false negate=false variadic=false default=null description=--strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--secret <value|env:VAR> required=true mandatory=false negate=false variadic=false default=[] description=REDACTION ONLY: a secret/PII value kept out of every model call and artifact (repeatable); env:VAR reads it from the environment (preferred: a literal is visible in the process list and shell history). It is never typed into a field — to log in, bind it with --secret-field (or start from --storage-state)
     - flags=--secret-field <binding> required=true mandatory=false negate=false variadic=false default=[] description=goal/usability strategy: '<label|testId|type|id|name>=<value>=env:<VAR>' (repeatable), e.g. 'label=Password=env:APP_PASSWORD'. When the run types into a matching field, code types $VAR itself; the model sees only «secret:VAR» and the Recording {redacted:true}
     - flags=--server-log-drain-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)
     - flags=--settle-ignore <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a request URL pattern the target marks as background (never pending work; repeatable, * wildcard)
     - flags=--show <labels> required=true mandatory=false negate=false variadic=false default=null description=opt-in filter on the quality grade (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then ALL grades — the grader is uncalibrated (#133), so by default every finding is shown with its grade
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--stall-timeout <seconds> required=true mandatory=false negate=false variadic=false default=null description=--strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist
     - flags=--strategy <name> required=true mandatory=false negate=false variadic=false default="goal" description=exploration strategy: goal (default) | coverage | exploratory | adversarial | usability (UX review: ranked, cited findings)
@@ -166,7 +230,7 @@
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=natural-language goal
     - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=journey id (used for the <id>.json filename in the store)
-    - flags=--journeys-dir <dir> required=true mandatory=false negate=false variadic=false default=null description=journeys store directory (default: ~/.jevitate/journeys)
+    - flags=--journeys-dir <dir> required=true mandatory=false negate=false variadic=false default=null description=journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on executed actions
     - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on model decisions
@@ -176,6 +240,83 @@
     - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=independent success assertion, e.g. urlIncludes:/confirmed
     - flags=--takes <n> required=true mandatory=false negate=false variadic=false default=1 description=corroborating takes incl. discovery (default 1)
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
+
+# inbox
+  description: the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
+
+# inbox approve
+  description: always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox cancel
+  description: always refused (MCP cancel_command): only a human can cancel an inbox item, in `jevitate ui`
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox command
+  description: poll one inbox item as the agent does (MCP get_command): burn-after-read — unread human input needs --reveal, which consumes and prints it
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reveal required=false mandatory=false negate=false variadic=false default=null description=consume the human's unread input and print it, exactly as MCP get_command returns it
+
+# inbox health
+  description: inbox store health: pending count, oldest pending age, build (MCP get_site_health)
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox list
+  description: list pending inbox items (MCP list_incoming)
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox queue-action
+  description: ask a human for a decision — an 'approval' item by default; only queues (MCP queue_action)
+  options:
+    - flags=--agent <name> required=true mandatory=false negate=false variadic=false default=null description=who is asking (required)
+    - flags=--findings <file> required=true mandatory=false negate=false variadic=false default=null description=a JSON file holding an array of {id, title, severity: low|med|high, evidence?}
+    - flags=--has-screenshot required=false mandatory=false negate=false variadic=false default=null description=a screenshot accompanies the item
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--journey <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey (required)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--kind <kind> required=true mandatory=false negate=false variadic=false default=null choices=["approval","handback","review"] description=approval (default) | handback | review
+    - flags=--reason <text> required=true mandatory=false negate=false variadic=false default=null description=what the human is asked for (required)
+    - flags=--run <id> required=true mandatory=false negate=false variadic=false default=null description=the run this item belongs to (required)
+    - flags=--step <step> required=true mandatory=false negate=false variadic=false default=null description=the step it stopped at (required)
+    - flags=--target-url <url> required=true mandatory=false negate=false variadic=false default=null description=the page it concerns
+
+# inbox queue-retrieval
+  description: ask a human to provide something back to the agent — a 'handback' item; only queues (MCP queue_retrieval)
+  options:
+    - flags=--agent <name> required=true mandatory=false negate=false variadic=false default=null description=who is asking (required)
+    - flags=--findings <file> required=true mandatory=false negate=false variadic=false default=null description=a JSON file holding an array of {id, title, severity: low|med|high, evidence?}
+    - flags=--has-screenshot required=false mandatory=false negate=false variadic=false default=null description=a screenshot accompanies the item
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--journey <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey (required)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reason <text> required=true mandatory=false negate=false variadic=false default=null description=what the human is asked for (required)
+    - flags=--run <id> required=true mandatory=false negate=false variadic=false default=null description=the run this item belongs to (required)
+    - flags=--step <step> required=true mandatory=false negate=false variadic=false default=null description=the step it stopped at (required)
+    - flags=--target-url <url> required=true mandatory=false negate=false variadic=false default=null description=the page it concerns
+
+# inbox show
+  description: an inbox item's conversation thread — never its secret input (MCP get_thread)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # init
   description: set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
@@ -205,18 +346,72 @@
 # journey
   description: manage and run promoted Journeys (regression-test replays)
 
+# journey annotate
+  description: draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--approve required=false mandatory=false negate=false variadic=false default=false description=apply the reviewed draft to the Journey (shows the diff; refused if the Journey changed since the draft)
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
+    - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=draft with the deterministic fake generator (pipeline smoke only)
+    - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
+    - flags=--real required=false mandatory=false negate=false variadic=false default=false description=draft with the live OpenRouter generation gateway (requires keys)
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the replay authenticated; must exist
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# journey demo
+  description: replay a Journey as a narrated demo (goal, step objectives as captions, target highlights) → a WebM video with .vtt subtitles and/or a Markdown step-by-step guide with screenshots; a Journey that no longer replays fails (exit 1)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
+    - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
+    - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--guide <file> required=true mandatory=false negate=false variadic=false default=null description=write a Markdown guide here (.md), screenshots in <name>.assets/ beside it
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
+    - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the replay authenticated; must exist
+    - flags=--video <file> required=true mandatory=false negate=false variadic=false default=null description=write the demo video here (.webm) and its subtitles beside it (.vtt)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
 # journey find
   description: 
   arguments:
     - name=query required=true variadic=false default=null
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey list
   description: 
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey promote
@@ -224,7 +419,7 @@
   arguments:
     - name=id required=true variadic=false default=null
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey publish
@@ -234,7 +429,7 @@
   options:
     - flags=--as <id> required=true mandatory=false negate=false variadic=false default=null description=publish under a different id than the local one
     - flags=--declare-origin <origin> required=true mandatory=false negate=false variadic=false default=[] description=origin this Journey is authorized for (repeatable; default: derived from navigate steps)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--to <source> required=true mandatory=true negate=false variadic=false default=null description=registered source name to publish into
 
@@ -245,19 +440,25 @@
   options:
     - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
     - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
     - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways for self-heal (pipeline smoke only)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways for self-heal (requires keys)
+    - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--self-heal <mode> required=true mandatory=false negate=false variadic=false default="fail-closed" description=self-heal policy mode: fail-closed | hybrid | full
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
@@ -305,12 +506,14 @@
     - name=journeyId required=true variadic=false default=null
   options:
     - flags=--authorized-origin <origin> required=true mandatory=false negate=false variadic=false default=[] description=allowed load-test target origin (repeatable) — required, fails closed if omitted
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--concurrency <n> required=true mandatory=false negate=false variadic=false default=1 description=pool size
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--iterations <n> required=true mandatory=false negate=false variadic=false default=1 description=iterations per actor
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
@@ -331,11 +534,44 @@
 # mcp
   description: start an MCP stdio server exposing only the allowlisted Jevitate tools
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--print-config <harness> required=true mandatory=false negate=false variadic=false default=null description=print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing
 
 # mission
   description: manage exploration mission targets and drain the mission queue
+
+# mission queue
+  description: enqueue an exploration mission against a PROMOTED target — only queues; `mission run` drains (MCP queue_exploration)
+  arguments:
+    - name=target required=true variadic=false default=null
+  options:
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use)
+    - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: a captioned evidence clip of its minimal repro + before/at screenshots (defects[].evidence)
+    - flags=--feature <name> required=true mandatory=false negate=false variadic=false default=null description=feature: the capability to test (goal-based: the objective)
+    - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=goal-based: the objective (exactly one of --goal/--feature/--route)
+    - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=null description=app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max actions (bounded by the queue's ceiling)
+    - flags=--max-candidates <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max candidates
+    - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max decisions
+    - flags=--persona <name> required=true mandatory=false negate=false variadic=false default=null description=run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path
+    - flags=--record-video required=false mandatory=false negate=false variadic=false default=null description=record a video of the run (headless too), written next to its result; listed as videoPaths
+    - flags=--route <glob> required=true mandatory=false negate=false variadic=false default=null description=coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective)
+    - flags=--screenshots [mode] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md next to the result: screens (default, one per distinct screen) | steps (one per step)
+    - flags=--strategy <strategy> required=true mandatory=false negate=false variadic=false default=null choices=["goal-based","coverage","exploratory","adversarial","feature"] description=goal-based | coverage | exploratory | adversarial | feature (required)
+    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=goal-based: the independent success check (required there), e.g. urlIncludes:/done — the `explore --success` page-check forms
+    - flags=--targets-dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission targets directory (default: ~/.jevitate/missions/targets)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# mission result
+  description: a mission's status and typed result, by result id or queued missionId (MCP get_mission_result); exits with its contract code
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--results-dir <path> required=true mandatory=false negate=false variadic=false default=null description=read the result file from this directory only (default: where `mission run` writes — .jevitate/logs/<date>, then ~/.jevitate)
 
 # mission run
   description: run queued missions (queue_exploration) through their strategy's runner; get_mission_result {id: missionId} then reads the result
@@ -478,15 +714,17 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: ~/.jevitate/regressions)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)
     - flags=--fingerprint <fp> required=true mandatory=false negate=false variadic=false default=null description=pin the required failure — a structural step signature (alone, restricts --from to failing at exactly that step), or (with --result, #119/#129) a defect/invariant fingerprint from the mission's own findings; with --result alone, cross-checks the derived oracle
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--force required=false mandatory=false negate=false variadic=false default=false description=overwrite an existing regression id's committed files (default: refused, #213)
     - flags=--from <file> required=true mandatory=true negate=false variadic=false default=null description=path to the schema-valid failing Recording JSON to capture
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--id <id> required=true mandatory=true negate=false variadic=false default=null description=regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--result <file> required=true mandatory=false negate=false variadic=false default=null description=mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist
     - flags=--summary <text> required=true mandatory=false negate=false variadic=false default=null description=optional human-readable bug summary recorded in the meta sidecar
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
@@ -497,12 +735,16 @@
     - name=id required=true variadic=false default=null description=the committed regression id (its <id>.recording.json/<id>.meta.json)
   options:
     - flags=--attempts <n> required=true mandatory=false negate=false variadic=false default=null description=fresh-context replays for a declared-invariant oracle (default 3)
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: ~/.jevitate/regressions)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to open the replay session authenticated (#129); must exist
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
@@ -655,12 +897,16 @@
     - flags=--fingerprint <fp> required=true mandatory=false negate=false variadic=false default=null description=the defect/hang fingerprint to verify
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--hang-replay-writes required=false mandatory=false negate=false variadic=false default=null description=let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed)
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=[] description=re-check a declared-invariant defect with these invariant files (repeatable) instead of the spec saved with the mission
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
+    - flags=--record-video [dir] required=false mandatory=false negate=false variadic=false default=null description=record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths
     - flags=--regressions-dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions)
     - flags=--replays <n> required=true mandatory=false negate=false variadic=false default=null description=fresh-context replays that confirm a fix (default 3)
     - flags=--result <path> required=true mandatory=false negate=false variadic=false default=null description=the mission's <stem>.result.json (written next to its Recording); default: the fingerprint's ledger entry (#195)
+    - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
     - flags=--secret <value|env:VAR> required=true mandatory=false negate=false variadic=false default=[] description=REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=override the storageState the mission ran with
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)

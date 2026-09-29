@@ -113,6 +113,15 @@ export const SUITE_EXPLORE_OPTIONS = {
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
+  // #245 demo mode: opt-in per item (a check stays headless by default, CI included)
+  headed: { shape: "boolean", appliesTo: ALL_KINDS },
+  slowMo: { shape: "count", appliesTo: ALL_KINDS },
+  recordVideo: { shape: "path", appliesTo: ALL_KINDS },
+  overlay: { shape: "boolean", appliesTo: ALL_KINDS },
+  // #251: masked screenshots (`screens`, `steps`, `screens:<dir>`, `steps:<dir>` or `<dir>`)
+  screenshots: { shape: "string", appliesTo: ALL_KINDS },
+  // #250: per-defect captioned repro clip + key screenshots (default: on when the item records video)
+  evidenceVideo: { shape: "boolean", appliesTo: ALL_KINDS },
 } as const satisfies Record<string, SuiteExploreOption>;
 
 export type SuiteExploreOptionName = keyof typeof SUITE_EXPLORE_OPTIONS;

@@ -29,12 +29,14 @@ export function http5xxSignalOf(
   response: { status(): number; url(): string },
   firstParty?: FirstPartyOrigins,
   headers?: Readonly<Record<string, string>>,
+  method?: string,
 ): Http5xxSignal | null {
   const status = response.status();
   if (status < 500) return null;
   if (firstParty !== undefined && firstParty.thirdParty(response.url(), headers) !== null) return null;
   const url = redactUrl(response.url());
-  return { kind: "http-5xx", detail: `${status} ${url}`, url, status };
+  // #250: the request's method (`PUT`, …) rides along for evidence captions; never part of the fingerprint.
+  return { kind: "http-5xx", detail: `${status} ${url}`, url, status, ...(method === undefined ? {} : { method: method.toUpperCase() }) };
 }
 
 /** Request headers without throwing (a stub request may not expose them). */
@@ -129,8 +131,12 @@ export class Http5xxOracle {
     return this.#observed.length;
   }
 
-  /** The run's HTTP 5xx defects, one per fingerprint, in first-seen order. */
-  defects(transcript: readonly { readonly step: number; readonly actOk: boolean }[]): Http5xxDefect[] {
+  /**
+   * The run's HTTP 5xx defects, one per fingerprint, in first-seen order. `recordingOffset` (#250):
+   * Recording steps that precede the first transcript step — a goal run records its seed navigation
+   * as step 0, so its repro index is shifted by 1 (else `verify-fix` stops BEFORE the step that 500s).
+   */
+  defects(transcript: readonly { readonly step: number; readonly actOk: boolean }[], recordingOffset = 0): Http5xxDefect[] {
     const byFp = new Map<string, { defect: Http5xxDefect; steps: number[]; count: number }>();
     for (const o of this.#observed) {
       const step = this.#stepOf(o.startedAt);
@@ -156,7 +162,7 @@ export class Http5xxOracle {
           firstSeenStep: step,
           occurrences: 1,
           occurrenceSteps: [],
-          repro: { recordingStepIndex: recordingStepIndexFor(transcript, step) },
+          repro: { recordingStepIndex: recordingStepIndexFor(transcript, step, recordingOffset) },
         },
       });
     }
@@ -174,8 +180,8 @@ export class Http5xxOracle {
  * becomes a Recording step, so only the successful ones up to and including `uptoStep` count.
  * Clamped to 0 (replay from the start — always a safe anchor).
  */
-function recordingStepIndexFor(transcript: readonly { readonly step: number; readonly actOk: boolean }[], uptoStep: number): number {
-  let idx = -1;
+function recordingStepIndexFor(transcript: readonly { readonly step: number; readonly actOk: boolean }[], uptoStep: number, offset: number): number {
+  let idx = offset - 1;
   for (const e of transcript) {
     if (e.step > uptoStep) break;
     if (e.actOk) idx += 1;
