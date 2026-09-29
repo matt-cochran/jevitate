@@ -241,7 +241,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (478 exports)
+# @jevitate/explore (480 exports)
   act: function
   ActArgs: interface
   ActResult: interface
@@ -351,6 +351,8 @@
   DEMO_HIGHLIGHT_MS: variable
   DEMO_OVERLAY_ATTR: variable
   DEMO_OVERLAY_HIDE_STYLE: variable
+  DemoCaption: interface
+  DemoCardTone: type-alias
   DemoOverlay: class
   demoOverlayFor: function
   DemoOverlayIntent: interface

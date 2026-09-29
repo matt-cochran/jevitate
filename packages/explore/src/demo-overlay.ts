@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import type { TargetDescriptor } from "@jevitate/recording";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { Control } from "./snapshot.js";
 import { redactText } from "./redact.js";
@@ -7,6 +8,8 @@ import { redactText } from "./redact.js";
  * #245 — the demo overlay: an on-page panel that shows an audience what jevitate is about to do and
  * why (step, strategy, op + target, reason), a brief highlight box around the target just before
  * the action, and a final outcome banner. Opt-in (`demoOverlay: true`); absent/false injects NOTHING.
+ * `journey demo` (#248) drives the same overlay with captions (a step's objective) and cards (the
+ * Journey's goal as a title card, the outcome at the end).
  *
  * INVISIBLE TO JEVITATE, by construction (one central exclusion, not per-reader special cases):
  *  - everything renders inside a CLOSED shadow root, so no DOM reader (`querySelectorAll`,
@@ -56,9 +59,19 @@ interface PanelState {
   readonly why: string;
 }
 
+/** A card's look: `title` (the Journey goal, #248), `ok` / `bad` (the outcome). */
+export type DemoCardTone = "title" | "ok" | "bad";
+
 interface BannerState {
   readonly text: string;
-  readonly ok: boolean;
+  readonly tone: DemoCardTone;
+}
+
+/** A narrated caption (#248): a small heading (e.g. `step 2 of 5`), the caption, an optional detail line. */
+export interface DemoCaption {
+  readonly head: string;
+  readonly text: string;
+  readonly detail?: string | null;
 }
 
 /**
@@ -78,7 +91,7 @@ const OVERLAY_RUNTIME = String.raw`(() => {
     "@keyframes jev-fade{0%,70%{opacity:1}100%{opacity:0}}" +
     ".banner{position:fixed;left:50%;top:16px;transform:translateX(-50%);max-width:calc(100vw - 32px);padding:10px 18px;border-radius:10px;" +
     "font:600 14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;background:rgba(21,128,61,.94);box-shadow:0 6px 24px rgba(0,0,0,.35)}" +
-    ".banner.bad{background:rgba(185,28,28,.94)}";
+    ".banner.bad{background:rgba(185,28,28,.94)}.banner.title{background:rgba(30,58,138,.94);font-size:18px;padding:14px 22px}";
   let host = null;
   let parts = null;
   let tracking = 0;
@@ -128,6 +141,7 @@ const OVERLAY_RUNTIME = String.raw`(() => {
       p.why.hidden = s.why === "";
       p.panel.hidden = false;
       p.box.hidden = true;
+      p.banner.hidden = true; // a new step replaces a card (the title card, #248)
       return true;
     },
     track(el) {
@@ -159,7 +173,7 @@ const OVERLAY_RUNTIME = String.raw`(() => {
       tracking++;
       p.box.hidden = true;
       p.banner.textContent = s.text;
-      p.banner.className = s.ok ? "banner" : "banner bad";
+      p.banner.className = s.tone === "ok" ? "banner" : "banner " + s.tone;
       p.banner.hidden = false;
       return true;
     },
@@ -273,8 +287,13 @@ export class DemoOverlay {
     this.#banner = null;
     await this.#render(page);
     if (control === null) return;
+    if (await this.#highlight(page, control.descriptor)) await new Promise((r) => setTimeout(r, DEMO_HIGHLIGHT_MS));
+  }
+
+  /** Boxes the element `descriptor` finds (its first match); true when it was shown. */
+  async #highlight(page: Page, descriptor: TargetDescriptor): Promise<boolean> {
     const shown = await bounded(
-      descriptorToLocator(page, control.descriptor)
+      descriptorToLocator(page, descriptor)
         .first()
         .evaluate(
           (el) => (window as unknown as { __jevitateOverlay?: { track(e: Element): boolean } }).__jevitateOverlay?.track(el) === true,
@@ -282,14 +301,51 @@ export class DemoOverlay {
           { timeout: OVERLAY_CALL_MS },
         ),
     );
-    if (shown === true) await new Promise((r) => setTimeout(r, DEMO_HIGHLIGHT_MS));
+    return shown === true;
+  }
+
+  /** The (redacted) panel text for a caption — what the page is shown. */
+  captionFor(caption: DemoCaption): PanelState {
+    return {
+      head: this.#clean(caption.head, 80),
+      action: this.#clean(caption.text, 240),
+      target: "",
+      why: caption.detail === undefined || caption.detail === null ? "" : this.#clean(caption.detail, 200),
+    };
+  }
+
+  /**
+   * #248: shows a narrated caption (replacing any card) and, with a `target`, highlights it. The
+   * caller paces the step; this never waits beyond its bounded round-trips. True when highlighted.
+   */
+  async caption(page: Page, caption: DemoCaption, target: TargetDescriptor | null = null): Promise<boolean> {
+    this.#watch(page);
+    this.#lastPage = page;
+    this.#panel = this.captionFor(caption);
+    this.#banner = null;
+    await this.#render(page);
+    return target === null ? false : this.#highlight(page, target);
+  }
+
+  /** #248: a card over the page — the Journey's goal as a title card, or the outcome. */
+  async card(page: Page, text: string, tone: DemoCardTone): Promise<void> {
+    if (page.isClosed()) return;
+    this.#watch(page);
+    this.#lastPage = page;
+    this.#banner = { text: this.#clean(text, 200), tone };
+    await this.#render(page);
+  }
+
+  /** Re-applies the latest caption/card now (e.g. right after a navigation, before a capture). */
+  async refresh(page: Page): Promise<void> {
+    if (!page.isClosed()) await this.#render(page);
   }
 
   /** The final banner with the run's outcome — on `page`, else the page last announced on. */
   async finish(text: string, ok: boolean, page: Page | null = this.#lastPage): Promise<void> {
     if (page === null || page.isClosed()) return;
     this.#watch(page);
-    this.#banner = { text: this.#clean(text, 200), ok };
+    this.#banner = { text: this.#clean(text, 200), tone: ok ? "ok" : "bad" };
     await this.#render(page);
   }
 }

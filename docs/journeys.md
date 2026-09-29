@@ -220,6 +220,46 @@ per persona for commands that run as a named persona. Secret fields are read fro
 variable at run time and never written anywhere. A Journey's own vault `secretRefs` stay bound to
 the origin they were recorded on: a secret for one environment is never typed into another.
 
+## Demo a Journey: video, subtitles and a step-by-step guide
+
+`journey demo` replays a Journey as a narrated demo, for sales, onboarding and user docs:
+
+```bash
+jevitate journey demo checkout --env staging --video demos/checkout.webm --guide docs/checkout.md
+jevitate journey demo checkout --headed --pace 2500    # present it live
+```
+
+- The on-page overlay shows the Journey's `goal` (else its name) as a title card, then each step's
+  `objective` as the caption (else its `label`, else a value-free description), with the step's
+  target highlighted and a `--pace` pause (default 1500 ms), then an outcome card.
+  [Annotate](#annotate-a-journey-draft-its-intent-then-approve-it) the Journey first so every step
+  has an objective.
+- `--video <file.webm>` writes the recording (Playwright records WebM; convert it with ffmpeg if
+  you need MP4) and `<file>.vtt` beside it: one WebVTT cue per step, timed to its caption.
+- `--guide <file.md>` writes a Markdown guide: the goal, the preconditions, and per step its
+  number, objective, expected result and a screenshot (in `<file>.assets/`). The overlay is hidden
+  in every screenshot.
+- With neither flag, both go to a fresh `journey-demo-<id>-<stamp>/` folder in the logs dir.
+- Headless by default (for CI); `--headed` shows the window (it needs a display), `--slow-mo` slows
+  every browser operation.
+
+The replay is a `journey run`: the same `--param`, `--storage-state`, `--env`/`--base-url`,
+fixture, browser and emulation flags, site policy and fail-closed run policy, so paid or
+destructive steps are refused as usual, and a demo never self-heals. Run it against local, dev or
+staging with seeded data. Secret parameter values are redacted in the captions, subtitles, guide
+and result, and the written text is checked for them before it is saved. Screenshots are not
+pixel-masked yet: keep secrets out of what the page displays, or use a password field.
+
+A demo whose Journey no longer replays is **stale**: nothing is written, the command says which
+step stopped, and it exits `1`, so a CI job that regenerates demos catches it.
+
+| Exit | When |
+|---|---|
+| `0` | The Journey replayed and every requested output was written |
+| `1` | Stale: the Journey no longer replays (nothing written) |
+| `2` | The replay completed but an output could not be produced (`E_JOURNEY_DEMO_OUTPUT`), or another runtime failure |
+| `64` | Bad arguments (a `--video` that is not `.webm`, a `--guide` that is not `.md`, a bad `--pace`), an unknown Journey, a bad `--param`, `--headed` without a display |
+
 ## Site policies
 
 A site policy keeps Journey runs on a site polite and bounded, whoever starts them (you, CI, or an
