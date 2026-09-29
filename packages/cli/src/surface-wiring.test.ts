@@ -60,13 +60,13 @@ const QUEUE_NARROW = "a queued mission carries only what MissionRequest allows (
 /** `<file> <api>` → option → why that surface does not pass it. */
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
-  "program.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
-  "program.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
-  "program.ts runAdversarialCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
-  "program.ts runFeatureCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
-  "program.ts runExploreMultiRun": { nowIso: SEAM },
-  "program.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
-  "program.ts runUsabilityMission": {
+  "explore-cli.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  "explore-cli.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
+  "explore-cli.ts runAdversarialCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
+  "explore-cli.ts runFeatureCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
+  "explore-cli.ts runExploreMultiRun": { nowIso: SEAM },
+  "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
+  "explore-cli.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
     configPath: SEAM,
@@ -75,7 +75,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     nowIso: SEAM,
     extractText: SEAM,
   },
-  "program.ts runUxReview": {
+  "ux-cli.ts runUxReview": {
     env: SEAM,
     configPath: SEAM,
     signals: SEAM,
@@ -93,8 +93,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     emulation: "replays under each finding's own recorded emulation",
     allowEmulationOverride: "replays under each finding's own recorded emulation",
   },
-  "program.ts runRegressionCapture": {},
-  "program.ts runRegressionRun": {},
+  "regression-cli.ts runRegressionCapture": {},
+  "regression-cli.ts runRegressionRun": {},
   "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM },
   "mcp-api.ts runVerifyFix": {
     storageState: MCP_NARROW,
@@ -112,8 +112,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
-  "program.ts runJourneyProgrammatically": { account: SITE_ACCOUNT },
-  "program.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
+  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT },
+  "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
     browser: MCP_JOURNEY,
@@ -314,7 +314,7 @@ describe("surface wiring — every mission option is passed by every surface, or
 
   it("finds the surfaces (the analysis itself is not vacuous)", () => {
     const keys = sites.map((s) => s.key);
-    for (const k of ["program.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-api.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
+    for (const k of ["explore-cli.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-api.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
       expect(keys, k).toContain(k);
     }
   }, 120_000);
