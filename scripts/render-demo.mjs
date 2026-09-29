@@ -4,11 +4,12 @@
 //
 //   1. `journey demo` replays a small Journey (goal title card, captioned steps): the user saves the
 //      display name "Zoë 😀" and the page says "Saved".
-//   2. `explore --strategy adversarial --evidence-video` finds the planted bug; the invariant
-//      defect's evidence clip marks the failing Save ("invariant `saved-means-stored` violated").
+//   2. `explore --strategy adversarial --evidence-video` finds the planted bug; the HTTP 500
+//      defect's evidence clip replays its repro and marks the Save click that sent the failing
+//      request ("server returned 500 (PUT /demo/api/profile)").
 //   3. `verify-fix` (3/3 still reproduces), `regression capture` + `regression run` (reproduces).
-//   4. The app restarts with the fix; `verify-fix --record-video` gives the captioned "after" clip,
-//      and the regression passes.
+//   4. The app restarts with the fix; `verify-fix --record-video` on the 500 gives the captioned
+//      "after" clip (fixed), and the regression passes.
 //
 // The only added frames are an intro, one interstitial and an end card (rendered from HTML by
 // Playwright). The end card's lines are built from the commands' actual verdicts, and the script
@@ -148,14 +149,6 @@ function durationOf(file) {
   return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
 }
 
-/** The first big scene change after 0.5 s: the moment a page paints over about:blank. */
-function firstPaint(file) {
-  const r = spawnSync("ffmpeg", ["-hide_banner", "-i", file, "-vf", "select='gt(scene,0.08)',showinfo", "-f", "null", "-"], { encoding: "utf8" });
-  const times = [...(r.stderr ?? "").matchAll(/pts_time:([\d.]+)/g)].map((x) => Number(x[1])).filter((t) => t > 0.5);
-  if (times.length === 0) return die(`no page paint found in ${file}`);
-  return times[0];
-}
-
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 /** A plain title frame (PNG) rendered by Chromium. */
@@ -259,11 +252,17 @@ async function record() {
   const d500 = run.defects.find((d) => d.kind === "http-5xx");
   const dInv = run.defects.find((d) => d.kind === "invariant");
   if (d500 === undefined || dInv === undefined) die("explore: expected both an http-5xx and an invariant defect");
-  const ev = dInv.evidence;
-  // (An invariant is re-checked by verify-fix, not by the clip's replay: the clip marks the step it fired at.)
-  if (ev?.videoPath === undefined || ev.replay?.outcome !== "completed" || !existsSync(ev.videoPath)) {
-    die(`explore: the invariant defect has no complete evidence clip (${JSON.stringify(ev)})`);
+  const ev = d500.evidence;
+  // The 500's clip must replay to the step that SENT the failing request (the Save click), see the
+  // 500 fire again, and mark it with the request's method and path.
+  if (ev?.videoPath === undefined || ev.replay?.outcome !== "completed" || ev.reproduced !== true || !existsSync(ev.videoPath)) {
+    die(`explore: the HTTP 500 defect has no complete, reproduced evidence clip (${JSON.stringify(ev)})`);
   }
+  if (!/^server returned 500 \(PUT \/demo\/api\/profile\)$/.test(ev.signal ?? "")) die(`explore: the 500's clip is marked "${ev.signal}", expected "server returned 500 (PUT /demo/api/profile)"`);
+  const runRecording = JSON.parse(readFileSync(run.resultPath.replace(/\.result\.json$/, ".json"), "utf8"));
+  const replayed = d500.repro?.recording ?? runRecording.recording ?? runRecording;
+  const marked = replayed.pages.flatMap((p) => p.steps)[ev.failingStep - 1]?.step;
+  if (marked?.kind !== "click" || !JSON.stringify(marked.target ?? {}).includes('"Save"')) die(`explore: the 500's clip marks step ${ev.failingStep} (${JSON.stringify(marked)}), expected the Save click`);
   const resultPath = run.resultPath;
   const recordingPath = resultPath.replace(/\.result\.json$/, ".json");
 
@@ -282,7 +281,7 @@ async function record() {
     "verify-fix after the fix",
     jev(
       "verify-fix --record-video (fix on)",
-      ["verify-fix", "--result", resultPath, "--fingerprint", dInv.fingerprint, "--invariants", invariants, "--record-video", join(work, "vf"), "--json"],
+      ["verify-fix", "--result", resultPath, "--fingerprint", d500.fingerprint, "--record-video", join(work, "vf"), "--json"],
       0,
     ).out,
   );
@@ -291,7 +290,7 @@ async function record() {
   if (afterClip === undefined || !existsSync(afterClip)) die("verify-fix --record-video wrote no after clip");
   jev("regression run (fix on → fixed)", ["regression", "run", "saved-means-stored", "--dir", regDir], 0);
   await stopSite();
-  const manifest = { journeyVideo, evidenceVideo: ev.videoPath, failingStep: ev.failingStep, afterClip, replays: [Number(replays[1]), Number(replays[2])] };
+  const manifest = { journeyVideo, evidenceVideo: ev.videoPath, failingStep: ev.failingStep, signal: ev.signal, afterClip, replays: [Number(replays[1]), Number(replays[2])] };
   writeFileSync(join(work, "manifest.json"), JSON.stringify(manifest, null, 2));
   return manifest;
 }
@@ -313,7 +312,7 @@ try {
   await card(browser, join(seg, "mid.png"), {
     kicker: "explore --strategy adversarial --evidence-video",
     title: "The page said “Saved”. The server returned HTTP 500 and kept the old name.",
-    foot: `Jevitate misused the form and caught it at step ${m.failingStep}. Its evidence clip replays the repro:`,
+    foot: `Jevitate misused the form and caught it. Its evidence clip replays the repro and marks the step that sent the failing request:`,
   });
   await card(browser, join(seg, "end.png"), {
     kicker: "Decided by code, not by a model",
@@ -338,17 +337,16 @@ const clip = (src, from, to, speed = 1) =>
   segments.push({ input: ["-ss", from.toFixed(2), "-to", to.toFixed(2), "-i", src], vf: `setpts=(PTS-STARTPTS)/${speed},${NORM}` });
 
 still(join(seg, "intro.png"), 1.6);
-// The Journey demo, captioned steps at 2x ("Saved" and the Done card at the end). Its WebM starts
-// late (about:blank), so its goal title card may be cut short or missing (the intro card names the
-// goal too): skip the blank lead-in and start just before the profile page first paints.
+// The Journey demo from its first frame (the goal title card), captioned steps at 2.5x ("Saved" and
+// the Done card at the end).
 const jd = durationOf(m.journeyVideo);
-clip(m.journeyVideo, Math.max(0, firstPaint(m.journeyVideo) - 0.6), jd - 0.1, 2);
+clip(m.journeyVideo, 0, jd - 0.1, 2.5);
 still(join(seg, "mid.png"), 2.4);
-// The invariant defect's evidence clip: its last steps (a unicode name, Save, "Saved", the failing
-// step marked by the red defect card).
+// The HTTP 500's evidence clip: its last steps (the Save click captioned, then marked "✗ … server
+// returned 500 (PUT /demo/api/profile)" with the red defect card).
 const evd = durationOf(m.evidenceVideo);
 clip(m.evidenceVideo, Math.max(0, evd - 4.75), evd - 0.15);
-// verify-fix --record-video with the fix on: the same Save, ending on the verdict card.
+// verify-fix --record-video on the 500 with the fix on: the same Save, ending on the verdict card.
 const afd = durationOf(m.afterClip);
 clip(m.afterClip, Math.max(0, afd - 2.55), afd - 0.15);
 still(join(seg, "end.png"), 3.2);

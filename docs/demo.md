@@ -168,9 +168,10 @@ Things worth pointing out in the output:
 ## Recording the launch GIF or video
 
 The README GIF and the website video (`docs/assets/demo.gif`, `demo.mp4`, `demo.webm`,
-`demo-poster.png`) are rendered by `pnpm demo:render` (`scripts/render-demo.mjs`, about 5 minutes).
+`demo-poster.png`) are rendered by `pnpm demo:render` (`scripts/render-demo.mjs`, about 9 to 10 minutes for a full run).
 It starts the example app on a free port, runs `journey demo` (the user saves "Zoë 😀" and sees
-"Saved"), the adversarial `explore --evidence-video`, `verify-fix`, `regression capture`/`run`, then
+"Saved"), the adversarial `explore --evidence-video` (the HTTP 500's evidence clip marks the Save click:
+"server returned 500 (PUT /demo/api/profile)"), `verify-fix`, `regression capture`/`run`, then
 restarts the app with the fix for `verify-fix --record-video` and the passing regression. It cuts the
 real clips together with an intro, one interstitial and an end card whose lines come from the
 commands' verdicts, and stops if any verdict differs. It needs a built CLI and `ffmpeg` on `PATH`
