@@ -118,6 +118,10 @@ export const SUITE_EXPLORE_OPTIONS = {
   slowMo: { shape: "count", appliesTo: ALL_KINDS },
   recordVideo: { shape: "path", appliesTo: ALL_KINDS },
   overlay: { shape: "boolean", appliesTo: ALL_KINDS },
+  // #251: masked screenshots (`screens`, `steps`, `screens:<dir>`, `steps:<dir>` or `<dir>`)
+  screenshots: { shape: "string", appliesTo: ALL_KINDS },
+  // #250: per-defect captioned repro clip + key screenshots (default: on when the item records video)
+  evidenceVideo: { shape: "boolean", appliesTo: ALL_KINDS },
 } as const satisfies Record<string, SuiteExploreOption>;
 
 export type SuiteExploreOptionName = keyof typeof SUITE_EXPLORE_OPTIONS;

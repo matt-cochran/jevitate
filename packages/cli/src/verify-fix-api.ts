@@ -30,6 +30,8 @@ import {
   type VerifySession,
 } from "@jevitate/explore";
 import { verifyServerLogDefect } from "./server-log-verify.js";
+import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable, type DefectEvidence } from "./defect-evidence.js";
+import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -94,6 +96,25 @@ export interface RunVerifyFixOptions {
   readonly emulation?: EmulationSpec;
   /** Replay at `emulation` even though it differs from the finding's recorded emulation. */
   readonly allowEmulationOverride?: boolean;
+  /**
+   * #251 `--screenshots`: masked screenshots of the captioned "after" replay (one per distinct
+   * screen, or per step) + `index.md`.
+   */
+  readonly screenshots?: ScreenshotsSpec;
+  /** #250: caption time per step in the "after" clip (ms). Default `EVIDENCE_PACE_MS`. */
+  readonly evidencePaceMs?: number;
+}
+
+/**
+ * #250 — `verify-fix --record-video`: a before/after pair for the PR. `before` is the run's own
+ * evidence clip of the defect (`--evidence-video` on the original run), `after` a captioned replay
+ * of the same steps now (still reproducing, or passing), its final card the verdict.
+ */
+export interface VerifyFixEvidence {
+  readonly before?: { readonly videoPath?: string; readonly screenshots: string[] };
+  /** Why there is no `before` (the run recorded no evidence clip for this defect). */
+  readonly beforeMissing?: string;
+  readonly after: DefectEvidence;
 }
 
 export interface VerifyFixReport extends VerifyFixResult {
@@ -103,6 +124,12 @@ export interface VerifyFixReport extends VerifyFixResult {
   readonly fixtures?: FixtureRecord & { readonly missionIdentity: string };
   /** #245: `--record-video` files of every replay session (each closed, so finalized). */
   readonly videoPaths?: string[];
+  /** #250: with `--record-video` (or `--screenshots`), the before/after evidence pair. */
+  readonly evidence?: VerifyFixEvidence;
+  /** #251: `--screenshots` of the captioned after-replay. */
+  readonly screenshotPaths?: string[];
+  readonly screenshotIndex?: string;
+  readonly screenshotsSkipped?: ScreenshotsResult["screenshotsSkipped"];
 }
 
 export class VerifyFixInputError extends Error {
@@ -327,7 +354,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   // #245: every replay (and observer) session is shown/recorded alike — videos in
   // `verify-fix-<stamp>.videos/` beside the mission result (or under `--record-video <dir>`).
-  const videoDir = runVideoDir(opts.browser, joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(new Date().toISOString())}.json`));
+  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(new Date().toISOString())}.json`);
+  const videoDir = runVideoDir(opts.browser, vfArtifact);
   const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {
     ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
@@ -466,9 +494,58 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   } finally {
     await fx?.restore();
   }
+  // #250/#251: the captioned "after" replay (video and/or screenshots), paired with the run's own clip.
+  let evidence: VerifyFixEvidence | undefined;
+  let shotFields: Partial<ScreenshotsResult> = {};
+  if (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined) {
+    const secrets = [...(opts.secrets ?? []), ...authTokenValues];
+    const stored = persistedDefect(raw, finding.fingerprint);
+    const storedEvidence = stored !== undefined && isRecord(stored.evidence) ? stored.evidence : undefined;
+    const beforeVideo = typeof storedEvidence?.videoPath === "string" ? storedEvidence.videoPath : undefined;
+    const beforeShots = Array.isArray(storedEvidence?.screenshots) ? storedEvidence.screenshots.filter((x): x is string => typeof x === "string") : [];
+    const shots =
+      opts.screenshots === undefined
+        ? undefined
+        : new RunScreenshots({ spec: opts.screenshots, dir: screenshotsDirFor(opts.screenshots, vfArtifact), secrets, title: `verify-fix ${finding.fingerprint}` });
+    const verdictCard = (): { text: string; ok: boolean } =>
+      result.verdict === "fixed"
+        ? { text: "After the fix: the defect no longer reproduces", ok: true }
+        : { text: `After: ${result.verdict === "still-reproduces" ? "still reproduces" : result.verdict}`, ok: false };
+    const after: DefectEvidence =
+      fx !== undefined || observers.length > 0
+        ? { screenshots: [], skipped: fx !== undefined ? "the run used mission fixtures: the after-clip replay does not restore them" : "a cross-actor defect: no after-clip replay" }
+        : await replayWithEvidence({
+            recording,
+            stepIndex: finding.repro.recordingStepIndex,
+            fingerprints: [finding.fingerprint, ...(finding.related ?? [])],
+            signalCheckable: signalCheckable(finding.kind),
+            signal: defectSignalText(stored ?? { kind: finding.kind, ...(finding.title === undefined ? {} : { title: finding.title }) }, secrets),
+            seedUrl: mission.target.seedUrl,
+            allowlist: mission.target.allowlist,
+            ...(storageState === undefined ? {} : { storageState }),
+            ...(effectiveEmulation === undefined ? {} : { emulation: effectiveEmulation }),
+            outDir: joinPath(dirnameOf(videoDir ?? vfArtifact), `${vfArtifact.replace(/^.*[\\/]/, "").replace(/\.json$/, "")}.evidence`),
+            video: opts.browser?.recordVideo !== undefined,
+            ...(shots === undefined ? {} : { screenshots: shots }),
+            secrets,
+            ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+            browserPortFactory: portFactory,
+            ...(opts.evidencePaceMs === undefined ? {} : { paceMs: opts.evidencePaceMs }),
+            ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
+            finalCard: verdictCard,
+          });
+    evidence = {
+      ...(beforeVideo === undefined && beforeShots.length === 0 ? {} : { before: { ...(beforeVideo === undefined ? {} : { videoPath: beforeVideo }), screenshots: beforeShots } }),
+      ...(beforeVideo === undefined ? { beforeMissing: "the run recorded no evidence clip for this defect (run it with --evidence-video)" } : {}),
+      after,
+    };
+    shotFields = shots === undefined ? {} : await shots.finish();
+  }
   return {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
+    ...(evidence === undefined ? {} : { evidence }),
+    ...shotFields,
     ...(finding.title === undefined ? {} : { title: finding.title }),
     ...(fx === undefined ? {} : { fixtures: { ...fx.record(), missionIdentity: mission.fixtures?.identity ?? "none" } }),
     // Every replay closed its own session (finalizing its video) before verifyFix returned.

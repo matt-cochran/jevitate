@@ -13,11 +13,11 @@ import {
 } from "@jevitate/journey";
 import { assertNoSecretInPayload, redactText } from "@jevitate/ai-core";
 import { DemoOverlay } from "@jevitate/explore";
-import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
+import type { StepObserver } from "@jevitate/interpreter";
 import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
 import type { TargetDescriptor } from "@jevitate/recording";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
-import { captureStepScreenshot, type CaptureLayer } from "./demo-capture.js";
+import { captureStepScreenshot, SecretPixelMask, type CaptureLayer } from "./demo-capture.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
 /**
@@ -32,8 +32,9 @@ import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgram
  * refused), site policy, fixtures and environment (#247) as `journey run`; a demo never heals. A
  * Journey that no longer replays is STALE: nothing is written and the command exits non-zero, so a
  * CI job regenerating demos catches it. Every caption, cue and guide line is redacted with the run's
- * secret parameters, and the written text is proven secret-free before it lands (pixels in the
- * screenshots are a capture layer's job — see `demo-capture.ts`).
+ * secret parameters, and the written text is proven secret-free before it lands; the secret
+ * parameters are also masked in PIXELS — video and screenshots — by the display-only mask layer
+ * (#250/#251, `demo-capture.ts`), proven at every screenshot.
  */
 
 /** How long each caption is shown before its step acts (`--pace`, ms). */
@@ -97,6 +98,10 @@ export interface DemoJourneyResult {
   readonly video?: string;
   readonly subtitles?: string;
   readonly guide?: string;
+  /** #251 `--screenshots`: the replay's masked screenshots and their `index.md`. */
+  readonly screenshotPaths?: string[];
+  readonly screenshotIndex?: string;
+  readonly screenshotsSkipped?: Array<{ readonly step: number; readonly reason: string }>;
 }
 
 /** A WebVTT timestamp: `HH:MM:SS.mmm`. */
@@ -204,6 +209,10 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
   const title = oneLine(redact((journey.metadata.goal ?? "").trim() || journey.metadata.name));
 
   const work = await mkdtemp(join(tmpdir(), "jevitate-demo-"));
+  // #250/#251: the demo's secret parameters are masked in pixels — in the video from its first
+  // paint, and proven at every guide screenshot (a capture whose mask cannot be proven fails).
+  const mask = new SecretPixelMask(secrets);
+  const layers = [mask.layer(), ...(opts.captureLayers ?? [])];
   try {
     const overlay = new DemoOverlay(secrets);
     // The video starts with the session's page (the last thing `open` makes): cues count from there.
@@ -255,7 +264,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
           if (opts.guide !== undefined) {
             const file = join(shots, `step-${String(index + 1).padStart(2, "0")}.png`);
             try {
-              await captureStepScreenshot(page, file, { step: index + 1 }, opts.captureLayers ?? []);
+              await captureStepScreenshot(page, file, { step: index + 1 }, layers);
               const entry = steps.find((x) => x.number === index + 1);
               if (entry !== undefined) entry.screenshot = file;
             } catch (err) {
@@ -281,7 +290,8 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       ...runOpts,
       ...(browser === undefined ? {} : { browser }),
       browserPortFactory: timedPort,
-      interpreter: new RecordingInterpreter({ observer }),
+      observer,
+      mask,
     });
     closeLast();
     const done: DemoStep[] = steps.map((s) => ({
@@ -293,6 +303,8 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
     }));
 
     if (run.outcome === "quarantined") {
+      // A stale demo writes nothing: not even the screenshots its replay took.
+      for (const f of [...(run.screenshotPaths ?? []), ...(run.screenshotIndex === undefined ? [] : [run.screenshotIndex])]) await rm(f, { force: true });
       const at = run.at === undefined ? undefined : run.at + 1;
       return {
         id: opts.id,
@@ -345,7 +357,12 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       await writeFile(guide, md);
       Object.assign(result, { guide, steps: placed });
     }
-    return { id: opts.id, outcome: "ok", totalSteps: flat.length, ...result };
+    const shotFields = {
+      ...(run.screenshotPaths === undefined ? {} : { screenshotPaths: run.screenshotPaths }),
+      ...(run.screenshotIndex === undefined ? {} : { screenshotIndex: run.screenshotIndex }),
+      ...(run.screenshotsSkipped === undefined ? {} : { screenshotsSkipped: run.screenshotsSkipped }),
+    };
+    return { id: opts.id, outcome: "ok", totalSteps: flat.length, ...result, ...shotFields };
   } finally {
     await rm(work, { recursive: true, force: true });
   }

@@ -4,6 +4,8 @@ import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
+import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec } from "@jevitate/recording";
 import type { HostHealthSampler } from "@jevitate/explore";
@@ -101,6 +103,14 @@ export interface RunAdversarialCliMissionOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
   readonly browser?: BrowserRunOptions;
+  /** #251 `--screenshots`: masked screenshots (one per distinct screen, or per step) + `index.md`. */
+  readonly screenshots?: ScreenshotsSpec;
+  /**
+   * #250 `--evidence-video`: after the result is written, each defect's minimal repro is replayed
+   * with captions (the failing step marked) into a masked clip + before/at screenshots, attached as
+   * `defects[].evidence` (and to its issue draft).
+   */
+  readonly evidenceVideo?: boolean;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -200,7 +210,16 @@ export async function runAdversarialCliMission(
   startRouteGlobs(opts.seedUrl);
   // #149: refused BEFORE any browser opens.
   const resolvedEmulation = resolveEmulation(opts.emulation);
-  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
+  // paint; `--screenshots` captures after each step (the Recording path names their folder).
+  const capture = runCaptureFor({
+    recordsVideo: opts.browser?.recordVideo !== undefined,
+    screenshots: opts.screenshots,
+    secrets: opts.secrets ?? [],
+    artifactPath: () => journal.recordingPath,
+    title: `adversarial run of ${opts.seedUrl}`,
+  });
+  const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -245,6 +264,7 @@ export async function runAdversarialCliMission(
     onTranscriptEntry: journal.onTranscriptEntry,
   });
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    capture.noteEntry(session.page, entry);
     health.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
@@ -318,6 +338,7 @@ export async function runAdversarialCliMission(
       iso,
     );
     // #245: every context closed (videos finalized) before the result naming them is written.
+    const shotFields = await capture.finish();
     const videos = await finalizeVideos(videoDir, closeSession);
     const result = {
       ...outcome,
@@ -326,6 +347,7 @@ export async function runAdversarialCliMission(
       missionOutcome,
       recordingPaths: [journal.recordingPath],
       ...videos,
+      ...shotFields,
       // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
       recording:
         resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
@@ -351,7 +373,7 @@ export async function runAdversarialCliMission(
       ...(host.failure === undefined || outcome.failure !== undefined ? {} : { failure: host.failure }),
       ...host.fields,
     };
-    return { ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) };
+    return await withRunEvidence({ ...result, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, result, runUsage) }, evidenceOf(opts, opts.secrets ?? []));
   } finally {
     disarmKillSwitch();
     health.stop();

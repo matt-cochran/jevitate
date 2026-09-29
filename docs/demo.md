@@ -102,6 +102,12 @@ jevitate verify-fix --result "$RESULT" --fingerprint "$FP_500" --json | jq '.dat
 
 To run it again from scratch: `rm -rf demo-runs demo-regressions` (both are git-ignored).
 
+Evidence for the PR: add `--evidence-video` to step 1 and each defect gets a captioned repro clip
+(the Save step marked "server returned 500 (PUT /demo/api/profile)") plus before/at screenshots,
+linked from the result (`defects[].evidence`) and the issue drafts. `verify-fix --record-video`
+in step 5 then gives the before/after pair. See
+[operations: evidence clips and screenshots](./operations.md#evidence-clips-and-screenshots).
+
 ## Expected sequence
 
 Recorded from a real run of the commands above (engine `0.1.0`, commit `098cdeb`; the timestamp

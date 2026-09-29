@@ -7,6 +7,7 @@ import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
@@ -27,6 +28,8 @@ import {
   withBrowserLaunchFlags,
   browserRunFromFlags,
   withDemoFlags,
+  withScreenshotsFlag,
+  type ScreenshotsFlags,
   type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
@@ -115,7 +118,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       }
     });
 
-  withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true }))
+  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true })))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -150,7 +153,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
-      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -158,7 +161,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         real?: boolean;
         fakeAi?: boolean;
         json?: boolean;
-      } & EmulationFlags>();
+      } & EmulationFlags & ScreenshotsFlags>();
       // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
       const storageState = storageStateFlag ?? environment?.storageState;
 
@@ -170,6 +173,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       let browser: ReturnType<typeof browserRunFromFlags>;
       try {
         browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      // #251: an unusable --screenshots value is a usage error (64), before any browser opens.
+      let screenshots: ScreenshotsSpec | undefined;
+      try {
+        screenshots = parseScreenshotsArg(this.opts<ScreenshotsFlags>().screenshots);
       } catch (err) {
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -228,6 +239,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           browserPortFactory: deps.explore?.browserPortFactory,
           ...(browser === undefined ? {} : { browser }),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
+          ...(screenshots === undefined ? {} : { screenshots }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(environment === undefined ? {} : { environment }),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);

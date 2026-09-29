@@ -121,6 +121,23 @@ jevitate explore --strategy adversarial --url http://127.0.0.1:5190/demo/profile
 it is refused (exit 64) — use `--record-video` instead. See
 [operations: demo mode](./docs/operations.md#demo-mode-watching-a-run).
 
+Evidence for a defect, and screenshots of any run:
+
+```bash
+# Per defect: its minimal repro replayed with captions, the failing step marked with the actual
+# signal ("Save → server returned 500 (PUT /api/profile)"), a clip + before/at screenshots
+# (defects[].evidence; linked from the issue draft, report, JUnit and SARIF)
+jevitate explore --url http://127.0.0.1:5190/demo/profile --goal "save the profile" --fake-ai --evidence-video
+
+# One masked screenshot per distinct screen (or `--screenshots steps`: one per step) + index.md
+jevitate journey run my-journey --screenshots
+```
+
+`--screenshots [screens|steps|<dir>]` works on every `explore` strategy, `journey run|annotate|demo`
+and `verify-fix`; `verify-fix --record-video` gives a before/after clip pair. Registered secrets are
+masked in the pixels of every clip and screenshot (a capture whose mask cannot be proven is skipped,
+never written). See [operations: evidence and screenshots](./docs/operations.md#evidence-clips-and-screenshots).
+
 ## Why Jevitate?
 
 Hand-written E2E tests check the paths someone thought of. The bugs that reach users tend to sit

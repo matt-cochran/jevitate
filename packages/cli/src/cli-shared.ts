@@ -311,6 +311,22 @@ export function withDemoFlags(cmd: Command, set: DemoFlagSet = {}): Command {
   return cmd;
 }
 
+/** Raw commander value of `--screenshots [mode|dir]` (#251). */
+export interface ScreenshotsFlags {
+  screenshots?: boolean | string;
+}
+
+/**
+ * #251: `--screenshots [mode|dir]` — masked screenshots of the run (one per distinct screen, or
+ * `steps`: one per step) plus an `index.md` contact sheet; parsed by `parseScreenshotsArg`.
+ */
+export function withScreenshotsFlag(cmd: Command): Command {
+  return cmd.option(
+    "--screenshots [mode|dir]",
+    "masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths",
+  );
+}
+
 /**
  * The runner's `browser` option for the parsed `--browser-*` and demo flags, or `undefined` when none
  * were given. `--headed` (or `JEVITATE_HEADED=1`) without a display throws `HeadedWithoutDisplayError`

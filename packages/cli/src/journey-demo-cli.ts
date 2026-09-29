@@ -1,3 +1,4 @@
+import { formatScreenshotsLine, parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
@@ -25,6 +26,8 @@ import {
   withBrowserLaunchFlags,
   browserRunFromFlags,
   withDemoFlags,
+  withScreenshotsFlag,
+  type ScreenshotsFlags,
   type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
@@ -42,7 +45,7 @@ import {
  * the logs dir. A Journey that no longer replays writes nothing and exits 1 (a stale demo).
  */
 export function registerJourneyDemoCommand(journey: Command, program: Command, deps: CliDeps): void {
-  withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("demo <id>"))))))
+  withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("demo <id>")))))))
     .description(
       "replay a Journey as a narrated demo (goal, step objectives as captions, target highlights) → a WebM video with .vtt subtitles " +
         "and/or a Markdown step-by-step guide with screenshots; a Journey that no longer replays fails (exit 1)",
@@ -56,7 +59,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, ...rest } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, ...rest } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -64,7 +67,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
         guide?: string;
         pace?: number;
         json?: boolean;
-      } & EmulationFlags & EnvironmentFlags>();
+      } & EmulationFlags & EnvironmentFlags & ScreenshotsFlags>();
       const out = program.configureOutput().writeOut;
       const journeysDir = resolveJourneysDir(deps, dir);
 
@@ -90,9 +93,11 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       // #245: --headed (a display is required) and --slow-mo, resolved before any browser opens.
       let browser: ReturnType<typeof browserRunFromFlags>;
       let emulation: EmulationSpec | undefined;
+      let screenshots: ScreenshotsSpec | undefined;
       try {
         browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
         emulation = emulationFromFlags({ viewport: rest.viewport, device: rest.device });
+        screenshots = parseScreenshotsArg(screenshotsFlag);
       } catch (err) {
         emitJson(program, fail("E_JOURNEY_DEMO_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -116,6 +121,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
             browserPortFactory: deps.explore?.browserPortFactory,
             ...(browser === undefined ? {} : { browser }),
             ...(emulation === undefined ? {} : { emulation }),
+            ...(screenshots === undefined ? {} : { screenshots }),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             ...(video === undefined ? {} : { video }),
@@ -148,6 +154,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
           out?.(`demo of journey '${id}': ${result.steps.length} step(s) replayed\n`);
           if (result.video !== undefined) out?.(`video: ${result.video}\nsubtitles: ${result.subtitles ?? ""}\n`);
           if (result.guide !== undefined) out?.(`guide: ${result.guide}\n`);
+          if (result.screenshotIndex !== undefined) out?.(formatScreenshotsLine(result));
         }
         process.exitCode = exit;
       } catch (err) {

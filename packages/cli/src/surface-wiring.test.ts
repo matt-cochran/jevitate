@@ -57,6 +57,11 @@ const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site p
 const MCP_JOURNEY = "MCP run_journey takes only id + params + a storageState path (invariant #5)";
 const ANNOTATE_OBSERVER = "#246: only `journey annotate` replays with an observing interpreter (before/after evidence); every run uses the plain one";
 const QUEUE_NARROW = "a queued mission carries only what MissionRequest allows (a closed schema an MCP agent fills)";
+const MASK_INTERNAL = "#250/#251: the pixel mask is built inside the run from the Journey's secret params; only a demo shares its own";
+const OBSERVER_INTERNAL = "#246/#248: only annotate and demo replay with an observer (evidence, captions); `--screenshots` composes its own inside the run";
+const OBSERVER_NOT_INTERPRETER = "#251: annotate/demo pass their observer (`observer`) so `--screenshots` can compose with it; never a whole interpreter";
+const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PACE_MS); a test seam only";
+const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -66,7 +71,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "explore-cli.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "explore-cli.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "explore-cli.ts runExploreMultiRun": { nowIso: SEAM },
-  "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
+  "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
   "explore-cli.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
@@ -86,6 +91,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixture: "offline review: nothing to upload",
   },
   "ledger-cli.ts runLedgerVerify": {
+    evidencePaceMs: EVIDENCE_PACE,
+    screenshots: NO_SCREENSHOTS_HERE,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
     invariantFiles: "a ledger entry carries the invariant spec it is re-checked with",
     hangReplayWrites: "never in a batch re-check; verify-fix <fp> --hang-replay-writes re-checks one hang",
@@ -98,6 +105,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "regression-cli.ts runRegressionRun": {},
   "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM },
   "mcp-api.ts runVerifyFix": {
+    evidencePaceMs: EVIDENCE_PACE,
+    screenshots: MCP_NARROW,
     storageState: MCP_NARROW,
     browserPortFactory: SEAM,
     browser: SEAM,
@@ -113,12 +122,14 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
-  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER },
+  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL },
   "journey-annotate-api.ts runJourneyProgrammatically": {
+    interpreter: OBSERVER_NOT_INTERPRETER,
     policy: "annotate replays with the fail-closed safeRunPolicy() — it documents a Journey, never heals one",
     selfHealer: "annotate never self-heals: a broken step stops the replay and drafts only the reached steps",
   },
   "journey-demo-api.ts runJourneyProgrammatically": {
+    interpreter: OBSERVER_NOT_INTERPRETER,
     policy: "a demo replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
@@ -130,6 +141,9 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    mask: MASK_INTERNAL,
+    observer: OBSERVER_INTERNAL,
+    screenshots: NO_SCREENSHOTS_HERE,
     account: SITE_ACCOUNT,
     browser: MCP_JOURNEY,
     browserPortFactory: SEAM,
@@ -140,6 +154,9 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     environment: MCP_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    mask: MASK_INTERNAL,
+    observer: OBSERVER_INTERNAL,
+    screenshots: NO_SCREENSHOTS_HERE,
     account: SITE_ACCOUNT,
     policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
     selfHealer: "check never self-heals: a broken step fails the gate",
@@ -148,6 +165,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
+    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
@@ -163,6 +182,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     actors: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runCoverageMission": {
+    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
+    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
@@ -171,6 +192,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
+    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
+    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
@@ -182,6 +205,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
+    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
+    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
     nowIso: SEAM,
@@ -222,6 +247,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
   "check-execute.ts runVerifyFix": {
+    evidencePaceMs: EVIDENCE_PACE,
+    screenshots: NO_SCREENSHOTS_HERE,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
     invariantFiles: "the result persists its invariant spec",
     allowLogCmd: "never enabled from a suite; targets.json may opt in",

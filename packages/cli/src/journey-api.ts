@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, deriveParamSchema, describeStep, flatJourneySteps, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { join } from "node:path";
@@ -7,7 +7,10 @@ import { closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type Brow
 import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { RecordingInterpreter } from "@jevitate/interpreter";
+import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
+import { BrowseTheWebToken } from "@jevitate/screenplay";
+import { SecretPixelMask, maskingPort } from "./demo-capture.js";
+import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
 import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
@@ -82,6 +85,18 @@ export interface RunJourneyProgrammaticallyOptions {
    * Absent: the Journey's recorded site, exactly as before.
    */
   environment?: ResolvedJourneyEnvironment;
+  /**
+   * #251 `--screenshots`: one masked screenshot per distinct screen (or per step) + `index.md`;
+   * the paths come back as `screenshotPaths`. Absent: none.
+   */
+  screenshots?: ScreenshotsSpec;
+  /** #251 seam: a per-step observer composed into the default interpreter (annotate, demo). Ignored with `interpreter`. */
+  observer?: StepObserver;
+  /**
+   * #250/#251: the run's pixel mask (default: one over the Journey's secret parameters) — installed
+   * on the session before its first navigation whenever it records video or screenshots.
+   */
+  mask?: SecretPixelMask;
 }
 
 /**
@@ -134,7 +149,7 @@ export async function promoteJourney(dir: string, id: string): Promise<Journey> 
  */
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[] }> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[] } & Partial<ScreenshotsResult>> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -173,12 +188,35 @@ export async function runJourneyProgrammatically(
       params = Object.fromEntries(Object.entries(opts.params).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
-    const port = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
+    // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
+    const secrets = secretParamValues(journey, params);
+    const mask = opts.mask ?? new SecretPixelMask(secrets);
+    const capturing = opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined;
+    const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
+    const port = capturing ? maskingPort(rawPort, mask) : rawPort;
+    const artifactName = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}.json`;
     // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
     const videoDir =
       opts.browser?.recordVideo === undefined
         ? undefined
-        : runVideoDir(opts.browser, join(opts.browser.recordVideo.dir ?? logsDirFor(), `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}.json`));
+        : runVideoDir(opts.browser, join(opts.browser.recordVideo.dir ?? logsDirFor(), artifactName));
+    const flat = flatJourneySteps(journey);
+    const shots =
+      opts.screenshots === undefined
+        ? undefined
+        : new RunScreenshots({
+            spec: opts.screenshots,
+            dir: screenshotsDirFor(opts.screenshots, join(logsDirFor(), artifactName)),
+            secrets,
+            title: `journey ${journey.metadata.name}`,
+            mask,
+          });
+    const whatOf = (i: number): string => {
+      const s = flat[i];
+      if (s === undefined) return `step ${i + 1}`;
+      const pick = [s.recorded.objective, s.recorded.step.label].map((t) => (t ?? "").trim()).find((t) => t !== "");
+      return pick ?? describeStep(s.recorded.step);
+    };
     const session = await port.open({
       ...sessionLaunchOptions(opts.browser, videoDir),
       allowedOrigins,
@@ -192,18 +230,24 @@ export async function runJourneyProgrammatically(
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
-      const runner = new JourneyRunner(actor, opts.interpreter ?? new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
+      const observer = composeObservers(
+        opts.observer,
+        shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
+      );
+      const interpreter = opts.interpreter ?? (opts.observer === undefined && shots === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer }));
+      const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
         result = redactSecretParams(await runner.run({ journey, params, policy }), journey, params);
       } finally {
         await gate.done();
       }
+      const shotFields = shots === undefined ? {} : await shots.finish();
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...videos };
+      if (fx === undefined) return { ...result, ...videos, ...shotFields };
       await fx.restore();
-      return { ...result, ...videos, fixtures: fx.record() };
+      return { ...result, ...videos, ...shotFields, fixtures: fx.record() };
     } finally {
       await closeSession();
     }

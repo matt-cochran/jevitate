@@ -19,6 +19,8 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { FilingConfigError, loadFilingFileConfig, resolveFilingConfig } from "./findings-filing.js";
+import { fileDraftsWithEvidence } from "./defect-evidence.js";
+import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { GitHubIssueFiler } from "./github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import {
@@ -72,6 +74,8 @@ import {
   type DemoFlags,
   withBrowserLaunchFlags,
   withDemoFlags,
+  withScreenshotsFlag,
+  type ScreenshotsFlags,
   browserRunFromFlags,
   type EmulationFlags,
   withEmulationFlags,
@@ -90,7 +94,7 @@ import { multiWindowWarning } from "./browser-run-options.js";
  * `buildProgram` builds a fresh program for each run of a multi-run (#141/#143).
  */
 export function registerExploreCommands(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
-  withEmulationFlags(
+  withScreenshotsFlag(withEmulationFlags(
     withFixtureFlags(
       withDemoFlags(
         withBrowserLaunchFlags(
@@ -101,7 +105,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         { recordVideo: true, overlay: true },
       ),
     ),
-  )
+  ))
     .option("--url <url>", "target URL (must be an authorized origin)")
     .option(
       "--strategy <name>",
@@ -386,6 +390,10 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--evidence-video",
+      "per defect: replay its minimal repro with captions + the failing step marked, record a masked clip and before/at screenshots (defects[].evidence; linked from drafts)",
+    )
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .addHelpText(
       "after",
@@ -476,7 +484,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         checkOverflow?: boolean;
         ignoreOverflow: string[];
         json?: boolean;
-      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags>();
+        evidenceVideo?: boolean;
+      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags & ScreenshotsFlags>();
       // #210: one output rule for every strategy — the envelope with --json, a human summary without.
       const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
@@ -519,6 +528,16 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
+      // #251: an unusable --screenshots value is a usage error (64), refused before any browser opens.
+      let screenshots: ScreenshotsSpec | undefined;
+      try {
+        screenshots = parseScreenshotsArg(o.screenshots);
+      } catch (err) {
+        emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      // #251/#250: the capture options every strategy's runner takes.
+      const screenshotsOpt = { ...(screenshots === undefined ? {} : { screenshots }), ...(o.evidenceVideo === true ? { evidenceVideo: true } : {}) };
       if (browser?.headed === true && (wantsMultiRun(o) || o.actor.length > 1)) {
         program.configureOutput().writeErr?.(multiWindowWarning(o.actor.length > 1 ? "several --actor sessions" : "--repeat/--persona"));
       }
@@ -639,6 +658,16 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         deps.explore?.issueFiler ??
         ((): IssueFilerPort =>
           new GitHubIssueFiler({ store: envCredentialStore(process.env, loadLocalCredentials()) }));
+      // #250 --evidence-video: the runner attaches each defect's captioned repro clip + key
+      // screenshots; drafts are filed only AFTER their media is linked (the run writes drafts only).
+      const evidenceOn = o.evidenceVideo === true;
+      const runFiling = filing === undefined ? undefined : evidenceOn ? { ...filing, enabled: false } : filing;
+      const withEvidence = async <R extends object>(result: R): Promise<R> => {
+        if (!evidenceOn) return result;
+        let out = result;
+        if (filing?.enabled === true) out = await fileDraftsWithEvidence(out, filing, issueFiler, new Date().toISOString());
+        return out;
+      };
       // `--fixture` feeds the upload op, which only the explore loop (goal and
       // usability strategies) can issue. Refuse it elsewhere rather than
       // silently ignoring a file the user expected to be uploaded.
@@ -832,6 +861,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...screenshotsOpt,
             ...(emulation === undefined ? {} : { emulation }),
             overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
@@ -840,7 +870,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...withServerLog,
           });
           // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
-          emitExplore(ok(result), result.exitCode);
+          emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -903,7 +933,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             coverageThresholds,
             bounds: Object.keys(advBounds).length > 0 ? advBounds : undefined,
             secrets: o.secret.length > 0 ? o.secret : undefined,
-            ...(filing === undefined ? {} : { filing }),
+            ...(runFiling === undefined ? {} : { filing: runFiling }),
             issueFiler,
             ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
             strategies: CLI_ADVERSARIAL_STRATEGIES,
@@ -911,6 +941,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             generation: advGen,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...screenshotsOpt,
             ...(emulation === undefined ? {} : { emulation }),
             overflow,
             outDir: o.out,
@@ -921,7 +952,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           });
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
           // itself broke (inconclusive/crashed) — see exit-codes.ts.
-          emitExplore(ok(result), result.exitCode);
+          emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1006,6 +1037,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...screenshotsOpt,
             ...(emulation === undefined ? {} : { emulation }),
             overflow,
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
@@ -1018,7 +1050,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           });
           // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
           // broken run or an unavailable analysis is 2.
-          emitExplore(ok(result), result.exitCode);
+          emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1067,6 +1099,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             outDir: o.out,
             browserPortFactory: deps.explore?.browserPortFactory,
             browser,
+            ...screenshotsOpt,
             ...(emulation === undefined ? {} : { emulation }),
             ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
@@ -1074,7 +1107,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...withServerLog,
             ...(target?.safety === undefined ? {} : { safety: target.safety }),
           });
-          emitExplore(ok(result), result.exitCode);
+          emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
@@ -1187,11 +1220,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
+          ...screenshotsOpt,
           ...(emulation === undefined ? {} : { emulation }),
           ...(primaryStorageState !== undefined ? { storageState: primaryStorageState } : {}),
           ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
           ...(actors === null ? {} : { actors }),
-          ...(filing === undefined ? {} : { filing }),
+          ...(runFiling === undefined ? {} : { filing: runFiling }),
           issueFiler,
           ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
           conversation,
@@ -1200,7 +1234,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...(fx === undefined ? {} : { fixtures: fx }),
         });
         // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
-        emitExplore(ok(result), result.exitCode);
+        emitExplore(ok(await withEvidence(result)), result.exitCode);
       } catch (err) {
         if (err instanceof UnauthorizedExploreTargetError) {
           emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));

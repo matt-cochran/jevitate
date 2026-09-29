@@ -60,6 +60,14 @@ export function renderSarif(input: SarifInput): SarifLog {
       ...(d.identity.route === undefined ? [] : [{ name: d.identity.route, kind: "module" }]),
       ...(d.identity.control === undefined ? [] : [{ name: d.identity.control, kind: "member" }]),
     ];
+    // #250: the defect's repro clip and screenshots — SARIF attachments (and related locations, which
+    // code scanning lists), so CI shows them with the result.
+    const media = d.evidence.flatMap((e) => [
+      ...(e.video === undefined ? [] : [{ uri: e.video, text: `captioned repro clip (run ${e.runId})` }]),
+      ...(e.screenshot === undefined ? [] : [{ uri: e.screenshot, text: `screenshot${e.step === undefined ? "" : ` at step ${e.step}`} (run ${e.runId})` }]),
+    ]);
+    const seen = new Set<string>();
+    const files = media.filter((m) => (seen.has(m.uri) ? false : (seen.add(m.uri), true))).slice(0, 10);
     return {
       ruleId: ruleId(d),
       level: f.gating ? "error" : d.severity === "hard" ? "warning" : "note",
@@ -72,6 +80,12 @@ export function renderSarif(input: SarifInput): SarifLog {
           ...(logical.length === 0 ? {} : { logicalLocations: logical }),
         },
       ],
+      ...(files.length === 0
+        ? {}
+        : {
+            relatedLocations: files.map((m, id) => ({ id, physicalLocation: { artifactLocation: { uri: m.uri } }, message: { text: m.text } })),
+            attachments: files.map((m) => ({ artifactLocation: { uri: m.uri }, description: { text: m.text } })),
+          }),
       partialFingerprints: { jevitateFindingKey: d.key },
       properties: {
         key: d.key,

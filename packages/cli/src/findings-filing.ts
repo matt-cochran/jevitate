@@ -115,6 +115,8 @@ export interface WrittenDraft {
   readonly title: string;
   readonly attribution: IssueDraft["attribution"];
   readonly targets: IssueDraft["targets"];
+  /** #250: kept so a draft can be filed later (after its evidence was attached). */
+  readonly labels?: readonly string[];
   readonly path: string;
 }
 
@@ -126,7 +128,7 @@ export function writeIssueDrafts(recordingPath: string, drafts: readonly IssueDr
   return drafts.map((d) => {
     const path = join(dir, `${d.fingerprint}.md`);
     writeFileSync(path, `# ${d.title}\n\n${d.body}\n`, "utf8");
-    return { fingerprint: d.fingerprint, title: d.title, attribution: d.attribution, targets: d.targets, path };
+    return { fingerprint: d.fingerprint, title: d.title, attribution: d.attribution, targets: d.targets, labels: d.labels, path };
   });
 }
 

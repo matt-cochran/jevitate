@@ -147,7 +147,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (306 exports)
+# @jevitate/explore (307 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -292,6 +292,7 @@
   controlFields: function
   controlKey: function
   controlRisk: function
+  coverageStateFingerprint: function
   coveredByInterceptors: function
   currentEnvironment: function
   decide: function

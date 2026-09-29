@@ -149,6 +149,9 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     slowMo: { kind: "feature", set: 100 },
     recordVideo: { kind: "goal", set: "videos" },
     overlay: { kind: "usability", set: false, with: { headed: true } },
+    // #251/#250: capture modes reach the runner as `screenshots` / `evidenceVideo`
+    screenshots: { kind: "goal", set: "steps" },
+    evidenceVideo: { kind: "coverage", set: true },
   };
 }
 

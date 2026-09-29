@@ -16,7 +16,7 @@ import {
 } from "@jevitate/journey";
 import { assertNoSecretInPayload, redactText, redactUrl, type GenerationPort, type GenerationProvenance } from "@jevitate/ai-core";
 import { contentHash } from "@jevitate/domain";
-import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
+import type { StepObserver } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
@@ -104,6 +104,10 @@ export interface AnnotateJourneyResult {
   /** What approving the draft would change (the same diff `--approve` shows). */
   readonly proposed: AnnotationChange[];
   readonly coverage: IntentCoverage;
+  /** #251 `--screenshots`: the replay's masked screenshots and their `index.md`. */
+  readonly screenshotPaths?: string[];
+  readonly screenshotIndex?: string;
+  readonly screenshotsSkipped?: Array<{ readonly step: number; readonly reason: string }>;
 }
 
 /**
@@ -132,7 +136,7 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     },
   };
   const { gen, now, ...runOpts } = opts;
-  const run = await runJourneyProgrammatically({ ...runOpts, interpreter: new RecordingInterpreter({ observer }) });
+  const run = await runJourneyProgrammatically({ ...runOpts, observer });
   const reachedSteps = before.size;
   const replay: AnnotationDraft["replay"] = run.outcome === "quarantined"
     ? { outcome: "stopped", reachedSteps, totalSteps: flat.length, reason: redactText(run.reason, secrets).slice(0, 2000) }
@@ -237,6 +241,9 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     },
     proposed: applyAnnotationDraft(journey, draft).changes,
     coverage: intentCoverage(journey),
+    ...(run.screenshotPaths === undefined ? {} : { screenshotPaths: run.screenshotPaths }),
+    ...(run.screenshotIndex === undefined ? {} : { screenshotIndex: run.screenshotIndex }),
+    ...(run.screenshotsSkipped === undefined ? {} : { screenshotsSkipped: run.screenshotsSkipped }),
   };
 }
 

@@ -20,6 +20,7 @@ import { type EngineInfo } from "./engine.js";
 import { applyJourneyEnvironment, isEnvironmentError, resolveJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
+import { parseScreenshotsArg } from "./run-screenshots.js";
 
 // ── changed routes ───────────────────────────────────────────────────────────
 
@@ -231,6 +232,8 @@ function itemSetup(
   const x = effectiveExploreOptions(t.explore, item.explore, kind);
   // #245: a headed item without a display is refused here, before anything runs (use recordVideo).
   assertHeadedDisplay(x.headed === true, env);
+  // #251: an unusable `screenshots` value is refused at preflight, before anything runs.
+  parseScreenshotsArg(x.screenshots, "screenshots");
   let storageState = sessionOf(t, item.storageState);
   if (item.storageState !== undefined && item.storageState !== null && !existsSync(item.storageState)) {
     throw new Error(`storage state not found: ${item.storageState}`);

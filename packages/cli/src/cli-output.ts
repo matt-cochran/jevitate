@@ -76,6 +76,30 @@ function defectLine(label: string, d: DefectLike): string {
   return `${tag(label)}${parts.join("  ")}${d.advisory === true ? "  (advisory)" : ""}`;
 }
 
+/** #250: a defect's evidence (clip, key screenshots, or why none) as indented lines. */
+function evidenceLines(d: unknown): string[] {
+  if (!isRecord(d) || !isRecord(d.evidence)) return [];
+  const e = d.evidence;
+  const out: string[] = [];
+  const mark = str(e.signal) === undefined ? "" : ` — step ${typeof e.failingStep === "number" ? e.failingStep : "?"} marked: ${str(e.signal)}`;
+  if (str(e.videoPath) !== undefined) out.push(`${tag("  CLIP")}${str(e.videoPath)}${mark}${e.reproduced === false ? " (did not fire on this replay)" : ""}`);
+  for (const sh of arr(e.screenshots)) if (str(sh) !== undefined) out.push(`${tag("  SHOT")}${str(sh)}`);
+  if (str(e.skipped) !== undefined) out.push(`${tag("  NO CLIP")}${str(e.skipped)}`);
+  for (const c of arr(e.captureSkips)) if (str(c) !== undefined) out.push(`${tag("  SKIPPED")}${str(c)}`);
+  return out;
+}
+
+/** #251: the run's `--screenshots` (count, index, refused captures). */
+function screenshotLines(r: Record<string, unknown>): string[] {
+  const index = str(r.screenshotIndex);
+  if (index === undefined) return [];
+  const skipped = arr(r.screenshotsSkipped).filter(isRecord);
+  return [
+    `${tag("SHOTS")}${arr(r.screenshotPaths).length} screenshot(s) — ${index}`,
+    ...skipped.map((k) => `${tag("  SKIPPED")}step ${typeof k.step === "number" ? k.step : "?"}: ${str(k.reason) ?? ""}`),
+  ];
+}
+
 /**
  * A mission result (any strategy) as a human summary: the verdict, the defects and hangs by
  * fingerprint, why a broken run proved nothing, where the result file is, and what to run next.
@@ -115,7 +139,7 @@ export function formatMissionHuman(result: unknown): string {
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
   // #213: the --storage-state session was not honoured (the run started on a sign-in page).
   if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
-  for (const d of defects) lines.push(defectLine("DEFECT", d));
+  for (const d of defects) lines.push(defectLine("DEFECT", d), ...evidenceLines(d));
   for (const h of hangs) lines.push(defectLine("HANG", { ...h, kind: "hang" }));
   if (isRecord(result.failure)) {
     lines.push(`${tag("REASON")}${str(result.failure.kind) ?? "failure"}: ${str(result.failure.message) ?? ""}`);
@@ -127,6 +151,7 @@ export function formatMissionHuman(result: unknown): string {
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
   // #245: the run's --record-video files.
   for (const v of arr(result.videoPaths)) if (str(v) !== undefined) lines.push(`${tag("VIDEO")}${str(v)}`);
+  lines.push(...screenshotLines(result));
   const resultPath = str(result.resultPath);
   if (resultPath !== undefined) lines.push(`${tag("RESULT")}${resultPath}`);
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
@@ -304,6 +329,17 @@ export function formatVerifyFixHuman(report: unknown, opts: { readonly result?: 
   }
   // #245: the replays' --record-video files.
   for (const v of arr(report.videoPaths)) if (str(v) !== undefined) lines.push(`${tag("VIDEO")}${str(v)}`);
+  // #250: the before/after pair for the PR.
+  if (isRecord(report.evidence)) {
+    const ev = report.evidence;
+    const before = isRecord(ev.before) ? str(ev.before.videoPath) : undefined;
+    lines.push(`${tag("BEFORE")}${before ?? str(ev.beforeMissing) ?? "no clip"}`);
+    const after = isRecord(ev.after) ? ev.after : undefined;
+    lines.push(`${tag("AFTER")}${str(after?.videoPath) ?? str(after?.skipped) ?? "no clip"}`);
+    for (const sh of arr(after?.screenshots)) if (str(sh) !== undefined) lines.push(`${tag("  SHOT")}${str(sh)}`);
+    for (const c of arr(after?.captureSkips)) if (str(c) !== undefined) lines.push(`${tag("  SKIPPED")}${str(c)}`);
+  }
+  lines.push(...screenshotLines(report));
   const resultFlag = opts.result === undefined ? "" : ` --result ${opts.result}`;
   lines.push(
     verdict === "fixed"

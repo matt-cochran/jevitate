@@ -208,6 +208,12 @@ boolean, and a number is a JSON number.
   `JEVITATE_HEADED` does not apply to `check`. An item (or a target default) sets `headed: true`
   to show its browser — refused at preflight when there is no display, like `--headed` — or
   `recordVideo: "videos"` to record it headless; the item's result then lists `videoPaths`.
+- **Evidence and screenshots (#250/#251).** An item that records video also gets each defect's
+  captioned repro clip and before/at screenshots (`evidenceVideo`, default on with `recordVideo`;
+  `false` turns it off). JUnit carries them as `attachment` properties and `[[ATTACHMENT|path]]`
+  lines, SARIF as `attachments`/`relatedLocations` — upload the `results/` folder as a CI artifact
+  so the links resolve. `screenshots: "steps"` (or `"screens"`, `"<dir>"`) adds masked screenshots
+  and an `index.md` to the item's result.
 - `saveStorageState` (like `explore --save-storage-state`) is refused when it resolves inside a
   repo's `.jevitate/`, which never holds sessions or secrets: write it under `~/.jevitate/` or
   outside the repo.
