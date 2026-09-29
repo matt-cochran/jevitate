@@ -221,7 +221,9 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
               await new Promise((r) => (v.ontimeupdate = r));
             }
             const end = v.duration;
-            const out: number[][] = [];
+            // Per rect: the share of mask-coloured pixels, near-white (unpainted) pixels, and anything
+            // else (page content — possibly the secret), so a failure says WHAT the frame showed.
+            const out: { t: number; mask: number; blank: number; other: number }[][] = [];
             for (const t of [end - 0.3, end - 0.8]) {
               v.currentTime = Math.max(0, t);
               await new Promise((r) => (v.onseeked = r));
@@ -240,9 +242,14 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
                   const w = Math.max(1, Math.floor(r.width * sx) - 4);
                   const h = Math.max(1, Math.floor(r.height * sy) - 4);
                   const d = g.getImageData(x, y, w, h).data;
-                  let hit = 0;
-                  for (let i = 0; i < d.length; i += 4) if (d[i]! > 180 && d[i + 1]! < 90 && d[i + 2]! > 180) hit++;
-                  return hit / (d.length / 4);
+                  let mask = 0;
+                  let blank = 0;
+                  for (let i = 0; i < d.length; i += 4) {
+                    if (d[i]! > 180 && d[i + 1]! < 90 && d[i + 2]! > 180) mask++;
+                    else if (d[i]! > 235 && d[i + 1]! > 235 && d[i + 2]! > 235) blank++;
+                  }
+                  const n = d.length / 4;
+                  return { t: v.currentTime, mask: mask / n, blank: blank / n, other: (n - mask - blank) / n };
                 }),
               );
             }
@@ -251,7 +258,12 @@ describe("pixel masking of registered secrets (served, real Chromium)", () => {
           { src: `data:video/webm;base64,${webm}`, rects: rects.map((r) => ({ ...r })) },
         );
         expect(rects.length).toBe(4);
-        for (const frame of shares) for (const s of frame) expect(s).toBeGreaterThan(0.9);
+        for (const frame of shares) {
+          for (const [i, s] of frame.entries()) {
+            const saw = `rect ${i} at t=${s.t.toFixed(2)}s: mask ${s.mask.toFixed(2)}, blank ${s.blank.toFixed(2)}, other ${s.other.toFixed(2)} (other = page content, possibly the secret)`;
+            expect(s.mask, saw).toBeGreaterThan(0.9);
+          }
+        }
       } finally {
         await reader.session.close();
         await rm(dir, { recursive: true, force: true });
