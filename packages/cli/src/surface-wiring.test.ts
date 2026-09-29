@@ -118,6 +118,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     policy: "annotate replays with the fail-closed safeRunPolicy() — it documents a Journey, never heals one",
     selfHealer: "annotate never self-heals: a broken step stops the replay and drafts only the reached steps",
   },
+  "journey-demo-api.ts runJourneyProgrammatically": {
+    policy: "a demo replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
+    selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
+  },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,

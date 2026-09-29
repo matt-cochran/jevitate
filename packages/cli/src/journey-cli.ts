@@ -9,6 +9,7 @@ import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
+import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
 import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
@@ -38,7 +39,7 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|publish`. */
+/** Registers `jevitate journey`: `list|find|run|promote|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -315,6 +316,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
 
   // #246 — draft a Journey's intent on playback; `--approve` is the human gate that writes it.
   registerJourneyAnnotateCommand(journey, program, deps);
+
+  // #248 — replay a Journey as a narrated demo: video + subtitles and/or a step-by-step guide.
+  registerJourneyDemoCommand(journey, program, deps);
 
   // #19 — publish a promoted local Journey to a registered distributed source.
   // Preserves every publish-side guard in `@jevitate/sources` (promoted-only,
