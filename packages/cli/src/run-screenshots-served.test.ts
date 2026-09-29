@@ -12,6 +12,9 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { runCoverageMission } from "./explore-api.js";
+import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
+import { PersistedMissionResultSchema } from "@jevitate/domain";
 import { parseScreenshotsArg, ScreenshotsArgError } from "./run-screenshots.js";
 
 /**
@@ -170,6 +173,31 @@ describe("--screenshots (served, real Chromium)", () => {
       } finally {
         await probe.close();
       }
+    },
+    180_000,
+  );
+
+  it(
+    "an explore strategy (coverage) captures one screenshot per distinct screen, listed in the result and the persisted file",
+    async () => {
+      const outDir = join(dir, "cov");
+      const r = await runCoverageMission({
+        url: `${origin}/a`,
+        allowlist: [origin],
+        judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+        gen: new FakeGenerationGateway(),
+        bounds: { maxActions: 6 },
+        outDir,
+        browserPortFactory: () => new PlaywrightBrowserPort(),
+        screenshots: { mode: "screens" },
+      });
+      const shots = r.screenshotPaths ?? [];
+      expect(shots.length).toBeGreaterThanOrEqual(1);
+      expect(new Set(shots).size).toBe(shots.length);
+      for (const p of shots) expect(existsSync(p)).toBe(true);
+      expect(r.screenshotIndex).toMatch(/coverage-.*\.screenshots\/index\.md$/);
+      const persisted = PersistedMissionResultSchema.parse(JSON.parse(readFileSync(r.resultPath, "utf8")));
+      expect(persisted.result.screenshotPaths).toEqual(shots);
     },
     180_000,
   );

@@ -23,8 +23,9 @@ import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgram
  * refused), site policy, fixtures and environment (#247) as `journey run`; a demo never heals. A
  * Journey that no longer replays is STALE: nothing is written and the command exits non-zero, so a
  * CI job regenerating demos catches it. Every caption, cue and guide line is redacted with the run's
- * secret parameters, and the written text is proven secret-free before it lands (pixels in the
- * screenshots are a capture layer's job — see `demo-capture.ts`).
+ * secret parameters, and the written text is proven secret-free before it lands; the secret
+ * parameters are also masked in PIXELS — video and screenshots — by the display-only mask layer
+ * (#250/#251, `demo-capture.ts`), proven at every screenshot.
  */
 
 /** How long each caption is shown before its step acts (`--pace`, ms). */

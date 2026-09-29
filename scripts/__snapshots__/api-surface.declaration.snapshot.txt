@@ -241,7 +241,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (480 exports)
+# @jevitate/explore (481 exports)
   act: function
   ActArgs: interface
   ActResult: interface
@@ -314,6 +314,7 @@
   CoverageReport: interface
   CoverageScope: interface
   CoverageScopeDeparture: interface
+  coverageStateFingerprint: other
   CoverageSufficiency: interface
   CoverageSufficiencyThresholds: interface
   CoverageThresholds: interface

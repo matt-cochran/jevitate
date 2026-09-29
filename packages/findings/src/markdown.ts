@@ -21,6 +21,7 @@ function evidenceLine(e: ConsolidatedDefect["evidence"][number]): string {
     e.screen === undefined ? undefined : `screen ${e.screen}`,
     e.request === undefined ? undefined : `request \`${e.request}\``,
     e.url === undefined ? undefined : `url \`${e.url}\``,
+    e.video === undefined ? undefined : `video \`${e.video}\``,
     e.screenshot === undefined ? undefined : `screenshot \`${e.screenshot}\``,
     e.transcript === undefined ? undefined : `transcript \`${e.transcript}\``,
     e.recording === undefined ? undefined : `recording \`${e.recording}\``,

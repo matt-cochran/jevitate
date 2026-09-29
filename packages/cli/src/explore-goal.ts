@@ -5,6 +5,8 @@ import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
+import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
@@ -85,6 +87,14 @@ export interface RunExplorationOptions {
   readonly browserPortFactory?: () => BrowserPort;
   /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
   readonly browser?: BrowserRunOptions;
+  /** #251 `--screenshots`: masked screenshots (one per distinct screen, or per step) + `index.md`. */
+  readonly screenshots?: ScreenshotsSpec;
+  /**
+   * #250 `--evidence-video`: after the result is written, each defect's minimal repro is replayed
+   * with captions (the failing step marked) into a masked clip + before/at screenshots, attached as
+   * `defects[].evidence` (and to its issue draft).
+   */
+  readonly evidenceVideo?: boolean;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -341,7 +351,16 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     throw new Error("runExploration: storageState must be the primary actor's own");
   }
   const primaryState = opts.actors?.primary.storageState ?? opts.storageState;
-  const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
+  // paint; `--screenshots` captures after each step (the Recording path names their folder).
+  const capture = runCaptureFor({
+    recordsVideo: opts.browser?.recordVideo !== undefined,
+    screenshots: opts.screenshots,
+    secrets: secrets ?? [],
+    artifactPath: () => journal.recordingPath,
+    title: `goal: ${opts.goal}`,
+  });
+  const portFactory = capture.wrap(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()));
   const port = portFactory();
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
@@ -401,6 +420,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // #159: every settled step also refreshes the in-memory storageState snapshot (cheap no-op when
   // `--save-storage-state` was not given — `snapshotter.noteSettledStep` checks `enabled` itself).
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
+    capture.noteEntry(session.page, entry);
     health.noteStep(entry);
     http5xx.noteStep(entry);
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
@@ -465,7 +485,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // `--log-defect` oracle turns an otherwise-`succeeded` run `inconclusive` (exit 2) — never clean.
     const loggedOutcome = applyServerLogGoalOutcome(mission.outcome, serverLogRun);
     // #208: an HTTP 5xx is a hard-signal defect — `defects-found` even when the goal's checks held.
-    const httpDefects = http5xx.defects(mission.transcript);
+    const httpDefects = http5xx.defects(mission.transcript, mission.recording.pages.flatMap((p) => p.steps)[0]?.step.kind === "navigate" ? 1 : 0);
     const hardOutcome = applyHttp5xxGoalOutcome(loggedOutcome, httpDefects);
     // #203: most steps on a starved host → `inconclusive` (degraded-environment), never a pass/fail.
     // #213: a starved `failed` goal keeps the check that did not hold in its degraded reason.
@@ -498,6 +518,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       iso,
     );
     // #245: every context closed (videos finalized) before the result naming them is written.
+    const shotFields = await capture.finish();
     const videos = await finalizeVideos(videoDir, closeSession);
 
     const result: RunExplorationResult = {
@@ -527,6 +548,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       recordingPaths: [journal.recordingPath],
       recordingPath: journal.recordingPath,
       ...videos,
+      ...shotFields,
       transcriptPath: journal.transcriptPath,
       transcript: serverLogRun?.transcript ?? mission.transcript,
       exitCode: goalExitCode(goalOutcome),
@@ -586,7 +608,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, result.missionOutcome, result.exitCode, result, runUsage);
-    return result;
+    return await withRunEvidence(result, evidenceOf(opts, secrets ?? []));
   } finally {
     disarmKillSwitch();
     health.stop();

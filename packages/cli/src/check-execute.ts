@@ -4,6 +4,7 @@ import type { EmulationSpec } from "@jevitate/playwright";
 import { withSiteGate } from "./site-gate-cli.js";
 import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { parseScreenshotsArg } from "./run-screenshots.js";
 import { resolveRouteScope } from "@jevitate/explore";
 import { type SuiteExploreOptions } from "./suite-explore-options.js";
 import { type BrowserRunOptions } from "./browser-run-options.js";
@@ -84,7 +85,14 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
   const session = setup !== undefined ? setup.storageState : sessionOf(t, item.journey?.storageState ?? item.verify?.storageState);
   // #245: an item's demo mode (headed/slowMo/recordVideo/overlay) on top of the check's launch flags.
   const browser = itemBrowser(opts.browser, x);
+  // #251: an item's `screenshots` (validated at preflight); #250: `evidenceVideo`, on by default
+  // when the item records video — each defect's captioned repro clip + key screenshots, attached to
+  // the result (and so to JUnit, SARIF and report.md).
+  const screenshots = parseScreenshotsArg(x.screenshots, "screenshots");
+  const evidenceOn = x.evidenceVideo ?? browser?.recordVideo !== undefined;
   const common = {
+    ...(screenshots === undefined ? {} : { screenshots }),
+    ...(evidenceOn ? { evidenceVideo: true } : {}),
     outDir: ctx.resultsDir,
     ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
     ...(browser === undefined ? {} : { browser }),

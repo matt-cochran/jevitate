@@ -147,6 +147,10 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const cases: GateCase[] = itemReports.map((i) => {
     const own = gating.filter((d) => i.gating.includes(d.key));
     const first = own[0];
+    // #250: each gating finding's repro clip and screenshots, attached to the case CI shows.
+    const attachments = [
+      ...new Set(own.flatMap((d) => d.evidence.flatMap((e) => [e.video, e.screenshot]).filter((f): f is string => f !== undefined && /\.(webm|png)$/i.test(f)))),
+    ];
     return {
       suite: i.target,
       classname: `jevitate.${i.target}.${i.kind}${i.strategy === undefined ? "" : `.${i.strategy}`}`,
@@ -154,6 +158,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       timeSec: i.durationMs / 1000,
       status: i.verdict,
       ...(i.resultPath === undefined ? {} : { resultPath: i.resultPath }),
+      ...(attachments.length === 0 ? {} : { attachments }),
       ...(i.verdict === "failed" && first !== undefined
         ? { type: first.category, message: `${own.length} gating finding(s): ${first.title}`, detail: caseDetail(own) }
         : {}),

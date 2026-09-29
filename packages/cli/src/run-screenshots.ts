@@ -4,7 +4,8 @@ import type { Page } from "playwright";
 import { assertNoSecretInPayload, redactText, redactUrl } from "@jevitate/ai-core";
 import { coverageStateFingerprint, snapshot, type TranscriptEntry } from "@jevitate/explore";
 import type { StepObserver } from "@jevitate/interpreter";
-import { captureStepScreenshot, SecretPixelMask } from "./demo-capture.js";
+import type { BrowserPort } from "@jevitate/playwright";
+import { captureStepScreenshot, maskingPort, SecretPixelMask } from "./demo-capture.js";
 
 /**
  * #251 — `--screenshots [dir]` / `--screenshots steps`: a screenshot capture mode for any run
@@ -274,4 +275,42 @@ export function formatScreenshotsLine(r: { readonly screenshotPaths?: readonly s
     `screenshots: ${(r.screenshotPaths ?? []).length} — index ${r.screenshotIndex}` +
     `${skipped.length === 0 ? "" : ` (${skipped.length} not captured: ${skipped.map((s) => `step ${s.step}: ${s.reason}`).join("; ")})`}\n`
   );
+}
+
+/** One run's capture wiring (#250/#251): the masked port and the (optional) screenshots. */
+export interface RunCapture {
+  readonly mask: SecretPixelMask;
+  /** `factory` whose sessions carry the live pixel mask when the run records video or screenshots. */
+  wrap(factory: () => BrowserPort): () => BrowserPort;
+  /** TranscriptLog hook: a screenshot of `page` after the step (no-op without `--screenshots`). */
+  noteEntry(page: Page, entry: TranscriptEntry): void;
+  /** Awaits every capture, writes the index; the result fields (`{}` without `--screenshots`). */
+  finish(): Promise<Partial<ScreenshotsResult>>;
+}
+
+/**
+ * The capture wiring an explore runner threads through its session and listener. `artifactPath` is
+ * read on first use (the run's Recording path: screenshots go in `<stem>.screenshots/` beside it).
+ */
+export function runCaptureFor(o: {
+  readonly recordsVideo: boolean;
+  readonly screenshots: ScreenshotsSpec | undefined;
+  readonly secrets: readonly string[];
+  readonly artifactPath: () => string;
+  readonly title: string;
+}): RunCapture {
+  const mask = new SecretPixelMask(o.secrets);
+  const capturing = o.recordsVideo || o.screenshots !== undefined;
+  let shots: RunScreenshots | undefined;
+  const shotsOf = (): RunScreenshots | undefined => {
+    if (o.screenshots === undefined) return undefined;
+    shots ??= new RunScreenshots({ spec: o.screenshots, dir: screenshotsDirFor(o.screenshots, o.artifactPath()), secrets: o.secrets, title: o.title, mask });
+    return shots;
+  };
+  return {
+    mask,
+    wrap: (factory) => (capturing ? () => maskingPort(factory(), mask) : factory),
+    noteEntry: (page, entry) => shotsOf()?.noteEntry(page, entry),
+    finish: async () => (await shotsOf()?.finish()) ?? {},
+  };
 }
