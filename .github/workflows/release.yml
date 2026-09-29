@@ -47,8 +47,9 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Ensure OIDC-capable npm
-        # npm OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles older.
-        run: npm install -g npm@latest
+        # npm OIDC Trusted Publishing needs npm >= 11.5.1; Node 22 bundles older. Pinned to npm 11:
+        # npm 12 rejects the --git-checks flag pnpm 9's publish passes through (EUNKNOWNCONFIG).
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
