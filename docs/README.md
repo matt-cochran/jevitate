@@ -2,7 +2,7 @@
 
 Start with the [README](../README.md) for what Jevitate is and a first run. These pages are the
 reference. Every command shown here exists in the CLI: run `jevitate <command> --help` for the
-full flag list.
+full flag list, or see the generated [CLI reference](./cli.md).
 
 **Understand it**
 
