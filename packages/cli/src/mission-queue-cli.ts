@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
-import { MISSION_STRATEGIES } from "@jevitate/missions";
+import { MISSION_STRATEGIES, QUEUED_SCREENSHOT_MODES } from "@jevitate/missions";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { emitEnvelope } from "./cli-output.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
@@ -54,15 +54,20 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
     mission
       .command("queue <target>")
       .description("enqueue an exploration mission against a PROMOTED target — only queues; `mission run` drains (MCP queue_exploration)")
-      .addOption(new Option("--strategy <strategy>", "goal-based | coverage | adversarial | feature (required)").choices(MISSION_STRATEGIES))
+      .addOption(new Option("--strategy <strategy>", `${MISSION_STRATEGIES.join(" | ")} (required)`).choices(MISSION_STRATEGIES))
       .option("--goal <text>", "goal-based: the objective (exactly one of --goal/--feature/--route)")
       .option("--feature <name>", "feature: the capability to test (goal-based: the objective)")
-      .option("--route <glob>", "coverage/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective)")
+      .option("--route <glob>", "coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective)")
       .option("--success <spec>", "goal-based: the independent success check (required there), e.g. urlIncludes:/done — the `explore --success` page-check forms")
       .option("--max-actions <n>", "budget: max actions (bounded by the queue's ceiling)", positiveIntArg)
       .option("--max-decisions <n>", "budget: max decisions", positiveIntArg)
       .option("--max-candidates <n>", "budget: max candidates", positiveIntArg)
-      .option("--invariants <file>", "app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)"),
+      .option("--invariants <file>", "app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)")
+      // #255 (MCP queue_exploration parity): media next to the result — never a path in a queued request.
+      .option("--record-video", "record a video of the run (headless too), written next to its result; listed as videoPaths")
+      .option("--screenshots [mode]", "masked screenshots + index.md next to the result: screens (default, one per distinct screen) | steps (one per step)")
+      .option("--evidence-video", "per defect: a captioned evidence clip of its minimal repro + before/at screenshots (defects[].evidence)")
+      .option("--persona <name>", "run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path"),
   )
     .option("--dir <path>", QUEUE_DIR_HELP)
     .option("--targets-dir <path>", "mission targets directory (default: ~/.jevitate/missions/targets)")
@@ -79,6 +84,10 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
           maxDecisions?: number;
           maxCandidates?: number;
           invariants?: string;
+          recordVideo?: boolean;
+          screenshots?: boolean | string;
+          evidenceVideo?: boolean;
+          persona?: string;
           dir?: string;
           targetsDir?: string;
           json?: boolean;
@@ -107,6 +116,11 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
           return;
         }
       }
+      const screenshots = o.screenshots === undefined ? undefined : o.screenshots === true ? "screens" : o.screenshots;
+      if (screenshots !== undefined && !(QUEUED_SCREENSHOT_MODES as readonly string[]).includes(screenshots as string)) {
+        refuse("E_MISSION_QUEUE_ARGS", `--screenshots takes a mode only (${QUEUED_SCREENSHOT_MODES.join(" | ")}): a queued mission writes next to its result, never to a chosen directory`);
+        return;
+      }
       let emulation;
       try {
         emulation = emulationFromFlags(o);
@@ -131,6 +145,10 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
         ...(invariants === undefined ? {} : { invariants }),
         ...(emulation?.viewport === undefined ? {} : { viewport: emulation.viewport }),
         ...(emulation?.device === undefined ? {} : { device: emulation.device }),
+        ...(o.recordVideo === true ? { recordVideo: true } : {}),
+        ...(screenshots === undefined ? {} : { screenshots }),
+        ...(o.evidenceVideo === true ? { evidenceVideo: true } : {}),
+        ...(o.persona === undefined ? {} : { persona: o.persona }),
       };
       let envelope: JsonEnvelope<unknown>;
       try {

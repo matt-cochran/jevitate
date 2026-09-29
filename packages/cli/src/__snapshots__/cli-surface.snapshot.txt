@@ -547,6 +547,7 @@
   options:
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use)
+    - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: a captioned evidence clip of its minimal repro + before/at screenshots (defects[].evidence)
     - flags=--feature <name> required=true mandatory=false negate=false variadic=false default=null description=feature: the capability to test (goal-based: the objective)
     - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=goal-based: the objective (exactly one of --goal/--feature/--route)
     - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=null description=app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)
@@ -554,8 +555,11 @@
     - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max actions (bounded by the queue's ceiling)
     - flags=--max-candidates <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max candidates
     - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max decisions
-    - flags=--route <glob> required=true mandatory=false negate=false variadic=false default=null description=coverage/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective)
-    - flags=--strategy <strategy> required=true mandatory=false negate=false variadic=false default=null choices=["goal-based","coverage","adversarial","feature"] description=goal-based | coverage | adversarial | feature (required)
+    - flags=--persona <name> required=true mandatory=false negate=false variadic=false default=null description=run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path
+    - flags=--record-video required=false mandatory=false negate=false variadic=false default=null description=record a video of the run (headless too), written next to its result; listed as videoPaths
+    - flags=--route <glob> required=true mandatory=false negate=false variadic=false default=null description=coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective)
+    - flags=--screenshots [mode] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md next to the result: screens (default, one per distinct screen) | steps (one per step)
+    - flags=--strategy <strategy> required=true mandatory=false negate=false variadic=false default=null choices=["goal-based","coverage","exploratory","adversarial","feature"] description=goal-based | coverage | exploratory | adversarial | feature (required)
     - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=goal-based: the independent success check (required there), e.g. urlIncludes:/done — the `explore --success` page-check forms
     - flags=--targets-dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission targets directory (default: ~/.jevitate/missions/targets)
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)

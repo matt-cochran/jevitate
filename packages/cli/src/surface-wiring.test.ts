@@ -168,8 +168,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
@@ -185,18 +183,13 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     actors: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runCoverageMission": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
-    strategy: "the queue has no exploratory strategy (MISSION_STRATEGIES)",
     stallTimeoutMs: QUEUE_NARROW,
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
@@ -208,8 +201,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
     nowIso: SEAM,
