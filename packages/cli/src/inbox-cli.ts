@@ -4,7 +4,9 @@ import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { emitEnvelope } from "./cli-output.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { commandPath } from "./cli-refusal.js";
+import { FsInboxStore } from "@jevitate/inbox";
 import { type CliDeps, resolveInboxDir } from "./cli-shared.js";
+import { currentEngineInfo } from "./engine.js";
 import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-bridge.js";
 
 /**
@@ -19,8 +21,9 @@ import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-brid
  *
  * SM1: approving or cancelling is human-only, in the `jevitate ui` dashboard — `inbox approve` /
  * `inbox cancel` refuse exactly as MCP does (E_HUMAN_APPROVAL_REQUIRED, exit 64).
- * `inbox command` keeps get_command's burn-after-read: it consumes any human-provided input, whose
- * VALUE is never printed (a secret never reaches a terminal, a log or a model through the CLI).
+ * `inbox command` keeps get_command's burn-after-read. A human's unread input is consumed only with
+ * `--reveal`, which prints it exactly as MCP returns it; without it the command refuses
+ * (E_INBOX_INPUT_PENDING) and consumes nothing, so the input is never burned unseen.
  */
 
 const INBOX_DIR_HELP = "inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)";
@@ -29,6 +32,7 @@ const REDACTED = "***REDACTED***";
 interface InboxOpts {
   inboxDir?: string;
   json?: boolean;
+  reveal?: boolean;
 }
 
 function withInboxFlags(cmd: Command): Command {
@@ -67,7 +71,8 @@ export function formatInboxCommandHuman(data: unknown): string {
   if (!isRecord(data)) return "";
   const lines = [`${String(data.id)}  ${String(data.kind)}  ${String(data.status)}`, `  ${String(data.run)} / ${String(data.journey)} / ${String(data.step)}: ${String(data.reason)}`];
   if (isRecord(data.resolution)) lines.push(`  resolution: ${String(data.resolution.decision)} by ${String(data.resolution.by)} at ${String(data.resolution.at)}`);
-  if (data.humanInput !== undefined) lines.push("  human input: provided — consumed now (burn-after-read); its value is never printed");
+  if (data.humanInput === REDACTED) lines.push("  human input: provided concurrently — consumed by this poll without --reveal; its value is not printed");
+  else if (data.humanInput !== undefined) lines.push(`  human input (consumed now, burn-after-read): ${String(data.humanInput)}`);
   else if (data.secretConsumedAt !== undefined) lines.push(`  human input: already consumed at ${String(data.secretConsumedAt)}`);
   return `${lines.join("\n")}\n`;
 }
@@ -83,7 +88,7 @@ function formatQueuedHuman(data: unknown): string {
   return `queued inbox item ${String(data.id)} (${String(data.status)})\nnext: a human answers it in \`jevitate ui\`; poll with \`jevitate inbox command ${String(data.id)}\`\n`;
 }
 
-/** get_command's item with any human-provided input's VALUE replaced — the CLI never prints a secret. */
+/** get_command's item with the input's VALUE replaced — only for a poll without --reveal that raced a human's answer. */
 function withoutSecretValue(body: unknown): unknown {
   if (!isRecord(body) || body.humanInput === undefined) return body;
   return { ...body, humanInput: REDACTED };
@@ -129,9 +134,24 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
   withInboxFlags(
     inbox
       .command("command <id>")
-      .description("poll one inbox item as the agent does (MCP get_command): burn-after-read — consumes any human-provided input once; its value is never printed"),
-  ).action(async function (this: Command, id: string) {
-    await run(this, "get_command", { id }, formatInboxCommandHuman, `no inbox item '${id}'`, withoutSecretValue);
+      .description("poll one inbox item as the agent does (MCP get_command): burn-after-read — unread human input needs --reveal, which consumes and prints it"),
+  ).option("--reveal", "consume the human's unread input and print it, exactly as MCP get_command returns it")
+    .action(async function (this: Command, id: string) {
+    const o = this.opts<InboxOpts>();
+    if (o.reveal !== true) {
+      // Peek without consuming: a poll that would burn unread input needs --reveal. (A bad id falls
+      // through to get_command, which refuses it exactly as MCP does.)
+      const store = new FsInboxStore(resolveInboxDir(deps, o.inboxDir), currentEngineInfo());
+      const item = await store.get(id).catch(() => null);
+      if (item?.humanInput !== undefined && item.secretConsumedAt === undefined) {
+        emitJsonOrRefusal(
+          program,
+          fail("E_INBOX_INPUT_PENDING", `inbox item '${id}' has unread human input; reading it consumes it (burn-after-read). Rerun with --reveal to receive it`),
+        );
+        return;
+      }
+    }
+    await run(this, "get_command", { id }, formatInboxCommandHuman, `no inbox item '${id}'`, o.reveal === true ? (b) => b : withoutSecretValue);
   });
 
   withInboxFlags(inbox.command("health").description("inbox store health: pending count, oldest pending age, build (MCP get_site_health)")).action(async function (

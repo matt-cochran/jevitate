@@ -472,7 +472,7 @@ always refused (MCP cancel_command): only a human can cancel an inbox item, in `
 jevitate inbox command [options] <id>
 ```
 
-poll one inbox item as the agent does (MCP get_command): burn-after-read — consumes any human-provided input once; its value is never printed
+poll one inbox item as the agent does (MCP get_command): burn-after-read — unread human input needs --reveal, which consumes and prints it
 
 **Arguments**
 
@@ -486,6 +486,7 @@ poll one inbox item as the agent does (MCP get_command): burn-after-read — con
 | --- | --- | --- | --- | --- | --- |
 | `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--reveal` | consume the human's unread input and print it, exactly as MCP get_command returns it |  |  |  |  |
 
 ### inbox health
 

@@ -128,26 +128,34 @@ describe("#254 inbox: CLI ↔ MCP round trips", { timeout: 30_000 }, () => {
     expect((await cli(e, ["inbox", "health"])).out).toMatch(/^inbox ok: 1 pending/);
   });
 
-  it("get_command via CLI keeps burn-after-read, and never prints the secret value", async () => {
+  it("get_command via CLI: unread input is refused without --reveal (nothing burned); --reveal consumes and prints it like MCP", async () => {
     const e = env();
     const tools = mcp(e);
     const id = (await tools.get("queue_retrieval")!({ run: "r", journey: "j", step: "s", reason: "otp", agent: "a" })).body.id as string;
     // A human answers in the dashboard (the only channel that may resolve).
     await new FsInboxStore(e.inboxDir).resolve(id, { channel: "human", action: "resume", input: "the-secret-otp" });
 
-    const first = await cli(e, ["inbox", "command", id, "--json"]);
+    // Without --reveal: refused (64), the value not printed, and the input NOT consumed.
+    const refused = await cli(e, ["inbox", "command", id, "--json"]);
+    expect(refused.code).toBe(64);
+    expect(refused.json).toMatchObject({ ok: false, error: { code: "E_INBOX_INPUT_PENDING" } });
+    expect(refused.out + refused.err).not.toContain("the-secret-otp");
+    expect((await new FsInboxStore(e.inboxDir).get(id))?.humanInput).toBe("the-secret-otp");
+
+    // --reveal: exactly MCP's get_command body, burn-after-read.
+    const first = await cli(e, ["inbox", "command", id, "--reveal", "--json"]);
     expect(first.code).toBe(0);
-    expect(first.out).not.toContain("the-secret-otp");
-    expect(first.json.data).toMatchObject({ id, status: "resolved", humanInput: "***REDACTED***" });
+    expect(first.json.data).toMatchObject({ id, status: "resolved", humanInput: "the-secret-otp", secretConsumedAt: expect.any(String) });
 
     // Burned: MCP's own poll no longer gets it — the CLI consumed it exactly like get_command does.
     const after = (await tools.get("get_command")!({ id })).body;
     expect(after.humanInput).toBeUndefined();
     expect(after.secretConsumedAt).toEqual(expect.any(String));
     const again = await cli(e, ["inbox", "command", id]);
+    expect(again.code).toBe(0);
     expect(again.out).toContain("already consumed");
     expect(again.out).not.toContain("the-secret-otp");
-    // Never more than MCP returns: the same keys (the value withheld).
+    // Never more than MCP returns: the same keys.
     expect(Object.keys((await cli(e, ["inbox", "command", id, "--json"])).json.data).sort()).toEqual(Object.keys(after).sort());
   });
 

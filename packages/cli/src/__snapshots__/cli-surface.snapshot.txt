@@ -259,12 +259,13 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # inbox command
-  description: poll one inbox item as the agent does (MCP get_command): burn-after-read — consumes any human-provided input once; its value is never printed
+  description: poll one inbox item as the agent does (MCP get_command): burn-after-read — unread human input needs --reveal, which consumes and prints it
   arguments:
     - name=id required=true variadic=false default=null
   options:
     - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reveal required=false mandatory=false negate=false variadic=false default=null description=consume the human's unread input and print it, exactly as MCP get_command returns it
 
 # inbox health
   description: inbox store health: pending count, oldest pending age, build (MCP get_site_health)

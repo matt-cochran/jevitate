@@ -60,8 +60,9 @@ Journey, never drive the page directly. The served tool list is checked against 
 Every MCP tool has a CLI command (the table's last column), and a test fails when a new tool has
 none. The CLI commands call the same handlers the server does, over the same stores
 (`~/.jevitate/inbox`, `~/.jevitate/missions/`), so what one queues the other sees, and the CLI never
-prints more than MCP returns. `inbox command <id>` keeps `get_command`'s burn-after-read: it
-consumes any input a human handed back, and it never prints that input's value. Each command takes
+prints more than MCP returns. `inbox command <id>` keeps `get_command`'s burn-after-read. If a human handed back
+input that hasn't been read, it refuses (`E_INBOX_INPUT_PENDING`, exit 64) and consumes nothing;
+`--reveal` consumes the input and prints it, exactly as `get_command` returns it. Each command takes
 `--json` for the `{v, ok, data}` envelope. `mission result` exits with the result's own code
 (0 clean · 1 defects · 2 broken run · 3 hang · 4 intermittent). A mission that is still queued or
 running, or that could not run, exits 2, because it proves nothing yet.
