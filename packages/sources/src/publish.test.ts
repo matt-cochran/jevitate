@@ -119,6 +119,28 @@ describe("publishJourney (fake GitExec + fake GhPort)", () => {
     expect(result.instructions).toBeUndefined();
   });
 
+  it("#125: gh.available() true but createPr() throws (non-GitHub remote) still reports pushed:true, not a failure", async () => {
+    const { mgr, calls } = setup();
+    const gh: GhPort = {
+      available: async () => true,
+      createPr: async () => {
+        throw new Error("gh: not a GitHub repository");
+      },
+    };
+    const req = { journey: journeyWithFill({ var: "pw" }), declaredOrigins: [ORIGIN], toSource: "gmail" };
+
+    const result = await publishJourney(mgr, gh, req);
+
+    expect(result.branch).toBe("publish/login");
+    expect(result.pushed).toBe(true);
+    expect(result.prUrl).toBeUndefined();
+    expect(result.instructions).toMatch(/pushed to origin/);
+    expect(result.instructions).toMatch(/gh pr create.*failed/i);
+    // The push already happened before createPr was attempted.
+    const pushCall = calls.find((a) => a[0] === "push");
+    expect(pushCall).toEqual(["push", "-u", "origin", "publish/login"]);
+  });
+
   it("never publishes a journey that fails validation (no branch/commit/push calls at all)", async () => {
     const { mgr, calls } = setup();
     const gh: GhPort = { available: async () => false, createPr: async () => "" };

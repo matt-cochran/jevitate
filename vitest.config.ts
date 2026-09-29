@@ -20,7 +20,6 @@ export default defineConfig({
       "@jevitate/cli": pkg("cli"),
       "@jevitate/playwright": pkg("playwright"),
       "@jevitate/screenplay": pkg("screenplay"),
-      "@jevitate/site-sdk": pkg("site-sdk"),
       "@jevitate/runtime": pkg("runtime"),
       "@jevitate/load": pkg("load"),
       "@jevitate/ai-core": pkg("ai-core"),
@@ -30,20 +29,31 @@ export default defineConfig({
       "@jevitate/regression": pkg("regression"),
       "@jevitate/skills": pkg("skills"),
       "@jevitate/ux": pkg("ux"),
+      "@jevitate/findings": pkg("findings"),
       // Add one line per new package here, e.g.:
       "@jevitate/example-site": fileURLToPath(new URL("./apps/example-site/src/index.ts", import.meta.url)),
-      "@jevitate/site-example-network": fileURLToPath(new URL("./site-integrations/example-network/src/index.ts", import.meta.url)),
     },
   },
   test: {
     include: [
       "packages/**/*.test.ts",
-      "site-integrations/**/*.test.ts",
       "apps/**/*.test.ts",
       "scripts/**/*.test.mjs",
     ],
     // Sweeps throwaway temp dirs the fixtures leak into os.tmpdir() at the end
     // of a run (a full run otherwise leaks ~0.5 GB). See test/global-temp-cleanup.ts.
     globalSetup: ["./test/global-temp-cleanup.ts"],
+    // Tests check the inbox store's and SQLite store's logic, not the disk flush; with fsync on, a
+    // test's duration followed the HOST's disk writeback (seconds under memory pressure), turning
+    // fast I/O tests into load-dependent timeouts. Production never sets this (see durability.ts).
+    //
+    // Host-starvation attribution (#203) is judged against the REAL host by default; on a loaded CI box
+    // that would turn unrelated tests' hangs/timeouts into `environment-degraded` and their outcomes
+    // `inconclusive`. Tests of the attribution itself inject a fake host with `attribute: true`.
+    // #213: never record test runs in the real ~/.jevitate/run-index.jsonl (index tests inject their own).
+    env: { JEVITATE_DURABLE_WRITES: "off", JEVITATE_HOST_STARVATION: "off", JEVITATE_RUN_INDEX: "off" },
+    // Only the workspace's `browser` project runs on threads (see
+    // vitest.workspace.ts): at most two real-Chromium test files at once.
+    poolOptions: { threads: { maxThreads: 2, minThreads: 1 } },
   },
 });

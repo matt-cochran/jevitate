@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { contentHash } from "@jevitate/domain";
-import { GEN_TASKS, type GenTaskKind, type GenInput, type GenOutput, type GenerationPort, type GenerationResult } from "./generation.js";
+import { GEN_TASKS, taskTemperature, type GenTaskKind, type GenInput, type GenOutput, type GenerationPort, type GenerationResult } from "./generation.js";
 import { type CredentialStore, requireKeys } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";
 import { type CatalogModel, type ModelConstraints, selectModel } from "./model-policy.js";
@@ -15,6 +15,10 @@ export interface OpenRouterCall {
     body: unknown;          // redacted, guard-checked — carries NO key
     authHeader: string;     // `Bearer <key>` — never logged, never in body
     signal?: AbortSignal;
+    /** Sampling temperature when the task pins one (e.g. 0 for ux.specifics consistency). */
+    temperature?: number;
+    /** The generation task (#163 usage accounting labels each call with it). Never prompt content. */
+    task?: string;
   }): Promise<{ object: unknown; latencyMs: number }>;
 }
 
@@ -40,8 +44,10 @@ export class OpenRouterGenerationGateway implements GenerationPort {
 
     const key = this.cfg.store.read("OPENROUTER_API_KEY");         // read at the call, nowhere else
     if (!key) throw new Error("unreachable: requireKeys passed but key unreadable");
+    const temperature = taskTemperature(kind);
     const { object, latencyMs } = await this.cfg.call({
-      model, schema: task.output, body, authHeader: `Bearer ${key}`,
+      model, schema: task.output, body, authHeader: `Bearer ${key}`, task: kind,
+      ...(temperature === undefined ? {} : { temperature }),
     });
 
     const output = task.output.parse(object) as GenOutput<K>;      // untrusted-out re-validated
@@ -55,9 +61,21 @@ export class OpenRouterGenerationGateway implements GenerationPort {
   }
 }
 
-// Real seam (documented, wired in bin/host, NOT unit-tested): the production
-// OpenRouterCall lazily imports `ai` + `@openrouter/ai-sdk-provider` and calls
-// generateObject({ model: openrouter(model), schema, prompt: JSON.stringify(body),
-// headers: { Authorization: authHeader } }). Lazy import keeps the package
-// building/testing without the SDK installed. Pin both versions and confirm
-// the generateObject signature at wiring time.
+// Real seam (wired in bin/host): the production OpenRouterCall lazily imports
+// `ai` + `@openrouter/ai-sdk-provider`, builds the provider from
+// `openRouterProviderSettings(authHeader)` and calls generateObject({ model:
+// openrouter(model), schema, prompt: JSON.stringify(body) }). Lazy import keeps
+// the package building/testing without the SDK installed.
+
+/**
+ * `@openrouter/ai-sdk-provider` settings for a gateway `Bearer <key>` auth header. The provider
+ * reads the key ONLY from `apiKey` (or the OPENROUTER_API_KEY env var) and builds its own
+ * `Authorization` header from it — a key passed as a custom header is ignored and the call fails
+ * with "OpenRouter API key is missing". Fails closed on a malformed header.
+ */
+export function openRouterProviderSettings(authHeader: string): { apiKey: string } {
+  const match = /^Bearer\s+(\S+)\s*$/.exec(authHeader);
+  const key = match?.[1];
+  if (key === undefined) throw new Error("generation auth header is not a Bearer token");
+  return { apiKey: key };
+}

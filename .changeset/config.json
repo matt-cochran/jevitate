@@ -23,8 +23,6 @@
     "@jevitate/runtime",
     "@jevitate/screenplay",
     "@jevitate/secrets",
-    "@jevitate/site-example-network",
-    "@jevitate/site-sdk",
     "@jevitate/sources",
     "@jevitate/storage-sqlite"
   ]

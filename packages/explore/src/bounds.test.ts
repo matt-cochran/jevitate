@@ -74,4 +74,17 @@ describe("NoProgressDetector — 3 consecutive non-wait steps, unchanged signatu
   it("rejects a non-positive limit", () => {
     expect(() => new NoProgressDetector(0)).toThrow(/positive integer/);
   });
+
+  it("#172: progress() (a scroll that moved the page) restarts the streak on an unchanged signature", () => {
+    const d = new NoProgressDetector(3);
+    d.note("click", "s");
+    d.note("scroll_down", "s");
+    d.note("scroll_down", "s");
+    expect(d.streak).toBe(2);
+    d.progress("s");
+    expect(d.streak).toBe(0);
+    expect(d.note("scroll_down", "s")).toBe(false);
+    expect(d.note("scroll_down", "s")).toBe(false);
+    expect(d.note("scroll_down", "s")).toBe(true);
+  });
 });

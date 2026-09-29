@@ -1,6 +1,6 @@
 ---
 name: jevitate-ux-review
-description: Produce ranked, cited, advisory usability findings for a flow — offline over a saved Recording (`jevitate ux <recording> --app-class`) or live over an authorized target (`jevitate explore --strategy usability --goal --app-class`). Use when a human wants a UX/usability critique of a journey, not a pass/fail functional test. Findings are advisory and never gate a run.
+description: Produce ranked, cited, advisory usability findings (preview) for a flow — offline over a saved Recording (`jevitate ux <recording> --app-class`, MCP `ux_review`) or live on an authorized target (`jevitate explore --strategy usability --goal --app-class`, MCP `run_exploration`). Use when the user wants a UX or usability critique, not a pass/fail test. Findings are advisory and never gate a run.
 ---
 
 You produce a UX review: ranked, cited, evidence-anchored usability findings for
@@ -9,21 +9,39 @@ fails a run or a build. Every finding is calibrated to an app class (a consumer
 signup and an internal admin tool are held to different bars) and cites a rubric
 item; the platform structurally cannot emit an uncited finding.
 
+PREVIEW (0.2.0): these findings are a preview feature. The independent quality
+grader is not yet calibrated across apps, and how findings are grouped/deduped
+is still being redesigned (issues #133, #198). `report.preview` is `true` and
+`report.headline` says so; tell the human this is a preview, not a finished
+verdict.
+
 ## Two modes — pick by what you have
 
 - OFFLINE, over a saved Recording — `jevitate ux <recording.json> --app-class
-  <class> [--persona <p>] [--job "<text>"] [--out <dir>] --json`. Analyzes a
+  <class> [--persona <p>] [--job "<text>"] [--out <dir>] [--min-confidence <n>]
+  [--show <labels>] --real --json`. Analyzes a
   Recording you already captured (e.g. from `jevitate-record` or a successful
   `jevitate explore`). It launches no browser. `--app-class` is REQUIRED
-  (e.g. `consumer`, `admin`, `internal`); `--job` sharpens relevance.
+  (e.g. `consumer`, `admin`, `internal`); `--job` sharpens relevance. It reads
+  the artifacts next to `<stem>.recording.json` automatically: the live
+  usability run's evidence sidecar `<stem>.evidence.json` (the screens as
+  analyzed plus the run signals), `<stem>.result.json` or
+  `<stem>.transcript.json`, and `<stem>.screens/`. With the sidecar, offline
+  review reproduces the live run's findings. Without it, `report.evidenceCaveats`
+  names what could not be checked. `--evidence` and `--result` override the
+  discovered files.
 - LIVE, against an authorized target — `jevitate explore --strategy usability
   --url <authorized-url> --goal "<the job>" --app-class <class> [--allow
-  <origin>] [--secret <value>] [--max-actions <n>] --real --json`. Drives the
+  <origin>] [--secret <value>] [--max-actions <n>] [--min-confidence <n>]
+  [--show <labels>] --real --json`. Drives the
   exploration loop toward the job (Jev makes the browsing decisions, not you)
   and reviews each observed screen against the rubric as it goes. Needs a
   gateway: `--real` (live, after `jevitate ai setup`) or `--fake-ai` (a
   deterministic pipeline smoke that will NOT produce a real review). No
   selection fails closed.
+
+Over MCP: `ux_review` is the offline mode (`recording`, `appClass`, …); `run_exploration`
+with `strategy: "usability"` is the live mode. Usability is not a queueable mission strategy.
 
 Prefer OFFLINE when a Recording already exists — it is cheaper, deterministic,
 and touches no live site. Use LIVE only when there is no Recording and the human
@@ -43,21 +61,93 @@ authorized the target.
   authorized. Pass real secrets/PII via `--secret` so they stay out of every
   model call.
 
+## Filtering what is shown
+
+- `--min-confidence <0..1>` (also `JEVITATE_UX_MIN_CONFIDENCE`, or `ux.minConfidence` in
+  `~/.jevitate/config.json`; default 0.3): findings below it are suppressed.
+- `--show <labels>` (also `JEVITATE_UX_SHOW`, or `ux.show` in the config): an
+  opt-in filter on the quality grade. The grades are `actionable`,
+  `relevant-minor`, `generic` and `wrong`. The default shows ALL grades. The
+  grader is not calibrated (no held-out, multi-rater kappa ≥ 0.4 off its tuning
+  app), so it labels findings and does not hide them. Each finding carries its
+  grade in `quality`, and `report.qualityFiltered` says whether a filter was
+  applied. `--show actionable,relevant-minor` restores the old filter.
+- `--max-findings-per-page <n>` (also `JEVITATE_UX_MAX_FINDINGS_PER_PAGE`, or
+  `ux.maxFindingsPerPage` in the config; default 5): caps findings per route,
+  highest-confidence first (0.2.0, issue #198 interim — a full redesign is
+  tracked there). The rest are counted in `report.suppressed` as
+  `per-page-cap`, never dropped silently.
+- Nothing is dropped silently: every suppressed candidate is counted in
+  `report.suppressed`. Change a filter only when the human asks, and say which
+  filter you changed.
+
 ## Reading the result
 
-- The report is a set of findings, each with a `severity` (`info` | `minor` |
-  `major`), a rubric `citation` (`source` + `ref`), and redacted evidence refs
-  pointing at the screen/control it is about. Rank your summary by severity and
-  lead with the `major` findings.
-- Report findings as ADVISORY recommendations, with their citations — never as
-  defects that block shipping, and never restate a finding without the rubric
-  citation the tool attached (the citation is what makes it more than an
-  opinion).
+- Lead with `report.headline`. It gives the findings grounded in observed run
+  behavior, the heuristic-only count in the appendix, and "N suppressed (by
+  rubric item: …)".
+- `report.findings` holds only findings with behavioral evidence:
+  - run signals (tier `signal`): a hung request, a stuck job still offered
+    again, a duplicate write or create, a failed submit with no or only generic
+    error copy, a repeated assistant reply, an inert control, an internal id,
+    or a URL whose page shows another route's content. Each cites its steps,
+    requests, text and screenshot in `signal`.
+  - rubric findings grounded in the friction the run hit on that screen: a
+    backtrack, a retry, a dead end, a long wait, an error, an abandoned field,
+    or the goal not reached. `journeyEvidence` gives the kind and step range.
+  - Their `severity` and `impact` come from the observed impact on the job:
+    `blocked` > `slowed` > `confused`. Findings on the same friction point are
+    collapsed into one, with the others listed in `contributing`.
+- `report.heuristicAppendix` holds rubric findings with no observed friction.
+  They are screen-level heuristics only, capped at `info`. Mention them as an
+  appendix, never as the review's findings.
+- Each finding is specific and grounded:
+  - `observation`: what is wrong, naming the control, label or text, relative to
+    the job.
+  - `userImpact`: what it costs the user.
+  - `recommendation`: a concrete change to that control or text.
+  - `controls` and `quotes`: the implicated controls and verbatim on-screen text.
+    Independent code checked that both exist on the screen.
+  - `evidenceRefs`: only those controls, not every control on the page.
+  - `route`, `screenId`, `occurrences` and `screenIds`: where it was seen. The
+    same item on the same route and controls is one finding with a count.
+  - `severity` (`info` | `minor` | `major`) and a rubric `citation` (`source` +
+    `ref`).
+  - `quality`: the independent grader's label and its confidence.
+  - `confidence` with its `confidenceBasis`: violation × applicability ×
+    grounding × agreement. Quote the observation and recommendation; don't
+    paraphrase them into generic heuristic advice.
+  - `contributing` (0.2.0, issue #198 interim): DIFFERENT rubric items that
+    fired on the SAME control on the SAME route are collapsed into one
+    finding — the highest-confidence one leads, the rest are listed here with
+    their own `rubricItemId`, `citation`, `observation` and `occurrences`. Read
+    it as "these principles all flagged the same thing", not as noise to
+    ignore — mention the other principles when it matters.
+- Rank your summary the way the report does: by `impact`, then severity. Lead
+  with what blocked the job.
+- `report.suppressed` counts what was not shown: `byReason`, `byRubricItem` and
+  `byRubricItemRoute`. The reasons are:
+  - `ungrounded`: named no control or text.
+  - `rejected-evidence`: cited a control or text that is not on the screen.
+  - `not-confirmed`: the specifics step found no concrete violation.
+  - `below-min-confidence`
+  - `quality-policy`: a grade outside an explicit `--show` filter.
+  - `per-page-cap` (0.2.0, issue #198 interim): the route already has
+    `--max-findings-per-page` findings shown; this one ranked lower.
+  Say how many were suppressed. `clean: true` only happens with zero findings
+  AND zero suppressed, so never describe a report with suppressions as "no
+  issues".
+- `coverage.notApplicable` lists items whose rubric precondition did not hold,
+  for example choice overload on a 2-control screen. Those items are evaluated,
+  not skipped.
+- Report findings as ADVISORY recommendations, with their citations. They are
+  never defects that block shipping. Never restate a finding without the rubric
+  citation the tool attached; the citation is what makes it more than an opinion.
 - An analysis that FAILED (`E_UX_ANALYSIS`) is a real failure to surface
-  honestly — never fabricate a clean "no issues found" report from a failed run.
-  Offline review over a bare Recording is coverage-limited (it sees only what
-  the Recording captured — no live a11y tree, no runtime contrast); say so when
-  the Recording is thin, rather than implying the flow is fully vetted.
+  honestly. Never fabricate a clean "no issues found" report from a failed run.
+  Offline review over a bare Recording is coverage-limited: it sees only what
+  the Recording captured, with no live a11y tree and no runtime contrast. When
+  the Recording is thin, say so rather than implying the flow is fully vetted.
 
 ## What you must never do
 

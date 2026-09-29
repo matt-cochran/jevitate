@@ -1,0 +1,24 @@
+{
+  "_source": "Preveti dogfood round 2 (2026-09-24), P-16: runs/g-login-totp/explore-2026-09-24T16-08-54-940Z.transcript.json (steps, bound-secret placeholders, final URL http://127.0.0.1:5193/login after Verify). Redacted: the password and TOTP are the transcript's own «secret:…»/«totp:…» placeholders; the email is the run's synthetic test account. The run did not record page text: the headings are reconstructed from the report (login → 2FA code → onboarding, URL still /login).",
+  "steps": [
+    { "step": 1, "op": "type", "target": "textbox \"Email\"", "actOk": true, "url": "http://127.0.0.1:5193/login", "value": "test-2fa@example.test", "descriptor": { "role": "textbox", "name": "Email" } },
+    { "step": 2, "op": "type", "target": "textbox \"Password\" (bound: «secret:APP_PASSWORD»)", "actOk": true, "url": "http://127.0.0.1:5193/login", "value": "«secret:APP_PASSWORD»", "descriptor": { "role": "textbox", "name": "Password" } },
+    { "step": 3, "op": "click", "target": "button \"Log in\"", "actOk": true, "url": "http://127.0.0.1:5193/login", "descriptor": { "role": "button", "name": "Log in" } },
+    { "step": 4, "op": "type", "target": "textbox \"Code\" (bound: «totp:APP_TOTP_SEED»)", "actOk": true, "url": "http://127.0.0.1:5193/login", "value": "«totp:APP_TOTP_SEED»", "descriptor": { "role": "textbox", "name": "Code" } },
+    { "step": 5, "op": "click", "target": "button \"Verify\"", "actOk": true, "url": "http://127.0.0.1:5193/login", "descriptor": { "role": "button", "name": "Verify" } },
+    { "step": 6, "op": "wait", "target": null, "actOk": true, "url": "http://127.0.0.1:5193/login", "reason": "waited 3.0s (the page did not change and nothing is pending — waiting again will not help)" },
+    { "step": 7, "op": "blocked", "target": null, "actOk": true, "url": "http://127.0.0.1:5193/login", "reason": "model blocked" }
+  ],
+  "requests": [
+    { "id": 0, "method": "POST", "endpoint": "POST /simuli.auth.AuthService/Login", "url": "http://127.0.0.1:18583/simuli.auth.AuthService/Login", "resourceType": "fetch", "startedAt": 7000, "endedAt": 7391, "status": 200, "step": 3 },
+    { "id": 1, "method": "POST", "endpoint": "POST /simuli.product.ProductService/ListProducts", "url": "http://127.0.0.1:18583/simuli.product.ProductService/ListProducts", "resourceType": "fetch", "startedAt": 14000, "endedAt": 14072, "status": 200, "step": 5 }
+  ],
+  "screens": [
+    { "index": 0, "step": 1, "at": 1000, "url": "http://127.0.0.1:5193/login", "signature": "p16-login", "heading": "Log in to Preveti", "visibleText": "Log in to Preveti\nEmail\nPassword\nLog in", "busy": false },
+    { "index": 1, "step": 2, "at": 3000, "url": "http://127.0.0.1:5193/login", "signature": "p16-login-2", "heading": "Log in to Preveti", "visibleText": "Log in to Preveti\nEmail\nPassword\nLog in", "busy": false },
+    { "index": 2, "step": 4, "at": 8000, "url": "http://127.0.0.1:5193/login", "signature": "p16-2fa", "heading": "Enter your authentication code", "visibleText": "Enter your authentication code\nCode\nVerify", "busy": false },
+    { "index": 3, "step": 6, "at": 15000, "url": "http://127.0.0.1:5193/login", "signature": "p16-onboarding", "heading": "Welcome to Preveti — tell us about your product", "visibleText": "Welcome to Preveti — tell us about your product\nProduct name\nContinue", "busy": false },
+    { "index": 4, "step": 7, "at": 18000, "url": "http://127.0.0.1:5193/login", "signature": "p16-onboarding", "heading": "Welcome to Preveti — tell us about your product", "visibleText": "Welcome to Preveti — tell us about your product\nProduct name\nContinue", "busy": false }
+  ],
+  "endedAt": 19000
+}

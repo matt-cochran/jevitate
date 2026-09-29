@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { RecordingSchema, type RecordedStep, type Step } from "@jevitate/recording";
@@ -30,8 +27,7 @@ async function withSite(
   routes: Readonly<Record<string, string>>,
   body: (ctx: { recorder: Recorder; page: import("playwright").Page }) => Promise<void>,
 ): Promise<void> {
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-recorder-"));
-  const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
+  const session = await port.open({ headless: true, allowedOrigins: [], baseUrl: "about:blank" });
   try {
     const recorder = new Recorder(session, SITE);
     await recorder.install();
@@ -43,7 +39,6 @@ async function withSite(
     await body({ recorder, page: session.page });
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -360,9 +355,10 @@ test(
       // 5. The normal field is a fill, always redacted, length-preserving.
       expect(login[1]).toEqual({
         kind: "fill",
-        target: { role: "textbox", name: "Username" },
+        // The stable `name` attribute is captured as the replay anchor (never the value).
+        target: { role: "textbox", name: "Username", anchor: { name: "u" } },
         value: { redacted: true, length: 4 },
-        expect: { kind: "visible", target: { role: "textbox", name: "Username" } },
+        expect: { kind: "visible", target: { role: "textbox", name: "Username", anchor: { name: "u" } } },
       });
 
       // 6. The secret field is a handback, not a fill/select: no value, no
@@ -370,7 +366,8 @@ test(
       const handback = login[2]!;
       expect(handback.kind).toBe("handback");
       if (handback.kind !== "handback") throw new Error("expected a handback step");
-      expect(handback.resume).toEqual({ kind: "visible", target: { label: "Password" } });
+      // The secret field's anchor is its `name` attribute — an identifier, never its value.
+      expect(handback.resume).toEqual({ kind: "visible", target: { label: "Password", anchor: { name: "p" } } });
       expect(handback.prompt.length).toBeGreaterThan(0);
       const serializedHandback = JSON.stringify(handback);
       for (const forbidden of ["redacted", '"value"', '"length"', String(secret.length)]) {
@@ -392,8 +389,8 @@ test(
       expect(inbox).toEqual([
         {
           kind: "click",
-          target: { role: "button", name: "Refresh" },
-          expect: { kind: "visible", target: { role: "button", name: "Refresh" } },
+          target: { role: "button", name: "Refresh", anchor: { id: "refresh" } },
+          expect: { kind: "visible", target: { role: "button", name: "Refresh", anchor: { id: "refresh" } } },
         },
       ]);
 
@@ -468,15 +465,18 @@ test(
 
       const select = steps[2]!;
       if (select.kind !== "select") throw new Error("expected select");
-      expect(select.target).toEqual({ role: "combobox", name: "Mode" });
+      // The stable `name` anchor is captured when the descriptor is read after the element is
+      // registered; either shape replays. Require the semantic locator, allow that anchor.
+      expect(select.target).toMatchObject({ role: "combobox", name: "Mode" });
+      if ("anchor" in select.target) expect(select.target.anchor).toEqual({ name: "m" });
       expect(select.value).toEqual({ redacted: true, length: 4 });
-      expect(select.expect).toEqual({ kind: "visible", target: { role: "combobox", name: "Mode" } });
+      expect(select.expect).toMatchObject({ kind: "visible", target: { role: "combobox", name: "Mode" } });
 
       // The checkbox produced click + input + change; only the click is a step.
       expect(steps[3]).toEqual({
         kind: "click",
-        target: { label: "Remember me" },
-        expect: { kind: "visible", target: { label: "Remember me" } },
+        target: { label: "Remember me", anchor: { name: "r" } },
+        expect: { kind: "visible", target: { label: "Remember me", anchor: { name: "r" } } },
       });
     });
   },
@@ -591,7 +591,7 @@ test(
       const settled = clicks[1]!.resolution;
       expect(settled?.ok).toBe(true);
       if (settled?.ok !== true) throw new Error("expected the settled click to be described");
-      expect(settled.descriptor).toEqual({ role: "button", name: "Refresh" });
+      expect(settled.descriptor).toEqual({ role: "button", name: "Refresh", anchor: { id: "refresh" } });
       expect(settled.stability).toBe("high");
       expect(settled.alternates.length).toBeGreaterThan(0);
 
@@ -670,8 +670,8 @@ test(
         expect(stepsOf(recording.pages[1]!.steps), diagnostic).toEqual([
           {
             kind: "click",
-            target: { role: "button", name: "Refresh" },
-            expect: { kind: "visible", target: { role: "button", name: "Refresh" } },
+            target: { role: "button", name: "Refresh", anchor: { id: "auto" } },
+            expect: { kind: "visible", target: { role: "button", name: "Refresh", anchor: { id: "auto" } } },
           },
         ]);
       },
@@ -707,9 +707,10 @@ test(
       const login = stepsOf(recording.pages[0]!.steps);
       expect(login[1]).toEqual({
         kind: "fill",
-        target: { role: "textbox", name: "Username" },
+        // The stable `name` attribute is captured as the replay anchor (never the value).
+        target: { role: "textbox", name: "Username", anchor: { name: "u" } },
         value: { redacted: true, length: 4 },
-        expect: { kind: "visible", target: { role: "textbox", name: "Username" } },
+        expect: { kind: "visible", target: { role: "textbox", name: "Username", anchor: { name: "u" } } },
       });
       expect(login[2]!.kind).toBe("handback");
 
@@ -766,8 +767,8 @@ test(
       // "OK" — so each click's descriptor is corroborated with `ordinal`
       // recording *which* match was acted on, rather than falling all the
       // way down to a generated css nth-of-type selector.
-      expect(first.descriptor).toEqual({ role: "button", name: "OK", ordinal: 0 });
-      expect(second.descriptor).toEqual({ role: "button", name: "OK", ordinal: 1 });
+      expect(first.descriptor).toEqual({ role: "button", name: "OK", ordinal: 0, candidates: 2 });
+      expect(second.descriptor).toEqual({ role: "button", name: "OK", ordinal: 1, candidates: 2 });
 
       const recording = await recorder.stop();
       expect(() => RecordingSchema.parse(recording)).not.toThrow();

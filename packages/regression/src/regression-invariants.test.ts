@@ -9,7 +9,7 @@ import { minimizeRecording, makeSingleShotReproduces } from "./minimize.js";
 import { commitRegression, FlakyNotCommittableError } from "./commit.js";
 
 function fakeLocator(visible: boolean) {
-  return { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), isVisible: vi.fn(async () => visible), count: vi.fn(async () => 0), innerText: vi.fn(async () => ""), waitFor: vi.fn(async () => {}) };
+  return { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), isVisible: vi.fn(async () => visible), count: vi.fn(async () => 1) /* the recorded target resolves uniquely */, innerText: vi.fn(async () => ""), waitFor: vi.fn(async () => {}) };
 }
 function fakePage(locator: ReturnType<typeof fakeLocator>) {
   return { goto: vi.fn(async () => {}), url: vi.fn(() => "https://example.test/x"), getByTestId: vi.fn(() => locator), getByRole: vi.fn(() => locator), getByLabel: vi.fn(() => locator), getByText: vi.fn(() => locator), locator: vi.fn(() => locator) };

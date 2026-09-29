@@ -1,3 +1,4 @@
+import type { ReplayTargetFailure } from "./resolve-target.js";
 import type { Assertion } from "@jevitate/recording";
 
 /**
@@ -24,4 +25,14 @@ import type { Assertion } from "@jevitate/recording";
 export type InterpretResult =
   | { outcome: "completed"; vars: Record<string, string> }
   | { outcome: "awaiting_human"; at: number; prompt: string; resume: Assertion }
-  | { outcome: "failed"; at: number; error: string };
+  | {
+      outcome: "failed";
+      at: number;
+      error: string;
+      /**
+       * Why, when it is a replay-TARGET problem: the recorded element is missing
+       * (`replay-target-not-found`) or cannot be told apart from others (`ambiguous`). Absent for
+       * every other failure (a postcondition, an automation error).
+       */
+      reason?: ReplayTargetFailure;
+    };

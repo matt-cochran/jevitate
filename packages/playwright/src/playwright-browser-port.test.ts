@@ -1,19 +1,169 @@
-import { afterAll, expect, test } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { afterAll, describe, expect, test } from "vitest";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PlaywrightBrowserPort } from "./playwright-browser-port.js";
+import { BrowserCrashedError } from "./browser-pool.js";
+import { PlaywrightBrowserPort, createBrowserPool, type PlaywrightBrowserPool } from "./playwright-browser-port.js";
+import { createResourceSignals } from "./select-resource-signals.js";
 
-const port = new PlaywrightBrowserPort();
+/**
+ * Real-Chromium smoke for the pooled port — the CI OS-matrix job runs this
+ * file on Linux, Windows and macOS. Each test owns a pool on this platform's
+ * REAL resource signals, so admission runs for real too.
+ */
 
-test("opens a persistent context and navigates to a data: URL", async () => {
-  const profileDir = await mkdtemp(join(tmpdir(), "jevitate-pw-"));
-  const session = await port.open({ profileDir, headless: true, allowedOrigins: [], baseUrl: "about:blank" });
-  try {
-    await session.page.setContent("<h1>hello</h1>");
-    expect(await session.page.locator("h1").textContent()).toBe("hello");
-  } finally {
-    await session.close();
-    await rm(profileDir, { recursive: true, force: true });
+const pools: PlaywrightBrowserPool[] = [];
+function realPool(): PlaywrightBrowserPool {
+  const pool = createBrowserPool({ signals: createResourceSignals(), maxContexts: 2 });
+  pools.push(pool);
+  return pool;
+}
+afterAll(async () => {
+  await Promise.all(pools.map((p) => p.close()));
+});
+
+const base = { headless: true, allowedOrigins: [], baseUrl: "about:blank" };
+
+/** Browser-process (not renderer) argvs carrying `marker`; Linux /proc only. */
+async function browserArgvsWith(marker: string): Promise<string[]> {
+  return (await browserProcsWith(marker)).map((p) => p.argv);
+}
+
+async function browserPidsWith(marker: string): Promise<number[]> {
+  return (await browserProcsWith(marker)).map((p) => p.pid);
+}
+
+async function browserProcsWith(marker: string): Promise<{ pid: number; argv: string }[]> {
+  const found: { pid: number; argv: string }[] = [];
+  for (const pid of await readdir("/proc")) {
+    if (!/^\d+$/.test(pid)) continue;
+    let argv: string;
+    try {
+      argv = (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").join(" ");
+    } catch {
+      continue; // process exited mid-scan
+    }
+    if (argv.includes(marker) && !argv.includes("--type=")) found.push({ pid: Number(pid), argv });
   }
-}, 60_000);
+  return found;
+}
+
+describe("pooled PlaywrightBrowserPort (real Chromium)", () => {
+  test("two sessions = two isolated contexts on ONE browser; admission sample is recorded", async () => {
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const marker = `--jevitate-test-marker=${randomUUID()}`;
+    const a = await port.open({ ...base, args: [marker] });
+    const b = await port.open({ ...base, args: [marker] });
+    try {
+      // The CI smoke's evidence line: which signal source admitted the contexts on this OS.
+      console.log(`[pool-smoke] ${process.platform} admission: ${JSON.stringify(a.admission)}`);
+      expect(a.admission?.sample.source).toMatch(/^(linux|wsl2|darwin|win32):/);
+      expect(a.page.context()).not.toBe(b.page.context());
+      expect(a.page.context().browser()).toBe(b.page.context().browser());
+      await a.page.setContent("<h1>hello</h1>");
+      expect(await a.page.locator("h1").textContent()).toBe("hello");
+      await a.page.context().addCookies([{ name: "sid", value: "a", url: "http://127.0.0.1:1/" }]);
+      expect(await b.page.context().cookies()).toEqual([]);
+      if (process.platform === "linux") {
+        const argvs = await browserArgvsWith(marker);
+        expect(argvs).toHaveLength(1);
+        expect(argvs[0]).toContain("--no-sandbox");
+        expect(argvs[0]).toContain("--disable-dev-shm-usage");
+      }
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  }, 60_000);
+
+  test("storageState round-trip carries auth cookies into a fresh context", async () => {
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const dir = await mkdtemp(join(tmpdir(), "jevitate-state-"));
+    const file = join(dir, "state.json");
+    try {
+      const first = await port.open(base);
+      try {
+        await first.page.context().addCookies([{ name: "auth", value: "token-1", url: "http://127.0.0.1:1/" }]);
+        await first.saveStorageState(file);
+      } finally {
+        await first.close();
+      }
+      const second = await port.open({ ...base, storageState: file });
+      try {
+        const cookies = await second.page.context().cookies("http://127.0.0.1:1/");
+        expect(cookies.map((c) => [c.name, c.value])).toEqual([["auth", "token-1"]]);
+      } finally {
+        await second.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("browser crash fails the live session loudly and the next session relaunches", async () => {
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const marker = `--jevitate-test-marker=${randomUUID()}`;
+    const session = await port.open({ ...base, args: [marker] });
+    const browserBefore = session.page.context().browser();
+    if (browserBefore === null) throw new Error("pooled session has no Browser");
+    if (process.platform === "linux") {
+      // A real crash: SIGKILL the browser process (found by its unique argv marker).
+      const pids = await browserPidsWith(marker);
+      expect(pids).toHaveLength(1);
+      process.kill(pids[0]!, "SIGKILL");
+    } else {
+      // Elsewhere there is no /proc to find the PID: the browser is shut down over
+      // CDP behind the pool's back — from the pool's view an unexpected disconnect.
+      // (CDP `Browser.crash` is not honored by headless Chromium, so it can't be used.)
+      const cdp = await browserBefore.newBrowserCDPSession();
+      await cdp.send("Browser.close");
+    }
+    await expect.poll(() => browserBefore.isConnected(), { timeout: 20_000 }).toBe(false);
+    await expect(session.close()).rejects.toBeInstanceOf(BrowserCrashedError);
+    const next = await port.open(base);
+    try {
+      expect(next.page.context().browser()).not.toBe(browserBefore);
+      await next.page.setContent("<p>alive</p>");
+      expect(await next.page.locator("p").textContent()).toBe("alive");
+    } finally {
+      await next.close();
+    }
+  }, 60_000);
+
+  test("--viewport / --device (#149) set the context's actual viewport, scale, mobile and UA", async () => {
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const sized = await port.open({ ...base, viewport: { width: 375, height: 812 } });
+    try {
+      expect(sized.page.viewportSize()).toEqual({ width: 375, height: 812 });
+    } finally {
+      await sized.close();
+    }
+    const device = await port.open({ ...base, device: "iPhone 13" });
+    try {
+      expect(device.page.viewportSize()).toEqual({ width: 390, height: 664 });
+      const ua = await device.page.evaluate(() => navigator.userAgent);
+      expect(ua).toContain("iPhone");
+      const isMobile = await device.page.evaluate(() => (navigator as unknown as { maxTouchPoints: number }).maxTouchPoints > 0);
+      expect(isMobile).toBe(true);
+    } finally {
+      await device.close();
+    }
+  }, 60_000);
+});
+
+describe("persistentProfile opt-in (real Chromium)", () => {
+  test("opens a persistent context on the given profile dir, outside the pool", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "jevitate-pw-"));
+    const port = new PlaywrightBrowserPort({ pool: realPool() });
+    const session = await port.open({ ...base, persistentProfile: profileDir });
+    try {
+      expect(session.admission).toBeUndefined();
+      await session.page.setContent("<h1>persisted</h1>");
+      expect(await session.page.locator("h1").textContent()).toBe("persisted");
+    } finally {
+      await session.close();
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});

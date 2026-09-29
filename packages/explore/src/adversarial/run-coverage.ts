@@ -1,0 +1,293 @@
+import type { Control, Snapshot } from "../snapshot.js";
+import { controlKey, detectForms, isExercisable } from "./form-misuse.js";
+import { routeOf } from "./scope.js";
+
+/**
+ * What an adversarial run actually exercised on its target (#64), and whether that is enough to
+ * call a silent run `clean`. A run that found nothing only means something if it tried: a run that
+ * never submitted the page's form, or touched a handful of its controls, proved nothing and is
+ * reported `inconclusive` with these numbers — never `clean`.
+ *
+ *  - controls — distinct target controls a run can act on (enabled; not secret, file or
+ *    session-ending; not a link out of scope), seen on in-scope pages, and how many were acted on;
+ *  - forms    — forms found on the target (per route) and how many were submitted: a submit
+ *    control clicked AND that click actually sent a request (a write or a navigation) — #155. A
+ *    click the browser blocked with native validation (`required`, `type=email`, `minlength`…)
+ *    never reached the server, so it is never counted `submitted`; it is instead recorded
+ *    `blocked`, with the browser's own validation message when one is known;
+ *  - strategies — per strategy, how often it applied vs found nothing to do;
+ *  - out-of-scope steps — steps that landed off the target (never coverage).
+ */
+
+export interface CoverageThresholds {
+  /** Minimum share of the target's controls a clean run must have exercised (0..1). */
+  readonly minControlRatio: number;
+  /** When the target has a form, a clean run must have submitted at least one. */
+  readonly requireFormSubmit: boolean;
+}
+
+/**
+ * Defaults: a quarter of the target's controls, and a submitted form when there is one. Whatever
+ * the configuration, a clean run must also have exercised at least one target control — a run that
+ * acted on nothing is never clean.
+ */
+export const DEFAULT_COVERAGE_THRESHOLDS: CoverageThresholds = { minControlRatio: 0.25, requireFormSubmit: true };
+
+/** Resolves (and validates) thresholds. Throws on an out-of-range ratio — a setup error. */
+export function resolveCoverageThresholds(partial?: Partial<CoverageThresholds>): CoverageThresholds {
+  const t: CoverageThresholds = { ...DEFAULT_COVERAGE_THRESHOLDS, ...partial };
+  if (!Number.isFinite(t.minControlRatio) || t.minControlRatio < 0 || t.minControlRatio > 1) {
+    throw new Error(`coverage threshold minControlRatio must be between 0 and 1, got ${String(t.minControlRatio)}`);
+  }
+  return t;
+}
+
+/** Why a submit attempt never reached the server (#155, #193). */
+export type SubmitBlock = "validation" | "disabled" | "denied";
+
+export interface StrategyCoverage {
+  readonly applied: number;
+  readonly foundNothing: number;
+}
+
+export interface AdversarialCoverage {
+  /**
+   * `total` is deliberately NOT the raw count of controls a snapshot saw (`transcript[i].controlCount`,
+   * or the DOM's own interactive-element count) — it is the count of DISTINCT EXERCISABLE target
+   * controls observed across the run (`isExercisable`: enabled; not secret, file or session-ending;
+   * not a link out of scope), on in-scope pages only. A page can show far more raw controls than
+   * this (hidden/duplicated across steps, disabled, secret-like, out-of-scope links) — this ratio is
+   * never expected to equal a single step's `controlCount` (#121).
+   */
+  readonly controls: {
+    readonly total: number;
+    readonly exercised: number;
+    readonly ratio: number;
+    /**
+     * #209: of `total`, the target controls the safety policy refused (paid, destructive, session-ending
+     * or `--deny`'d) — never exercisable in this run. Present when any was refused; the coverage
+     * shortfall then names them and how to permit them.
+     */
+    readonly refused?: number;
+  };
+  /**
+   * `blocked` (#155): submit attempts that never reached the server — never a submit. `blockedBy`
+   * (#193, present when any was blocked) says why: the browser's native validation, a submit
+   * control still disabled, or one the safety policy refused (`--deny`, paid, destructive).
+   */
+  readonly forms: {
+    readonly found: number;
+    readonly submitted: number;
+    readonly blocked: number;
+    readonly blockedBy?: Partial<Record<SubmitBlock, number>>;
+  };
+  /** Actions executed on the target (any op). */
+  readonly actionsOnTarget: number;
+  readonly strategies: Readonly<Record<string, StrategyCoverage>>;
+  readonly outOfScopeSteps: number;
+  readonly thresholds: CoverageThresholds;
+  /** Whether the run exercised enough of its target for silence to mean `clean`. */
+  readonly sufficient: boolean;
+  /** Why not, when it did not (empty when sufficient). */
+  readonly shortfalls: string[];
+}
+
+/** Accumulates a run's coverage. Only in-scope pages are observed; only on-target actions count. */
+export class CoverageTracker {
+  readonly #inScope: (url: string) => boolean;
+  readonly #controls = new Set<string>();
+  readonly #exercised = new Set<string>();
+  readonly #forms = new Set<string>();
+  readonly #submitted = new Set<string>();
+  /** route|formKey|why -> how many attempts were blocked that way, and the first message. */
+  readonly #blocked = new Map<string, { form: string; why: SubmitBlock; count: number; message?: string }>();
+  readonly #strategies = new Map<string, { applied: number; foundNothing: number }>();
+  /** #209: target controls the safety policy refused — key → accessible name and why. */
+  readonly #refused = new Map<string, { readonly name: string; readonly risk: string }>();
+  #actions = 0;
+
+  constructor(inScope: (url: string) => boolean) {
+    this.#inScope = inScope;
+  }
+
+  /** Keys (`controlKey`) of the target controls acted on so far. */
+  get exercisedKeys(): ReadonlySet<string> {
+    return this.#exercised;
+  }
+
+  /** Notes the controls and forms of a page (ignored when the page is out of scope). */
+  observe(snapshot: Snapshot): void {
+    if (!this.#inScope(snapshot.url)) return;
+    for (const c of snapshot.controls) if (isExercisable(c, this.#inScope)) this.#controls.add(controlKey(c));
+    const route = routeOf(snapshot.url);
+    for (const f of detectForms(snapshot.controls, this.#inScope)) this.#forms.add(`${route}|${f.key}`);
+  }
+
+  /**
+   * An action executed on the target page `url` (on `control`, when it had one). A control acted on
+   * successfully is always counted exercised — even one `observe()` never saw yet (e.g. it appeared
+   * mid-episode, after an earlier step in the SAME episode revealed it) — so `actionsOnTarget` and
+   * `controls.exercised` can never disagree about a control that really was acted on.
+   *
+   * This ONLY counts the control as exercised. A submit click is never inferred "submitted" from
+   * the click alone (#155) — call `submitted()` / `blocked()` once the caller knows whether the
+   * click actually sent a request.
+   */
+  acted(url: string, control: Control | null): void {
+    if (!this.#inScope(url)) return;
+    this.#actions += 1;
+    if (control !== null) {
+      const key = controlKey(control);
+      this.#exercised.add(key);
+      if (isExercisable(control, this.#inScope)) this.#controls.add(key);
+    }
+  }
+
+  /** A submit click on `formKey` (on page `url`) actually sent a request — #155: a write or a navigation. */
+  submitted(url: string, formKey: string): void {
+    if (!this.#inScope(url)) return;
+    this.#submitted.add(`${routeOf(url)}|${formKey}`);
+  }
+
+  /**
+   * A submit of `formKey` (on page `url`) never reached the server, so it never counts toward
+   * `forms.submitted` (#155). `why` (#193): the browser's own native validation (`required`,
+   * `type=email`, `minlength`… — `message` is its `validationMessage`, when known), a submit control
+   * still disabled, or one the safety policy refused (`message` is the policy's reason).
+   */
+  blocked(url: string, formKey: string, message?: string, why: SubmitBlock = "validation"): void {
+    if (!this.#inScope(url)) return;
+    const form = `${routeOf(url)}|${formKey}`;
+    const key = `${form}|${why}`;
+    const cur = this.#blocked.get(key);
+    this.#blocked.set(key, { form, why, count: (cur?.count ?? 0) + 1, message: cur?.message ?? message });
+  }
+
+  /**
+   * #209: the safety policy refused this target control (`risk`: paid, destructive, session-end,
+   * denied). It still counts toward `controls.total` — the target HAS it — but the shortfall names
+   * the refusal instead of reading as a run that merely did not get to it.
+   */
+  refused(url: string, control: Control, risk: string): void {
+    if (!this.#inScope(url)) return;
+    const key = controlKey(control);
+    if (!this.#refused.has(key)) this.#refused.set(key, { name: control.name.replace(/\s+/g, " ").trim(), risk });
+  }
+
+  /**
+   * #209: every target control seen so far was refused by the safety policy (and none was exercised):
+   * the run can exercise nothing on this target, so hunting on (scrolling, re-planning) proves nothing.
+   */
+  everyTargetRefused(): boolean {
+    if (this.#controls.size === 0 || this.#exercised.size > 0) return false;
+    for (const k of this.#controls) if (!this.#refused.has(k)) return false;
+    return true;
+  }
+
+  /** A strategy's turn: it applied (planned something) or found nothing to do. */
+  strategy(name: string, applied: boolean): void {
+    const s = this.#strategies.get(name) ?? { applied: 0, foundNothing: 0 };
+    if (applied) s.applied += 1;
+    else s.foundNothing += 1;
+    this.#strategies.set(name, s);
+  }
+
+  report(thresholds: CoverageThresholds, outOfScopeSteps: number): AdversarialCoverage {
+    const total = this.#controls.size;
+    const exercised = [...this.#exercised].filter((k) => this.#controls.has(k)).length;
+    const ratio = total === 0 ? 0 : exercised / total;
+    const blockedEntries = [...this.#blocked.values()].filter((v) => this.#forms.has(v.form));
+    const blockedCount = blockedEntries.reduce((sum, v) => sum + v.count, 0);
+    const blockedBy: Partial<Record<SubmitBlock, number>> = {};
+    for (const v of blockedEntries) blockedBy[v.why] = (blockedBy[v.why] ?? 0) + v.count;
+    const forms = {
+      found: this.#forms.size,
+      submitted: [...this.#submitted].filter((k) => this.#forms.has(k)).length,
+      blocked: blockedCount,
+      ...(blockedCount === 0 ? {} : { blockedBy }),
+    };
+    const shortfalls: string[] = [];
+    if (total === 0) shortfalls.push("the target offered no control to exercise");
+    else if (exercised === 0) shortfalls.push("no target control was exercised");
+    const refusedTargets = [...this.#refused].filter(([k]) => this.#controls.has(k) && !this.#exercised.has(k)).map(([, v]) => v);
+    if (total > 0 && ratio < thresholds.minControlRatio) {
+      shortfalls.push(
+        `${exercised}/${total} target controls exercised (${pct(ratio)}), below the ${pct(thresholds.minControlRatio)} threshold${refusalNote(refusedTargets, total)}`,
+      );
+    }
+    if (thresholds.requireFormSubmit && forms.found > 0 && forms.submitted === 0) {
+      // #155: a submit the browser refused with native validation never reached the server — it is
+      // never silently counted as a submit, and the shortfall says so (with the message, when known).
+      // #193: a submit blocked another way (disabled, refused by the safety policy) says so too.
+      const why = (["validation", "disabled", "denied"] as const)
+        .map((w) => {
+          const n = blockedBy[w];
+          if (n === undefined) return null;
+          const message = blockedEntries.find((v) => v.why === w && v.message !== undefined)?.message;
+          const label = w === "validation" ? "by validation" : w === "disabled" ? "with the submit disabled" : "by the safety policy";
+          return `${n} attempt${n === 1 ? "" : "s"} blocked ${label}${message === undefined ? "" : `: "${message}"`}`;
+        })
+        .filter((x): x is string => x !== null);
+      shortfalls.push(forms.blocked > 0 ? `form submitted 0 times (${why.join("; ")})` : `no form was submitted (${forms.found} found)`);
+    }
+    return {
+      controls: { total, exercised, ratio, ...(refusedTargets.length === 0 ? {} : { refused: refusedTargets.length }) },
+      forms,
+      actionsOnTarget: this.#actions,
+      strategies: Object.fromEntries([...this.#strategies].map(([k, v]) => [k, { ...v }])),
+      outOfScopeSteps,
+      thresholds,
+      sufficient: shortfalls.length === 0,
+      shortfalls,
+    };
+  }
+}
+
+/**
+ * #209: why the target's controls were not exercised, when the safety policy refused them — named, with
+ * how to permit them: `--allow-destructive` for paid / destructive / session-ending controls, removing
+ * the `--deny` pattern for a denied one, and `--paid`/`--deny` to reclassify a misjudged control.
+ */
+export function refusalNote(refused: ReadonlyArray<{ readonly name: string; readonly risk: string }>, total?: number): string {
+  if (refused.length === 0) return "";
+  const byRisk = new Map<string, string[]>();
+  for (const r of refused) byRisk.set(r.risk, [...(byRisk.get(r.risk) ?? []), r.name]);
+  const groups = [...byRisk].map(([risk, names]) => {
+    const counts = new Map<string, number>();
+    for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+    const listed = [...counts].slice(0, 5).map(([n, c]) => `"${n}"${c > 1 ? ` x${c}` : ""}`);
+    return `${risk}: ${listed.join(", ")}${counts.size > 5 ? ", …" : ""}`;
+  });
+  const all =
+    total === undefined ? `${refused.length} control(s)` : refused.length === total ? (total === 1 ? "the only one" : `all ${total}`) : `${refused.length}`;
+  const hints: string[] = [];
+  if (refused.some((r) => r.risk !== "denied")) hints.push("pass --allow-destructive to let the run click paid/destructive controls");
+  if (refused.some((r) => r.risk === "denied")) hints.push("remove the --deny pattern that matches them");
+  hints.push("or reclassify a misjudged control with --paid/--deny");
+  return ` — ${all} refused by the safety policy (${groups.join("; ")}); to exercise them, ${hints.join(", ")}`;
+}
+
+/**
+ * #213: the controls a run's safety policy refused, read from its transcript's `safety-policy` steps
+ * (`refused by the safety policy: "<name>" … (<risk>)` / `… matches --deny …`) — one per name, in order.
+ * What a strategy without its own refusal tracking (feature) names in its `insufficient-coverage` reason.
+ */
+export function safetyRefusalsFromTranscript(
+  entries: ReadonlyArray<{ readonly strategy?: string | null; readonly actOk?: boolean; readonly reason?: string | null }>,
+): Array<{ readonly name: string; readonly risk: string }> {
+  const out = new Map<string, string>();
+  for (const e of entries) {
+    if (e.strategy !== "safety-policy" || e.actOk !== false || typeof e.reason !== "string") continue;
+    const m = /^refused by the safety policy: "(.*)" ((?:ends the session|is destructive|may cost money|matches --deny).*)$/.exec(e.reason);
+    if (m === null) continue;
+    const name = m[1] ?? "";
+    const rest = m[2] ?? "";
+    const risk = /matches --deny/.test(rest) ? "denied" : (/\((session-end|destructive|paid)\)/.exec(rest)?.[1] ?? "refused");
+    if (!out.has(name)) out.set(name, risk);
+  }
+  return [...out].map(([name, risk]) => ({ name, risk }));
+}
+
+function pct(r: number): string {
+  return `${Math.round(r * 100)}%`;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
-import { judgeScreen, questionKey } from "./judge.js";
+import { APPLIES_QUESTION_ID, judgeScreen, questionKey } from "./judge.js";
 import { redactEvidence } from "./redact.js";
 import type { RubricEntry, UxEvidence } from "./types.js";
 
@@ -64,8 +64,9 @@ describe("judgeScreen (batched)", () => {
     const answers = await judgeScreen(port, redacted, entries);
 
     expect(systemOne).toHaveBeenCalledTimes(1);
-    // 1 + 1 + 2 = 4 questions across 3 entries, all in the single request
-    expect(Object.keys(receivedQuestions).length).toBe(4);
+    // 1 + 1 + 2 = 4 rubric questions + 3 applicability questions (one per entry), all in the single request
+    expect(Object.keys(receivedQuestions).length).toBe(7);
+    expect(receivedQuestions[questionKey("scent", APPLIES_QUESTION_ID)]?.kind).toBe("noul");
     expect(answers[questionKey("primary-action", "unambiguous")]).toBeDefined();
     expect(answers[questionKey("dark-patterns", "misdirection")]).toBeDefined();
   });
@@ -104,4 +105,29 @@ describe("judgeScreen (batched)", () => {
     expect(state?.goal).toContain("complete checkout");
     expect(state?.goal).toContain("consumer-checkout");
   });
+
+  it("Jev sees the rubric's filled instruction + criteria (not the bare question key) and the page text", async () => {
+    let received: Record<string, Question> = {};
+    let state: JudgmentState | undefined;
+    const port: JudgmentPort = {
+      systemOne: async (args) => {
+        received = args.questions;
+        state = args.state;
+        const out: Record<string, Answer> = {};
+        for (const k of Object.keys(args.questions)) out[k] = { kind: "noul", value: true, probability: 0.9 };
+        return out;
+      },
+    };
+    const templated: RubricEntry = {
+      ...entries[0]!,
+      questions: [{ id: "unambiguous", instruction: "For a {persona} on this {appClass} screen, is the next step clear?", criteria: "One dominant action.", kind: "noul", flag: { when: "noul-false" }, severity: "major" }],
+    };
+    await judgeScreen(port, redactEvidence(evidence, []), [templated]);
+    const q = received[questionKey("primary-action", "unambiguous")];
+    expect(q?.kind).toBe("noul");
+    const instructions = q && q.kind === "noul" ? q.instructions : undefined;
+    expect(instructions).toBe("For a first-time buyer on this consumer-checkout screen, is the next step clear? Criteria: One dominant action.");
+    expect(state?.visibleText).toBe("Review your order and pay.");
+  });
 });
+

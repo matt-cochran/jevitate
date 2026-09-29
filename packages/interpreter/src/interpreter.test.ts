@@ -12,7 +12,7 @@ function fakeLocator(overrides: Partial<Record<string, any>> = {}) {
     pressSequentially: vi.fn(async () => {}),
     innerText: vi.fn(async () => ""),
     isVisible: vi.fn(async () => true),
-    count: vi.fn(async () => 0),
+    count: vi.fn(async () => 1), // the recorded target resolves uniquely
     waitFor: vi.fn(async () => {}),
     ...overrides,
   };

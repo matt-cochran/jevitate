@@ -68,6 +68,13 @@ test("mcp command is registered on the program (additive #20)", async () => {
   expect(mcp?.description()).toContain("MCP");
 });
 
+test("#213: every top-level command has a --help description", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const missing = program.commands.filter((c) => c.description().trim() === "").map((c) => c.name());
+  expect(missing).toEqual([]);
+});
+
 test("mcp --print-config json prints the bare mcpServers JSON (no server start)", async () => {
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });
@@ -105,12 +112,14 @@ test("mcp --print-config <bogus> is a fail envelope", async () => {
   const profiles = {} as unknown as ProfileManager;
   const program = buildProgram({ profiles });
   const lines: string[] = [];
-  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  const errs: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: (s) => errs.push(s) });
   program.exitOverride();
   await program.parseAsync(["mcp", "--print-config", "emacs"], { from: "user" });
-  const parsed = JSON.parse(lines.join(""));
-  expect(parsed.ok).toBe(false);
-  expect(parsed.error.code).toBe("E_MCP_PRINT_CONFIG");
+  // #218: `mcp` has no --json — a refusal is a human line on stderr, never an envelope on stdout.
+  expect(lines.join("")).toBe("");
+  expect(errs.join("")).toMatch(/^error E_MCP_PRINT_CONFIG: /);
+  expect(process.exitCode).toBe(64);
 });
 
 test("ui --port --no-open --inbox-dir calls the injected startUiServer with the resolved deps", async () => {
@@ -164,7 +173,7 @@ test("profile create prints a success envelope", async () => {
   expect(parsed).toMatchObject({ v: 1, ok: true, data: { name: "main", exists: true } });
 });
 
-test("profile create prints a failure envelope and sets exit code 1 when the action throws", async () => {
+test("profile create prints a failure envelope and sets exit code 2 when the action throws", async () => {
   const savedExitCode = process.exitCode;
   try {
     const profiles = {
@@ -186,7 +195,7 @@ test("profile create prints a failure envelope and sets exit code 1 when the act
       ok: false,
       error: { code: "E_PROFILE_CREATE", message: expect.stringContaining("boom") },
     });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -290,7 +299,7 @@ test("site simulate prints a timing profile with totalMs, using an empty interac
   expect(parsed.data.totalMs).toBe(0);
 });
 
-test("site simulate --seed abc returns a failure envelope and sets exit code 1 (invalid seed must not silently become 0)", async () => {
+test("site simulate --seed abc returns a failure envelope and sets exit code 64 (invalid seed must not silently become 0)", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -310,7 +319,7 @@ test("site simulate --seed abc returns a failure envelope and sets exit code 1 (
     );
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_SEED" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -341,7 +350,7 @@ test("recording diff of two JSON takes prints a variable column", async () => {
   expect(variableColumns[0].values).toEqual(["jane", "bob"]);
 });
 
-test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is missing", async () => {
+test("recording diff fails closed (E_INVALID_TAKE, exit 64) when a take file's `values` field is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
@@ -365,10 +374,38 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
-  expect(process.exitCode).toBe(1);
+  expect(process.exitCode).toBe(64);
 });
 
-test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `values` field is malformed (wrong shape)", async () => {
+test("#124: recording diff gives a clear error (not a zod dump) when handed a raw Recording instead of a take file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
+  const profiles = new ProfileManager(root);
+  const takeAPath = join(root, "takeA.json");
+  const takeBPath = join(root, "takeB.json");
+
+  const takeA = authoringTakeJson([fillStep("username", "jane"), clickStep("submit")]);
+  const takeB = authoringTakeJson([fillStep("username", "bob"), clickStep("submit")]);
+  // A raw Recording — what `explore`/`explore-author-journey`/a usability run emit — handed
+  // directly to `recording diff` instead of a `{recording, values}` take file.
+  await writeFile(takeAPath, JSON.stringify(takeA.recording));
+  await writeFile(takeBPath, JSON.stringify(takeB));
+
+  const lines: string[] = [];
+  const program = buildProgram({ profiles });
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  program.exitOverride();
+  await program.parseAsync(["recording", "diff", takeAPath, takeBPath, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
+  expect(parsed.error.message).toContain("looks like a Recording");
+  expect(parsed.error.message).toContain("jevitate record");
+  // NOT a zod dump: no "Unrecognized keys" issue-array text.
+  expect(parsed.error.message).not.toMatch(/Unrecognized keys/);
+  expect(process.exitCode).toBe(64);
+});
+
+test("recording diff fails closed (E_INVALID_TAKE, exit 64) when a take file's `values` field is malformed (wrong shape)", async () => {
   const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
   const profiles = new ProfileManager(root);
   const takeAPath = join(root, "takeA.json");
@@ -389,7 +426,7 @@ test("recording diff fails closed (E_INVALID_TAKE, exit 1) when a take file's `v
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_TAKE" } });
-  expect(process.exitCode).toBe(1);
+  expect(process.exitCode).toBe(64);
 });
 
 test("recording fit prints a policy whose full output round-trips through SitePolicySchema", async () => {
@@ -456,7 +493,7 @@ test("recording promote sets value:{var:...} at the targeted fill step", async (
   expect(parsed.pages[0].steps[0].variableName).toBe("username");
 });
 
-test("recording promote on a click step returns a fail envelope and sets exit code 1", async () => {
+test("recording promote on a click step is refused (a human error line) and sets exit code 64", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -471,16 +508,18 @@ test("recording promote on a click step returns a fail envelope and sets exit co
     await writeFile(recPath, JSON.stringify(rec));
 
     const lines: string[] = [];
+    const errs: string[] = [];
     const program = buildProgram({ profiles });
-    program.configureOutput({ writeOut: (s) => lines.push(s) });
+    program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: (s) => errs.push(s) });
     program.exitOverride();
     await program.parseAsync(
       ["recording", "promote", recPath, "--page", "0", "--step", "0", "--var", "x"],
       { from: "user" }
     );
-    const parsed = JSON.parse(lines.join(""));
-    expect(parsed).toMatchObject({ v: 1, ok: false });
-    expect(process.exitCode).toBe(1);
+    // #218: `recording promote` has no --json — its refusal is a human line on stderr.
+    expect(lines.join("")).toBe("");
+    expect(errs.join("")).toMatch(/^error E_[A-Z_]+: /);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -541,7 +580,7 @@ test("recording postdoc --decisions applies the decisions and prints the same Re
   expect(parsed.data).toEqual(JSON.parse(JSON.stringify(expected)));
 });
 
-test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) on a malformed decisions file", async () => {
+test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 64) on a malformed decisions file", async () => {
   const savedExitCode = process.exitCode;
   try {
     const root = await mkdtemp(join(tmpdir(), "jevitate-cli-"));
@@ -571,7 +610,7 @@ test("recording postdoc --decisions fails closed (E_INVALID_DECISIONS, exit 1) o
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_INVALID_DECISIONS" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -627,7 +666,7 @@ test("load run accumulates repeated --authorized-origin flags", async () => {
  * (so no prompt fires) and skill-install detection pinned to fresh temp
  * home/cwd dirs plus a temp state path (so nothing touches the real machine).
  */
-function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) => boolean } = {}) {
+function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) => boolean; isInteractive?: () => boolean } = {}) {
   const profiles = new ProfileManager("/unused-in-init-tests");
   const home = mkdtempSync(join(tmpdir(), "init-home-"));
   const cwd = mkdtempSync(join(tmpdir(), "init-cwd-"));
@@ -636,10 +675,14 @@ function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) 
   const lines: string[] = [];
   const program = buildProgram({
     profiles,
-    ai: { env },
+    // `localConfig: {}` isolates from the real machine's ~/.jevitate/credentials.json — these
+    // tests assert on exactly what `env` provides, not whatever keys happen to be configured
+    // on whatever machine runs the suite.
+    ai: { env, localConfig: {} },
     init: {
       detection: { existsSync: opts.existsSync ?? (() => false), homedir: () => home, cwd: () => cwd },
       statePath,
+      ...(opts.isInteractive === undefined ? {} : { isInteractive: opts.isInteractive }),
     },
   });
   program.configureOutput({ writeOut: (s) => lines.push(s) });
@@ -662,6 +705,60 @@ test("init --json (keys present, first run) emits initialized + keys + skills", 
   expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
   // never leaks a key value
   expect(lines.join("")).not.toContain('"x"');
+});
+
+// #230: `jevitate init </dev/null` (no TTY, no key env vars — how coding agents and CI run it) used
+// to write the key prompt to stdout, read EOF, and exit 0 silently (no summary, no --json envelope).
+test("init --json (no TTY, keys missing): never prompts, completes init, reports missing keys — exit 0", async () => {
+  const { program, lines } = newInitProgram({ keysPresent: false, isInteractive: () => false });
+  await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(true);
+  expect(parsed.data.keys).toEqual({
+    generation: { required: ["OPENROUTER_API_KEY"], collected: [], missing: ["OPENROUTER_API_KEY"] },
+    judgment: { required: ["TYPESAFE_API_KEY"], collected: [], missing: ["TYPESAFE_API_KEY"] },
+  });
+  // #230: exit 0 with a warning — init's other work (project dir/skills/MCP, here skipped by
+  // flag) still genuinely succeeded; a missing key is expected for a fresh non-interactive
+  // install that configures keys separately (see program.ts's init action for the full rationale).
+  expect(process.exitCode).toBe(0);
+});
+
+test("init (no TTY, keys missing, human output): reports 'not configured' with the same setup command README uses", async () => {
+  const { program, lines } = newInitProgram({ keysPresent: false, isInteractive: () => false });
+  await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project"], { from: "user" });
+  const out = lines.join("");
+  expect(out).toContain("keys: generation not configured — set OPENROUTER_API_KEY or run `jevitate ai setup generation`");
+  expect(out).toContain("keys: judgment not configured — set TYPESAFE_API_KEY or run `jevitate ai setup judgment`");
+  expect(process.exitCode).toBe(0);
+});
+
+test("init prints a tailored 'next steps' block (≤6 lines) and returns it additively as data.nextSteps", async () => {
+  const missing = newInitProgram({ keysPresent: false, isInteractive: () => false });
+  await missing.program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project"], { from: "user" });
+  const out = missing.lines.join("");
+  const block = out.slice(out.indexOf("next steps"));
+  expect(block.trimEnd().split("\n").length).toBeLessThanOrEqual(6);
+  expect(block).toContain("jevitate explore --strategy adversarial --url <app-url> --fake-ai");
+  expect(block).toContain("jevitate ai setup generation");
+  expect(block).not.toContain("--real");
+
+  const ready = newInitProgram({ keysPresent: true });
+  await ready.program.parseAsync(["init", "--targets", "claude-code", "--skip-project", "--json"], { from: "user" });
+  const parsed = JSON.parse(ready.lines.join(""));
+  expect(parsed.data.keys).toBeDefined();
+  expect(parsed.data.nextSteps[0]).toContain("jevitate explore --url <app-url> --goal");
+  expect(parsed.data.nextSteps.at(-1)).toMatch(/MCP server registered for claude-code/);
+});
+
+test("init (no TTY, keys already present): reads exactly like the interactive path — no 'missing'", async () => {
+  const { program, lines } = newInitProgram({ keysPresent: true, isInteractive: () => false });
+  await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.data.keys).toEqual({
+    generation: { required: ["OPENROUTER_API_KEY"], collected: [] },
+    judgment: { required: ["TYPESAFE_API_KEY"], collected: [] },
+  });
 });
 
 test("init --skip-keys --json runs the skill install but omits keys", async () => {
@@ -702,6 +799,22 @@ test("init --dry-run --skip-keys --json reports planned actions but writes nothi
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(true);
   expect(parsed.data.skills.every((r: { action: string }) => r.action === "create")).toBe(true);
+  expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
+  expect(existsSync(statePath)).toBe(false);
+});
+
+// #213: the human summary must never claim an action ("initialized", "N created", "processed")
+// that --dry-run did not actually take — it wrote nothing, so it says "would".
+test("init --dry-run --skip-keys human summary says 'would', never 'initialized'/'created'/'processed'", async () => {
+  const { program, lines, cwd, statePath } = newInitProgram();
+  await program.parseAsync(["init", "--dry-run", "--skip-keys"], { from: "user" });
+  const out = lines.join("");
+  expect(out).toMatch(/dry run — nothing was written/);
+  expect(out).toMatch(/would be processed/);
+  expect(out).not.toContain("jevitate initialized");
+  expect(out).not.toContain("pairs processed");
+  expect(out).not.toContain("config(s) processed");
+  expect(out).not.toMatch(/\d+ created\)/);
   expect(existsSync(join(cwd, "AGENTS.md"))).toBe(false);
   expect(existsSync(statePath)).toBe(false);
 });
@@ -759,4 +872,131 @@ test("init --dry-run --skip-keys --json plans MCP registration without writing a
   expect(parsed.ok).toBe(true);
   expect(parsed.data.mcp.every((r: { action: string }) => r.action === "create")).toBe(true);
   expect(existsSync(join(cwd, ".mcp.json"))).toBe(false);
+});
+
+// === #154 — --hang-replays is validated before any browser opens ===
+
+test.each(["-1", "abc", "1.5", ""])("explore --hang-replays %j is refused before any browser opens", async (n) => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s), writeErr: () => undefined });
+  program.commands.forEach((c) => c.exitOverride());
+  // #218: parsed at parse time (cli-args.ts) — a usage error (64) with the command's own envelope code.
+  await expect(program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--hang-replays", n, "--json"], { from: "user" })).rejects.toMatchObject({ exitCode: 64 });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("--hang-replays");
+  expect(parsed.error.message).toContain("must be a non-negative integer");
+});
+
+// === viewport/device emulation (#149) — CLI validation refuses before any browser opens ===
+
+test("explore --device 'Nokia 9000' is refused before any browser opens, listing close matches", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["explore", "--url", "http://127.0.0.1:1/", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --viewport 375x812 --device \"iPhone 13\" together is refused (mutually exclusive)", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["explore", "--url", "http://127.0.0.1:1/", "--viewport", "375x812", "--device", "iPhone 13", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message.toLowerCase()).toContain("mutually exclusive");
+});
+
+test("verify-fix --device 'Nokia 9000' is refused before any replay", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["verify-fix", "--result", "/nonexistent.result.json", "--fingerprint", "deadbeef", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_VERIFY_FIX_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --strategy usability --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["explore", "--strategy", "usability", "--url", "http://127.0.0.1:1/", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_EXPLORE_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("journey run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["journey", "run", "some-id", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_JOURNEY_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("load run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(
+    ["load", "run", "some-id", "--authorized-origin", "http://127.0.0.1:1", "--device", "Nokia 9000", "--json"],
+    { from: "user" },
+  );
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_LOAD_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("source run --device 'Nokia 9000' is refused before any browser opens", async () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const lines: string[] = [];
+  program.configureOutput({ writeOut: (s) => lines.push(s) });
+  await program.parseAsync(["source", "run", "some-source", "some-id", "--device", "Nokia 9000", "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("E_SOURCE_RUN_ARGS");
+  expect(parsed.error.message).toContain("Nokia 9000");
+});
+
+test("explore --help documents the default viewport and --viewport/--device (#149)", () => {
+  const profiles = {} as unknown as ProfileManager;
+  const program = buildProgram({ profiles });
+  const explore = program.commands.find((c) => c.name() === "explore")!;
+  let help = "";
+  explore.configureOutput({ writeOut: (s) => (help += s) });
+  explore.outputHelp();
+  expect(help).toContain("--viewport");
+  expect(help).toContain("--device");
+  expect(help).toMatch(/default viewport|1280x720/i);
 });

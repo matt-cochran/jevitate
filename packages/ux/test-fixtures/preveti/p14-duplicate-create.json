@@ -1,0 +1,23 @@
+{
+  "_source": "Preveti dogfood round 2 (2026-09-24), P-14: runs/g-participants-two/explore-2026-09-24T16-23-46-040Z.transcript.json (steps, typed values, POST /v1/participants 200 twice). The participant list text is reconstructed from the report's P-14 row (same name and email saved twice, no warning). The typed name/email are the run's own synthetic test values (no real person). Timestamps are relative.",
+  "steps": [
+    { "step": 1, "op": "type", "target": "textbox \"Participant name\"", "actOk": true, "url": "http://127.0.0.1:5193/participants", "value": "Dana Ruiz", "descriptor": { "role": "textbox", "name": "Participant name" } },
+    { "step": 2, "op": "type", "target": "textbox \"Participant email\"", "actOk": true, "url": "http://127.0.0.1:5193/participants", "value": "dana@example.com", "descriptor": { "role": "textbox", "name": "Participant email" } },
+    { "step": 3, "op": "click", "target": "button \"Save private contact\"", "actOk": true, "url": "http://127.0.0.1:5193/participants", "descriptor": { "role": "button", "name": "Save private contact" } },
+    { "step": 4, "op": "type", "target": "textbox \"Participant name\"", "actOk": true, "url": "http://127.0.0.1:5193/participants", "value": "Dana Ruiz", "descriptor": { "role": "textbox", "name": "Participant name" } },
+    { "step": 5, "op": "type", "target": "textbox \"Participant email\"", "actOk": true, "url": "http://127.0.0.1:5193/participants", "value": "dana@example.com", "descriptor": { "role": "textbox", "name": "Participant email" } },
+    { "step": 6, "op": "click", "target": "button \"Save private contact\"", "actOk": true, "url": "http://127.0.0.1:5193/participants", "descriptor": { "role": "button", "name": "Save private contact" } },
+    { "step": 7, "op": "done", "target": null, "actOk": true, "url": "http://127.0.0.1:5193/participants", "reason": "done accepted: goal verified by success-condition" }
+  ],
+  "requests": [
+    { "id": 0, "method": "GET", "endpoint": "GET /v1/participants", "url": "http://127.0.0.1:18583/v1/participants", "resourceType": "fetch", "startedAt": 100, "endedAt": 494, "status": 200, "step": 0 },
+    { "id": 1, "method": "POST", "endpoint": "POST /v1/participants", "url": "http://127.0.0.1:18583/v1/participants", "resourceType": "fetch", "startedAt": 9000, "endedAt": 9120, "status": 200, "step": 3 },
+    { "id": 2, "method": "POST", "endpoint": "POST /v1/participants", "url": "http://127.0.0.1:18583/v1/participants", "resourceType": "fetch", "startedAt": 21000, "endedAt": 21801, "status": 200, "step": 6 }
+  ],
+  "screens": [
+    { "index": 0, "step": 1, "at": 1000, "url": "http://127.0.0.1:5193/participants", "signature": "p14-empty", "visibleText": "Participants\nPrivate contacts\nParticipant name\nParticipant email\nSave private contact", "busy": false },
+    { "index": 1, "step": 4, "at": 10000, "url": "http://127.0.0.1:5193/participants", "signature": "p14-one", "visibleText": "Participants\nPrivate contacts\nDana Ruiz · dana@example.com\nCreate intake link for Dana Ruiz\nParticipant name\nParticipant email\nSave private contact", "busy": false },
+    { "index": 2, "step": 7, "at": 22500, "url": "http://127.0.0.1:5193/participants", "signature": "p14-two", "visibleText": "Participants\nPrivate contacts\nDana Ruiz · dana@example.com\nCreate intake link for Dana Ruiz\nDana Ruiz · dana@example.com\nCreate intake link for Dana Ruiz\nParticipant name\nParticipant email\nSave private contact", "busy": false }
+  ],
+  "endedAt": 23000
+}

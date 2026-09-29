@@ -8,6 +8,7 @@ import type { GhPort, GitExec, JevitateManifest, SharedJourneyFile } from "@jevi
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { RunResolvedJourney } from "./source-run-api.js";
 import { buildProgram, type CliDeps } from "./program.js";
+import { currentEngineInfo } from "./engine.js";
 
 /**
  * End-to-end CLI tests for `jevitate source` (#18) and `jevitate journey
@@ -194,7 +195,25 @@ test("source run --json runs a read-only journey from a trusted, ToU-acked sourc
   const env = parse(lines);
   expect(env.ok).toBe(true);
   expect(env.data.outcome).toBe("ok");
+  // #112: every result envelope says which build produced it.
+  expect(env.data.engine).toEqual(currentEngineInfo());
   expect(spy.calls).toEqual([{ id: "checkout", params: {} }]);
+});
+
+test("source run: --browser-* flags reach the journey runner (surface-wiring audit)", async () => {
+  const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+  const seen: unknown[] = [];
+  const runJourney: RunResolvedJourney = async (file, _params, _policy, _state, _emulation, browser) => {
+    seen.push(browser);
+    return { outcome: "ok", output: { ran: file.metadata.id } } satisfies JourneyRunResult;
+  };
+  const { program } = await newProgram({ git, runJourney });
+  await program.parseAsync(["source", "add", "shop", "https://git.test/shop.git", "--accept-tou", "--json"], { from: "user" });
+  await program.parseAsync(
+    ["source", "run", "shop", "checkout", "--browser-channel", "chrome", "--browser-arg", "--lang=de", "--json"],
+    { from: "user" },
+  );
+  expect(seen).toEqual([{ channel: "chrome", args: ["--lang=de"] }]);
 });
 
 test("SECURITY: source run refuses an UNTRUSTED risky journey -> E_SOURCE_RUN_UNTRUSTED (never runs)", async () => {

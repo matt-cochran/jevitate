@@ -3,6 +3,14 @@ import type { Step } from "./schema.js";
 import { urlTemplate, stepSignature, strictSignature } from "./signature.js";
 
 describe("urlTemplate", () => {
+  it("templates a word joined by . _ : to a long hex id, never a file name (#188)", () => {
+    expect(urlTemplate("/projects/7/workbench/ws.1697a048f9bc46e39e818af68ff4aaed")).toBe("/projects/:id/workbench/:id");
+    expect(urlTemplate("/w/doc_0123abcd9f")).toBe("/w/:id");
+    expect(urlTemplate("/static/index.html")).toBe("/static/index.html");
+    expect(urlTemplate("/docs/v1.2")).toBe("/docs/v1.2");
+    expect(urlTemplate("/app/settings.billing")).toBe("/app/settings.billing");
+  });
+
   it("normalizes all-digit path segments to :id", () => {
     expect(urlTemplate("/thread/1")).toBe("/thread/:id");
     expect(urlTemplate("/thread/2")).toBe("/thread/:id");
@@ -18,6 +26,29 @@ describe("urlTemplate", () => {
   it("leaves fixed route words alone", () => {
     expect(urlTemplate("/inbox")).toBe("/inbox");
     expect(urlTemplate("/login")).toBe("/login");
+  });
+
+  it("templates a prefixed uuid to the whole segment, never keeping the literal prefix (#95/#127)", () => {
+    expect(urlTemplate("/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
+      "/decisions/:id",
+    );
+    expect(urlTemplate("/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345")).toBe(
+      "/decisions/:id",
+    );
+    expect(urlTemplate("/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890")).toBe(
+      urlTemplate("/decisions/candidate-9f8e7d6c-5b4a-4321-9876-abcdef012345"),
+    );
+  });
+
+  it("templates a prefixed numeric id to the whole segment, never keeping the literal prefix (#95/#127)", () => {
+    expect(urlTemplate("/items/item-42")).toBe("/items/:id");
+    expect(urlTemplate("/decisions/demo-bet-1")).toBe("/decisions/:id");
+  });
+
+  it("#127: a short trailing-digit slug and a uuid slug under the SAME prefix template identically", () => {
+    expect(urlTemplate("/decisions/demo-bet-1")).toBe(
+      urlTemplate("/decisions/candidate-a1b2c3d4-e5f6-4a3b-8c1d-ef1234567890"),
+    );
   });
 });
 

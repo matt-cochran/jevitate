@@ -25,21 +25,21 @@ test("role+name (combined) is used when both are present", () => {
   const page = fakePage();
   const d: TargetDescriptor = { role: "button", name: "Send" };
   descriptorToTarget(d).resolve(page as any);
-  expect(page.getByRole).toHaveBeenCalledWith("button", { name: "Send" });
+  expect(page.getByRole).toHaveBeenCalledWith("button", { name: "Send", exact: true });
 });
 
 test("label is used when testId and role+name are absent", () => {
   const page = fakePage();
   const d: TargetDescriptor = { label: "Username" };
   descriptorToTarget(d).resolve(page as any);
-  expect(page.getByLabel).toHaveBeenCalledWith("Username");
+  expect(page.getByLabel).toHaveBeenCalledWith("Username", { exact: true });
 });
 
 test("text is used when higher-priority rungs are absent", () => {
   const page = fakePage();
   const d: TargetDescriptor = { text: "Some text" };
   descriptorToTarget(d).resolve(page as any);
-  expect(page.getByText).toHaveBeenCalledWith("Some text");
+  expect(page.getByText).toHaveBeenCalledWith("Some text", { exact: true });
 });
 
 test("css is used as the last-resort rung", () => {
@@ -53,7 +53,7 @@ test("role without name does not satisfy the role+name rung and falls through to
   const page = fakePage();
   const d: TargetDescriptor = { role: "button", label: "Username" };
   descriptorToTarget(d).resolve(page as any);
-  expect(page.getByLabel).toHaveBeenCalledWith("Username");
+  expect(page.getByLabel).toHaveBeenCalledWith("Username", { exact: true });
   expect(page.getByRole).not.toHaveBeenCalled();
 });
 

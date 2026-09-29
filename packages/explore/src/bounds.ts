@@ -45,9 +45,15 @@ export function resolveBounds(overrides?: Partial<Bounds>): Bounds {
 /**
  * The reason a run stopped. `done`/`blocked` come from the decision head;
  * `exhausted` comes from these bounds; `no-progress` from the detector below.
+ * `inconclusive` means a required step (the model decision) stayed unavailable;
+ * `hang` means the app under test hung (see `hang.ts`) — its own stop, never folded into
+ * no-progress; `crashed` means the engine failed (browser/page crash, unexpected exception) —
+ * the run returns its partial transcript and Recording instead of throwing; `budget` means a
+ * declared mission spend budget (#150, see `budget.ts`) was crossed — or a pre-action guard refused
+ * a paid control that would have crossed it — so the run stopped cleanly before its next action.
  * There is no "gave up and guessed" terminal — that is the point.
  */
-export type StopReason = "done" | "blocked" | "exhausted" | "no-progress";
+export type StopReason = "done" | "blocked" | "exhausted" | "no-progress" | "hang" | "inconclusive" | "crashed" | "budget";
 
 /**
  * A pure counter the loop increments as it spends actions and decisions.
@@ -126,5 +132,14 @@ export class NoProgressDetector {
     }
     this.#lastSignature = signature;
     return this.#streak >= this.limit;
+  }
+
+  /**
+   * Records a step that made progress the signature cannot show (#172: a scroll that MOVED the
+   * page — the control set is the same, the viewport is not): the streak restarts from here.
+   */
+  progress(signature: string): void {
+    this.#streak = 0;
+    this.#lastSignature = signature;
   }
 }

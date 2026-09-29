@@ -1,5 +1,5 @@
 import { mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { safeChildPath } from "@jevitate/domain";
 
 export interface ProfileStatus {
   name: string;
@@ -10,8 +10,9 @@ export interface ProfileStatus {
 export class ProfileManager {
   constructor(private readonly rootDir: string) {}
 
+  /** #221: a profile name is one safe path segment, and its dir must resolve inside the profiles root. */
   private dirFor(name: string): string {
-    return join(this.rootDir, name);
+    return safeChildPath(this.rootDir, name, { what: "profile name" });
   }
 
   async create(name: string): Promise<ProfileStatus> {

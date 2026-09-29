@@ -1,11 +1,12 @@
 import type { Actor } from "@jevitate/screenplay";
-import type { Assertion, AuthoringRecording } from "@jevitate/recording";
+import type { Assertion, AuthoringRecording, Recording } from "@jevitate/recording";
 import { diffTakes, applyPostdoc } from "@jevitate/recording";
 import type { GenerationPort, JudgmentPort } from "@jevitate/ai-core";
 import { deriveParamSchema } from "@jevitate/journey";
 import type { Journey, JourneyMetadata } from "@jevitate/journey";
 import { runGoalBasedMission } from "../missions/goal-based.js";
 import type { Bounds } from "../bounds.js";
+import type { SafetyConfig } from "../safety.js";
 import { ValueCapturingGenerationPort } from "./value-capturing-generation-port.js";
 import { autoDecidePostdoc } from "./auto-decide.js";
 
@@ -27,6 +28,11 @@ export interface AuthorJourneyRequest {
   takes?: number;
   journeyId: string;
   journeyName: string;
+  /**
+   * The shared safety policy (#116) for the exploration (#249: the target's `safety` from
+   * targets.json). Absent: the built-in policy — paid, destructive and session-ending controls refused.
+   */
+  safety?: SafetyConfig;
 }
 
 export type AuthorJourneyResult =
@@ -56,6 +62,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     actor: req.actor,
     judge: req.judgment,
     gen: discoveryGeneration,
+    ...(req.safety === undefined ? {} : { safety: req.safety }),
   });
   if (discovery.outcome !== "succeeded") {
     return { outcome: "not-reached", reason: `discovery mission ${discovery.outcome}` };
@@ -84,6 +91,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
       actor: req.actor,
       judge: req.judgment,
       gen: replayGeneration,
+      ...(req.safety === undefined ? {} : { safety: req.safety }),
     });
     if (replay.outcome !== "succeeded") continue;
     authoringTakes.push({ recording: replay.recording, values: replayGeneration.capturedValues(replay.recording) });
@@ -91,7 +99,13 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
 
   const diff = diffTakes(authoringTakes);
   const decisions = autoDecidePostdoc(authoringTakes[0].recording, diff);
-  const parameterizedRecording = applyPostdoc(authoringTakes[0], diff, decisions);
+  const materializedRecording = applyPostdoc(authoringTakes[0], diff, decisions);
+
+  // #118: the authored Journey's LAST step is always an `assert` on the independent success
+  // condition that gated authoring — so a replay proves the outcome the goal was driving toward,
+  // not just that navigation reached the final page. Jev's own "done" judgment is never trusted
+  // (ticket #1); this bakes that same independent oracle into the artifact itself.
+  const parameterizedRecording = appendSuccessAssertion(materializedRecording, req.successAssertion);
 
   const metadata: JourneyMetadata = {
     id: req.journeyId,
@@ -103,4 +117,20 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
   };
 
   return { outcome: "authored", journey: { metadata, recording: parameterizedRecording } };
+}
+
+/**
+ * Appends an `{ kind: "assert", check }` step to the LAST page's step list — the authored
+ * Journey's final step (#118). A no-op-safe fallback when the recording somehow has no pages
+ * (never expected past a successful discovery mission, which always emits at least one page).
+ */
+function appendSuccessAssertion(recording: Recording, check: Assertion): Recording {
+  if (recording.pages.length === 0) return recording;
+  const lastIndex = recording.pages.length - 1;
+  return {
+    ...recording,
+    pages: recording.pages.map((page, i) =>
+      i === lastIndex ? { ...page, steps: [...page.steps, { step: { kind: "assert", check } }] } : page,
+    ),
+  };
 }

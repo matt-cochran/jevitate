@@ -110,9 +110,22 @@ export async function publishJourney(
   await mgr.run(req.toSource, ["commit", "-m", `Add ${id} journey`]);
   await mgr.run(req.toSource, ["push", "-u", "origin", branch]);
 
+  // #125: the branch is ALREADY pushed by this point — a `gh` that's installed+authenticated but
+  // fails to open a PR (the remote isn't GitHub, no `origin` on GitHub.com, insufficient scope,
+  // etc.) must never turn an already-successful push into a reported failure. Same graceful
+  // degrade as "no gh available" below, just entered from a caught failure instead.
   if (await gh.available()) {
-    const prUrl = await gh.createPr(dir, branch, `Add ${id} journey`);
-    return { branch, pushed: true, prUrl };
+    try {
+      const prUrl = await gh.createPr(dir, branch, `Add ${id} journey`);
+      return { branch, pushed: true, prUrl };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return {
+        branch,
+        pushed: true,
+        instructions: `Branch '${branch}' was pushed to origin, but 'gh pr create' failed (${reason}) — the remote is likely not GitHub. Open a pull request manually comparing '${branch}' against the source's default branch to contribute it.`,
+      };
+    }
   }
 
   return {

@@ -2,6 +2,7 @@
 // + the objective-a11y subset. `loadV1Rubric()` validates + indexes it.
 import type { RubricEntry } from "../../types.js";
 import { loadRubric } from "../schema.js";
+import { applyRubricDescriptions } from "../../prompts.js";
 import { NIELSEN } from "./nielsen.js";
 import { SCENT } from "./scent.js";
 import { DISCLOSURE } from "./disclosure.js";
@@ -20,7 +21,11 @@ export const V1_RUBRIC: readonly RubricEntry[] = Object.freeze([
   ...A11Y,
 ]);
 
-/** Validates and indexes the frozen v1 rubric into a `Map<id, RubricEntry>`. */
+/**
+ * Validates and indexes the frozen v1 rubric STRUCTURE (ids, citations, flags, severity,
+ * requiredEvidence, applicability) with its tuned model-facing TEXT from the versioned prompt
+ * asset (`assets/ux-prompts.json`) into a `Map<id, RubricEntry>`.
+ */
 export function loadV1Rubric(): Map<string, RubricEntry> {
-  return loadRubric(V1_RUBRIC);
+  return loadRubric(applyRubricDescriptions(V1_RUBRIC));
 }

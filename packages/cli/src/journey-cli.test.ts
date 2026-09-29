@@ -115,7 +115,7 @@ test("journey run with an unknown --param fails fast (no browser launch) with E_
     expect(parsed.ok).toBe(false);
     expect(parsed.error.code).toBe("E_INVALID_PARAMS");
     expect(parsed.error.message).toMatch(/unknown/i);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -134,7 +134,7 @@ test("journey run with an unknown journey id fails fast with E_UNKNOWN_JOURNEY a
     const parsed = JSON.parse(lines.join(""));
 
     expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }
@@ -157,6 +157,38 @@ test("journey run --self-heal hybrid wires a SelfHealer into the JourneyRunner (
     const parsed = JSON.parse(lines.join(""));
     expect(parsed.ok).toBe(false);
     expect(parsed.error.code).toBe("E_AI_SETUP_REQUIRED");
+  } finally {
+    process.exitCode = savedExitCode;
+  }
+});
+
+test("#124: journey promote <id> promotes an unpromoted journey (human-approval gate) and persists it", async () => {
+  const journeysDir = await seedJourneysDir([makeJourney({ id: "draft", promoted: false })]);
+  const { program, lines } = newProgram();
+
+  await program.parseAsync(["journey", "promote", "draft", "--dir", journeysDir, "--json"], { from: "user" });
+  const parsed = JSON.parse(lines.join(""));
+
+  expect(parsed).toMatchObject({ v: 1, ok: true, data: { id: "draft", promoted: true } });
+
+  // Persisted: a second read via `journey list` shows it promoted.
+  const { program: program2, lines: lines2 } = newProgram();
+  await program2.parseAsync(["journey", "list", "--dir", journeysDir, "--json"], { from: "user" });
+  const listed = JSON.parse(lines2.join(""));
+  expect(listed.data).toContainEqual(expect.objectContaining({ id: "draft", promoted: true }));
+});
+
+test("journey promote with an unknown id fails fast with E_UNKNOWN_JOURNEY and a non-zero exit", async () => {
+  const savedExitCode = process.exitCode;
+  try {
+    const journeysDir = await seedJourneysDir([]);
+    const { program, lines } = newProgram();
+
+    await program.parseAsync(["journey", "promote", "does-not-exist", "--dir", journeysDir, "--json"], { from: "user" });
+    const parsed = JSON.parse(lines.join(""));
+
+    expect(parsed).toMatchObject({ v: 1, ok: false, error: { code: "E_UNKNOWN_JOURNEY" } });
+    expect(process.exitCode).toBe(64);
   } finally {
     process.exitCode = savedExitCode;
   }

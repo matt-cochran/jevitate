@@ -1,4 +1,5 @@
 import type { Control, Op, Snapshot } from "../index.js";
+import { affordedOp } from "../actions.js";
 import { valueFor } from "./input-strategy.js";
 
 /**
@@ -22,7 +23,20 @@ export type MisuseStrategy =
   | "repeat-rapid"
   | "nav-during-pending"
   | "boundary-input"
-  | "contradictory-actions";
+  | "contradictory-actions"
+  /**
+   * Keep hunting on OTHER routes: follow a same-page link not followed before (by accessible
+   * name), so a run that already found a defect goes on to exercise the rest of the app.
+   */
+  | "visit-route"
+  /** Form-aware episodes (#64) — planned by `planMisuseEpisode` in ./form-misuse.ts. */
+  | "double-submit"
+  | "boundary-submit"
+  | "edit-cancel-save"
+  | "navigate-away-unsaved"
+  | "act-while-pending"
+  /** Act once on the next target control not exercised yet (coverage). */
+  | "exercise-controls";
 
 export interface MisuseDecision {
   readonly op: Op;
@@ -32,15 +46,20 @@ export interface MisuseDecision {
   readonly fillText?: string;
 }
 
-const TERMINAL_NAME = /submit|confirm|pay|complete|checkout|send/i;
+const TERMINAL_NAME = /submit|confirm|pay|complete|checkout|send|save/i;
 const OPPOSING_NAME = /cancel|back|reject|decline/i;
 
 function terminalControl(controls: readonly Control[]): Control | undefined {
   return controls.find((c) => c.role === "button" && TERMINAL_NAME.test(c.name) && c.enabled);
 }
 
+/**
+ * The first enabled text-entry control — by the SHARED affordance mapping (`affordedOp`), so a
+ * boundary input targets exactly the controls the goal loop would type into (textarea, search,
+ * number, `role=textbox` widgets…) and never a control that cannot take text.
+ */
 function firstTextbox(controls: readonly Control[]): Control | undefined {
-  return controls.find((c) => c.role === "textbox" && c.enabled);
+  return controls.find((c) => affordedOp(c) === "type" && c.enabled);
 }
 
 export function pickMisuseAction(params: {
@@ -48,6 +67,8 @@ export function pickMisuseAction(params: {
   strategy: MisuseStrategy;
   lastDecision?: MisuseDecision;
   rng: () => number;
+  /** Link names already followed by `visit-route` (so each link is followed at most once). */
+  visitedLinks?: ReadonlySet<string>;
 }): MisuseDecision | null {
   switch (params.strategy) {
     case "ordering-violation": {
@@ -73,10 +94,25 @@ export function pickMisuseAction(params: {
         : undefined;
       return opposing ? { op: "click", targetIndex: opposing.index } : null;
     }
+    case "visit-route": {
+      const visited = params.visitedLinks ?? new Set<string>();
+      const link = params.snapshot.controls.find(
+        (c) => c.role === "link" && c.enabled && c.name !== "" && !visited.has(c.name),
+      );
+      return link ? { op: "click", targetIndex: link.index } : null;
+    }
     case "nav-during-pending":
       // The mission loop (Task 6) is what actually races this against a
       // pending request; this pure function only chooses "do something else
       // immediately" rather than performing the race itself.
       return { op: "scroll_down" };
+    case "double-submit":
+    case "boundary-submit":
+    case "edit-cancel-save":
+    case "navigate-away-unsaved":
+    case "act-while-pending":
+    case "exercise-controls":
+      // Multi-step episodes: planned by `planMisuseEpisode` (./form-misuse.ts), not here.
+      return null;
   }
 }

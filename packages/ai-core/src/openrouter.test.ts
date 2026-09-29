@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { OpenRouterGenerationGateway, envCredentialStore, MissingCredentialError, CredentialLeakError, type OpenRouterCall } from "./index.js";
+import { OpenRouterGenerationGateway, envCredentialStore, MissingCredentialError, CredentialLeakError, FORM_VALUE_INSTRUCTIONS, openRouterProviderSettings, type OpenRouterCall } from "./index.js";
 
 const catalog = [{ id: "b/cheap-us", promptUsdPer1k: 0.1, completionUsdPer1k: 0.1, regions: ["US"], latencyClass: "fast" as const, capabilities: [] }];
 const constraints = { requireRegion: "US", maxPromptUsdPer1k: 1, requiredCapabilities: [] };
@@ -25,6 +25,19 @@ it("sends no key in the body, puts it only in the auth header, and records prove
   expect(JSON.stringify(res.provenance)).not.toContain("sk-or-SECRET");
 });
 
+it("form.value carries the field-scoped instructions in the prompt body (promptVersion 3, #71)", async () => {
+  const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-SECRET" }, {});
+  let body: unknown;
+  const call: OpenRouterCall = async (args) => {
+    body = args.body;
+    return { object: { text: "ada@example.com" }, latencyMs: 1 };
+  };
+  const g = new OpenRouterGenerationGateway({ store, catalog, constraints, call });
+  const res = await g.generate("form.value", input);
+  expect(body).toMatchObject({ task: "form.value", promptVersion: "4", input: { instructions: FORM_VALUE_INSTRUCTIONS } });
+  expect(res.provenance.promptVersion).toBe("4");
+});
+
 it("throws when the model's returned object fails the task schema", async () => {
   const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-SECRET" }, {});
   const call: OpenRouterCall = async () => ({ object: { wrong: 1 }, latencyMs: 1 });
@@ -41,4 +54,15 @@ it("belt-and-suspenders: the in-gateway credential guard TRIPS when a poisoned r
   const poisoned = { ...input, visibleContext: "leaked key: sk-or-SECRET" };
   await expect(g.generate("form.value", poisoned)).rejects.toBeInstanceOf(CredentialLeakError);
   expect(call).not.toHaveBeenCalled();
+});
+
+describe("openRouterProviderSettings — the live provider gets the key as apiKey", () => {
+  it("extracts the bare key from the gateway's Bearer header", () => {
+    expect(openRouterProviderSettings("Bearer sk-or-abc")).toEqual({ apiKey: "sk-or-abc" });
+  });
+  it("fails closed on a header that is not a single Bearer token", () => {
+    expect(() => openRouterProviderSettings("sk-or-abc")).toThrow(/not a Bearer token/);
+    expect(() => openRouterProviderSettings("Bearer ")).toThrow(/not a Bearer token/);
+    expect(() => openRouterProviderSettings("Bearer a b")).toThrow(/not a Bearer token/);
+  });
 });

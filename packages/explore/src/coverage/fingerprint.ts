@@ -40,6 +40,19 @@ export function stateFingerprint(snapshot: Snapshot, normalizeUrl: UrlNormalizer
   return `${normalizeUrl(snapshot.url)}\u0003${controls}`;
 }
 
+/**
+ * A control's identity ACROSS states — role + accessible name, ignoring which state it was seen
+ * from or whether it is currently enabled. A global nav link (or any other control repeated on
+ * every page) resolves to the SAME identity everywhere it appears, even though each occurrence
+ * belongs to a different state fingerprint (and so gets a different `actionKey`). The frontier
+ * (#75) uses this to recognise "the same control again" — to blacklist one that failed with a
+ * timeout for the rest of the run, and to prefer a control never yet exercised over one already
+ * exercised under a different state.
+ */
+export function controlIdentity(c: Pick<Control, "role" | "name">): string {
+  return `${c.role}\u0001${c.name}`;
+}
+
 /** The ops the coverage frontier may enqueue against an in-page control. */
 export type FrontierOp = "click" | "type" | "select";
 

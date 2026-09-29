@@ -58,3 +58,18 @@ describe("assertNoSecretInPayload (general user-secret never-to-model choke poin
     }
   });
 });
+
+describe("SecretLeakError names its sink (#219)", () => {
+  it("defaults to the model payload; a non-model sink names itself — never the value", () => {
+    expect(() => assertNoSecretInPayload("x hunter2 x", ["hunter2"])).toThrow(/appeared in an outbound model payload/);
+    try {
+      assertNoSecretInPayload({ v: "hunter2" }, ["hunter2"], "the Recording");
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(SecretLeakError);
+      expect((e as SecretLeakError).where).toBe("the Recording");
+      expect((e as Error).message).toMatch(/appeared in the Recording/);
+      expect((e as Error).message).not.toContain("hunter2");
+    }
+  });
+});

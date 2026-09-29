@@ -30,6 +30,7 @@ export function postconditionOf(step: Step): Assertion | undefined {
     case "click":
     case "fill":
     case "select":
+    case "upload":
     case "press":
     case "extract":
       return step.expect;

@@ -10,6 +10,8 @@ export const PRIMARY_ACTION: RubricEntry = {
   },
   tier: "semantic",
   requiredEvidence: ["controls", "visibleText", "job"],
+  // primary-action ambiguity needs at least two candidate actions.
+  applicability: { minControls: 2 },
   attentionProvenance: "predicted-from-visual-hierarchy",
   questions: [
     {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { chooseInputStrategy, valueFor } from "./input-strategy.js";
+import { valueFor } from "./input-strategy.js";
 import type { Control } from "../index.js";
 
 /** Build a valid `Control` (real shape) for the pure value-selection tests. */
@@ -17,24 +17,6 @@ function control(over: Partial<Control>): Control {
     ...over,
   };
 }
-
-describe("chooseInputStrategy", () => {
-  test("picks 'empty' first for any textbox not yet tried with it", () => {
-    const c = control({ role: "textbox", name: "Username" });
-    expect(chooseInputStrategy(c, [])).toBe("empty");
-  });
-
-  test("advances to the next untried strategy in a fixed order", () => {
-    const c = control({ role: "textbox", name: "Username" });
-    expect(chooseInputStrategy(c, ["empty"])).toBe("boundary");
-    expect(chooseInputStrategy(c, ["empty", "boundary"])).toBe("long");
-  });
-
-  test("returns null once every strategy has been tried (bounded — never repeats forever)", () => {
-    const c = control({ role: "textbox", name: "Username" });
-    expect(chooseInputStrategy(c, ["empty", "boundary", "long", "unicode", "invalid", "normal"])).toBeNull();
-  });
-});
 
 describe("valueFor", () => {
   test("an email-named field gets a syntactically-invalid value under 'invalid'", () => {

@@ -10,6 +10,8 @@ export const DISCLOSURE: RubricEntry = {
   },
   tier: "semantic",
   requiredEvidence: ["controls", "job"],
+  // progressive disclosure is only at issue when a screen presents many controls at once.
+  applicability: { minControls: 6 },
   questions: [
     {
       id: "disclosure-quality",

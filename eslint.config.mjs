@@ -28,11 +28,11 @@ export default [
     },
   },
   {
-    // Boundary rule: domain and site-integrations must stay free of
+    // Boundary rule: domain must stay free of
     // browser/db driver dependencies. Scoped here (not globally) so
     // packages that legitimately need playwright/better-sqlite3/kysely
     // (e.g. storage-sqlite, a future automation-runner) are unaffected.
-    files: ["packages/domain/**/*.ts", "site-integrations/**/*.ts"],
+    files: ["packages/domain/**/*.ts"],
     rules: boundaryRule,
   },
 ];

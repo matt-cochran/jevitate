@@ -16,7 +16,7 @@ export class JevJudgmentGateway implements JudgmentPort {
   }
 }
 
-// Real seam (documented, wired in host): the production JevClientCall lazily
-// imports `@typesafe-ai/sdk`, constructs the client, and calls
+// Real seam: `realJevClientCall` (./jev-sdk-adapter.ts) lazily imports
+// `@typesafe-ai/sdk`, constructs the client, and calls
 // client.systemOne({ state, questions }) mapping Choice/Noul/Score results to
-// Answer. Lazy import keeps the package buildable without the SDK.
+// Answer. Lazy import keeps the package buildable without the SDK; hosts wire it.

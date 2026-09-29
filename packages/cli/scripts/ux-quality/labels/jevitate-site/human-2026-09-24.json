@@ -1,0 +1,102 @@
+[
+ {
+  "key": "primary-action|/docs/safety/|link \"Get Started\"",
+  "label": "generic",
+  "observation": "The 'Get Started' link is visually dominant but does not clearly indicate that it is the primary action for installation, which could confuse users about the next step."
+ },
+ {
+  "key": "primary-action|/docs/getting-started/|link \"Get Started\"+link \"Getting Started\"",
+  "label": "relevant-minor",
+  "observation": "There are multiple 'Get Started' links that could confuse users about which action to take first."
+ },
+ {
+  "key": "primary-action|/docs/journeys/|link \"Get Started\"+link \"Getting Started\"+link \"Journeys\"+link \"Overview\"",
+  "label": "generic",
+  "observation": "Multiple actions are presented as primary options, which can confuse users about the next step they should take."
+ },
+ {
+  "key": "progressive-disclosure|/docs/getting-started/|link \"Discussions\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"How it works\"+link \"Issues\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Next Journeys\"+link \"Overview\"+link \"Overview\"+link \"Previous Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "generic",
+  "observation": "Multiple options for getting started and various modes are presented simultaneously, which may overwhelm users."
+ },
+ {
+  "key": "nielsen-4|/docs/|link \"Get Started\"+link \"Getting Started\"",
+  "label": "relevant-minor",
+  "observation": "The presence of both 'Get Started' and 'Getting Started' can create confusion about whether they refer to the same action or different steps in the process."
+ },
+ {
+  "key": "nielsen-2|/docs/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Getting Started\"+link \"Overview\"+link \"Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "relevant-minor",
+  "observation": "The terminology used in the links (e.g., 'MCP & CLI', 'Testing Modes') may not be familiar to all users, particularly those who are new to the tool or automation in general."
+ },
+ {
+  "key": "nielsen-2|/docs/getting-started/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Journeys\"+link \"Overview\"+link \"Overview\"+link \"Previous Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "relevant-minor",
+  "observation": "The use of terms like 'MCP', 'CLI', and 'Journeys' may not be familiar to all users, potentially causing confusion."
+ },
+ {
+  "key": "nielsen-4|/docs/journeys/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next MCP & CLI\"+link \"Overview\"+link \"Overview\"+link \"Previous Getting Started\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "wrong",
+  "observation": "The same concepts are referred to with different terms (e.g., 'MCP & CLI' appears multiple times), which can confuse users about their meanings."
+ },
+ {
+  "key": "nielsen-3|/docs/|link \"Get Started\"",
+  "label": "wrong",
+  "observation": "The 'Get Started' link does not provide a clear way to backtrack or cancel once the user has clicked it, which may lead to confusion if they want to explore other options first."
+ },
+ {
+  "key": "nielsen-2|/docs/safety/|link \"Get Started\"+link \"Getting Started\"",
+  "label": "generic",
+  "observation": "The terms 'Get Started' and 'Getting Started' are vague and do not clearly indicate what the user should expect or do next regarding installation or checks."
+ },
+ {
+  "key": "progressive-disclosure|/docs/journeys/|link \"Get Started\"+link \"Getting Started\"+link \"Journeys\"+link \"Overview\"",
+  "label": "generic",
+  "observation": "Advanced options are presented alongside essential actions, which may distract users from the primary tasks they need to complete."
+ },
+ {
+  "key": "progressive-disclosure|/docs/safety/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Testing Modes\"+link \"Overview\"+link \"Overview\"+link \"Previous MCP & CLI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "generic",
+  "observation": "The screen displays many options that may not be necessary for the immediate task of installation, which can overwhelm users with choices."
+ },
+ {
+  "key": "nielsen-2|/docs/journeys/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next MCP & CLI\"+link \"Overview\"+link \"Overview\"+link \"Previous Getting Started\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "relevant-minor",
+  "observation": "The use of terms like 'MCP', 'CLI', and 'Regression' may not be familiar to all users, potentially causing confusion."
+ },
+ {
+  "key": "nielsen-3|/docs/journeys/|link \"Get Started\"+link \"Getting Started\"+link \"Journeys\"+link \"Overview\"",
+  "label": "wrong",
+  "observation": "The controls present do not offer a clear way to backtrack or cancel actions, which could lead users to feel trapped in a workflow."
+ },
+ {
+  "key": "nielsen-1|/docs/|link \"Get Started\"",
+  "label": "wrong",
+  "observation": "The description of Jevitate does not provide any real-time feedback or indicators about the installation or running of checks, leaving users uncertain about the current state of their actions."
+ },
+ {
+  "key": "cognitive-load|/docs/getting-started/|link \"Discussions\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"How it works\"+link \"Issues\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Next Journeys\"+link \"Overview\"+link \"Overview\"+link \"Previous Overview\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "generic",
+  "observation": "The screen presents a large number of choices and commands, which can be overwhelming for users trying to focus on their immediate task."
+ },
+ {
+  "key": "nielsen-10|/docs/safety/|link \"Docs\"+link \"Get Started\"+link \"GitHub\"",
+  "label": "generic",
+  "observation": "Help resources are not clearly linked to the specific tasks of installation and running checks, making it difficult for users to find assistance when needed."
+ },
+ {
+  "key": "nielsen-10|/docs/|link \"Docs\"",
+  "label": "generic",
+  "observation": "The documentation link is present, but there is no contextual help or guidance provided on the main screen for users who may need assistance with specific tasks."
+ },
+ {
+  "key": "nielsen-8|/docs/safety/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Testing Modes\"+link \"Overview\"+link \"Overview\"+link \"Previous MCP & CLI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "generic",
+  "observation": "The prominent statement about being 'LOCAL-FIRST BROWSER AUTOMATION' does not directly relate to the user's immediate task of installation and running checks, which could distract from the primary goal."
+ },
+ {
+  "key": "nielsen-7|/docs/safety/|link \"Discussions\"+link \"Docs\"+link \"Get Started\"+link \"Getting Started\"+link \"Getting Started\"+link \"GitHub\"+link \"GitHub\"+link \"How it works\"+link \"How it works\"+link \"Issues\"+link \"JEVITATE\"+link \"Jobs it does\"+link \"Journeys\"+link \"Journeys\"+link \"MCP & CLI\"+link \"MCP & CLI\"+link \"Modes\"+link \"Next Testing Modes\"+link \"Overview\"+link \"Overview\"+link \"Previous MCP & CLI\"+link \"Regression & CI\"+link \"Regression & CI\"+link \"Safe by default\"+link \"Safety & Secrets\"+link \"Safety & Secrets\"+link \"Testing Modes\"+link \"Testing Modes\"",
+  "label": "generic",
+  "observation": "The screen presents too many options and links, which may overwhelm users and slow down their ability to find essential information about installation and checks."
+ }
+]

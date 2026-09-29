@@ -4,19 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadManifest } from "./manifest.js";
 
-test("loadManifest() returns exactly the seven shipped skills, including jevitate-ux-review", () => {
+test("loadManifest() returns exactly the eleven shipped skills", () => {
   const skills = loadManifest();
-  expect(skills).toHaveLength(7);
+  expect(skills).toHaveLength(11);
   const ids = new Set(skills.map((s) => s.id));
   expect(ids).toEqual(
     new Set([
+      "jevitate-ci-check",
+      "jevitate-demo",
       "jevitate-explore",
+      "jevitate-getting-started",
       "jevitate-load-test",
       "jevitate-mission-scope",
       "jevitate-record",
       "jevitate-run-journey",
       "jevitate-sources",
       "jevitate-ux-review",
+      "jevitate-verify-fix",
     ]),
   );
 });
