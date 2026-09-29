@@ -231,8 +231,6 @@ function extendRecording(
 }
 
 export type FeatureMissionParams = {
-  /** #245: show the on-page demo overlay (headed runs). Implemented by the demo overlay (#245). */
-  readonly demoOverlay?: boolean;
   page: Page;
   actor: Actor;
   seedUrl: string;

@@ -233,8 +233,6 @@ export interface AdversarialOutcome {
 }
 
 export interface AdversarialMissionParams {
-  /** #245: show the on-page demo overlay (headed runs). Implemented by the demo overlay (#245). */
-  readonly demoOverlay?: boolean;
   readonly page: Page;
   readonly actor: Actor;
   readonly judgment: JudgmentPort;

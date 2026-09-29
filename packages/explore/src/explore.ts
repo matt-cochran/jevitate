@@ -162,8 +162,6 @@ export const LAST_CHANCE_NOTE =
  */
 
 export interface ExploreConfig {
-  /** #245: show the on-page demo overlay (headed runs). Implemented by the demo overlay (#245). */
-  readonly demoOverlay?: boolean;
   readonly actor: Actor;
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
