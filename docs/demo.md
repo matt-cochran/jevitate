@@ -191,6 +191,8 @@ theme with high contrast. Don't show your home directory, other projects or any 
    `docs/assets/demo-poster.png`. Then replace the demo placeholder at the top of the README (and
    the website's demo slot, `public/demo/`) with them.
 
+To capture the browser side without a screen recorder, add `--record-video` (headless, WebM listed in the result's `videoPaths`) or `--headed --slow-mo 400` to the explore command; see [operations: demo mode](./operations.md#demo-mode-watching-a-run).
+
 Tools that work well: [asciinema](https://asciinema.org) with [agg](https://github.com/asciinema/agg)
 for a terminal-only GIF, or any screen recorder for the two-pane version. Record real output only.
 Do not re-type or edit the JSON.

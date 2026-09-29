@@ -24,6 +24,9 @@ browsers, and a flaky signal is reported as intermittent, never as fixed.
 In the demo, a form says "Saved" while the server returns HTTP 500. Jevitate finds it, reproduces
 it 3/3, commits a regression, and verifies the fix, with no API keys needed.
 
+You can watch it work (headed mode, video, captioned evidence clips per defect) and render a
+Journey as a narrated demo.
+
 It's MIT licensed, runs locally, and plugs into coding agents (Claude Code, Codex, Cursor) through
 skills and an MCP server that deliberately exposes no raw browser tools.
 
@@ -51,7 +54,10 @@ https://github.com/matt-cochran/jevitate
 2. > Verdicts are code only: HTTP 5xx, uncaught exceptions, hangs confirmed by replay, your
    > success checks, and invariants you declare in JSON ("if the page says Saved, the server has
    > the value"). The model's "looks broken" is advisory.
-3. > For coding agents: an MCP server with domain tools only (queue a mission, read a typed
+3. > Watch it: `--headed` opens a visible browser, `--record-video` records any run, and
+   > `--evidence-video` attaches a captioned repro clip to each defect. `journey demo` turns a
+   > Journey into a narrated video with subtitles and a guide.
+4. > For coding agents: an MCP server with domain tools only (queue a mission, read a typed
    > result, verify a fix). browser_click and friends are on the forbidden list.
 
 ---

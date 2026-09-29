@@ -23,7 +23,8 @@ git push -u origin site/v0.2.0-launch   # then open a PR into dev
 ## 2. Drop in the demo recording
 
 Record it by following `docs/demo.md` → "Recording the launch GIF or video" in the jevitate repo.
-Use the same recording as the README.
+Use the same recording as the README. `--record-video` and `--headed` can produce it
+(`docs/demo.md`).
 
 1. Copy the files to the site:
    - `public/demo/jevitate-demo.mp4` (H.264, 1280×720 or larger, 20 to 30 s, muted, under ~8 MB)
@@ -79,9 +80,13 @@ it off again after a few weeks.
 
 ## 6. After the #149 / #150 merges
 
-- `src/pages/docs/ux.astro` says there is no viewport flag. That stops being true when #149
-  (`--viewport`/`--device`) merges, so update it under #16.
+- `src/pages/docs/ux.astro` says there is no viewport flag. That is no longer true
+  (`--viewport`/`--device` shipped), so update it under #16.
 - Add `--viewport`/`--device` and the invariants `budget` key to the flags reference under #16.
+  The flag reference is generated in the jevitate repo as `docs/cli.md` (`pnpm docs:cli`); copy
+  from it instead of writing flags by hand.
+- Add pages for demo mode (`--headed`, `--record-video`), defect evidence, Journey intent and
+  environments, `journey demo` / `demo "<aspect>"`, and the `inbox` / `mission queue` commands.
 
 ## 7. Checks to repeat before merging to main
 

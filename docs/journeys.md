@@ -249,8 +249,9 @@ The replay is a `journey run`: the same `--param`, `--storage-state`, `--env`/`-
 fixture, browser and emulation flags, site policy and fail-closed run policy, so paid or
 destructive steps are refused as usual, and a demo never self-heals. Run it against local, dev or
 staging with seeded data. Secret parameter values are redacted in the captions, subtitles, guide
-and result, and the written text is checked for them before it is saved. Screenshots are not
-pixel-masked yet: keep secrets out of what the page displays, or use a password field.
+and result, and the written text is checked for them before it is saved. They are also masked in
+pixels, in the video and in every guide screenshot; a screenshot whose mask cannot be proven is not
+written ([details](./operations.md#evidence-clips-and-screenshots)).
 
 A demo whose Journey no longer replays is **stale**: nothing is written, the command says which
 step stopped, and it exits `1`, so a CI job that regenerates demos catches it.

@@ -138,6 +138,37 @@ and `verify-fix`; `verify-fix --record-video` gives a before/after clip pair. Re
 masked in the pixels of every clip and screenshot (a capture whose mask cannot be proven is skipped,
 never written). See [operations: evidence and screenshots](./docs/operations.md#evidence-clips-and-screenshots).
 
+## Journeys, environments and demos
+
+A **Journey** is a replayable, typed flow you author from a goal, record by demonstration, or get
+from `explore`. It runs the same on every machine, self-heals under policy and loads as a test in
+CI ([Journeys](./docs/journeys.md)).
+
+```bash
+# Intent: why, not only what. Drafts goals, success criteria and per-step objectives on playback;
+# nothing is written until you review and approve.
+jevitate journey annotate checkout --real
+jevitate journey annotate checkout --approve
+
+# Environments: a Journey knows no host. Name yours in .jevitate/environments.json (committed, no
+# secrets), then pick one per run. A step on any other origin is refused before a browser opens.
+jevitate journey run checkout --env staging
+jevitate regression run saved-means-stored --base-url http://localhost:3000
+
+# A narrated demo of a Journey: video + .vtt subtitles + a Markdown guide with screenshots
+jevitate journey demo checkout --env staging --video demos/checkout.webm --guide demos/checkout.md
+
+# Or from a one-line request: explore -> minimize -> author -> annotate -> DRAFT demo
+jevitate demo "check out with a saved card" --env staging --success 'urlIncludes:/order/confirmed' --real
+jevitate demo approve <id>          # the one human approval: renders the final demo, promotes the Journey
+```
+
+Existing Journeys keep working unchanged: intent fields and environments are optional.
+`--env`/`--base-url` work on `journey run|annotate`, `regression run` and `load run`. Sessions and
+secret fields per environment live in `~/.jevitate/targets.json`, never in the repo. `demo` refuses
+an environment flagged `production: true`. Details: [Journeys](./docs/journeys.md#annotate-a-journey-draft-its-intent-then-approve-it),
+[environments](./docs/journeys.md#environments---env), [demos](./docs/journeys.md#demo-a-journey-video-subtitles-and-a-step-by-step-guide).
+
 ## Why Jevitate?
 
 Hand-written E2E tests check the paths someone thought of. The bugs that reach users tend to sit
@@ -206,6 +237,22 @@ arguments and confined paths. Only `mcp`, `ui`, `init`, `ai setup`, `record` and
 stay off MCP, each for a stated reason. Raw browser tools such as `browser_click` or `page_evaluate`
 are forbidden: an agent asks for a mission or a Journey, it never drives the page. Approving or
 cancelling an inbox item stays human-only, in `jevitate ui`. See [agents and MCP](./docs/agents.md).
+
+## Queue missions and read the inbox from the CLI
+
+Everything an agent can do over MCP you can do from the shell, over the same stores
+(`~/.jevitate/missions/`, `~/.jevitate/inbox`):
+
+```bash
+jevitate mission queue spa --strategy coverage --route '/settings/**'   # enqueue against a promoted target
+jevitate mission run                                                    # drain the queue
+jevitate mission result <id>                                            # status + typed result; exits with its contract code
+jevitate inbox list                                                     # also: show, command, queue-retrieval, queue-action, health
+```
+
+`inbox command <id>` is burn-after-read like MCP's `get_command`: unread human input needs
+`--reveal`, which consumes and prints it. Approving or cancelling an inbox item stays human-only
+(`jevitate ui`). Flags: [docs/cli.md](./docs/cli.md).
 
 ## Safety
 

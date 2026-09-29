@@ -63,6 +63,13 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
 The bound value and the seed are registered as run secrets, so the existing
 redaction seams scrub them everywhere.
 
+**Per-origin sessions.** `~/.jevitate/targets.json`, keyed by origin, can hold a target's
+`storageState` and `secretFields` (paths relative to that file). Queued missions (`mission run`)
+and `verify_fix` over MCP start from it, and so do Journey commands run with `--env`/`--base-url`
+(`journey run`, `journey annotate`, `regression run`, `load run`) when `--storage-state` is not given
+([environments](./journeys.md#environments---env)). It is operator-only and never committed; the
+repo's `.jevitate/environments.json` refuses any session or secret key.
+
 **Replaying an authenticated Journey.** A Journey `explore-author-journey` authors
 with `--storage-state` needs the SAME authenticated pre-step to replay: pass
 `--storage-state <file>` to `jevitate journey run`, `jevitate load run` and
