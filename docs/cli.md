@@ -19,6 +19,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`diff`](#diff): classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
 - [`explore`](#explore): goal-directed exploration -> a deterministic Recording (authoring/test plane)
 - [`explore-author-journey`](#explore-author-journey): Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
+- [`inbox`](#inbox): the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 - [`init`](#init): set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
 - [`invariants`](#invariants): declared-invariant files (`explore --invariants`)
 - [`journey`](#journey): manage and run promoted Journeys (regression-test replays)
@@ -414,6 +415,175 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--success <spec>` | independent success assertion, e.g. urlIncludes:/confirmed |  |  |  |  |
 | `--takes <n>` | corroborating takes incl. discovery (default 1) | `1` |  |  |  |
 | `--url <url>` | target URL (must be an authorized origin) |  |  |  |  |
+
+## inbox
+
+```
+jevitate inbox [command]
+```
+
+the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
+
+### inbox approve
+
+```
+jevitate inbox approve [options] <id>
+```
+
+always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+### inbox cancel
+
+```
+jevitate inbox cancel [options] <id>
+```
+
+always refused (MCP cancel_command): only a human can cancel an inbox item, in `jevitate ui`
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+### inbox command
+
+```
+jevitate inbox command [options] <id>
+```
+
+poll one inbox item as the agent does (MCP get_command): burn-after-read — consumes any human-provided input once; its value is never printed
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+### inbox health
+
+```
+jevitate inbox health [options]
+```
+
+inbox store health: pending count, oldest pending age, build (MCP get_site_health)
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+### inbox list
+
+```
+jevitate inbox list [options]
+```
+
+list pending inbox items (MCP list_incoming)
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+
+### inbox queue-action
+
+```
+jevitate inbox queue-action [options]
+```
+
+ask a human for a decision — an 'approval' item by default; only queues (MCP queue_action)
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--agent <name>` | who is asking (required) |  |  |  |  |
+| `--findings <file>` | a JSON file holding an array of {id, title, severity: low\|med\|high, evidence?} |  |  |  |  |
+| `--has-screenshot` | a screenshot accompanies the item |  |  |  |  |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--journey <id>` | the Journey (required) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--kind <kind>` | approval (default) \| handback \| review |  | `approval`, `handback`, `review` |  |  |
+| `--reason <text>` | what the human is asked for (required) |  |  |  |  |
+| `--run <id>` | the run this item belongs to (required) |  |  |  |  |
+| `--step <step>` | the step it stopped at (required) |  |  |  |  |
+| `--target-url <url>` | the page it concerns |  |  |  |  |
+
+### inbox queue-retrieval
+
+```
+jevitate inbox queue-retrieval [options]
+```
+
+ask a human to provide something back to the agent — a 'handback' item; only queues (MCP queue_retrieval)
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--agent <name>` | who is asking (required) |  |  |  |  |
+| `--findings <file>` | a JSON file holding an array of {id, title, severity: low\|med\|high, evidence?} |  |  |  |  |
+| `--has-screenshot` | a screenshot accompanies the item |  |  |  |  |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--journey <id>` | the Journey (required) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--reason <text>` | what the human is asked for (required) |  |  |  |  |
+| `--run <id>` | the run this item belongs to (required) |  |  |  |  |
+| `--step <step>` | the step it stopped at (required) |  |  |  |  |
+| `--target-url <url>` | the page it concerns |  |  |  |  |
+
+### inbox show
+
+```
+jevitate inbox show [options] <id>
+```
+
+an inbox item's conversation thread — never its secret input (MCP get_thread)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
 
 ## init
 
@@ -828,6 +998,61 @@ jevitate mission [command]
 ```
 
 manage exploration mission targets and drain the mission queue
+
+### mission queue
+
+```
+jevitate mission queue [options] <target>
+```
+
+enqueue an exploration mission against a PROMOTED target — only queues; `mission run` drains (MCP queue_exploration)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `target` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--dir <path>` | mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use) |  |  |  |  |
+| `--feature <name>` | feature: the capability to test (goal-based: the objective) |  |  |  |  |
+| `--goal <text>` | goal-based: the objective (exactly one of --goal/--feature/--route) |  |  |  |  |
+| `--invariants <file>` | app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--max-actions <n>` | budget: max actions (bounded by the queue's ceiling) |  |  |  |  |
+| `--max-candidates <n>` | budget: max candidates |  |  |  |  |
+| `--max-decisions <n>` | budget: max decisions |  |  |  |  |
+| `--route <glob>` | coverage/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective) |  |  |  |  |
+| `--strategy <strategy>` | goal-based \| coverage \| adversarial \| feature (required) |  | `goal-based`, `coverage`, `adversarial`, `feature` |  |  |
+| `--success <spec>` | goal-based: the independent success check (required there), e.g. urlIncludes:/done — the `explore --success` page-check forms |  |  |  |  |
+| `--targets-dir <path>` | mission targets directory (default: ~/.jevitate/missions/targets) |  |  |  |  |
+| `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+### mission result
+
+```
+jevitate mission result [options] <id>
+```
+
+a mission's status and typed result, by result id or queued missionId (MCP get_mission_result); exits with its contract code
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--results-dir <path>` | read the result file from this directory only (default: where `mission run` writes — .jevitate/logs/<date>, then ~/.jevitate) |  |  |  |  |
 
 ### mission run
 

@@ -369,6 +369,7 @@ describe("result exposure — every engine result field reaches the user's envel
 const NOT_BROWSER_COMMANDS: Readonly<Record<string, string>> = {
   "mission target add": "stores a target's session path; `mission run` opens the browser",
   "mission target update": "stores a target's session path; `mission run` opens the browser",
+  "mission queue": "only enqueues the viewport/device (#254, MCP queue_exploration); `mission run` opens the browser",
 };
 
 describe("flag exposure — every browser-opening command takes the shared --browser-* launch flags", () => {
