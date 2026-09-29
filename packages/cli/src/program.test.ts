@@ -733,6 +733,24 @@ test("init (no TTY, keys missing, human output): reports 'not configured' with t
   expect(process.exitCode).toBe(0);
 });
 
+test("init prints a tailored 'next steps' block (≤6 lines) and returns it additively as data.nextSteps", async () => {
+  const missing = newInitProgram({ keysPresent: false, isInteractive: () => false });
+  await missing.program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project"], { from: "user" });
+  const out = missing.lines.join("");
+  const block = out.slice(out.indexOf("next steps"));
+  expect(block.trimEnd().split("\n").length).toBeLessThanOrEqual(6);
+  expect(block).toContain("jevitate explore --strategy adversarial --url <app-url> --fake-ai");
+  expect(block).toContain("jevitate ai setup generation");
+  expect(block).not.toContain("--real");
+
+  const ready = newInitProgram({ keysPresent: true });
+  await ready.program.parseAsync(["init", "--targets", "claude-code", "--skip-project", "--json"], { from: "user" });
+  const parsed = JSON.parse(ready.lines.join(""));
+  expect(parsed.data.keys).toBeDefined();
+  expect(parsed.data.nextSteps[0]).toContain("jevitate explore --url <app-url> --goal");
+  expect(parsed.data.nextSteps.at(-1)).toMatch(/MCP server registered for claude-code/);
+});
+
 test("init (no TTY, keys already present): reads exactly like the interactive path — no 'missing'", async () => {
   const { program, lines } = newInitProgram({ keysPresent: true, isInteractive: () => false });
   await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
