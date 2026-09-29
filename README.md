@@ -247,6 +247,7 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 ## Documentation
 
 - [Docs index](./docs/README.md): every reference page
+- Full command reference: [docs/cli.md](./docs/cli.md)
 - [Demo](./docs/demo.md) · [How it works](./docs/how-it-works.md) · [Safety](./docs/safety.md)
 - [Changelog](./CHANGELOG.md) · [Releasing](./RELEASING.md)
 - Website: [jevitate.com](https://jevitate.com)
