@@ -1,6 +1,6 @@
 ---
 name: jevitate-mission-scope
-description: Reads a diff, pull request, changelog, or user story and scopes change-driven testing — identifies at-risk routes/features, maps them to existing promoted Journeys, runs the most relevant ones, and recommends which newly-discovered repros to promote. Use when a user wants to know "what should I test" after a code change, rather than testing everything or picking targets blindly.
+description: Turn a diff, pull request, changelog or user story into targeted jevitate testing. Finds at-risk routes and features, maps them to promoted Journeys (`journey find` / `find_capabilities`) and runs those, scopes bounded missions where nothing covers a gap (including queued missions on promoted targets), and recommends which new repros to promote or capture as regressions. Use when the user asks "what should I test?" after a code change, or wants a change-scoped check.
 ---
 
 You scope testing to what actually changed. You never drive a browser yourself —
@@ -54,6 +54,8 @@ tool to scope a **bounded** mission at the specific at-risk area:
   --url <authorized-url>` (bounded misuse + a trusted hard-signal defect oracle).
 - For state coverage of the changed area: `jevitate explore --strategy coverage
   --url <authorized-url>`.
+- In CI, the same scoping is `jevitate check --suite <file> --changed-routes '<glob>'`: only the
+  Journeys and goals touching those routes run (see `jevitate-ci-check`).
 - Only if you cannot reach an authorized target at all (or `jevitate explore`
   is genuinely absent from your environment) do you stop and report the gap —
   never fall back to a generic browser-automation tool; that would bypass every
@@ -106,11 +108,8 @@ An app whose API lives on another origin declares it on the target:
 `--authorized-origin <app-origin> --api-origin <api-origin>` (repeatable; each a
 bare http(s) origin). A queued mission can reach only those origins.
 
-Queued missions run when `jevitate mission run --once --real --json` drains the
-queue (`--watch` keeps draining). `get_mission_result({ id: missionId })` reports
-`queued`/`running` (`pending: true`), the typed result once done, or `failed`.
-
-## Known gaps
-
-- Offline only: `queue_exploration` enqueues but does not itself run the
-  mission — treat the returned `missionId` as "accepted," not "finished."
+Queued missions run when the queue is drained: `run_queued_missions` over MCP (it drains once),
+or `jevitate mission run --once --real --json` (`--watch` keeps draining).
+`get_mission_result({ id: missionId })` reports `queued`/`running` (`pending: true`), the typed
+result once done, or `failed`. `queue_exploration` only enqueues — treat the returned `missionId`
+as "accepted," not "finished," until the result says otherwise.

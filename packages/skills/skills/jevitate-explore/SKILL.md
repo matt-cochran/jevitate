@@ -1,136 +1,109 @@
 ---
 name: jevitate-explore
-description: Scopes and runs a bounded exploration mission via `jevitate explore` (goal, coverage, exploratory, adversarial, or capability-scoped feature strategies) or the MCP `queue_exploration` tool — drives Jev (not you) on an authorized target and emits a replayable Recording. Use when there is no existing Journey for what needs testing and a human wants autonomous, bounded exploration.
+description: Run a bounded jevitate exploration of an authorized web app. Strategies: goal (reach an end state, checked by `--success`), find-out (answer a question), coverage/exploratory (state coverage), adversarial (try to break it), feature (model-free), and usability. Runs via `jevitate explore` or MCP `run_exploration`/`queue_exploration`; saves a verified path as a Journey (`explore-author-journey`). Use when there's no saved Journey for what needs testing, or the user wants bugs found.
 ---
 
-You scope an exploration mission; you never drive the browser yourself. Jev
-(the judgment gateway) makes every click/type/select decision inside the
-exploration engine; a generative model writes only form text; an independent,
-user-supplied assertion — not the model's own "done" signal — decides whether
-a goal-based mission actually succeeded. Your entire job is composing a good
+You scope an exploration mission. You never drive the browser yourself. Jev (the judgment
+gateway) makes each click, type and select decision inside the engine, a generative model writes
+only form text, and an independent check decides whether a goal succeeded: the `--success`
+assertion or a hard signal, never the model's own "done". Your whole job is composing a good
 mission and reading the result honestly.
 
 ## Before you start
 
-- The target must already be authorized. This tool refuses an unknown or
-  unauthorized target by design (`E_UNAUTHORIZED_EXPLORE_TARGET` — authoring/test
-  plane only, never production writes). The allowlist is the `--url`'s own
-  origin ONLY WHEN `--allow` is omitted entirely — any `--allow <origin>`
-  REPLACES that default rather than adding to it, so include the URL's own
-  origin explicitly in your `--allow` list if the mission still needs to
-  navigate there too. If you don't know whether a target is authorized, ask.
-- Pick a strategy deliberately (default is `goal`):
-  - `--strategy goal` (default): needs `--goal` and `--success`. Reaches a
-    stated end state.
-  - `--strategy coverage` / `--strategy exploratory`: state-coverage by
-    induction; the frontier itself is the objective, so it takes no
-    goal/success. `coverage` sweeps breadth-first; `exploratory` follows
-    the controls each action just revealed (novelty-first). `--stall-timeout
-    <seconds>` (default 120) ends a run that stops making progress.
-  - `--strategy adversarial`: bounded misuse ("try to break it") whose stop
-    decision comes from a trusted hard-signal defect oracle, never Jev's own
-    signal. Needs only `--url`.
-  - `--feature <name> --route <glob>`: capability-scoped feature testing
-    (model-free; no goal/success, no gateway selection needed).
+- The target must be authorized. By default the allowlist is `--url`'s own origin. Any
+  `--allow <origin>` REPLACES that default, so include the URL's own origin if the mission still
+  needs it. An unauthorized target is refused (`E_UNAUTHORIZED_EXPLORE_TARGET`, 64). Exploration
+  is authoring/test plane only, never production. If you don't know whether a target is
+  authorized, ask.
+- Model-driven strategies (goal, find-out, coverage, exploratory, usability) need a gateway:
+  `--real` (live, after the human ran `jevitate ai setup`) or `--fake-ai` (a deterministic pipeline
+  smoke that won't reach a real goal). Selecting neither fails closed (`E_AI_SETUP_REQUIRED`,
+  64). `adversarial` and `--feature` produce real findings without keys: use `--fake-ai` for
+  adversarial.
+- Pick a strategy on purpose:
+  - `--goal "<end state>" --success <check>` (default strategy `goal`): reach a stated end state.
+  - `--goal "find out <question>; report the answer"` with no `--success`: a find-out run. It's
+    read-only unless `--allow-writes` is passed, and the grounded answer is the verdict.
+  - `--strategy coverage` / `--strategy exploratory`: state coverage with no goal. `coverage` is
+    breadth-first, and `exploratory` follows newly revealed controls. `--scope app` widens it to the
+    whole app, and `--stall-timeout <seconds>` (default 120) ends a stalled run.
+  - `--strategy adversarial`: bounded misuse ("try to break it"). A hard-signal oracle decides.
+  - `--feature <name> --route "<glob>"`: model-free testing of one capability.
+  - `--strategy usability --goal "<job>" --app-class <class>`: see `jevitate-ux-review`.
 
-## Writing a goal-based mission
+## Writing a goal
 
-- Write a `--goal` in plain language describing the end state, not a sequence of
-  clicks ("place an order for one widget and reach the confirmation page," not
-  "click .add-to-cart then click #checkout").
-- Write a `--success` assertion independent of what you expect Jev to report —
-  checkable from page state alone, e.g. `urlIncludes:/confirmation`. Jev's own
-  "goal met?" judgment is advisory; the assertion is what decides success. If
-  you cannot state a concrete, checkable assertion, the goal is too vague —
-  narrow it first.
+- Describe the end state in plain language, not clicks ("place an order for one widget and reach
+  the confirmation page", not "click .add-to-cart").
+- Write `--success` so page or network state alone can check it, independent of what Jev
+  reports: `urlIncludes:/confirmation`, `textIncludes:testId=status|Saved`,
+  `requestMade:PUT /api/profile`, `responseStatus:POST /api/orders=2xx`. It's repeatable, and every
+  check must hold. If you can't state a checkable assertion, the goal is too vague, so narrow it.
+- A check that already held before the first action is vacuous. The run fails as `inconclusive`
+  (`vacuous-check`) instead of passing.
 
 ## Running it
 
-- Goal: `jevitate explore --url <authorized-url> --goal "<goal>" --success
-  urlIncludes:/inbox [--allow <origin>] [--secret <value>] [--max-actions <n>]
-  [--max-decisions <n>] --real --json`. Model-driving strategies (`goal`,
-  `coverage`, `exploratory`, `adversarial`) need a gateway: `--real` (live
-  Jev + OpenRouter, after `jevitate ai setup`) or `--fake-ai` (a deterministic
-  pipeline smoke — it will NOT drive to a real goal). No selection fails closed.
-- Adversarial: `jevitate explore --strategy adversarial --url <authorized-url>
-  --real --json`.
-- Coverage: `jevitate explore --strategy coverage --url <authorized-url> --real
-  --json`.
-- Feature: `jevitate explore --feature checkout --route "/cart/**" --url
-  <authorized-url> --json` (model-free).
-- Authoring a promotable Journey: `jevitate explore-author-journey --url
-  <authorized-url> --goal "<goal>" --success <assertion> --id <journey-id>
-  --name "<name>" [--storage-state <file>] --real --json` — drives the
-  goal-based mission and writes an UNPROMOTED, parameterized Journey to the
-  store. It is never auto-promoted (`jevitate journey promote <id>` promotes
-  it once a human is ready). The `--success` assertion is baked in as the
-  authored Journey's FINAL step (an `assert`), so a replay of it proves the
-  outcome it was authored to reach — not just that navigation got there.
-  `--storage-state` authors against an already-logged-in session for a target
-  behind a login; replaying that Journey later needs the SAME flag on `journey
-  run`/`load run`/`source run` (see `jevitate-run-journey`).
-- MCP: the `queue_exploration` tool — `queue_exploration({ target, goal, ... })`
-  — enqueues a bounded mission and returns a `missionId` immediately (it does
-  not run inline). `target` must be a pre-registered mission target id, not a
-  raw URL.
+- Goal: `jevitate explore --url <authorized-url> --goal "<goal>" --success "urlIncludes:/done"
+  [--allow <origin>] [--max-actions <n>] [--max-decisions <n>] --real --json`.
+- Adversarial: `jevitate explore --strategy adversarial --url <authorized-url> --fake-ai --json`.
+- Coverage: `jevitate explore --strategy coverage --url <authorized-url> --real --json`.
+- Feature: `jevitate explore --feature checkout --route "/cart/**" --url <authorized-url> --json`.
+- Behind a login: `--storage-state <file>` (a Playwright storageState path; `--save-storage-state
+  <file>` writes the rotated one back). Pass real secrets with `--secret env:VAR` or
+  `--secret-field 'label=Password=env:APP_PASSWORD'` so they stay out of every model call. Never
+  put a secret value in the command line yourself.
+- App rules: `--invariants <file>` checks declared invariants around every action (e.g. "when the
+  page says Saved, the server has the value"). A violation is a code-decided defect.
+- Evidence: `--evidence-video` (a captioned clip and before/at screenshots per defect),
+  `--record-video`, and `--screenshots [screens|steps]`. See `jevitate-verify-fix`.
+- Viewport: `--viewport 375x812` or `--device "iPhone 13"`.
+- Keep the path as a Journey: `jevitate explore-author-journey --url <authorized-url> --goal
+  "<goal>" --success <check> --id <journey-id> --name "<name>" [--storage-state <file>] --real
+  --json` writes an UNPROMOTED Journey whose last step asserts `--success`. Promotion
+  (`jevitate journey promote <id>`) is the human's decision.
+
+## MCP
+
+- `run_exploration({ url, strategy?, goal?, success?, ... })` runs `explore` directly, with every
+  strategy including `usability`, and returns the typed result. Arguments are the flags in
+  camelCase.
+- For a PROMOTED mission target, queue instead: `queue_exploration({ target, strategy, goal?,
+  successAssertion?, feature?, route?, recordVideo?, evidenceVideo?, screenshots?, persona? })`
+  returns a `missionId` right away without running it. `run_queued_missions` (or
+  `jevitate mission run --once --real --json`) drains the queue, and `get_mission_result({ id })`
+  reports `queued`/`running` (`pending: true`, so poll again), the typed result, or `failed`.
+  Queueable strategies are `goal-based`, `coverage`, `exploratory`, `adversarial` and `feature`.
+  Registering and promoting targets is in `jevitate-mission-scope`.
 
 ## Reading the result
 
-- The output is a deterministic `Recording`. Report the actual `outcome`, not an
-  optimistic gloss — a `blocked` or `exhausted` (budget) outcome with a partial
-  Recording is a precise repro of how far Jev got, but it is not success. A
-  goal-based run is success only when `outcome` is `succeeded`; adversarial CI
-  gates on `outcome === "defect"`; a coverage run gates on discovered defects.
-- `runOutcome` (goal) / `outcome` (usability) is the run's own account:
-  `completed` only when the goal's success condition was observably met, else
-  `incomplete` with the reason (budget, stuck detector, a rejected `done`, hang,
-  crash). Quote the reason; never read an `incomplete` run as done.
-- Chat pages: messages are typed AND sent (`send`), each reply is awaited
-  (`--reply-wait-ms`, default 60000) and recorded in the transcript (`message`,
-  `reply`); generated messages are capped by `--reply-max-chars` (default 300).
-- A successful goal-based Recording is a candidate to hand to `jevitate-record`
-  for postdoc review, or to author directly via `explore-author-journey` —
-  say so when it succeeds.
+- Every result carries the canonical `missionOutcome` and its exit code: `clean` (0),
+  `defects-found` (1), `inconclusive`/`crashed` (2, proved nothing), `hang` (3), `intermittent` (4).
+  A goal run also carries `goalOutcome`: `succeeded`, `failed` (a check didn't hold), `exhausted`
+  (budget), or `blocked`. Report these values, with `reason`/`failure.message`, not an optimistic
+  gloss. A partial Recording from a `blocked` or `exhausted` run is a precise repro of how far Jev
+  got, not a success.
+- `inconclusive` with `failure.kind` `insufficient-coverage`, `vacuous-check`,
+  `target-unresponsive` or `job-incomplete` means the run proved nothing. Say so and suggest a
+  fix: a bigger budget, a session, or a better check.
+- Each defect has a `fingerprint`. To reproduce it, prove a fix, or keep it as a regression, go to
+  `jevitate-verify-fix`. Redacted issue drafts are written under `<run>.issues/`.
+- Chat pages: messages are typed and sent, and each reply is awaited (`--reply-wait-ms`, default
+  60000) and recorded.
 
 ## What you must never do
 
-- Never widen `--allow`/the target beyond what the human explicitly authorized.
-- Never treat Jev's in-loop "done" signal as the final word — only the
-  `--success` assertion result is, for goal-based runs.
-- Never ask the exploration engine to do anything on a production target — this
-  is authoring/test-plane only, always.
-- Never fall back to a generic browser-automation tool if `jevitate explore`
-  is unavailable — that bypasses every guardrail this skill enforces.
+- Never widen `--allow` or the target beyond what the human authorized, and never add
+  `--allow-destructive` or `--allow-writes` on your own.
+- Never treat Jev's in-loop "done" as the verdict. Only the checks and hard signals decide.
+- Never run exploration against production.
+- Never fall back to a generic browser-automation tool if jevitate is unavailable or refuses.
+  That bypasses every guardrail.
 
-## Running it through MCP (shipped)
+## Further reading (in the jevitate repo)
 
-- `jevitate mcp` starts the stdio MCP server; `queue_exploration` is one of its
-  allowlisted, wired tools. Register it in your harness with `jevitate mcp
-  --print-config <claude|cursor|codex|json>`, or let `jevitate init` register it
-  for each detected runtime.
-- `queue_exploration` needs a PROMOTED mission target, not a raw URL. Register
-  and promote one first with `jevitate mission target add <id> ...` then
-  `jevitate mission target promote <id>` (see `jevitate-mission-scope`). It
-  enqueues and returns a `missionId` immediately — it never runs inline.
-- Strategies: `goal-based` (`goal` + `successAssertion`), `coverage` and
-  `adversarial` (optional in-scope `route` glob), `feature` (`feature` name).
-  Usability reviews are CLI-only (`explore --strategy usability`).
-- `jevitate mission run --once --real --json` (a human runs it, or `--watch`
-  keeps it draining) runs every queued mission and writes its result.
-  `get_mission_result({ id: missionId })` then reports `queued`/`running`
-  (`pending: true` — poll again), the typed result, or `failed`. `verify_fix`
-  accepts the missionId once it is done.
-
-## Further reading (full schemas, in the jevitate repo)
-
-- Mission fixtures (`--fixtures`/`--before`/`--after`, goal-only): `docs/fixtures.md`.
-- App-declared invariants, budgets and multi-actor `capture`/`deniedAs`: `docs/invariants.md`.
-- `--repeat`/`--min-agreement`, `--persona`/`--personas`, `--actor`: `docs/multi-run.md`.
-- The safety model, including `--read-rpc`/`safety.readRequests`: `docs/safety.md`.
-- Build identity, usage/cost accounting, crashes and packaging: `docs/operations.md`.
-
-## Known gaps
-
-- `queue_exploration` enqueues but does not itself run the mission; nothing
-  runs until `jevitate mission run` drains the queue. Treat the returned
-  `missionId` as "accepted," not "finished."
+`docs/exploration.md` (strategies), `docs/fixtures.md` (`--fixtures`), `docs/invariants.md`,
+`docs/multi-run.md` (`--repeat`, `--persona`, `--actor`), `docs/safety.md`,
+`docs/backend-logs.md` (`--log-source`), `docs/outcomes.md` (every outcome value).

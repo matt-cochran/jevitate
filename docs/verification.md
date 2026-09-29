@@ -117,7 +117,7 @@ A single clean replay is not evidence of a fix (#74): an intermittent signal can
 once. `verify-fix` replays the defect's repro `--replays` times (default 3), each in a fresh
 session; only absence across EVERY replay that reached the defect's step is `fixed`.
 
-The MCP tool `verify_fix` (`{ id, fingerprint }`) does the same, always with the default replay count.
+The MCP tool `verify_fix` (`{ id, fingerprint }`, plus `replays`, `recordVideo`, `screenshots`, `storageState`, …) does the same.
 
 `verify-fix` also takes `--headed`, `--slow-mo <ms>`, `--record-video [dir]` (the result lists
 `videoPaths`) and `--screenshots [screens|steps|dir]`. With `--record-video` it writes before/after

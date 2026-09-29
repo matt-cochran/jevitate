@@ -28,7 +28,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
   const load = program.command("load").description("run a promoted Journey as a load test");
 
   withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>"))))
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
     // via a `fail` envelope rather than commander's `.requiredOption` — which

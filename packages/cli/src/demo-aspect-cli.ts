@@ -139,7 +139,7 @@ function replayOptionsFrom(
 
 function withReplayFlags(cmd: Command): Command {
   return withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(cmd))))
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--storage-state <file>", "Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist")
     .option("--out <dir>", "write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir)")
     .option("--pace <ms>", `how long each step's caption shows before it acts (default ${DEMO_DEFAULT_PACE_MS})`, intArg({ min: 0, max: DEMO_MAX_PACE_MS }))

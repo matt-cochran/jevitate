@@ -25,10 +25,25 @@ into every agent runtime it detects:
 `--targets claude-code,codex,cursor` forces targets, `--skip-skills` / `--skip-keys` / `--skip-mcp`
 skip a step, and a file you have edited is never overwritten without `--force`.
 
-The skills: `jevitate-explore` (run a bounded exploration mission), `jevitate-mission-scope`
-(read a diff and decide what to test), `jevitate-record`, `jevitate-run-journey`,
-`jevitate-sources`, `jevitate-load-test` and `jevitate-ux-review`. Their source is
-[`packages/skills/skills/`](../packages/skills/skills).
+The skills (each one's description tells the agent when to use it):
+
+| Skill | For |
+| --- | --- |
+| `jevitate-getting-started` | the entry point: checks setup, gets a first result, picks the skill, MCP vs CLI, exit codes, human-only approvals |
+| `jevitate-explore` | bounded exploration: goal, find-out, coverage, adversarial, feature; authoring a Journey from it |
+| `jevitate-mission-scope` | a diff or PR → what to test, which Journeys to run, which gaps to explore |
+| `jevitate-run-journey` | find and replay a promoted Journey (`--env`, video, screenshots, self-heal) |
+| `jevitate-record` | a flow the person clicks through, and post-processing the takes |
+| `jevitate-demo` | `demo "<aspect>"` / `demo approve`, `journey annotate`, `journey demo`, environments |
+| `jevitate-verify-fix` | `verify-fix`, evidence clips and screenshots, the ledger, `regression capture`/`run` |
+| `jevitate-ci-check` | `check --suite` (JUnit, SARIF, exit codes), baselines, `report`, `diff` |
+| `jevitate-ux-review`, `jevitate-load-test`, `jevitate-sources` | usability review, load tests, shared/third-party Journeys |
+
+Their source is [`packages/skills/skills/`](../packages/skills/skills). Every `jevitate` command and
+flag a skill shows is checked against the real CLI, and every tool it names against the MCP
+allowlist (`packages/cli/src/skills-cli-drift.test.ts`). After setup, `init` prints a short
+**next steps** list based on what it found (keys, MCP registration, `.jevitate/environments.json`).
+With `--json`, the list is in `data.nextSteps`.
 
 ## 2. The MCP server
 

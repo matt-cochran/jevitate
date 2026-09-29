@@ -86,7 +86,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
@@ -109,7 +109,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=the named environment to demo on (.jevitate/environments.json); required, and never one flagged production: true
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
@@ -230,7 +230,7 @@
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
     - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=natural-language goal
     - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=journey id (used for the <id>.json filename in the store)
-    - flags=--journeys-dir <dir> required=true mandatory=false negate=false variadic=false default=null description=journeys store directory (default: ~/.jevitate/journeys)
+    - flags=--journeys-dir <dir> required=true mandatory=false negate=false variadic=false default=null description=journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on executed actions
     - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on model decisions
@@ -360,7 +360,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=draft with the deterministic fake generator (pipeline smoke only)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
@@ -385,7 +385,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--guide <file> required=true mandatory=false negate=false variadic=false default=null description=write a Markdown guide here (.md), screenshots in <name>.assets/ beside it
@@ -405,13 +405,13 @@
   arguments:
     - name=query required=true variadic=false default=null
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey list
   description: 
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey promote
@@ -419,7 +419,7 @@
   arguments:
     - name=id required=true variadic=false default=null
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey publish
@@ -429,7 +429,7 @@
   options:
     - flags=--as <id> required=true mandatory=false negate=false variadic=false default=null description=publish under a different id than the local one
     - flags=--declare-origin <origin> required=true mandatory=false negate=false variadic=false default=[] description=origin this Journey is authorized for (repeatable; default: derived from navigate steps)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--to <source> required=true mandatory=true negate=false variadic=false default=null description=registered source name to publish into
 
@@ -446,7 +446,7 @@
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways for self-heal (pipeline smoke only)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
@@ -512,7 +512,7 @@
     - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
     - flags=--concurrency <n> required=true mandatory=false negate=false variadic=false default=1 description=pool size
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--iterations <n> required=true mandatory=false negate=false variadic=false default=1 description=iterations per actor
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -534,7 +534,7 @@
 # mcp
   description: start an MCP stdio server exposing only the allowlisted Jevitate tools
   options:
-    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--print-config <harness> required=true mandatory=false negate=false variadic=false default=null description=print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing
 
 # mission
