@@ -16,9 +16,8 @@ confirm a fix and commits it as a regression you can run in CI.
 **Nondeterministic discovery. Deterministic verification.** A model may suggest what to try next.
 It never decides whether your software passed.
 
-<!-- DEMO: replace this block with the recording once it exists (see docs/demo.md, "Recording the launch GIF or video"):
-<p align="center"><img src="docs/assets/demo.gif" alt="Jevitate finds an HTTP 500 behind a form that says Saved, reproduces it, commits a regression, and verifies the fix" width="800"></p>
--->
+<p align="center"><img src="docs/assets/demo.gif" alt="A real Jevitate run on the example app: a profile form says Saved while the server returns HTTP 500; Jevitate's evidence clip marks the failing Save, and after the fix verify-fix reports it fixed" width="800"></p>
+
 > **Demo:** a 2-minute, no-API-key walkthrough is in [docs/demo.md](./docs/demo.md). A form says
 > "Saved" while the server returns HTTP 500. Jevitate finds it, reproduces it 3/3, commits it as a
 > regression, and verifies the fix.

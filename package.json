@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "docs:cli": "pnpm --filter @jevitate/cli run build && node packages/cli/scripts/generate-cli-reference.mjs",
     "check:no-fallback": "node scripts/check-no-permissive-fallback.mjs",
+    "demo:render": "node scripts/render-demo.mjs",
     "release": "pnpm build && pnpm --filter @jevitate/cli run bundle && changeset publish",
     "version-packages": "changeset version"
   },

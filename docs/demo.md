@@ -167,6 +167,18 @@ Things worth pointing out in the output:
 
 ## Recording the launch GIF or video
 
+The README GIF and the website video (`docs/assets/demo.gif`, `demo.mp4`, `demo.webm`,
+`demo-poster.png`) are rendered by `pnpm demo:render` (`scripts/render-demo.mjs`, about 5 minutes).
+It starts the example app on a free port, runs `journey demo` (the user saves "Zoë 😀" and sees
+"Saved"), the adversarial `explore --evidence-video`, `verify-fix`, `regression capture`/`run`, then
+restarts the app with the fix for `verify-fix --record-video` and the passing regression. It cuts the
+real clips together with an intro, one interstitial and an end card whose lines come from the
+commands' verdicts, and stops if any verdict differs. It needs a built CLI and `ffmpeg` on `PATH`
+(with libx264 and libvpx-vp9); without ffmpeg it refuses and renders nothing. `--keep` keeps the
+recording and `--compose-only <dir>` re-cuts it without re-running.
+
+For a hand-made terminal recording instead:
+
 Target: 20 to 30 seconds, a 1280×720 or larger terminal, a large font (18 pt or more), and a dark
 theme with high contrast. Don't show your home directory, other projects or any keys.
 
