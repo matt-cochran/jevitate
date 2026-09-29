@@ -137,6 +137,10 @@ jevitate journey annotate checkout --approve                    # the human gate
 4. The drafts go to a sidecar, `.jevitate/journeys/.drafts/<id>.annotations.json`, and never into
    the Journey. The command prints the diff that approving would apply.
 
+`jevitate init` adds `journeys/.drafts/` to `.jevitate/.gitignore` (re-running `init` on an
+existing project adds the line once), so an unapproved draft is never committed by accident: the
+text reaches the repo only as part of the Journey, after `--approve`.
+
 The draft is plain JSON: edit any text, or delete an entry, before approving. `--approve` validates
 the draft and shows the diff. It then writes only the four intent fields (`goal`,
 `successCriteria`, and each step's `objective` and `expectedResult`) and removes the draft. It
