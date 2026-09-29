@@ -68,6 +68,66 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
 
+## Environments (`--env`)
+
+A Journey is environment-free: recorded and authored Journeys keep app-relative paths (`/login`),
+and the `site` they were recorded on is only their default environment. Name the places your app
+runs in the committed `.jevitate/environments.json` (`jevitate init` writes an example once and
+never overwrites it):
+
+```json
+{
+  "local":   { "baseUrl": "http://localhost:3000" },
+  "staging": {
+    "baseUrl": "https://staging.example.com",
+    "allow": ["https://auth.example.com"],
+    "fixtures": "fixtures/staging.json",
+    "hooks": { "before": "./scripts/seed-staging.sh" }
+  }
+}
+```
+
+```bash
+jevitate journey run checkout --env staging
+jevitate journey run checkout --base-url https://pr-123.preview.example.com   # an ad-hoc environment
+jevitate regression run cart-total --env local
+jevitate load run checkout --env staging --authorized-origin https://staging.example.com
+```
+
+- `baseUrl` is an origin (no path, no credentials). The Journey's recorded same-origin URLs move
+  onto it, with their path, query and fragment; app-relative paths resolve against it.
+- The run's allowlist is the environment: `baseUrl` plus `allow`. A Journey step on any other
+  origin is refused (exit 64) before any browser opens: add the origin to `allow` if it belongs.
+- `fixtures` (relative to the file) and `hooks` (`before`/`after`) apply when `--fixtures`,
+  `--before` and `--after` are not given. Hooks still need `--allow-shell-hooks`.
+- `--base-url` alone is an ad-hoc environment; with `--env`, it replaces that environment's
+  `baseUrl` and keeps the rest.
+- An unknown `--env` is exit 64 and lists the known ones. Without `--env` or `--base-url`, a
+  Journey runs on its recorded site, exactly as before.
+- Check suites take the same choice per Journey item: `{ "id": "checkout", "env": "staging" }`
+  ([ci](./ci.md)).
+
+The file is committed with your code, so it **never** holds a secret or a session: a
+`storageState`, `secret`, `password`, `token`, `cookie`, `credential` or `apiKey` key anywhere in it
+is refused. Sessions and secrets for an environment stay in `~/.jevitate/targets.json`, keyed by
+the environment's origin, the same per-origin file queued missions use:
+
+```json
+{
+  "https://staging.example.com": {
+    "storageState": "sessions/staging.json",
+    "secretFields": ["label=Password=env:STAGING_PASSWORD"],
+    "personas": { "admin": { "storageState": "sessions/staging-admin.json" } }
+  }
+}
+```
+
+`journey run`, `regression run` and `load run` start from the environment's `storageState` when
+`--storage-state` is not given (paths are relative to `targets.json`). `personas` holds one session
+per persona for commands that run as a named persona. Secret fields are read from the environment
+variable at run time and never written anywhere. A Journey's own vault `secretRefs` stay bound to
+the origin they were recorded on: a secret for one environment is never typed into another.
+
 ## Site policies
 
 A site policy keeps Journey runs on a site polite and bounded, whoever starts them (you, CI, or an

@@ -121,6 +121,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     emulation: MCP_JOURNEY,
     fixtures: MCP_JOURNEY,
     selfHealer: "MCP runs are fail-closed: a broken step quarantines, never heals",
+    environment: MCP_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,

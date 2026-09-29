@@ -14,6 +14,7 @@ import { withEngine } from "./engine.js";
 import { publishJourneyToSource, realGhPort, NotPromotedError, NoDeclaredOriginsError } from "./source-api.js";
 import { UnknownSourceError, EmbeddedSecretError, UndeclaredOriginError } from "@jevitate/sources";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveDbPath,
@@ -27,6 +28,7 @@ import {
   emulationFromFlags,
   collectParam,
   emitJson,
+  environmentSeams,
   writeRawResult,
   GatewaySelectionError,
   buildExploreGateways,
@@ -108,7 +110,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       }
     });
 
-  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>"))))
+  withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))))
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -126,8 +128,24 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const fixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState, selfHeal, real, fakeAi, json, ...emulationFlags } = this.opts<{
+      const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
+      // #247: --env/--base-url choose where the Journey runs (unknown env / bad file → 64, nothing opened).
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const ownFixtureFlags = this.opts<FixtureFlags>();
+      // The environment's fixtures/hooks apply when the flags name none (hooks still need --allow-shell-hooks).
+      const fixtureFlags: FixtureFlags = {
+        ...ownFixtureFlags,
+        ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
+        ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
+      };
+      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -136,6 +154,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         fakeAi?: boolean;
         json?: boolean;
       } & EmulationFlags>();
+      // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
+      const storageState = storageStateFlag ?? environment?.storageState;
 
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", `storage state not found: ${storageState}`));
@@ -196,12 +216,15 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...browserOption(this.opts<BrowserLaunchFlags>()),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
-          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).
+          ...(environment === undefined ? {} : { environment }),
+          // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
+          // #247: under an environment, its allowed origins.
           fixtures: (site) => {
             const fx = buildMissionFixtures(fixtureFlags, {
-              allowlist: [site],
+              allowlist: environment === undefined ? [site] : environment.allowedOrigins,
               baseUrl: site,
               ...(storageState !== undefined ? { storageState } : {}),
+              ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
             });
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
@@ -218,7 +241,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
-        if (err instanceof SiteGateRefusedError) {
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

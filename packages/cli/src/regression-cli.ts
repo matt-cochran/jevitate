@@ -12,6 +12,7 @@ import { withEngine } from "./engine.js";
 import { positiveIntArg } from "./cli-args.js";
 import { formatRegressionCaptureHuman, formatRegressionRunHuman } from "./cli-output.js";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveRegressionsDir,
@@ -23,6 +24,7 @@ import {
   withEmulationFlags,
   emulationFromFlags,
   emitJson,
+  environmentSeams,
   refuseUnsafeName,
   writeHumanResult,
 } from "./cli-shared.js";
@@ -160,16 +162,27 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   // `regression capture` wrote — a step-oracle, network-check, or declared-invariant one) and
   // reports "reproduces" or "fixed". The one CLI/MCP surface `loadRegressions`/`replayRegression`
   // (`@jevitate/regression`) previously had none of.
-  withBrowserLaunchFlags(withEmulationFlags(regression.command("run")))
+  withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(regression.command("run"))))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)", positiveIntArg)
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const { dir, attempts, storageState, json, ...emulationFlags } = this.opts<
-        { dir?: string; attempts?: string; storageState?: string; json?: boolean } & EmulationFlags
+      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
+        { dir?: string; attempts?: string; storageState?: string; json?: boolean } & EmulationFlags & EnvironmentFlags
       >();
+      // #247: --env/--base-url choose where the regression replays (unknown env / bad file → 64).
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
+      const storageState = storageStateFlag ?? environment?.storageState;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_REGRESSION_ARGS", `storage state not found: ${storageState}`));
         return;
@@ -204,8 +217,16 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           id,
           regressionsDir,
           ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
+          ...(environment === undefined ? {} : { environment }),
           makeActor: async () => {
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
+            const { actor, close } = await makeRealBrowserActor(
+              environment?.baseUrl ?? recording.site,
+              storageState,
+              runEmulation,
+              browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()),
+              deps.explore?.browserPortFactory,
+              environment?.allowedOrigins,
+            );
             opened.push(close);
             return actor;
           },
@@ -220,7 +241,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         }
         process.exitCode = report.verdict === "reproduces" ? 1 : report.verdict === "fixed" ? 0 : 2;
       } catch (err) {
-        if (err instanceof RegressionNotFoundError) {
+        if (err instanceof RegressionNotFoundError || isEnvironmentError(err)) {
           emitJson(program, fail(err.code, err.message));
         } else {
           emitJson(program, fail("E_REGRESSION_RUN", String(err instanceof Error ? err.message : err)));
