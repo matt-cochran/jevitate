@@ -302,7 +302,7 @@ export interface DemoFlagSet {
  */
 export function withDemoFlags(cmd: Command, set: DemoFlagSet = {}): Command {
   cmd
-    .option("--headed", "show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video")
+    .option("--headed", `show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display${set.recordVideo === true ? " — else use --record-video" : ""}`)
     .option("--slow-mo <ms>", `slow every browser operation by this many ms (default ${HEADED_DEFAULT_SLOW_MO_MS} with --headed, else 0)`, nonNegativeIntArg);
   if (set.recordVideo === true) {
     cmd.option("--record-video [dir]", "record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths");

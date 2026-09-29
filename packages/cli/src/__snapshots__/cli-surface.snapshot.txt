@@ -251,7 +251,7 @@
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--guide <file> required=true mandatory=false negate=false variadic=false default=null description=write a Markdown guide here (.md), screenshots in <name>.assets/ beside it
-    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
@@ -546,7 +546,7 @@
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
     - flags=--force required=false mandatory=false negate=false variadic=false default=false description=overwrite an existing regression id's committed files (default: refused, #213)
     - flags=--from <file> required=true mandatory=true negate=false variadic=false default=null description=path to the schema-valid failing Recording JSON to capture
-    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
     - flags=--id <id> required=true mandatory=true negate=false variadic=false default=null description=regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
@@ -569,7 +569,7 @@
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=regressions directory (default: ~/.jevitate/regressions)
     - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
-    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
     - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to open the replay session authenticated (#129); must exist

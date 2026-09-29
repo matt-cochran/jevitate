@@ -453,7 +453,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--guide <file>` | write a Markdown guide here (.md), screenshots in <name>.assets/ beside it |  |  |  |  |
-| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
@@ -1042,7 +1042,7 @@ jevitate regression capture [options]
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--force` | overwrite an existing regression id's committed files (default: refused, #213) | `false` |  |  |  |
 | `--from <file>` | path to the schema-valid failing Recording JSON to capture |  |  | yes |  |
-| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | regression id (used for the committed <id>.recording.json/<id>.meta.json filenames) |  |  | yes |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1076,7 +1076,7 @@ jevitate regression run [options] <id>
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | regressions directory (default: ~/.jevitate/regressions) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
-| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
