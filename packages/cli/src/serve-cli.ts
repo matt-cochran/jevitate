@@ -30,7 +30,7 @@ export function registerServeCommands(program: Command, deps: CliDeps, buildProg
   program
     .command("mcp")
     .description("start an MCP stdio server exposing only the allowlisted Jevitate tools")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
       "--print-config <harness>",
       "print the config snippet to register `jevitate mcp` in a harness (claude | cursor | codex | json) and exit — prints only, writes nothing",

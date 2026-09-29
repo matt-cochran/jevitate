@@ -52,7 +52,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
       "draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; " +
         "writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)",
     )
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--storage-state <file>", "Playwright storageState JSON to start the replay authenticated; must exist")
     .option("--real", "draft with the live OpenRouter generation gateway (requires keys)", false)

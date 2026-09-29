@@ -219,7 +219,7 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
@@ -255,7 +255,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | the named environment to demo on (.jevitate/environments.json); required, and never one flagged production: true |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
@@ -407,7 +407,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--goal <text>` | natural-language goal |  |  |  |  |
 | `--id <id>` | journey id (used for the <id>.json filename in the store) |  |  |  |  |
-| `--journeys-dir <dir>` | journeys store directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--journeys-dir <dir>` | journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-actions <n>` | hard cap on executed actions |  |  |  |  |
 | `--max-decisions <n>` | hard cap on model decisions |  |  |  |  |
@@ -675,7 +675,7 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
@@ -713,7 +713,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--guide <file>` | write a Markdown guide here (.md), screenshots in <name>.assets/ beside it |  |  |  |  |
@@ -744,7 +744,7 @@ jevitate journey find [options] <query>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
 ### journey list
@@ -757,7 +757,7 @@ jevitate journey list [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
 ### journey promote
@@ -778,7 +778,7 @@ promote a local Journey (human-approval gate) so it becomes discoverable/runnabl
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 
 ### journey publish
@@ -799,7 +799,7 @@ jevitate journey publish [options] <id>
 | --- | --- | --- | --- | --- | --- |
 | `--as <id>` | publish under a different id than the local one |  |  |  |  |
 | `--declare-origin <origin>` | origin this Journey is authorized for (repeatable; default: derived from navigate steps) | `[]` |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--to <source>` | registered source name to publish into |  |  | yes |  |
 
@@ -827,7 +827,7 @@ jevitate journey run [options] <id>
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways for self-heal (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
@@ -949,7 +949,7 @@ jevitate load run [options] <journeyId>
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--concurrency <n>` | pool size | `1` |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--iterations <n>` | iterations per actor | `1` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -994,7 +994,7 @@ start an MCP stdio server exposing only the allowlisted Jevitate tools
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--print-config <harness>` | print the config snippet to register `jevitate mcp` in a harness (claude \| cursor \| codex \| json) and exit — prints only, writes nothing |  |  |  |  |
 
 ## mission

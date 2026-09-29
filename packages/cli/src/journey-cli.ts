@@ -56,7 +56,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
    */
   journey
     .command("list")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -89,7 +89,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   // forbidden dependency.
   journey
     .command("find <query>")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, query: string) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -119,7 +119,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     });
 
   withScreenshotsFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true })))
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
       "--storage-state <file>",
@@ -304,7 +304,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   journey
     .command("promote <id>")
     .description("promote a local Journey (human-approval gate) so it becomes discoverable/runnable")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
@@ -339,7 +339,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   journey
     .command("publish <id>")
     .requiredOption("--to <source>", "registered source name to publish into")
-    .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--declare-origin <origin>", "origin this Journey is authorized for (repeatable; default: derived from navigate steps)", (v: string, prev: string[]) => [...prev, v], [] as string[])
     .option("--as <id>", "publish under a different id than the local one")
     .option("--json", "emit a JSON envelope")

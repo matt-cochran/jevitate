@@ -39,7 +39,7 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist",
     )
-    .option("--journeys-dir <dir>", "journeys store directory (default: ~/.jevitate/journeys)")
+    .option("--journeys-dir <dir>", "journeys store directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
       "--allow <origin>",
       "authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it",
