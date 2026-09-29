@@ -8,6 +8,8 @@ import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
 import { withSiteGate } from "./site-gate-cli.js";
+import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
+import { journeyIntentCoverage } from "./journey-annotate-api.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
 import { withEngine } from "./engine.js";
@@ -207,14 +209,21 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
             return fx;
           },
         })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
-        const envelope = ok(result);
+        // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
+        const intent = await journeyIntentCoverage(resolveJourneysDir(deps, dir), id);
+        if (intent !== undefined && intent.withoutObjective > 0 && !json) {
+          program.configureOutput().writeErr?.(
+            `note: ${intent.withoutObjective} of ${intent.steps} step(s) have no objective — draft them with \`jevitate journey annotate ${id}\`\n`,
+          );
+        }
+        const envelope = ok(intent === undefined ? result : { ...result, intent });
         if (json) {
           emitJson(program, envelope);
           // "ok" and "healed" (a recovered run) are both successes; only
           // "quarantined" is a non-zero exit.
           if (result.outcome === "quarantined") process.exitCode = 1;
         } else {
-          writeRawResult(program, result);
+          writeRawResult(program, envelope.data);
           process.exitCode = result.outcome === "quarantined" ? 1 : 0;
         }
       } catch (err) {
@@ -270,6 +279,9 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         }
       }
     });
+
+  // #246 — draft a Journey's intent on playback; `--approve` is the human gate that writes it.
+  registerJourneyAnnotateCommand(journey, program, deps);
 
   // #19 — publish a promoted local Journey to a registered distributed source.
   // Preserves every publish-side guard in `@jevitate/sources` (promoted-only,

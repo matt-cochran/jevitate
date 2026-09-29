@@ -82,6 +82,21 @@ artifact; your job is to find the right one and run it with the right params.
   a Recording becomes a Journey first (through an authoring path, or the
   `JourneyRegistry` API), then `journey promote <id>` promotes it.
 
+## Annotating a Journey's intent (#246)
+
+- `jevitate journey annotate <id> [--param k=v] [--storage-state f] --real|--fake-ai --json`
+  replays the Journey and DRAFTS each step's `objective` / `expectedResult` (and
+  the Journey's `goal` / `successCriteria` when missing) into
+  `.jevitate/journeys/.drafts/<id>.annotations.json`. It never writes the
+  Journey. Exit 2 means the replay stopped early and only reached steps were
+  drafted.
+- `jevitate journey annotate <id> --approve` is a human gate, like promote:
+  show the user the draft (or its diff) and let THEM approve. Never approve on
+  your own. It refuses a stale draft (`E_JOURNEY_ANNOTATIONS_STALE`, exit 64)
+  when the Journey changed since the draft; re-draft instead.
+- `journey run` reports `intent.withoutObjective`. It is informational and
+  never a failure.
+
 ## Publishing to a distributed source
 
 - `jevitate journey publish <id> --to <source>` pushes a PROMOTED local Journey

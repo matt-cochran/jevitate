@@ -1,4 +1,5 @@
-import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, deriveParamSchema, secretParamValues, validateParams, type Journey } from "@jevitate/journey";
+import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -64,6 +65,29 @@ export interface RunJourneyProgrammaticallyOptions {
   siteGate?: SiteGateDeps;
   /** The site-policy account (default `primary`, as `jevitate site policy` uses). */
   account?: string;
+  /**
+   * #246 seam: the interpreter the run replays with — `journey annotate` passes one carrying a
+   * `StepObserver` (before/after page evidence). Default: a plain `RecordingInterpreter`.
+   */
+  interpreter?: RecordingInterpreter;
+}
+
+/**
+ * #246: a secret parameter's value (declared `secret: true`, or a credential-like name) never comes
+ * back in a run's output — the interpreter's vars start as the params, so the value is masked there.
+ */
+function redactSecretParams<T>(result: T, journey: Journey, params: Record<string, string>): T {
+  const secrets = secretParamValues(journey, params);
+  if (secrets.length === 0) return result;
+  const scrub = (v: unknown): unknown =>
+    typeof v === "string"
+      ? redactText(v, secrets)
+      : Array.isArray(v)
+        ? v.map(scrub)
+        : v !== null && typeof v === "object"
+          ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)]))
+          : v;
+  return scrub(result) as T;
 }
 
 /**
@@ -148,10 +172,10 @@ export async function runJourneyProgrammatically(
         new BrowseTheWeb(session, [journey.recording.site]),
         ...gate.abilities,
       );
-      const runner = new JourneyRunner(actor, new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
+      const runner = new JourneyRunner(actor, opts.interpreter ?? new RecordingInterpreter(), undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
-        result = await runner.run({ journey, params, policy });
+        result = redactSecretParams(await runner.run({ journey, params, policy }), journey, params);
       } finally {
         await gate.done();
       }

@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (126 exports)
+# @jevitate/ai-core (132 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -55,6 +55,12 @@
   JevPricing: interface
   JevResponseError: class
   jittered: function
+  JOURNEY_GOAL_INSTRUCTIONS: variable
+  JOURNEY_STEP_INSTRUCTIONS: variable
+  JourneyGoalInput: variable
+  JourneyGoalOutput: variable
+  JourneyStepInput: variable
+  JourneyStepOutput: variable
   JudgmentPort: interface
   JudgmentState: interface
   MAX_CHOICE_OPTIONS: variable
@@ -790,7 +796,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (46 exports)
+# @jevitate/interpreter (47 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -830,6 +836,7 @@
   runStep: other
   SizeBounds: other
   sizeViolation: other
+  StepObserver: other
   StepOutcome: other
   styleChannel: other
   stylesOf: other
@@ -838,16 +845,35 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (11 exports)
+# @jevitate/journey (30 exports)
+  AnnotationChange: interface
+  AnnotationDraft: type-alias
+  AnnotationDraftMismatchError: class
+  AnnotationDraftSchema: variable
+  AnnotationDraftStep: type-alias
+  AnnotationDraftStepSchema: variable
+  applyAnnotationDraft: function
   deriveParamSchema: function
+  describeStep: function
+  FlatJourneyStep: interface
+  flatJourneySteps: function
+  formatAnnotationChanges: function
   FsJourneyStore: class
+  intentCoverage: function
+  IntentCoverage: interface
   Journey: interface
   JourneyMetadata: interface
+  JourneyParameter: interface
+  JourneyPrecondition: interface
   JourneyRegistry: class
   JourneySchema: variable
   JourneyStore: interface
+  JourneySuccessCriterion: interface
   ParamSchema: interface
   ParamValidationError: class
+  SECRET_PARAM_NAME_RE: variable
+  secretParamNames: function
+  secretParamValues: function
   SecretRef: interface
   validateParams: function
 

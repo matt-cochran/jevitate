@@ -530,6 +530,38 @@ export async function buildExploreGateways(
 }
 
 /**
+ * #246: the generation gateway ALONE (`journey annotate` drafts text and asks no judgment
+ * question, so it needs no Jev key). Same selection rules as `buildExploreGateways`: injected (tests)
+ * wins, `--real` is fail-closed on the OpenRouter key, `--fake-ai` is the deterministic fake, the two
+ * are exclusive, and no selection is a refusal — never a silent fake.
+ */
+export async function buildGenerationGateway(
+  deps: CliDeps,
+  opts: { real: boolean; fakeAi: boolean },
+): Promise<{ gen: GenerationPort; usage: UsageTracker }> {
+  if (opts.real && opts.fakeAi) {
+    throw new GatewaySelectionError("--real and --fake-ai are mutually exclusive — pass one, not both");
+  }
+  const usage = deps.explore?.usage ?? new UsageTracker(resolveUsagePricing(deps.explore?.env ?? process.env));
+  if (deps.explore?.gen) return { gen: deps.explore.gen, usage };
+  if (opts.real) {
+    const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
+    requireKeys("generation", store); // fail-closed
+    const gen = new OpenRouterGenerationGateway({
+      store,
+      catalog: DEFAULT_EXPLORE_CATALOG,
+      constraints: DEFAULT_EXPLORE_CONSTRAINTS,
+      call: await realOpenRouterCall(usage),
+    });
+    return { gen: new RetryingGenerationPort(gen), usage };
+  }
+  if (opts.fakeAi) return { gen: new FakeGenerationGateway(undefined, usage), usage };
+  throw new GatewaySelectionError(
+    "no gateway selected — pass --real for live OpenRouter generation (after `jevitate ai setup generation`), or --fake-ai for a deterministic pipeline smoke",
+  );
+}
+
+/**
  * A judge that always proposes `done` — used only by `--fake-ai` (smoke). It is TOTAL and
  * deterministic: it answers EVERY question it is asked, whatever the mission or rubric names it
  * (#213) — a choice offering `done` picks `done` (so the goal/coverage loop stops at once, and
