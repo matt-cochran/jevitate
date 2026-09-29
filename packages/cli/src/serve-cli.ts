@@ -2,18 +2,15 @@ import { Command } from "commander";
 import { envCredentialStore, OpenRouterGenerationGateway } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
 import { fail } from "./envelope.js";
-import { logsRoot, resultDirsFor } from "./project-dir.js";
 import { startMcpServer } from "./mcp-api.js";
 import { realOpenRouterCall } from "./openrouter-call.js";
 import { startUiServer } from "./ui-api.js";
 import { intArg } from "./cli-args.js";
 import { renderPrintConfig, type McpHarness } from "./init-mcp.js";
-import { resolveDataDir } from "./data-dir.js";
+import { mcpToolDeps } from "./mcp-cli-bridge.js";
 import {
   type CliDeps,
-  resolveDbPath,
   resolveJourneysDir,
-  resolveMissionTargetsDir,
   resolveInboxDir,
   emitJson,
   DEFAULT_EXPLORE_CATALOG,
@@ -73,17 +70,8 @@ export function registerServeCommands(program: Command, deps: CliDeps): void {
             constraints: deps.ai?.constraints ?? DEFAULT_EXPLORE_CONSTRAINTS,
             call: await realOpenRouterCall(),
           });
-        await startMcpServer({
-          journeysDir: resolveJourneysDir(deps, dir),
-          sitePolicyDbPath: resolveDbPath(deps),
-          missionTargetsDir: resolveMissionTargetsDir(deps),
-          missionQueueDir: resolveDataDir(["missions", "queue"]),
-          recordingsDir: logsRoot(),
-          resultDirsFor: (resultId: string) => resultDirsFor(resultId),
-          inboxDir: resolveInboxDir(deps),
-          credentialStore: aiStore,
-          generationGateway,
-        });
+        // #254: the same default stores the CLI's `inbox`/`mission queue`/`mission result` read (mcpToolDeps).
+        await startMcpServer(mcpToolDeps(deps, { journeysDir: resolveJourneysDir(deps, dir), credentialStore: aiStore, generationGateway }));
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
       }

@@ -37,6 +37,7 @@ import { registerMissionCommands } from "./mission-cli.js";
 import { registerServeCommands } from "./serve-cli.js";
 import { registerUxCommands } from "./ux-cli.js";
 import { registerLogsCommands } from "./logs-cli.js";
+import { registerInboxCommands } from "./inbox-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
@@ -87,6 +88,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerRegressionCommands(program, deps);
   registerMissionCommands(program, deps);
   registerServeCommands(program, deps);
+  registerInboxCommands(program, deps); // #254: MCP inbox tools from the CLI
   registerUxCommands(program, deps);
   registerAiCommands(program, deps);
 

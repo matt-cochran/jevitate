@@ -217,6 +217,21 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "mission target list": { exempt: "a listing" },
   "mission target promote": { cases: [["nope"]] },
   "mission run": { base: ["--once", "--fake-ai"], cases: [["--once", "--watch"]] },
+  // #254: MCP queue_exploration / get_mission_result — the facade's refusals, as 64.
+  "mission queue": {
+    base: ["nope", "--strategy", "coverage", "--dir", join(dir, "queue")],
+    cases: [["nope", "--strategy", "coverage", "--dir", join(dir, "queue")], ["nope", "--dir", join(dir, "queue")], ["nope", "--strategy", "bogus"], ["nope", "--strategy", "coverage", "--invariants", missing]],
+  },
+  "mission result": { cases: [["nope"], ["../x"], ["explore-2026-01-01T00-00-00-000Z", "--results-dir", join(dir, "results")]] },
+  // #254: MCP inbox tools — unknown/unsafe ids, missing fields; approve/cancel are always refused (human-only).
+  "inbox list": { exempt: "a listing" },
+  "inbox health": { exempt: "a status report" },
+  "inbox show": { cases: [["nope"], ["../x"]] },
+  "inbox command": { cases: [["nope"], ["../x"]] },
+  "inbox queue-retrieval": { cases: [[], ["--run", "r", "--journey", "j", "--step", "s", "--reason", "x", "--agent", "a", "--findings", missing]] },
+  "inbox queue-action": { cases: [[], ["--run", "r", "--journey", "j", "--step", "s", "--reason", "x", "--agent", "a", "--kind", "bogus"]] },
+  "inbox approve": { cases: [["x"]] },
+  "inbox cancel": { cases: [["x"]] },
   mcp: { cases: [["--print-config", "bogus"]] },
   ui: { exempt: "no file or id input (its --port is covered by the numeric sweep)" },
   ux: {
@@ -350,9 +365,10 @@ describe("#227: a listing command's SUCCESS output without --json is human text,
     { path: "source list", argv: ["source", "list"] },
     { path: "ledger list", argv: ["ledger", "list", "--dir", join(dir, "ledger-empty")] },
     { path: "mission target list", argv: ["mission", "target", "list", "--dir", join(dir, "targets-empty")] },
+    { path: "inbox list", argv: ["inbox", "list", "--inbox-dir", join(dir, "inbox-empty")] },
   ];
 
-  for (const path of ["journey list", "source list", "ledger list", "mission target list"]) {
+  for (const path of ["journey list", "source list", "ledger list", "mission target list", "inbox list"]) {
     it(`${path}: success without --json is human text, never raw JSON`, async () => {
       const argv = LISTINGS().find((l) => l.path === path)!.argv;
       const r = await run(argv);

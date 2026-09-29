@@ -20,6 +20,7 @@ import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { positiveIntArg } from "./cli-args.js";
 import { resolveDataDir } from "./data-dir.js";
+import { registerMissionQueueCommands } from "./mission-queue-cli.js";
 import {
   type CliDeps,
   resolveMissionTargetsDir,
@@ -31,7 +32,7 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate mission`: `target add|update|list|promote` and `run` (drains the mission queue). */
+/** Registers `jevitate mission`: `target add|update|list|promote`, `run` (drains the mission queue), `queue` and `result` (#254). */
 export function registerMissionCommands(program: Command, deps: CliDeps): void {
   // Additive: `mission target` — register/list/promote exploration mission
   // targets (Ticket #21). Wires the real fs-backed `@jevitate/missions`
@@ -287,4 +288,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_MISSION_RUN", String(err instanceof Error ? err.message : err)));
       }
     });
+
+  // #254: `mission queue` / `mission result` — MCP queue_exploration / get_mission_result from the CLI.
+  registerMissionQueueCommands(program, mission, deps);
 }

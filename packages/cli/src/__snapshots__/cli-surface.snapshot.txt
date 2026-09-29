@@ -239,6 +239,82 @@
     - flags=--takes <n> required=true mandatory=false negate=false variadic=false default=1 description=corroborating takes incl. discovery (default 1)
     - flags=--url <url> required=true mandatory=false negate=false variadic=false default=null description=target URL (must be an authorized origin)
 
+# inbox
+  description: the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
+
+# inbox approve
+  description: always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox cancel
+  description: always refused (MCP cancel_command): only a human can cancel an inbox item, in `jevitate ui`
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox command
+  description: poll one inbox item as the agent does (MCP get_command): burn-after-read — consumes any human-provided input once; its value is never printed
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox health
+  description: inbox store health: pending count, oldest pending age, build (MCP get_site_health)
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox list
+  description: list pending inbox items (MCP list_incoming)
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
+# inbox queue-action
+  description: ask a human for a decision — an 'approval' item by default; only queues (MCP queue_action)
+  options:
+    - flags=--agent <name> required=true mandatory=false negate=false variadic=false default=null description=who is asking (required)
+    - flags=--findings <file> required=true mandatory=false negate=false variadic=false default=null description=a JSON file holding an array of {id, title, severity: low|med|high, evidence?}
+    - flags=--has-screenshot required=false mandatory=false negate=false variadic=false default=null description=a screenshot accompanies the item
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--journey <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey (required)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--kind <kind> required=true mandatory=false negate=false variadic=false default=null choices=["approval","handback","review"] description=approval (default) | handback | review
+    - flags=--reason <text> required=true mandatory=false negate=false variadic=false default=null description=what the human is asked for (required)
+    - flags=--run <id> required=true mandatory=false negate=false variadic=false default=null description=the run this item belongs to (required)
+    - flags=--step <step> required=true mandatory=false negate=false variadic=false default=null description=the step it stopped at (required)
+    - flags=--target-url <url> required=true mandatory=false negate=false variadic=false default=null description=the page it concerns
+
+# inbox queue-retrieval
+  description: ask a human to provide something back to the agent — a 'handback' item; only queues (MCP queue_retrieval)
+  options:
+    - flags=--agent <name> required=true mandatory=false negate=false variadic=false default=null description=who is asking (required)
+    - flags=--findings <file> required=true mandatory=false negate=false variadic=false default=null description=a JSON file holding an array of {id, title, severity: low|med|high, evidence?}
+    - flags=--has-screenshot required=false mandatory=false negate=false variadic=false default=null description=a screenshot accompanies the item
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--journey <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey (required)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reason <text> required=true mandatory=false negate=false variadic=false default=null description=what the human is asked for (required)
+    - flags=--run <id> required=true mandatory=false negate=false variadic=false default=null description=the run this item belongs to (required)
+    - flags=--step <step> required=true mandatory=false negate=false variadic=false default=null description=the step it stopped at (required)
+    - flags=--target-url <url> required=true mandatory=false negate=false variadic=false default=null description=the page it concerns
+
+# inbox show
+  description: an inbox item's conversation thread — never its secret input (MCP get_thread)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+
 # init
   description: set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/
   options:
@@ -457,6 +533,35 @@
 
 # mission
   description: manage exploration mission targets and drain the mission queue
+
+# mission queue
+  description: enqueue an exploration mission against a PROMOTED target — only queues; `mission run` drains (MCP queue_exploration)
+  arguments:
+    - name=target required=true variadic=false default=null
+  options:
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use)
+    - flags=--feature <name> required=true mandatory=false negate=false variadic=false default=null description=feature: the capability to test (goal-based: the objective)
+    - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=goal-based: the objective (exactly one of --goal/--feature/--route)
+    - flags=--invariants <file> required=true mandatory=false negate=false variadic=false default=null description=app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max actions (bounded by the queue's ceiling)
+    - flags=--max-candidates <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max candidates
+    - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=budget: max decisions
+    - flags=--route <glob> required=true mandatory=false negate=false variadic=false default=null description=coverage/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective)
+    - flags=--strategy <strategy> required=true mandatory=false negate=false variadic=false default=null choices=["goal-based","coverage","adversarial","feature"] description=goal-based | coverage | adversarial | feature (required)
+    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=goal-based: the independent success check (required there), e.g. urlIncludes:/done — the `explore --success` page-check forms
+    - flags=--targets-dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission targets directory (default: ~/.jevitate/missions/targets)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# mission result
+  description: a mission's status and typed result, by result id or queued missionId (MCP get_mission_result); exits with its contract code
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--results-dir <path> required=true mandatory=false negate=false variadic=false default=null description=read the result file from this directory only (default: where `mission run` writes — .jevitate/logs/<date>, then ~/.jevitate)
 
 # mission run
   description: run queued missions (queue_exploration) through their strategy's runner; get_mission_result {id: missionId} then reads the result

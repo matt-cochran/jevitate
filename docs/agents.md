@@ -43,19 +43,28 @@ jevitate mcp --print-config claude   # or: cursor | codex | json
 
 The server exposes an allowlist of domain tools and nothing else:
 
-| Tool | What it does |
-| --- | --- |
-| `find_capabilities`, `run_journey` | find and run promoted Journeys with typed parameters |
-| `queue_exploration`, `get_mission_result`, `verify_fix` | queue a bounded mission against a promoted target, read its typed result, re-check a finding |
-| `queue_retrieval`, `queue_action`, `get_command`, `cancel_command`, `approve_action` | the command queue (`approve_action` and cancelling are human-only and refuse over MCP) |
-| `list_incoming`, `get_thread` | site-integration reads |
-| `get_site_health` | health, including the engine build identity |
-| `ai_generate_text` | model-assisted text, gated on configured keys |
+| Tool | What it does | Same thing from the CLI |
+| --- | --- | --- |
+| `find_capabilities`, `run_journey` | find and run promoted Journeys with typed parameters | `journey find`, `journey run` |
+| `queue_exploration`, `get_mission_result`, `verify_fix` | queue a bounded mission against a promoted target, read its typed result, re-check a finding | `mission queue`, `mission result`, `verify-fix` |
+| `queue_retrieval`, `queue_action`, `get_command`, `cancel_command`, `approve_action` | the command queue (`approve_action` and cancelling are human-only and refuse over MCP) | `inbox queue-retrieval`, `inbox queue-action`, `inbox command`; `inbox cancel` / `inbox approve` refuse the same way (approve or cancel in `jevitate ui`) |
+| `list_incoming`, `get_thread` | site-integration reads | `inbox list`, `inbox show` |
+| `get_site_health` | health, including the engine build identity | `inbox health` |
+| `ai_generate_text` | model-assisted text, gated on configured keys | `ai generate` |
 
 Raw browser tools (`browser_click`, `browser_fill`, `page_evaluate`, `run_selector`,
 `navigate_url`, `get_dom`, `get_cookies`) are forbidden: an agent can ask for a mission or a
 Journey, never drive the page directly. The served tool list is checked against the allowlist in
 [`packages/mcp-facade`](../packages/mcp-facade).
+
+Every MCP tool has a CLI command (the table's last column), and a test fails when a new tool has
+none. The CLI commands call the same handlers the server does, over the same stores
+(`~/.jevitate/inbox`, `~/.jevitate/missions/`), so what one queues the other sees, and the CLI never
+prints more than MCP returns. `inbox command <id>` keeps `get_command`'s burn-after-read: it
+consumes any input a human handed back, and it never prints that input's value. Each command takes
+`--json` for the `{v, ok, data}` envelope. `mission result` exits with the result's own code
+(0 clean · 1 defects · 2 broken run · 3 hang · 4 intermittent). A mission that is still queued or
+running, or that could not run, exits 2, because it proves nothing yet.
 
 ## Queued missions (MCP)
 
@@ -70,7 +79,9 @@ unpromoted meanwhile); `verify_fix` takes the missionId too once it is done.
 jevitate mission target add spa --name "App" --authorized-origin http://127.0.0.1:5193 \
   --api-origin http://127.0.0.1:18582 --base-url http://127.0.0.1:5193/settings --json
 jevitate mission target promote spa --json          # a human act: only promoted targets are queueable
+jevitate mission queue spa --strategy coverage --route '/settings/**' --json   # what queue_exploration does
 jevitate mission run --once --real --json           # drain what is queued now (--watch keeps polling)
+jevitate mission result <missionId>                 # what get_mission_result reports
 ```
 
 A mission may reach only its target's `--authorized-origin` plus its `--api-origin`s (each a bare

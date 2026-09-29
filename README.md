@@ -183,8 +183,10 @@ keys separately with `jevitate ai setup <generation|judgment>`.
 
 The MCP server exposes an allowlist of domain tools (`queue_exploration`, `get_mission_result`,
 `verify_fix`, `run_journey`, …). Raw browser tools such as `browser_click` or `page_evaluate` are
-forbidden. An agent can ask for a mission, but it never drives the page. See
-[agents and MCP](./docs/agents.md).
+forbidden. An agent can ask for a mission, but it never drives the page. Every MCP tool also has a
+CLI command: `mission queue` / `mission result`, and `inbox list | show | command | queue-retrieval |
+queue-action | health` for the human-in-the-loop inbox. Approving or cancelling stays human-only, in
+`jevitate ui`. See [agents and MCP](./docs/agents.md).
 
 ## Safety
 
