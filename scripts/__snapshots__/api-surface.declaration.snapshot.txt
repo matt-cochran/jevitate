@@ -940,7 +940,7 @@
   QueueExplorationResult: interface
   runJourney: function
 
-# @jevitate/missions (26 exports)
+# @jevitate/missions (27 exports)
   Budget: type-alias
   BudgetExceedsCeilingError: class
   ClaimOwner: interface
@@ -960,6 +960,7 @@
   MissionTargetSchema: variable
   MissionTargetStore: interface
   QUEUED_MISSION_STATUSES: variable
+  QUEUED_SCREENSHOT_MODES: variable
   QueuedMission: interface
   QueuedMissionSchema: variable
   QueuedMissionStatus: type-alias
