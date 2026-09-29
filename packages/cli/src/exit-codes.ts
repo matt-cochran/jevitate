@@ -74,6 +74,8 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_REGRESSION_EXISTS", // `regression capture --id` already exists; needs --force
   "E_REGRESSION_HARD_SIGNAL", // `regression capture --fingerprint` names a hard-signal defect; use the ledger instead
   "E_JOURNEY_ANNOTATIONS_STALE", // `journey annotate --approve`: the Journey changed since the draft; re-draft
+  "E_DEMO_PRODUCTION_ENV", // #249: `demo` refuses an environment flagged production: true
+  "E_DEMO_EXISTS", // #249: `demo` would overwrite an existing Journey / pending demo draft
 ]);
 
 /** True when a refused command's error code is a usage/input error (exit 64). */

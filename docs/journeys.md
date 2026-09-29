@@ -191,6 +191,8 @@ jevitate load run checkout --env staging --authorized-origin https://staging.exa
   origin is refused (exit 64) before any browser opens: add the origin to `allow` if it belongs.
 - `fixtures` (relative to the file) and `hooks` (`before`/`after`) apply when `--fixtures`,
   `--before` and `--after` are not given. Hooks still need `--allow-shell-hooks`.
+- `"production": true` marks a live environment: [`demo`](#demo-an-aspect-from-a-one-line-request)
+  refuses it.
 - `--base-url` alone is an ad-hoc environment; with `--env`, it replaces that environment's
   `baseUrl` and keeps the rest.
 - An unknown `--env` is exit 64 and lists the known ones. Without `--env` or `--base-url`, a
@@ -259,6 +261,52 @@ step stopped, and it exits `1`, so a CI job that regenerates demos catches it.
 | `1` | Stale: the Journey no longer replays (nothing written) |
 | `2` | The replay completed but an output could not be produced (`E_JOURNEY_DEMO_OUTPUT`), or another runtime failure |
 | `64` | Bad arguments (a `--video` that is not `.webm`, a `--guide` that is not `.md`, a bad `--pace`), an unknown Journey, a bad `--param`, `--headed` without a display |
+
+## Demo an aspect from a one-line request
+
+`demo` turns one sentence into a reviewed demo. It explores, keeps only the steps that matter,
+annotates them and renders a **DRAFT**. One approval then makes it an ordinary Journey:
+
+```bash
+jevitate demo "Save your display name" --env staging --success "textIncludes:testId=status|Saved" --real
+jevitate demo approve demo-save-your-display-name     # review first: the Journey, its annotations, the draft
+```
+
+1. **Explore and author.** A goal-directed exploration (the `explore-author-journey` path) writes
+   a Journey for the aspect. `--success` is the independent check that proves the aspect was
+   shown: Jev drives, code decides. `--start <path>` sets where exploration begins, `--persona`
+   picks the session, and `--id` names the Journey (default `demo-<aspect slug>`).
+2. **Clean path.** The explored path is minimized with the same ddmin as `regression capture`. A
+   step (a detour, a dead end, a repeated attempt) is dropped only if the Journey still replays
+   to its success check without it. The success check always stays as the last step. The explored
+   path must replay before minimizing, and the minimized one is replayed once more; otherwise
+   nothing is written (exit `1`).
+3. **Annotate.** A replay drafts each step's objective and expected result (as `journey annotate`).
+   The Journey's goal is the aspect, and its success criterion is the `--success` check.
+4. **Draft demo.** A video, `.vtt` and guide (as `journey demo`), narrated with the drafted
+   annotations and marked DRAFT: a watermark on the overlay, a note and a `[DRAFT]` prefix in the
+   subtitles, and a DRAFT title and notice in the guide. They go to `--out <dir>`, or else a fresh
+   folder in the logs dir.
+
+The Journey (unpromoted), its annotation draft and a demo record (`<journeys>/.drafts/<id>.demo.json`)
+are written only when every stage succeeds. `demo approve <id>` shows the Journey with its
+annotations, renders the final demo (no DRAFT marks) on the environment the draft was made on,
+then applies the annotations and promotes the Journey. If that replay fails, nothing is promoted
+(exit `1`). After approval it is an ordinary Journey: re-render it with `journey demo --env
+<any>`, or check it in CI with `journey run`.
+
+Safety: `demo` runs only against a named environment (`--env`). One flagged `"production": true`
+in `.jevitate/environments.json` is refused before anything runs (`E_DEMO_PRODUCTION_ENV`, exit
+`64`), both when drafting and when approving. Writes are allowed. Paid, destructive and
+session-ending controls are refused unless that origin's `safety` in `~/.jevitate/targets.json`
+allows them. Every replay uses `journey run`'s fail-closed policy, and every output is redacted.
+Nothing is promoted without `demo approve`.
+
+| Exit | When |
+|---|---|
+| `0` | Drafted (`demo`), or approved and rendered (`demo approve`) |
+| `1` | The success check was not reached, the path did not replay, or the demo's replay stopped (nothing written or promoted) |
+| `64` | No `--env` / `--success`, a production environment, an existing id or pending draft (`E_DEMO_EXISTS`), no demo draft to approve (`E_DEMO_NOT_FOUND`) |
 
 ## Site policies
 

@@ -94,6 +94,14 @@ describe(".jevitate/environments.json", () => {
     bad({ local: { baseUrl: "http://x.test", extra: 1 } }, /\[local\]\.extra: unknown key/);
     bad({ local: { baseUrl: "http://x.test", hooks: { during: "x" } } }, /\[local\]\.hooks\.during: unknown key/);
     bad({ "../x": { baseUrl: "http://x.test" } }, /an environment name is letters/);
+    bad({ prod: { baseUrl: "http://x.test", production: "yes" } }, /\[prod\]\.production must be true or false/);
+  });
+
+  it("#249: `production: true` is carried to the resolved environment (demo refuses it); absent or false is not", () => {
+    const file = envFile({ prod: { baseUrl: "https://app.test", production: true }, staging: { baseUrl: "https://s.test", production: false } });
+    expect(loadEnvironmentsFile(file).prod?.production).toBe(true);
+    expect(resolveJourneyEnvironment({ env: "prod", environmentsFile: file, targets: {} })?.production).toBe(true);
+    expect(resolveJourneyEnvironment({ env: "staging", environmentsFile: file, targets: {} })).not.toHaveProperty("production");
   });
 
   it("NEVER holds secrets or sessions: such keys are refused, pointing at ~/.jevitate", () => {

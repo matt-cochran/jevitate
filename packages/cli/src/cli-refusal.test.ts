@@ -200,6 +200,12 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
     base: ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--id", "a", "--name", "a", "--fake-ai"],
     cases: [["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--id", "a", "--name", "a", "--fake-ai", "--storage-state", missing]],
   },
+  // #249: --success and a named (non-production) --env are required; a bad spec / unknown env is refused.
+  "demo create": {
+    base: ["x", "--success", "urlIncludes:/x", "--fake-ai"],
+    cases: [["x", "--fake-ai"], ["x", "--success", "urlIncludes:/x", "--fake-ai"], ["x", "--success", "nonsense:x", "--env", "nope"], ["x", "--success", "urlIncludes:/x", "--env", "nope"]],
+  },
+  "demo approve": { cases: [["nope"], ["../x"]] },
   record: { cases: [["--url", "not-a-url"]] },
   "regression capture": {
     base: ["--from", missing, "--id", "x", "--dir", join(dir, "regressions")],

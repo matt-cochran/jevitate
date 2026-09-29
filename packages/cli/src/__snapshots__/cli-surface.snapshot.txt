@@ -71,6 +71,64 @@
     - flags=--suite <file> required=true mandatory=true negate=false variadic=false default=null description=the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget)
     - flags=--target-build <id> required=true mandatory=false negate=false variadic=false default=null description=the target's build/commit id, stamped on every result
 
+# demo
+  description: demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
+
+# demo approve
+  description: the one human approval of a DRAFT demo: shows the Journey and its annotations, renders the final demo (no DRAFT marks) on the environment it was made on, then applies the annotations and promotes the Journey; a replay that no longer works promotes nothing (exit 1)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir)
+    - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
+# demo create
+  description: explore a named non-production environment toward <aspect> (checked by --success), minimize the path to its essential steps (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide); nothing is promoted until `demo approve <id>` (also: jevitate demo "<aspect>")
+  arguments:
+    - name=aspect required=true variadic=false default=null
+  options:
+    - flags=--after <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run after the mission and every replay (needs --allow-shell-hooks)
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running --before/--after (operator commands; never model-chosen)
+    - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: ~/.jevitate/journeys)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=the named environment to demo on (.jevitate/environments.json); required, and never one flagged production: true
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
+    - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display
+    - flags=--hook-timeout-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=timeout for each --before/--after hook (default 60000; the process group is killed)
+    - flags=--id <id> required=true mandatory=false negate=false variadic=false default=null description=the Journey id (default: demo-<aspect slug>)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--max-actions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on explored actions
+    - flags=--max-decisions <n> required=true mandatory=false negate=false variadic=false default=null description=hard cap on model decisions
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir)
+    - flags=--pace <ms> required=true mandatory=false negate=false variadic=false default=null description=how long each step's caption shows before it acts (default 1500)
+    - flags=--persona <name> required=true mandatory=false negate=false variadic=false default=null description=the persona whose session (~/.jevitate/targets.json personas) the demo runs as
+    - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways (requires keys)
+    - flags=--slow-mo <ms> required=true mandatory=false negate=false variadic=false default=null description=slow every browser operation by this many ms (default 250 with --headed, else 0)
+    - flags=--start <path> required=true mandatory=false negate=false variadic=false default=null description=the app path exploration starts from (default /)
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist
+    - flags=--success <spec> required=true mandatory=false negate=false variadic=false default=null description=independent success check that proves the aspect was shown, e.g. textIncludes:testId=status|Saved (required)
+    - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
+
 # diff
   description: classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
   arguments:

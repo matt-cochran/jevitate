@@ -23,7 +23,8 @@ import { loadTargetsFile, TargetConfigError, type TargetConfig } from "./target-
  *    origins a Journey step may be on (an auth provider, say); `fixtures` — a mission fixtures file
  *    (relative to the environments file) used when `--fixtures` is absent; `hooks` — `before`/
  *    `after` shell hooks used when `--before`/`--after` are absent (they still need
- *    `--allow-shell-hooks`). Keys starting with `$` (`$comment`) are documentation. The file is
+ *    `--allow-shell-hooks`); `production: true` marks a live environment (`jevitate demo` refuses it,
+ *    #249). Keys starting with `$` (`$comment`) are documentation. The file is
  *    committed, so it NEVER holds a secret or a session: a `storageState`/`secret`/`password`/
  *    `token`/`cookie`/`credential` key anywhere in it is refused.
  *  - `--base-url <origin>` — an ad-hoc environment (a preview deploy); with `--env`, it replaces
@@ -53,6 +54,8 @@ export interface EnvironmentDef {
   readonly fixtures?: string;
   /** Operator shell hooks (still gated by `--allow-shell-hooks`). */
   readonly hooks?: { readonly before?: string; readonly after?: string };
+  /** `production: true` (#249): a live environment — `jevitate demo` refuses it. */
+  readonly production?: boolean;
 }
 
 /** `.jevitate/environments.json` is missing a named environment, or is not what it should be. */
@@ -114,7 +117,7 @@ export function isEnvironmentError(err: unknown): err is EnvironmentError {
 }
 
 const ENV_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const ENV_KEYS = new Set(["baseUrl", "allow", "fixtures", "hooks"]);
+const ENV_KEYS = new Set(["baseUrl", "allow", "fixtures", "hooks", "production"]);
 const HOOK_KEYS = new Set(["before", "after"]);
 /** A key that would put a secret or a session into a committed file. */
 const SECRET_KEY = /storage.?state|secret|passw(or)?d|token|cookie|credential|api.?key|session|auth(orization)?$/i;
@@ -159,7 +162,7 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
   refuseSecretKeys(v, where);
   const o = v as Record<string, unknown>;
   for (const k of Object.keys(o)) {
-    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, fixtures, hooks)`);
+    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, fixtures, hooks, production)`);
   }
   if (o.baseUrl === undefined) throw new EnvironmentConfigError(`${where}.baseUrl is required`);
   const base = originOf(o.baseUrl);
@@ -189,11 +192,13 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
       hooks[k as "before" | "after"] = h;
     }
   }
+  if (o.production !== undefined && typeof o.production !== "boolean") throw new EnvironmentConfigError(`${where}.production must be true or false`);
   return {
     baseUrl: base.origin,
     allow: allow.filter((a) => a !== base.origin),
     ...(fixtures === undefined ? {} : { fixtures }),
     ...(hooks === undefined ? {} : { hooks }),
+    ...(o.production === true ? { production: true } : {}),
   };
 }
 
@@ -253,6 +258,8 @@ export interface ResolvedJourneyEnvironment {
   readonly secretFields?: readonly string[];
   /** Where the environment came from (`--env`'s file, or `--base-url`). */
   readonly source: string;
+  /** The named environment is flagged `production: true` (#249: `demo` refuses it). */
+  readonly production?: true;
 }
 
 export interface JourneyEnvironmentRequest {
@@ -327,6 +334,7 @@ export function resolveJourneyEnvironment(req: JourneyEnvironmentRequest): Resol
     ...(session?.storageState === undefined ? {} : { storageState: session.storageState }),
     ...(session?.secretFields === undefined ? {} : { secretFields: session.secretFields }),
     source,
+    ...(def?.production === true ? { production: true as const } : {}),
   };
 }
 
