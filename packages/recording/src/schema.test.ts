@@ -487,4 +487,44 @@ describe("AssertionSchema (exported for @jevitate/missions' successAssertion)", 
   it("rejects an unknown assertion kind", () => {
     expect(() => AssertionSchema.parse({ kind: "bogus" })).toThrow();
   });
+
+  it("parses valueEquals (a form control's value) and requires its target and value", () => {
+    expect(AssertionSchema.parse({ kind: "valueEquals", target: { testId: "last" }, value: "Litmus" })).toEqual({
+      kind: "valueEquals",
+      target: { testId: "last" },
+      value: "Litmus",
+    });
+    expect(() => AssertionSchema.parse({ kind: "valueEquals", target: { testId: "last" } })).toThrow();
+    expect(() => AssertionSchema.parse({ kind: "valueEquals", value: "x" })).toThrow();
+    expect(() => AssertionSchema.parse({ kind: "valueEquals", target: { testId: "last" }, value: "x", text: "y" })).toThrow();
+  });
+});
+
+describe("RecordingSchema — upload step", () => {
+  const withStep = (step: unknown) => ({
+    version: "1.0",
+    site: "https://example.com",
+    pages: [{ url: "/profile", steps: [{ step }] }],
+  });
+  const target = { label: "Choose avatar" };
+  const expect_ = { kind: "count", target, min: 1 };
+
+  it("parses a plain-path, redacted and var-bound upload", () => {
+    for (const file of [
+      { redacted: false, value: "/abs/avatar.png" },
+      { redacted: true, length: 12 },
+      { var: "fixture" },
+    ]) {
+      expect(() => RecordingSchema.parse(withStep({ kind: "upload", target, file, expect: expect_ }))).not.toThrow();
+    }
+  });
+
+  it("rejects an upload without a file or with an unknown key (strict)", () => {
+    expect(() => RecordingSchema.parse(withStep({ kind: "upload", target, expect: expect_ }))).toThrow();
+    expect(() =>
+      RecordingSchema.parse(
+        withStep({ kind: "upload", target, file: { var: "f" }, path: "/x", expect: expect_ }),
+      ),
+    ).toThrow();
+  });
 });

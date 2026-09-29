@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/matt-cochran/jevitate/security/advisories/new
+    about: Report vulnerabilities privately — never in a public issue.
+  - name: Documentation
+    url: https://jevitate.com/docs
+    about: Guides and reference docs for every command.

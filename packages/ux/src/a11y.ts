@@ -7,6 +7,7 @@
 // assumed passing. Every finding is built through the shared finding gate, so it
 // carries a resolved citation + resolved evidence refs like any other.
 import { makeFinding } from "./finding.js";
+import { routeOf } from "./route.js";
 import type { RedactedEvidence } from "./redact.js";
 import type { RubricEntry, UxFinding } from "./types.js";
 
@@ -30,7 +31,15 @@ export function a11yChecks(evidence: RedactedEvidence, rubric: ReadonlyMap<strin
     const q = rubric.get(id)?.questions[0];
     return q?.severity ?? "minor";
   };
-  const emit = (rubricItemId: string, refId: string, note: string) => {
+  const route = routeOf(evidence.url);
+  const controlByRef = new Map<string, (typeof evidence.controls)[number]>(evidence.controls.map((c) => [`control:${c.index}`, c]));
+  const labelOf = (refId: string): string | undefined => {
+    const c = controlByRef.get(refId);
+    if (!c) return undefined;
+    return c.name.trim().length > 0 ? `${c.role || "control"} "${c.name}"` : `${c.role || "control"} (unnamed, ${refId})`;
+  };
+  const emit = (rubricItemId: string, refId: string, observation: string, userImpact: string, recommendation: string) => {
+    const label = labelOf(refId);
     findings.push(
       makeFinding(
         {
@@ -38,8 +47,12 @@ export function a11yChecks(evidence: RedactedEvidence, rubric: ReadonlyMap<strin
           evidenceRefs: [{ id: evidence.refs.has(refId) ? refId : "a11y" }],
           severity: severityOf(rubricItemId),
           confidence: 1, // objective, computed — not a probabilistic judgment
-          recommendation: note,
+          observation,
+          userImpact,
+          recommendation: `${recommendation} See ${rubric.get(rubricItemId)?.citation.ref ?? ""}.`,
           tier: "objective-a11y",
+          route,
+          controls: label ? [label] : [],
         },
         rubric,
         evidence,
@@ -52,7 +65,13 @@ export function a11yChecks(evidence: RedactedEvidence, rubric: ReadonlyMap<strin
     checked.add("control-name");
     for (const f of facts) {
       if (!f.accessibleName || f.accessibleName.trim().length === 0) {
-        emit("a11y-control-name", f.controlRef, `Control ${f.controlRef} exposes no name to assistive technology. See ${rubric.get("a11y-control-name")?.citation.ref ?? ""}.`);
+        emit(
+          "a11y-control-name",
+          f.controlRef,
+          `${labelOf(f.controlRef) ?? f.controlRef} exposes no accessible name to assistive technology.`,
+          "Screen-reader and voice-control users cannot identify or target this control.",
+          `Give ${f.controlRef} a visible label or aria-label that names its action.`,
+        );
       }
     }
   } else {
@@ -66,7 +85,13 @@ export function a11yChecks(evidence: RedactedEvidence, rubric: ReadonlyMap<strin
     const hasDuplicate = new Set(orders).size !== orders.length;
     const hasNegative = orders.some((n) => n < 0);
     if (hasDuplicate || hasNegative) {
-      emit("a11y-focus-order", "a11y", `Focus order is not a clean increasing sequence (duplicate or negative positions). See ${rubric.get("a11y-focus-order")?.citation.ref ?? ""}.`);
+      emit(
+        "a11y-focus-order",
+        "a11y",
+        "Focus order is not a clean increasing sequence (duplicate or negative positions).",
+        "Keyboard users tab through controls in an unpredictable order.",
+        "Remove positive/negative tabindex values so focus follows the visual order.",
+      );
     }
   } else {
     notChecked.add("focus-order");
@@ -79,7 +104,13 @@ export function a11yChecks(evidence: RedactedEvidence, rubric: ReadonlyMap<strin
     for (const f of sized) {
       const size = f.targetSize!;
       if (Math.min(size.width, size.height) < MIN_TARGET_PX) {
-        emit("a11y-target-size", f.controlRef, `Control ${f.controlRef} target is smaller than ${MIN_TARGET_PX}px. See ${rubric.get("a11y-target-size")?.citation.ref ?? ""}.`);
+        emit(
+          "a11y-target-size",
+          f.controlRef,
+          `${labelOf(f.controlRef) ?? f.controlRef} has a ${size.width}×${size.height}px target, smaller than ${MIN_TARGET_PX}px.`,
+          "Touch and motor-impaired users mis-tap or cannot hit this control.",
+          `Enlarge ${f.controlRef}'s hit area to at least ${MIN_TARGET_PX}×${MIN_TARGET_PX}px.`,
+        );
       }
     }
   } else {
@@ -92,7 +123,13 @@ export function a11yChecks(evidence: RedactedEvidence, rubric: ReadonlyMap<strin
     checked.add("contrast");
     for (const f of contrastable) {
       if ((f.contrastRatio as number) < MIN_CONTRAST) {
-        emit("a11y-contrast", f.controlRef, `Control ${f.controlRef} contrast is below ${MIN_CONTRAST}:1. See ${rubric.get("a11y-contrast")?.citation.ref ?? ""}.`);
+        emit(
+          "a11y-contrast",
+          f.controlRef,
+          `${labelOf(f.controlRef) ?? f.controlRef} has a contrast ratio of ${(f.contrastRatio as number).toFixed(2)}:1, below ${MIN_CONTRAST}:1.`,
+          "Low-vision users cannot read this control's label.",
+          `Raise ${f.controlRef}'s text/background contrast to at least ${MIN_CONTRAST}:1.`,
+        );
       }
     }
   } else {

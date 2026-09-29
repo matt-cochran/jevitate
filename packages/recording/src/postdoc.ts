@@ -390,7 +390,9 @@ function deriveResumeAssertion(step: Step): Assertion {
     case "fill":
     case "extract":
     case "select":
+    case "upload":
     case "press":
+    case "editText":
       return step.expect;
     case "assert":
       return step.check;

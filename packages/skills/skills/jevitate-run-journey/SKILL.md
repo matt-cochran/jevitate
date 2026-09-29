@@ -1,6 +1,6 @@
 ---
 name: jevitate-run-journey
-description: Find and run a promoted Jevitate Journey by id, with typed params, via the jevitate CLI or the find_capabilities/run_journey MCP tools. Use when a user wants to execute a known, already-recorded browser automation (a login, a checkout, a form submission) rather than explore or record a new one.
+description: Find and replay a promoted jevitate Journey (a saved, deterministic browser flow such as a login, checkout or form submission) by id with typed params, on any named environment (`--env`/`--base-url`), optionally with video and screenshots and self-heal. Runs via `jevitate journey find|run` or MCP `find_capabilities`/`run_journey`. Also covers promoting (human-only). Use when a known flow should be re-run or regression-checked, not explored or recorded fresh.
 ---
 
 You drive already-published, promoted Jevitate Journeys. You never write or invent
@@ -25,13 +25,43 @@ artifact; your job is to find the right one and run it with the right params.
   Every param the `find`/`find_capabilities` result listed under `params` is
   required; passing an unknown param key is a refusal (`E_INVALID_PARAMS`), not
   a silent ignore. An unknown id is `E_UNKNOWN_JOURNEY`.
-- MCP: `run_journey(id, params)` — same param-schema validation, same refusal on
-  an unknown id or params. It NEVER accepts inline steps or a raw recording —
-  a published id only.
+- MCP: `run_journey({ id, params, storageState? })` — same param-schema
+  validation, same refusal on an unknown id or params. It NEVER accepts inline
+  steps or a raw recording — a published id only.
 - Read the JSON envelope's `outcome` field. `"ok"` and `"healed"` (a run that
-  recovered via self-heal) are both successes; `"quarantined"` (and any other
-  value, including a secret-handback pause) means it did not complete — report
-  that honestly, do not summarize a non-success outcome as success.
+  recovered via self-heal) are both successes (exit 0); `"quarantined"` (exit 1)
+  and any other value, including a secret-handback pause, mean it did not
+  complete — report that honestly, with the step it stopped at. Exit 64 is a
+  refusal before anything ran (unknown id, bad params, a step off the allowlist).
+
+## Where it runs (`--env`) and what it records
+
+- `--env <name>` replays on a named environment from the repo's
+  `.jevitate/environments.json` (its `baseUrl` plus `allow`); `--base-url <origin>`
+  is an ad-hoc one (e.g. a preview deploy). Without either, the Journey runs on
+  the site it was recorded on. A step on an origin the environment doesn't allow
+  is refused (64) before any browser opens. MCP: `run_journey`'s `env`/`baseUrl`.
+- Evidence: `--record-video` (listed as `videoPaths`), `--screenshots
+  [screens|steps]` (`screenshotPaths` + an `index.md`), `--headed`/`--slow-mo <ms>`
+  to watch it. `--viewport 375x812` / `--device "iPhone 13"` for mobile.
+- For a narrated demo video or a step-by-step guide of a Journey, use
+  `jevitate-demo` (`journey demo`, `journey annotate`).
+
+## Authenticated Journeys (#118)
+
+- A Journey authored behind a login needs a deterministic authenticated
+  pre-step to replay: `--storage-state <file>` (a Playwright storageState JSON
+  path — cookies + origin storage) on `jevitate journey run`, `jevitate load
+  run`, and `jevitate source run`; over MCP, `run_journey`'s optional
+  `storageState` argument is the SAME thing — a file PATH on the machine
+  running the MCP server, never raw cookie/session content in the call itself.
+  The file's contents are read only by the browser session; never logged,
+  never echoed back.
+- A Journey CAN declare `metadata.requiresAuth: true` if it only reaches its
+  steps from an authenticated session. A run given no `storageState` then
+  fails fast — before any browser opens — with `E_JOURNEY_REQUIRES_AUTH`
+  naming the actual problem, instead of a confusing deep
+  `replay-target-not-found` partway through the steps.
 
 ## Self-heal (optional, additive)
 
@@ -54,19 +84,33 @@ artifact; your job is to find the right one and run it with the right params.
   result in this same session — a promoted id can be revoked; don't rely on a
   memorized id from an earlier conversation.
 
+## Promoting a Journey
+
+- `jevitate journey promote <id> --json` promotes a local Journey — a
+  deliberate human-approval gate (mirrors `mission target promote`'s
+  semantics), never automatic — run it (or MCP `promote_journey`) only when
+  the human tells you to. Every authored/recorded Journey starts
+  `metadata.promoted: false` (`explore-author-journey`, `jevitate record` +
+  `recording postdoc`); only a promoted Journey is discoverable via `journey
+  find`/`find_capabilities` and runnable via `journey run`/`run_journey`.
+  There is still no "raw Recording -> promoted Journey in one step" command —
+  a Recording becomes a Journey first (through an authoring path, or the
+  `JourneyRegistry` API), then `journey promote <id>` promotes it.
+
+## Step intent (annotations)
+
+- `journey run` reports `intent.withoutObjective` (steps with no stated objective). It is
+  informational and never a failure. Drafting and approving objectives is `journey annotate`
+  (see `jevitate-demo`); `--approve` is the human's call, like promote.
+
 ## Publishing to a distributed source
 
 - `jevitate journey publish <id> --to <source>` pushes a PROMOTED local Journey
   up to a registered distributed source (see `jevitate-sources`). It preserves
   every publish-side guard: promoted-only, secret-references-only, and
   declared-origin coverage; it writes onto a new `publish/<id>` branch and,
-  when `gh` is present, opens a PR. It never publishes an unpromoted Journey.
-
-## Known gaps
-
-- There is no single "raw Recording -> promoted Journey" command: a Recording
-  becomes a Journey through the authoring paths (`jevitate
-  explore-author-journey`, which writes an UNPROMOTED Journey a human still
-  promotes) or the `JourneyRegistry` API, and promotion stays a deliberate
-  human gate. If a user asks you to "promote this recording," recommend those
-  paths rather than guessing at a promote command — do not invent one.
+  when `gh` is present, opens a PR. When `gh` is absent, or a PR can't be
+  opened (e.g. the remote isn't GitHub), the branch is still pushed and the
+  command still reports success (`pushed: true`, no PR) with instructions to
+  open one manually — pushing the branch is never reported as a failure. It
+  never publishes an unpromoted Journey.

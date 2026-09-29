@@ -1,0 +1,256 @@
+[
+ {
+  "app": "preveti",
+  "id": "workspace",
+  "url": "http://127.0.0.1:5190/workspace",
+  "job": "You want to figure out whether adding a free tier would grow your product. Ask Preveti that question and answer its follow-up questions until the question is framed and you can see what Preveti will investigate next.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "workspace-inquiry-new",
+  "url": "http://127.0.0.1:5190/workspace?inquiry=new",
+  "job": "Customers keep cancelling after their first month and you don't know why. Talk it through with Preveti until you have a concrete bet saved that you could go on to test.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "workspace-raise-pro",
+  "url": "http://127.0.0.1:5190/workspace?inquiry=ws-inq-raise-pro",
+  "job": "An assistant suggested a change to your 'Should we raise Pro to $149?' analysis. Find the suggestion, review it, and accept it if it is reasonable.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "settings",
+  "url": "http://127.0.0.1:5190/settings",
+  "job": "Find out which plan you are on, how many credits you have left, and what you need to do this month to keep your Design Partner pricing.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "decisions",
+  "url": "http://127.0.0.1:5190/decisions",
+  "job": "Take the 'Raise Pro to $149' bet forward: give it a stakes estimate, then review and approve it so it is committed with your reasoning recorded.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "decision-demo-bet-1",
+  "url": "http://127.0.0.1:5190/decisions/demo-bet-1",
+  "job": "Set up a customer interview about the 'Raise Pro to $149' bet so you can send a customer a link, and check whether anyone has responded yet.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "decisions-new",
+  "url": "http://127.0.0.1:5190/decisions/new",
+  "job": "Pressure-test the 'Raise Pro to $149' bet by simulating how your customers would respond, and read the verdict on whether to go ahead.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "research",
+  "url": "http://127.0.0.1:5190/research",
+  "job": "Set up a customer interview about the 'Raise Pro to $149' bet so you can send a customer a link, and check whether anyone has responded yet.",
+  "appClass": "consumer",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "admin-plan-applications",
+  "url": "http://127.0.0.1:5190/admin/plan-applications",
+  "job": "Review the pending Startup plan application and approve it if the company meets the criteria.",
+  "appClass": "admin",
+  "split": "tune",
+  "storageState": "/home/mc/.cache/jevdog-stack/preveti-admin-state.json"
+ },
+ {
+  "app": "preveti",
+  "id": "participant-link",
+  "url": "http://127.0.0.1:5190/e/etok_<participant-token>",
+  "job": "You were sent this link to give feedback on a product's pricing. Agree to take part and answer the first question.",
+  "appClass": "consumer",
+  "split": "tune"
+ },
+ {
+  "app": "example-site",
+  "id": "login",
+  "url": "http://127.0.0.1:5301/login",
+  "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+  "appClass": "consumer",
+  "split": "holdout"
+ },
+ {
+  "app": "example-site",
+  "id": "inbox",
+  "url": "http://127.0.0.1:5301/login",
+  "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+  "appClass": "consumer",
+  "split": "holdout",
+  "steps": [
+   {
+    "fill": {
+     "label": "Username",
+     "value": "jane"
+    }
+   },
+   {
+    "clickRole": {
+     "role": "button",
+     "name": "Sign in"
+    },
+    "waitMs": 1200
+   }
+  ]
+ },
+ {
+  "app": "example-site",
+  "id": "thread",
+  "url": "http://127.0.0.1:5301/login",
+  "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+  "appClass": "consumer",
+  "split": "holdout",
+  "steps": [
+   {
+    "fill": {
+     "label": "Username",
+     "value": "jane"
+    }
+   },
+   {
+    "clickRole": {
+     "role": "button",
+     "name": "Sign in"
+    },
+    "waitMs": 1200
+   },
+   {
+    "clickRole": {
+     "role": "link",
+     "name": "Welcome"
+    },
+    "waitMs": 1200
+   }
+  ]
+ },
+ {
+  "app": "example-site",
+  "id": "notfound",
+  "url": "http://127.0.0.1:5301/adversarial/notfound",
+  "job": "Sign in as 'jane' and read the most recent message in your inbox, then find who sent it.",
+  "appClass": "consumer",
+  "split": "holdout"
+ },
+ {
+  "app": "jevitate-site",
+  "id": "home",
+  "url": "http://127.0.0.1:5302/",
+  "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+  "appClass": "developer-tool marketing and docs",
+  "split": "holdout"
+ },
+ {
+  "app": "jevitate-site",
+  "id": "docs",
+  "url": "http://127.0.0.1:5302/docs/",
+  "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+  "appClass": "developer-tool marketing and docs",
+  "split": "holdout"
+ },
+ {
+  "app": "jevitate-site",
+  "id": "getting-started",
+  "url": "http://127.0.0.1:5302/docs/getting-started/",
+  "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+  "appClass": "developer-tool marketing and docs",
+  "split": "holdout"
+ },
+ {
+  "app": "jevitate-site",
+  "id": "journeys",
+  "url": "http://127.0.0.1:5302/docs/journeys/",
+  "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+  "appClass": "developer-tool marketing and docs",
+  "split": "holdout"
+ },
+ {
+  "app": "jevitate-site",
+  "id": "safety",
+  "url": "http://127.0.0.1:5302/docs/safety/",
+  "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+  "appClass": "developer-tool marketing and docs",
+  "split": "holdout"
+ },
+ {
+  "app": "jevitate-site",
+  "id": "testing-modes",
+  "url": "http://127.0.0.1:5302/docs/testing-modes/",
+  "job": "You maintain a web app and want to know whether this tool can check your app's key user flows automatically. Find out how to install it and run your first check.",
+  "appClass": "developer-tool marketing and docs",
+  "split": "holdout"
+ },
+ {
+  "app": "preveti-site",
+  "id": "home",
+  "url": "http://127.0.0.1:5303/",
+  "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+  "appClass": "B2B SaaS marketing site",
+  "split": "holdout"
+ },
+ {
+  "app": "preveti-site",
+  "id": "pricing",
+  "url": "http://127.0.0.1:5303/pricing/",
+  "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+  "appClass": "B2B SaaS marketing site",
+  "split": "holdout"
+ },
+ {
+  "app": "preveti-site",
+  "id": "founders",
+  "url": "http://127.0.0.1:5303/founders/",
+  "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+  "appClass": "B2B SaaS marketing site",
+  "split": "holdout"
+ },
+ {
+  "app": "preveti-site",
+  "id": "startup-program",
+  "url": "http://127.0.0.1:5303/startup-program/",
+  "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+  "appClass": "B2B SaaS marketing site",
+  "split": "holdout"
+ },
+ {
+  "app": "preveti-site",
+  "id": "overview",
+  "url": "http://127.0.0.1:5303/overview/",
+  "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+  "appClass": "B2B SaaS marketing site",
+  "split": "holdout"
+ },
+ {
+  "app": "preveti-site",
+  "id": "how-to",
+  "url": "http://127.0.0.1:5303/how-to/",
+  "job": "You lead a small product team. Figure out what this product does, what it would cost your team, and how to get started.",
+  "appClass": "B2B SaaS marketing site",
+  "split": "holdout"
+ }
+]

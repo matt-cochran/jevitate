@@ -1,6 +1,5 @@
 export * from "./schema.js";
 export * from "./store.js";
-export * from "./retention.js";
 export * from "./promote.js";
 export * from "./signature.js";
 export * from "./align.js";
@@ -10,3 +9,5 @@ export * from "./reference-diff.js";
 export * from "./fit.js";
 export * from "./splice.js";
 export * from "./postdoc.js";
+export * from "./invariants.js";
+export * from "./write-request.js";

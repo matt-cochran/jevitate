@@ -1,7 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Page } from "playwright";
 import { startServer } from "@jevitate/example-site";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
@@ -10,7 +7,6 @@ import { FakeJudgmentGateway, FakeGenerationGateway } from "@jevitate/ai-core";
 import { runInductionMission } from "./induction.js";
 
 let site: { url: string; close(): Promise<void> };
-let profileDir: string;
 let session: BrowserSession;
 let page: Page;
 let actor: CastActor;
@@ -20,9 +16,8 @@ const noDefects = () =>
 
 beforeAll(async () => {
   site = await startServer();
-  profileDir = await mkdtemp(join(tmpdir(), "jevitate-induction-"));
   const browserPort = new PlaywrightBrowserPort();
-  session = await browserPort.open({ profileDir, headless: true, allowedOrigins: [site.url], baseUrl: site.url });
+  session = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url });
   page = session.page;
   actor = CastActor.named("tester").whoCan(new BrowseTheWeb(session, [site.url]));
   // Authenticate ONCE so the persistent-context cookie (sid=ok) carries into the
@@ -36,7 +31,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await session.close();
   await site.close();
-  await rm(profileDir, { recursive: true, force: true });
 });
 
 describe("runInductionMission — single state", () => {
@@ -65,7 +59,7 @@ describe("runInductionMission — single state", () => {
 });
 
 describe("runInductionMission — branching", () => {
-  test("discovers both thread states from /inbox and exercises both transitions", async () => {
+  test("exercises both thread links from /inbox; the prefixed thread ids template to ONE state (#95)", async () => {
     const result = await runInductionMission({
       page,
       actor,
@@ -73,13 +67,16 @@ describe("runInductionMission — branching", () => {
       generation: new FakeGenerationGateway(),
       seedUrl: `${site.url}/inbox`,
       allowlist: [site.url],
+      // /thread/* is a SIBLING route of /inbox, not under it: #89 scopes the frontier to the seed's
+      // own route by default, so this deliberately cross-route discovery test widens the scope.
+      routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
-    // inbox + thread-t-1 + thread-t-2 = 3 distinct states. The thread ids ("t-1",
-    // "t-2") are NOT id-normalized by urlTemplate (they contain a letter), so the
-    // two threads template to distinct states — exactly the coverage the mission
-    // should find.
-    expect(result.coverage.statesVisited).toBe(3);
+    // inbox + :id = 2 distinct states. `/thread/t-1` and `/thread/t-2` are PREFIXED ids (a literal
+    // "t-" prefix + a numeric suffix): #95/#127 templates the WHOLE segment, so both collapse to
+    // the same `/thread/:id` state — the mission still exercises BOTH links (both transitions
+    // land), it just correctly recognizes the second as an already-visited state, not a new one.
+    expect(result.coverage.statesVisited).toBe(2);
     expect(result.coverage.transitionsExercised).toBeGreaterThanOrEqual(2);
     expect(result.recordings.length).toBeGreaterThanOrEqual(2);
   }, 30_000);
@@ -97,6 +94,9 @@ describe("runInductionMission — cycles", () => {
       generation: new FakeGenerationGateway(),
       seedUrl: `${site.url}/exploratory-testing/cycle-a`,
       allowlist: [site.url],
+      // cycle-b is a SIBLING of cycle-a, not under it: widen scope for this deliberately
+      // cross-route cycle-detection test (#89 scopes to the seed's own route by default).
+      routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
     expect(result.coverage.statesVisited).toBe(2);
@@ -118,12 +118,125 @@ describe("runInductionMission — defect judgment is advisory only", () => {
       generation: new FakeGenerationGateway(),
       seedUrl: `${site.url}/inbox`,
       allowlist: [site.url],
+      // /thread/* is a sibling route: widen scope so this test still reaches it (#89 default-scopes
+      // the frontier to the seed's own route).
+      routeGlobs: ["/**"],
     });
     expect(result.outcome).toBe("exhausted");
     expect(result.coverage.defects.length).toBeGreaterThan(0);
     for (const d of result.coverage.defects) {
       expect(d.recording.pages.length).toBeGreaterThan(0);
     }
+  }, 30_000);
+});
+
+describe("runInductionMission — a lost --storage-state session (#82)", () => {
+  test("a seed that redirects to /login ends scope-unreachable/inconclusive with an authentication-shaped reason, never exploring the logged-out pages", async () => {
+    // A FRESH, unauthenticated session — no login step — so /inbox's own auth redirect fires,
+    // exactly as a lost/expired --storage-state session would.
+    const browserPort = new PlaywrightBrowserPort();
+    const unauthSession = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url });
+    try {
+      const unauthActor = CastActor.named("unauth-tester").whoCan(new BrowseTheWeb(unauthSession, [site.url]));
+      const result = await runInductionMission({
+        page: unauthSession.page,
+        actor: unauthActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}/inbox`,
+        allowlist: [site.url],
+      });
+      expect(result.outcome).toBe("scope-unreachable");
+      expect(result.failure?.kind).toBe("target-unreachable");
+      expect(result.failure?.message).toBe(
+        "seed /inbox redirected to /login — the --storage-state session is not authenticated",
+      );
+      // Nothing was explored past the redirect — the run never touched /login's own controls.
+      expect(result.coverage.statesVisited).toBe(0);
+      expect(result.coverage.transitionsExercised).toBe(0);
+      expect(result.recordings).toEqual([]);
+    } finally {
+      await unauthSession.close();
+    }
+  }, 30_000);
+});
+
+describe("runInductionMission — the seed itself cannot be loaded (#128)", () => {
+  test("a net::ERR_UNSAFE_PORT on the first navigation ends scope-unreachable/inconclusive with target-unreachable, never crashed", async () => {
+    const browserPort = new PlaywrightBrowserPort();
+    const url = "http://127.0.0.1:1/";
+    const badSession = await browserPort.open({ headless: true, allowedOrigins: [url], baseUrl: url });
+    try {
+      const badActor = CastActor.named("unreachable-tester").whoCan(new BrowseTheWeb(badSession, [url]));
+      const result = await runInductionMission({
+        page: badSession.page,
+        actor: badActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: url,
+        allowlist: [url],
+      });
+      expect(result.outcome).toBe("scope-unreachable");
+      expect(result.failure?.kind).toBe("target-unreachable");
+      expect(result.failure?.message).toMatch(/^target unreachable \(.*unsafe port.*\)$/i);
+      expect(result.coverage.statesVisited).toBe(0);
+      expect(result.recordings).toEqual([]);
+    } finally {
+      await badSession.close();
+    }
+  }, 30_000);
+});
+
+describe("runInductionMission — scope containment (#89, reusing #64's scope model)", () => {
+  test("a coverage run started at area-a explores area-a's own states, records area-b as a departure, and never expands it", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/coverage-scope/area-a`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    // area-a + area-a/detail: exactly the in-scope target — area-b never counts as coverage.
+    expect(result.coverage.statesVisited).toBe(2);
+    expect(result.coverage.scope.outOfScopeTransitions).toBeGreaterThan(0);
+    expect(result.coverage.scope.departures.some((d) => d.url.includes("/coverage-scope/area-b"))).toBe(true);
+    // Area B's own control was never exercised: its state was recorded, never expanded.
+    expect(result.transcript.some((e) => e.target?.includes("Area B action") === true)).toBe(false);
+    // Area A's own in-scope detail action WAS exercised.
+    expect(result.transcript.some((e) => e.target?.includes("Detail action") === true && e.actOk)).toBe(true);
+  }, 30_000);
+
+  test("--route '/**' widens the scope, so area-b IS explored", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/coverage-scope/area-a`,
+      allowlist: [site.url],
+      routeGlobs: ["/**"],
+    });
+    expect(result.outcome).toBe("exhausted");
+    expect(result.coverage.scope.outOfScopeTransitions).toBe(0);
+    expect(result.transcript.some((e) => e.target?.includes("Area B action") === true && e.actOk)).toBe(true);
+  }, 30_000);
+});
+
+describe("runInductionMission — route templating collapses prefixed ids to one state (#95)", () => {
+  test("three /coverage-templating/items/item-<n> instances count as ONE route state", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/coverage-templating/items`,
+      allowlist: [site.url],
+    });
+    expect(result.outcome).toBe("exhausted");
+    // The items hub + ONE templated item-:id state = 2, never 4 (hub + 3 separate item states).
+    expect(result.coverage.statesVisited).toBe(2);
   }, 30_000);
 });
 
@@ -140,5 +253,97 @@ describe("runInductionMission — bounds", () => {
     });
     expect(result.outcome).toBe("cap");
     expect(result.coverage.frontierExhausted).toBe(false);
+  }, 30_000);
+});
+
+describe("runInductionMission — horizontal-overflow hard signal (#149)", () => {
+  async function runAt(seedPath: string, viewport: { width: number; height: number }, checkOverflow = false) {
+    const browserPort = new PlaywrightBrowserPort();
+    const narrowSession = await browserPort.open({ headless: true, allowedOrigins: [site.url], baseUrl: site.url, viewport });
+    try {
+      const narrowActor = CastActor.named("responsive-tester").whoCan(new BrowseTheWeb(narrowSession, [site.url]));
+      return await runInductionMission({
+        page: narrowSession.page,
+        actor: narrowActor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}${seedPath}`,
+        allowlist: [site.url],
+        overflow: { checkOverflow },
+      });
+    } finally {
+      await narrowSession.close();
+    }
+  }
+
+  test("--viewport 375x812 on /responsive/overflow gives a horizontal-overflow defect attributed to [data-testid=wide]", async () => {
+    const result = await runAt("/responsive/overflow", { width: 375, height: 812 });
+    expect(result.outcome).toBe("exhausted");
+    const overflowDefects = result.coverage.defects.filter((d) => d.overflow !== undefined);
+    expect(overflowDefects).toHaveLength(1);
+    const finding = overflowDefects[0]!.overflow!;
+    expect(finding.kind).toBe("horizontal-overflow");
+    expect(finding.element.descriptor).toBe("[data-testid=wide]");
+    expect(finding.overflowPx).toBeGreaterThanOrEqual(200);
+    expect(finding.overflowPx).toBeLessThanOrEqual(250);
+  }, 30_000);
+
+  test("/responsive/ok is clean at 375px (no overflow defect)", async () => {
+    const result = await runAt("/responsive/ok", { width: 375, height: 812 });
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+
+  test("/responsive/contained is clean at 375px (overflow is inside a scroll container, never page-level)", async () => {
+    const result = await runAt("/responsive/contained", { width: 375, height: 812 });
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+
+  test("/responsive/overflow is clean at 1280px (the same page fits at a desktop width)", async () => {
+    const result = await runAt("/responsive/overflow", { width: 1280, height: 800 }, true);
+    expect(result.coverage.defects.filter((d) => d.overflow !== undefined)).toEqual([]);
+  }, 30_000);
+});
+
+describe("runInductionMission — #213: a timed-out action is retried once before it counts", () => {
+  test("a working button that is still animating when first clicked (a 5s click timeout) lands on the retry — no failed action", async () => {
+    // The button keeps moving for 8s after load: Playwright's click waits for it to be stable and
+    // times out (5s) on the first try; the one retry lands once it stops.
+    const path = "/t213-slow-button";
+    await page.route(`${site.url}${path}`, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<!doctype html><html><head><style>@keyframes wob{from{transform:translateX(0)}to{transform:translateX(40px)}}
+#b{animation:wob .2s linear 40 alternate}</style></head><body><main><button id="b" onclick="document.getElementById('o').textContent='clicked'">Slow button</button><p id="o"></p></main></body></html>`,
+      }),
+    );
+    try {
+      const result = await runInductionMission({
+        page,
+        actor,
+        judgment: noDefects(),
+        generation: new FakeGenerationGateway(),
+        seedUrl: `${site.url}${path}`,
+        allowlist: [site.url],
+      });
+      expect(result.coverage.failedActions).toBe(0);
+      expect(result.coverage.timedOutActions).toBe(0);
+      expect(result.transcript.some((e) => (e.target ?? "").includes("Slow button") && e.actOk === true)).toBe(true);
+    } finally {
+      await page.unroute(`${site.url}${path}`);
+    }
+  }, 60_000);
+
+  test("a control-free start page's 'no action was taken' says why and how to reach clean", async () => {
+    const result = await runInductionMission({
+      page,
+      actor,
+      judgment: noDefects(),
+      generation: new FakeGenerationGateway(),
+      seedUrl: `${site.url}/whoami`,
+      allowlist: [site.url],
+    });
+    expect(result.coverage.sufficiency.shortfalls[0]).toMatch(
+      /^no action was taken — the start page offered no enabled control to act on; to reach clean: start --url on a page with its own controls/,
+    );
   }, 30_000);
 });

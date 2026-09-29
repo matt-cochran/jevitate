@@ -4,18 +4,113 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeGenerationGateway, FakeJudgmentGateway } from "@jevitate/ai-core";
-import { UnauthorizedExploreTargetError } from "@jevitate/explore";
+import { UnauthorizedExploreTargetError, type GoalBasedOutcome } from "@jevitate/explore";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
+import type { TranscriptEntryWithLogs } from "./log-correlation.js";
 import {
   parseAssertionSpec,
+  parseSuccessSpec,
   resolveExploreAllowlist,
   runExploration,
   runAuthorJourney,
   runCoverageMission,
   runAdversarialCliMission,
   runFeatureCliMission,
+  withServerCause,
 } from "./explore-api.js";
+
+const step = (url: string, serverLogs?: TranscriptEntryWithLogs["serverLogs"]): TranscriptEntryWithLogs => ({
+  step: 1,
+  op: "click",
+  target: 'button "Go"',
+  confidence: null,
+  chosenBy: "strategy",
+  actOk: true,
+  url,
+  signature: "s1",
+  controlCount: 1,
+  ...(serverLogs === undefined ? {} : { serverLogs }),
+});
+
+describe("withServerCause (#165 'Also' — pairs a UI blocker with its correlated server cause, pure)", () => {
+  it("appends the last step's error line to an already-computed reason, for a blocked/exhausted/inconclusive outcome", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/signup", [
+        { level: "error", message: "duplicate key value violates unique constraint", raw: "…", source: "file:app.log", epochMs: 1 },
+      ]),
+    ];
+    const reason = withServerCause('field "Email" is invalid — "already taken"', "blocked", transcript);
+    expect(reason).toBe(
+      'field "Email" is invalid — "already taken"; server: error "duplicate key value violates unique constraint"',
+    );
+  });
+
+  it("includes the logger's target/category when known", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/signup", [
+        { level: "error", message: "duplicate key", raw: "…", source: "file:app.log", epochMs: 1, target: "Api.Controllers.Signup" },
+      ]),
+    ];
+    const reason = withServerCause("blocked: no valid target", "blocked", transcript);
+    expect(reason).toBe('blocked: no valid target; server: error Api.Controllers.Signup "duplicate key"');
+  });
+
+  it("prefers an error line over a warn line attached to the same step", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/signup", [
+        { level: "warn", message: "slow query", raw: "…", source: "file:app.log", epochMs: 1 },
+        { level: "error", message: "the real cause", raw: "…", source: "file:app.log", epochMs: 2 },
+      ]),
+    ];
+    const reason = withServerCause("blocked", "blocked", transcript);
+    expect(reason).toContain("the real cause");
+  });
+
+  it("falls back to a warn line when no error is attached", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "warn", message: "slow query", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    const reason = withServerCause("blocked", "blocked", transcript);
+    expect(reason).toBe('blocked; server: warn "slow query"');
+  });
+
+  it("truncates a long message", () => {
+    const long = "x".repeat(300);
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "error", message: long, raw: "…", source: "file:app.log", epochMs: 1 }])];
+    const reason = withServerCause("blocked", "blocked", transcript);
+    expect(reason?.length).toBeLessThan(long.length + 40);
+    expect(reason).toContain("…");
+  });
+
+  it("is a no-op when there is no server-log evidence at all (no --log-source)", () => {
+    expect(withServerCause("blocked", "blocked", undefined)).toBe("blocked");
+  });
+
+  it("is a no-op when the last step has no warn/error server-log evidence", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "info", message: "handled", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    expect(withServerCause("blocked", "blocked", transcript)).toBe("blocked");
+  });
+
+  it("is a no-op when reason itself is undefined", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "error", message: "x", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    expect(withServerCause(undefined, "blocked", transcript)).toBeUndefined();
+  });
+
+  it("is a no-op for outcomes outside blocked/exhausted/inconclusive (e.g. succeeded, defects-found)", () => {
+    const transcript: TranscriptEntryWithLogs[] = [step("http://x.test/signup", [{ level: "error", message: "x", raw: "…", source: "file:app.log", epochMs: 1 }])];
+    const succeeded: GoalBasedOutcome = "succeeded";
+    const defectsFound: GoalBasedOutcome = "defects-found";
+    expect(withServerCause("all good", succeeded, transcript)).toBe("all good");
+    expect(withServerCause("already reported separately", defectsFound, transcript)).toBe("already reported separately");
+  });
+
+  it("only looks at the LAST transcript entry — a stale error from an earlier step is not the current blocker", () => {
+    const transcript: TranscriptEntryWithLogs[] = [
+      step("http://x.test/step1", [{ level: "error", message: "earlier unrelated error", raw: "…", source: "file:app.log", epochMs: 1 }]),
+      { ...step("http://x.test/step2"), step: 2, signature: "s2" },
+    ];
+    expect(withServerCause("blocked", "blocked", transcript)).toBe("blocked");
+  });
+});
 
 describe("explore-api — assertion spec + allowlist (pure, no browser)", () => {
   it("parses urlIncludes / visible / textIncludes / count specs", () => {
@@ -40,6 +135,102 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     expect(() => parseAssertionSpec("nope")).toThrow();
     expect(() => parseAssertionSpec("urlIncludes:")).toThrow();
     expect(() => parseAssertionSpec("visible:foo=bar")).toThrow(/no usable selector/);
+  });
+
+  it("#213: a bare, lowercase, syntactically valid CSS selector is read as CSS", () => {
+    // The issue's own repro: textIncludes:h1|… used to be rejected as having no usable selector.
+    expect(parseAssertionSpec("textIncludes:h1|Welcome")).toEqual({
+      kind: "textIncludes",
+      target: { css: "h1" },
+      text: "Welcome",
+    });
+    expect(parseAssertionSpec("visible:main h1")).toEqual({ kind: "visible", target: { css: "main h1" } });
+    expect(parseAssertionSpec("visible:body")).toEqual({ kind: "visible", target: { css: "body" } });
+    expect(parseAssertionSpec("visible:div.card")).toEqual({ kind: "visible", target: { css: "div.card" } });
+    expect(parseAssertionSpec("visible:ul > li")).toEqual({ kind: "visible", target: { css: "ul > li" } });
+  });
+
+  it("#213: a bare descriptor that is not valid lowercase CSS is refused with a key=value hint, never guessed as text or CSS", () => {
+    // "Display name" — an accessible-name phrase, not a tag name: the capital letters refuse it.
+    expect(() => parseAssertionSpec("visible:Display name")).toThrow(
+      /no usable selector — use css=<selector>, label=<text>, testId=<id>, role=<role>;name=<name>, or text=<text>/,
+    );
+    expect(() => parseAssertionSpec("visible:Save button")).toThrow(/no usable selector/);
+  });
+
+  it("parses valueEquals (a form control's value) with key=value or CSS-selector descriptors", () => {
+    expect(parseAssertionSpec("valueEquals:label=Last name|Litmus")).toEqual({
+      kind: "valueEquals",
+      target: { label: "Last name" },
+      value: "Litmus",
+    });
+    // The issue's own example: a [data-testid=…] selector is read as the test id.
+    expect(parseAssertionSpec("valueEquals:[data-testid=profile-general-lastName]|Litmus")).toEqual({
+      kind: "valueEquals",
+      target: { testId: "profile-general-lastName" },
+      value: "Litmus",
+    });
+    expect(parseAssertionSpec('valueEquals:[data-testid="last"]|')).toEqual({
+      kind: "valueEquals",
+      target: { testId: "last" },
+      value: "",
+    });
+    expect(parseAssertionSpec("valueEquals:#profile input[name=last]|x")).toEqual({
+      kind: "valueEquals",
+      target: { css: "#profile input[name=last]" },
+      value: "x",
+    });
+    expect(() => parseAssertionSpec("valueEquals:testId=last")).toThrow(/<descriptor>\|<value>/);
+  });
+
+  it("parses every --success check kind: page, reloadThen, requestMade, responseStatus", () => {
+    expect(parseSuccessSpec("urlIncludes:/done")).toEqual({ kind: "page", assertion: { kind: "urlIncludes", text: "/done" } });
+    expect(parseSuccessSpec("reloadThen:valueEquals:[data-testid=last]|Litmus")).toEqual({
+      kind: "reloadThen",
+      assertion: { kind: "valueEquals", target: { testId: "last" }, value: "Litmus" },
+    });
+    expect(parseSuccessSpec("requestMade:put /api/profile/*")).toEqual({
+      kind: "requestMade",
+      method: "PUT",
+      pathGlob: "/api/profile/*",
+    });
+    expect(parseSuccessSpec("requestMade:* /api/**")).toEqual({ kind: "requestMade", method: "*", pathGlob: "/api/**" });
+    expect(parseSuccessSpec("responseStatus:PUT /api/profile=2xx")).toEqual({
+      kind: "responseStatus",
+      method: "PUT",
+      pathGlob: "/api/profile",
+      status: { class: 2 },
+    });
+    expect(parseSuccessSpec("responseStatus:POST /api/items=201")).toMatchObject({ status: { code: 201 } });
+    expect(parseSuccessSpec("responseStatus:DELETE /api/items/*=4XX")).toMatchObject({ status: { class: 4 } });
+  });
+
+  it("rejects malformed --success checks", () => {
+    expect(() => parseSuccessSpec("requestMade:/api/profile")).toThrow(/<METHOD> <path-glob>/);
+    // Method and glob both present, but the glob isn't rooted at "/" — a distinct, more
+    // specific error than the generic shape mismatch above (issue #83).
+    expect(() => parseSuccessSpec("requestMade:PUT api/profile")).toThrow(
+      /path glob must start with "\/" \(got "api\/profile"\)/,
+    );
+    expect(() => parseSuccessSpec("requestMade:POST */ReverseEngineerStream")).toThrow(
+      /path glob must start with "\/" \(got "\*\/ReverseEngineerStream"\)/,
+    );
+    expect(() => parseSuccessSpec("responseStatus:PUT /api/profile")).toThrow(/=<2xx\|4xx\|code>/);
+    expect(() => parseSuccessSpec("responseStatus:PUT /api/profile=ok")).toThrow(/2xx, 4xx/);
+    expect(() => parseSuccessSpec("responseStatus:PUT /api/profile=600")).toThrow(/2xx, 4xx/);
+    expect(() => parseSuccessSpec("reloadThen:reloadThen:urlIncludes:/x")).toThrow(/cannot be nested/);
+    expect(() => parseSuccessSpec("reloadThen:nope")).toThrow();
+    expect(() => parseSuccessSpec("nope")).toThrow();
+  });
+
+  it("documents every --success kind in the explore help, and --success is repeatable", () => {
+    const program = buildProgram({ profiles: new ProfileManager("/unused") });
+    const explore = program.commands.find((c) => c.name() === "explore");
+    const success = explore?.options.find((o) => o.long === "--success");
+    for (const kind of ["urlIncludes:", "visible:", "textIncludes:", "count:", "valueEquals:", "reloadThen:", "requestMade:", "responseStatus:"]) {
+      expect(success?.description).toContain(kind);
+    }
+    expect(success?.description).toContain("repeatable");
   });
 
   it("defaults the allowlist to the URL's own origin, honoring explicit --allow", () => {
@@ -99,6 +290,21 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     const persisted = await new FsJourneyStore(journeysDir).get("explore-checkout");
     expect(persisted?.metadata.authoredBy).toBe("jev-driven");
     expect(persisted?.metadata.promoted).toBe(false);
+    expect(persisted?.metadata.requiresAuth).toBeUndefined();
+
+    // #170: authored behind a login ⇒ it declares requiresAuth, so a run without a session fails fast.
+    await runAuthorJourney({
+      url: "https://fixture.test/checkout",
+      goal: "reach the confirmation page",
+      successAssertion: parseAssertionSpec("visible:testId=confirmed"),
+      allowlist: ["https://fixture.test"],
+      journeysDir,
+      journeyId: "explore-checkout",
+      journeyName: "Explore: checkout",
+      storageState: "/unused/state.json",
+      authorImpl: async () => ({ outcome: "authored", journey: authored }),
+    });
+    expect((await new FsJourneyStore(journeysDir).get("explore-checkout"))?.metadata.requiresAuth).toBe(true);
   });
 
   it("runAuthorJourney refuses an off-allowlist target BEFORE authoring", async () => {
@@ -134,6 +340,23 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
     expect(browserPortFactory).not.toHaveBeenCalled();
   });
 
+  it("runCoverageMission (#89): routeGlobs is accepted and the authorized-target guard still runs FIRST", async () => {
+    const browserPortFactory = vi.fn(() => {
+      throw new Error("browser must not be opened for an unauthorized target");
+    });
+    await expect(
+      runCoverageMission({
+        url: "http://127.0.0.1:3000/area-a",
+        allowlist: ["https://only-this.example.com"],
+        judge: new FakeJudgmentGateway({ isDefect: { kind: "noul", value: false, probability: 0 } }),
+        gen: new FakeGenerationGateway(),
+        routeGlobs: ["/**"],
+        browserPortFactory,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedExploreTargetError);
+    expect(browserPortFactory).not.toHaveBeenCalled();
+  });
+
   it("runFeatureCliMission refuses an undeclared origin (no browser touched)", async () => {
     await expect(
       runFeatureCliMission({
@@ -141,7 +364,6 @@ describe("explore-api — assertion spec + allowlist (pure, no browser)", () => 
         allowlist: ["https://authorized.test"],
         capability: "checkout",
         routeGlobs: ["/checkout/**"],
-        profileDir: "/tmp/unused",
       }),
     ).rejects.toThrow(UnauthorizedExploreTargetError);
   });
@@ -162,6 +384,34 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     await program.parseAsync(["explore", "--url", "http://127.0.0.1:3000/login", "--json"], { from: "user" });
     const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS" } });
+  });
+
+  it("adversarial: refuses a --min-control-coverage outside 0..1 before any browser opens", async () => {
+    const { program, lines } = newProgram();
+    program.configureOutput({ writeErr: () => undefined });
+    program.commands.forEach((c) => c.exitOverride());
+    // #218: parsed at parse time (cli-args.ts ratioArg) — a usage error (64), the envelope still printed under --json.
+    await expect(
+      program.parseAsync(
+        ["explore", "--strategy", "adversarial", "--url", "http://127.0.0.1:3000/login", "--fake-ai", "--min-control-coverage", "2", "--json"],
+        { from: "user" },
+      ),
+    ).rejects.toMatchObject({ exitCode: 64 });
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("from 0 to 1") } });
+  });
+
+  it("refuses a --success-when other than held|final before any browser opens (#80)", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      [
+        "explore", "--url", "http://127.0.0.1:3000/login", "--goal", "g", "--success", "visible:testId=x",
+        "--success-when", "sometimes", "--fake-ai", "--json",
+      ],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("--success-when") } });
   });
 
   it("fails on a malformed --success spec", async () => {
@@ -193,6 +443,17 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
   });
 
+  it("a find-out goal (#130d) does not require --success and reaches gateway setup", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--url", "http://127.0.0.1:3000/login", "--goal", "find out how many contacts are overdue and report the count", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    // Got PAST the goal-args validation (no E_EXPLORE_ARGS) to gateway setup.
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+
   it("explore --strategy coverage does not require --goal/--success and reaches gateway setup", async () => {
     const { program, lines } = newProgram();
     await program.parseAsync(
@@ -202,6 +463,26 @@ describe("explore command — argument + setup refusals (no browser)", () => {
     const parsed = JSON.parse(lines.join(""));
     // Got PAST the goal-args validation (no E_EXPLORE_ARGS) to gateway setup,
     // proving the coverage strategy is a distinct, goal-free path.
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
+  });
+
+  it("coverage: --scope only accepts 'app', refused before any gateway/browser setup (#89)", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--strategy", "coverage", "--url", "http://127.0.0.1:3000/login", "--scope", "everything", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
+    expect(parsed).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS", message: expect.stringContaining("--scope") } });
+  });
+
+  it("coverage: --scope app is accepted and reaches gateway setup (#89)", async () => {
+    const { program, lines } = newProgram();
+    await program.parseAsync(
+      ["explore", "--strategy", "coverage", "--url", "http://127.0.0.1:3000/login", "--scope", "app", "--json"],
+      { from: "user" },
+    );
+    const parsed = JSON.parse(lines.join(""));
     expect(parsed).toMatchObject({ ok: false, error: { code: "E_AI_SETUP_REQUIRED" } });
   });
 });
@@ -216,7 +497,6 @@ describe("runAdversarialCliMission — fail-closed (no browser)", () => {
         strategies: ["ordering-violation"],
         judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0 } }),
         generation: new FakeGenerationGateway(),
-        profileDir: "/tmp/unused",
         // If the guard failed to fail-closed, this factory would run and flip the flag.
         browserPortFactory: () => {
           opened = true;

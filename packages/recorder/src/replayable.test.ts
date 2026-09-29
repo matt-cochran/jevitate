@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
@@ -40,9 +37,7 @@ type Session = Awaited<ReturnType<typeof port.open>>;
 
 /** Each call gets its own profile directory, so two sessions share no state. */
 async function withSession<T>(prefix: string, body: (session: Session) => Promise<T>): Promise<T> {
-  const profileDir = await mkdtemp(join(tmpdir(), prefix));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [site.url],
     baseUrl: site.url,
@@ -51,7 +46,6 @@ async function withSession<T>(prefix: string, body: (session: Session) => Promis
     return await body(session);
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -94,7 +88,10 @@ test(
     const fillRef = findFillStepRef(recording);
     const fillStep = recording.pages[fillRef.page]!.steps[fillRef.step]!.step;
     if (fillStep.kind !== "fill") throw new Error(`expected a fill step at ${JSON.stringify(fillRef)}`);
-    expect(fillStep.target).toEqual({ role: "textbox", name: "Username" });
+    // The recorder may also capture a stable anchor (the input's `name` attribute) depending on when
+    // the descriptor is read; either shape replays. Require the semantic locator, allow that anchor.
+    expect(fillStep.target).toMatchObject({ role: "textbox", name: "Username" });
+    if ("anchor" in fillStep.target) expect(fillStep.target.anchor).toEqual({ name: "username" });
     expect(fillStep.value).toEqual({ redacted: true, length: "jane".length });
     expect(values.get(`${fillRef.page}:${fillRef.step}`)).toBe("jane");
 

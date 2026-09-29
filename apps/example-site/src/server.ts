@@ -1,15 +1,27 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
+import { appendFileSync } from "node:fs";
 import { SEED_THREADS } from "./data.js";
+import { registerTenancy, type TenancyOptions } from "./tenancy.js";
+import { registerDemo, type DemoOptions } from "./demo.js";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const authed = (req: { cookies: Record<string, string | undefined> }) => req.cookies.sid === "ok";
 
-export function buildServer(): FastifyInstance {
+export interface ServerOptions {
+  /** The `/tenancy/*` two-tenant fixture (#147); the object is kept, so `leaky` can be flipped at runtime. */
+  readonly tenancy?: TenancyOptions;
+  /** The `/demo/*` launch-demo form (docs/demo.md) and whether its planted bug is fixed. */
+  readonly demo?: DemoOptions;
+}
+
+export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   const app = Fastify();
   app.register(cookie);
   app.register(formbody);
+  registerTenancy(app, opts.tenancy);
+  registerDemo(app, opts.demo);
 
   app.get("/login", async (_req, reply) => {
     reply.type("text/html").send(`<!doctype html><html><body><h1>Sign in</h1>
@@ -56,6 +68,48 @@ export function buildServer(): FastifyInstance {
     reply.code(404).send("not found");
   });
 
+  // Additive fixture for @jevitate/cli's backend log correlation (#142): each route returns 200
+  // immediately (the browser/mission sees nothing wrong) and appends a backend log line to
+  // $EXAMPLE_SITE_LOG, if set — a test points --log-source at that file. Namespaced under
+  // /server-log-mission to stay clear of other fixtures edited in parallel.
+  app.get("/server-log-mission/warn", async (_req, reply) => {
+    const logFile = process.env.EXAMPLE_SITE_LOG;
+    if (logFile !== undefined) {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({ level: "warn", time: new Date().toISOString(), message: "Not Authorized for feature AllOrganizations_View" })}\n`,
+      );
+    }
+    reply.send({ ok: true });
+  });
+
+  // The error line embeds a fixture "secret" value (a fake bearer token) so a test can assert the
+  // run's `--secret` redaction reaches server-log evidence too, never just page/model-facing text.
+  app.get("/server-log-mission/error", async (_req, reply) => {
+    const logFile = process.env.EXAMPLE_SITE_LOG;
+    if (logFile !== undefined) {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({
+          level: "error",
+          time: new Date().toISOString(),
+          message: "GetActiveRatePlanForOffer failed for token tok_live_FIXTURE_SECRET_42: no resolvable active subscription tier yet",
+        })}\n`,
+      );
+    }
+    reply.send({ ok: true });
+  });
+
+  // Two buttons, nothing else clickable (deterministic control order for a scripted test): the
+  // first hits /server-log-mission/warn, the second /server-log-mission/error, each updating
+  // #status so a --success check can require BOTH to have fired.
+  app.get("/server-log-mission/page", async (_req, reply) => {
+    reply.type("text/html").send(`<!doctype html><html><body><h1>Server log mission</h1>
+<button data-testid="warn-btn" onclick="fetch('/server-log-mission/warn').then(()=>{document.querySelector('[data-testid=status]').textContent+=' warn-done'})">Trigger warn</button>
+<button data-testid="error-btn" onclick="fetch('/server-log-mission/error').then(()=>{document.querySelector('[data-testid=status]').textContent+=' error-done'})">Trigger error</button>
+<div data-testid="status"></div></body></html>`);
+  });
+
   app.get<{ Params: { id: string } }>("/thread/:id", async (req, reply) => {
     if (!authed(req)) { reply.redirect("/login"); return; }
     const t = SEED_THREADS.find((x) => x.id === req.params.id);
@@ -83,5 +137,211 @@ export function buildServer(): FastifyInstance {
     );
   });
 
+  // Additive fixture for the feature-testing mission's ranking + scope
+  // guardrails (ticket #78): a header `<nav>` of 5 links — global chrome,
+  // present byte-identically on every page under this fixture — plus, on the
+  // `/shop` page only, an in-scope `<section>` of 3 "Buy pack" buttons that
+  // mutate the page in place (no navigation, so they never leave scope). The
+  // nav links all point OUTSIDE the `/feature-mission/shop` route glob, so a
+  // correct mission must record them as boundary edges (never expanded, never
+  // counted as a discovered feature path) while still exercising the buttons.
+  // `/feature-mission/chrome-only` carries the same nav and nothing else — no
+  // control there serves any capability, so a mission scoped to it alone must
+  // end `inconclusive`, never `clean`.
+  const FEATURE_MISSION_NAV: readonly [string, string][] = [
+    ["home", "Home"],
+    ["docs", "Docs"],
+    ["pricing", "Pricing"],
+    ["about", "About"],
+    ["contact", "Contact"],
+  ];
+  const featureMissionChrome = (): string =>
+    `<header><nav data-testid="global-nav">${FEATURE_MISSION_NAV.map(
+      ([slug, label]) => `<a href="/feature-mission/${esc(slug)}" data-testid="nav-${esc(slug)}">${esc(label)}</a>`,
+    ).join("")}</nav></header>`;
+
+  app.get("/feature-mission/shop", async (_req, reply) => {
+    const packs = [1, 2, 3]
+      .map(
+        (n) =>
+          `<button data-testid="buy-pack-${n}" onclick="this.textContent='Added pack ${n}'">Buy pack ${n}</button>`,
+      )
+      .join("");
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${featureMissionChrome()}<section data-testid="packs"><h1>Buy a pack</h1>${packs}</section></body></html>`,
+    );
+  });
+
+  for (const [slug] of FEATURE_MISSION_NAV) {
+    app.get(`/feature-mission/${slug}`, async (_req, reply) => {
+      reply.type("text/html").send(
+        `<!doctype html><html><body>${featureMissionChrome()}<main><h1>${esc(slug)}</h1></main></body></html>`,
+      );
+    });
+  }
+
+  app.get("/feature-mission/chrome-only", async (_req, reply) => {
+    reply.type("text/html").send(`<!doctype html><html><body>${featureMissionChrome()}</body></html>`);
+  });
+
+  // Additive fixture for the coverage/exploratory mission's scope containment (#89, reusing #64's
+  // scope model): area-a links to an in-scope sub-page AND to an out-of-scope area-b. A coverage
+  // run started at /coverage-scope/area-a must explore area-a and its own detail page, record
+  // area-b as a departure, and never expand area-b's own states unless the scope is explicitly
+  // widened (--route '/**' or --scope app). Namespaced under /coverage-scope/* to stay clear of
+  // other fixtures.
+  app.get("/coverage-scope/area-a", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Area A</h1>` +
+        `<a href="/coverage-scope/area-a/detail">Detail</a> ` +
+        `<a href="/coverage-scope/area-b">Go to Area B</a>` +
+        `</body></html>`,
+    );
+  });
+  // Buttons here are inert (no onclick): a mutating label would fingerprint as a SECOND state
+  // (before/after click), which is correct behavior elsewhere but would obscure this fixture's
+  // single concern — scope containment — under an unrelated state count.
+  app.get("/coverage-scope/area-a/detail", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Area A detail</h1><button>Detail action</button></body></html>`,
+    );
+  });
+  app.get("/coverage-scope/area-b", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Area B</h1><button>Area B action</button></body></html>`,
+    );
+  });
+
+  // Additive fixture for route templating (#95): three item pages under a PREFIXED id
+  // (item-1/item-2/item-3), identical apart from the id in the path and a text node (never a
+  // control). The coverage mission's state fingerprint (`urlTemplate`) must collapse all three
+  // into ONE `/coverage-templating/items/item-:id` state, not three.
+  app.get("/coverage-templating/items", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Items</h1>` +
+        `<a href="/coverage-templating/items/item-1">Item 1</a> ` +
+        `<a href="/coverage-templating/items/item-2">Item 2</a> ` +
+        `<a href="/coverage-templating/items/item-3">Item 3</a>` +
+        `</body></html>`,
+    );
+  });
+  // The button is inert (no onclick): a mutating label would fingerprint as a second state
+  // per item id, obscuring the templating collapse this fixture exists to prove.
+  app.get<{ Params: { id: string } }>("/coverage-templating/items/:id", async (req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body><h1>Item</h1><p data-testid="item-id">${esc(req.params.id)}</p>` +
+        `<button>Mark reviewed</button></body></html>`,
+    );
+  });
+
+  // Additive fixture for per-mission viewport/device emulation + the horizontal-overflow hard
+  // signal (#149). Three pages, same table markup, different layout:
+  //  - /responsive/ok: fluid (max-width: 100%) — never overflows, at any viewport.
+  //  - /responsive/overflow: a table[data-testid=wide] with min-width:600px and NO scroll wrapper —
+  //    overflows the page itself at a narrow (375px) viewport; ~225px of it, matching the
+  //    acceptance criterion (600 - 375 = 225).
+  //  - /responsive/contained: the SAME wide table, but inside an overflow-x:auto wrapper — the
+  //    overflow is contained in a scroll container, never page-level, so it must never fire.
+  // Each page also carries one inert (no onclick) button: the adversarial mission's seed-load gate
+  // requires at least one rendered control to proceed past "nothing to misuse" — a mutating button
+  // would fingerprint as a second state, obscuring these fixtures' single concern (#149).
+  const responsiveStyle = "<style>body{margin:0;padding:8px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px}</style>";
+  const wideTable = (testId: string) =>
+    `<table data-testid="${esc(testId)}" style="min-width:600px"><thead><tr><th>Key</th><th>Name</th><th>Created</th></tr></thead>` +
+    `<tbody><tr><td>k_live_1</td><td>Production key</td><td>2026-01-01</td></tr></tbody></table>`;
+
+  app.get("/responsive/ok", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${responsiveStyle}<h1>Responsive OK</h1>` +
+        `<table data-testid="fluid" style="max-width:100%;width:100%"><thead><tr><th>Key</th><th>Name</th></tr></thead>` +
+        `<tbody><tr><td>k_live_1</td><td>Production key</td></tr></tbody></table><button type="button">Acknowledge</button></body></html>`,
+    );
+  });
+  app.get("/responsive/overflow", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${responsiveStyle}<h1>Responsive overflow</h1>${wideTable("wide")}<button type="button">Acknowledge</button></body></html>`,
+    );
+  });
+  app.get("/responsive/contained", async (_req, reply) => {
+    reply.type("text/html").send(
+      `<!doctype html><html><body>${responsiveStyle}<h1>Responsive contained</h1>` +
+        `<div data-testid="scroll-wrapper" style="overflow-x:auto;max-width:100%">${wideTable("wide-contained")}</div>` +
+        `<button type="button">Acknowledge</button></body></html>`,
+    );
+  });
+
+  // Rich-text editor fixture (#148): three contenteditable prose blocks (persisted per server
+  // instance, so `reloadThen` proves an edit saved), `[data-heat]` highlight spans, and an SVG
+  // minimap whose cells scroll their block into view and flash it for 800 ms.
+  //   ?broken=heat    — the heat spans render with alpha 0 (text and count unchanged)
+  //   ?broken=minimap — a cell scrolls to the WRONG block and never flashes
+  const blocks = new Map<string, string>(EDITOR_BLOCKS);
+  app.get<{ Querystring: { broken?: string } }>("/editor-fixture", async (req, reply) => {
+    const broken = req.query.broken ?? "";
+    const heatAlpha = broken === "heat" ? "0" : "0.4";
+    const ids = [...blocks.keys()];
+    const cells = ids
+      .map(
+        (id, i) =>
+          `<rect data-cell="${i + 1}" data-target="${id}" role="button" aria-label="Jump to block ${i + 1}" x="0" y="${i * 40}" width="40" height="36" fill="#8ab"></rect>`,
+      )
+      .join("");
+    const prose = ids.map((id) => `<p id="${id}" class="block" contenteditable="true">${blocks.get(id) ?? ""}</p>`).join("\n");
+    reply.type("text/html").send(`<!doctype html><html><head><title>Editor fixture</title><style>
+body { font: 16px/1.5 sans-serif; margin: 0; padding: 16px 80px 16px 16px; }
+.block { margin: 0 0 150vh; padding: 8px; }
+[data-heat] { background-color: rgba(255, 200, 0, ${heatAlpha}); }
+.flash { outline: 3px solid orange; }
+#minimap { position: fixed; top: 10px; right: 10px; }
+</style></head><body><h1>Editor</h1>
+<svg id="minimap" width="40" height="${ids.length * 40}">${cells}</svg>
+${prose}
+<script>
+const broken = ${JSON.stringify(broken)};
+const ids = ${JSON.stringify(ids)};
+// Every keystroke saves; a sequence number lets the server drop a save that arrives after a newer
+// one (concurrent PUTs can land out of order on a loaded host).
+let seq = 0;
+for (const p of document.querySelectorAll(".block")) {
+  p.addEventListener("input", () => {
+    seq += 1;
+    fetch("/editor-fixture/blocks/" + p.id, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ html: p.innerHTML, seq }), keepalive: true });
+  });
+}
+for (const cell of document.querySelectorAll("rect[data-cell]")) {
+  cell.addEventListener("click", () => {
+    let id = cell.getAttribute("data-target");
+    if (broken === "minimap") id = ids[(ids.indexOf(id) + 1) % ids.length];
+    const block = document.getElementById(id);
+    block.scrollIntoView({ block: "center" });
+    if (broken === "minimap") return;
+    block.classList.add("flash");
+    setTimeout(() => block.classList.remove("flash"), 800);
+  });
+}
+</script></body></html>`);
+  });
+  const lastSeq = new Map<string, number>();
+  app.put<{ Params: { id: string }; Body: { html?: string; seq?: number } }>("/editor-fixture/blocks/:id", async (req, reply) => {
+    if (!blocks.has(req.params.id) || typeof req.body?.html !== "string") {
+      reply.code(400).send({ ok: false });
+      return;
+    }
+    const seq = typeof req.body.seq === "number" ? req.body.seq : Number.POSITIVE_INFINITY;
+    // Last WRITTEN wins, not last ARRIVED: a stale save that lands late never overwrites a newer one.
+    if (seq >= (lastSeq.get(req.params.id) ?? 0)) {
+      lastSeq.set(req.params.id, seq);
+      blocks.set(req.params.id, req.body.html);
+    }
+    reply.send({ ok: true });
+  });
+
   return app;
 }
+
+/** The editor fixture's initial prose blocks (#148), by id. */
+export const EDITOR_BLOCKS: ReadonlyArray<readonly [string, string]> = [
+  ["b1", 'The draft opens with <span data-heat="3">three risky claims</span> and <span data-heat="1">a soft hedge</span>.'],
+  ["b2", "Paragraph two says the quick brown fox jumps over the lazy dog."],
+  ["b3", "The closing paragraph thanks the reader for their time."],
+];

@@ -1,6 +1,6 @@
 ---
 name: jevitate-load-test
-description: Runs a seeded, human-paced concurrent load test of a promoted Journey via `jevitate load run`, against an explicitly authorized target only. Use when a user wants a capacity/throughput measurement, not a single functional run.
+description: Run a seeded, human-paced concurrent load test of a promoted jevitate Journey (`jevitate load run`, MCP `run_load_test`) against an origin the human explicitly authorized, optionally on a named environment (`--env`). Use when the user wants capacity, throughput or latency numbers. For a single functional run, use jevitate-run-journey.
 ---
 
 You scope and run a throughput/capacity measurement, never a single functional
@@ -19,12 +19,21 @@ check (use `jevitate-run-journey` for that instead).
 
 - `jevitate load run <journeyId> --authorized-origin <origin> [--authorized-origin
   <origin2> ...] --param k=v --concurrency <n> --iterations <n> --seed <n>
-  --json`.
+  [--storage-state <file>] --json`.
 - `<journeyId>` must be a promoted Journey id (same discovery flow as
   `jevitate-run-journey`: `jevitate journey find`/`find_capabilities` first).
+- `--env <name>` / `--base-url <origin>` runs it against a named environment
+  (`.jevitate/environments.json`) instead of the recorded site; the
+  `--authorized-origin` must still name that origin explicitly.
+- MCP: `run_load_test` takes the same arguments (`authorizedOrigin`,
+  `concurrency`, `iterations`, `seed`, …).
 - `--seed` makes the run reproducible — if the human wants to compare two
   configurations, keep the seed fixed and vary only `--concurrency`/
   `--iterations`.
+- `--storage-state <file>` seeds EVERY pool member's session from the same
+  Playwright storageState file (the same authenticated pre-step as `jevitate
+  journey run` — see `jevitate-run-journey`), for load-testing a Journey that
+  needs an authenticated session.
 
 ## Reading the result
 

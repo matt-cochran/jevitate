@@ -1,0 +1,957 @@
+=== RUNTIME (dist/index.js) ===
+
+# @jevitate/ai-core (85 exports)
+  AI_CORE: const (string)
+  ALL_CREDENTIAL_KEYS: array
+  BACKOFF_SCHEDULE_MS: array
+  CHAT_REPLY_INSTRUCTIONS: const (string)
+  CHAT_REPLY_STUCK_INSTRUCTIONS: const (string)
+  CatalogModelSchema: object
+  ChatReplyInput: object
+  ChatReplyOutput: object
+  CredentialLeakError: class
+  FAKE_CALL_USAGE: object
+  FAKE_MODEL: const (string)
+  FEATURE_KEYS: object
+  FORM_VALUE_INSTRUCTIONS: const (string)
+  FakeGenerationGateway: class
+  FakeJudgmentGateway: class
+  FormValueInput: object
+  FormValueOutput: object
+  GENERATION_PRICE_TABLE: object
+  GEN_TASKS: object
+  GOAL_ANSWER_INSTRUCTIONS: const (string)
+  GoalAnswerInput: object
+  GoalAnswerOutput: object
+  JEV_PRICE_TABLE: object
+  JOURNEY_GOAL_INSTRUCTIONS: const (string)
+  JOURNEY_STEP_INSTRUCTIONS: const (string)
+  JevJudgmentGateway: class
+  JevResponseError: class
+  JourneyGoalInput: object
+  JourneyGoalOutput: object
+  JourneyStepInput: object
+  JourneyStepOutput: object
+  MAX_CHOICE_OPTIONS: const (number)
+  MissingCredentialError: class
+  ModelConstraintsSchema: object
+  NoEligibleModelError: class
+  OpenRouterGenerationGateway: class
+  REDACTION_MASK: const (string)
+  RetryExhaustedError: class
+  RetryingGenerationPort: class
+  RetryingJudgmentPort: class
+  SECRET_IN_MODEL_PAYLOAD: const (string)
+  SENSITIVE_URL_PARAMS: object
+  SecretLeakError: class
+  TEXT_EDIT_INSTRUCTIONS: const (string)
+  TextEditInput: object
+  TextEditOutput: object
+  TriageInput: object
+  TriageOutput: object
+  UsageTracker: class
+  UxRecommendationInput: object
+  UxRecommendationOutput: object
+  UxSpecificsInput: object
+  UxSpecificsItem: object
+  UxSpecificsOutput: object
+  aggregateOf: function
+  apiKeyFromAuthHeader: function
+  assertNoOutboundCredential: function
+  assertNoSecretInPayload: function
+  collectMissingKeys: function
+  envAliasesFor: function
+  envCredentialStore: function
+  failureClass: function
+  filterCatalog: function
+  formatUsageLine: function
+  fromSdkAnswers: function
+  isTransientError: function
+  jittered: function
+  openRouterProviderSettings: function
+  priceCall: function
+  realJevClientCall: function
+  redactContext: function
+  redactText: function
+  redactUrl: function
+  requireKeys: function
+  retryTransient: function
+  secretForms: function
+  selectModel: function
+  sumUsage: function
+  summarizeCalls: function
+  taskTemperature: function
+  toSdkQuestions: function
+  toSetupRequiredResult: function
+  usageCountsFrom: function
+  usageSidecar: function
+  withPreflight: function
+
+# @jevitate/application (0 exports)
+
+# @jevitate/daemon (1 exports)
+  ProfileManager: class
+
+# @jevitate/domain (53 exports)
+  DEFAULT_HEAP_GROWTH_RULE: object
+  DEFAULT_JEVITATE_REPO: const (string)
+  DEGRADED_FINDINGS: array
+  EnvironmentDegradedSchema: object
+  GOAL_ONLY_OUTCOMES: array
+  GOAL_OUTCOMES: array
+  GOAL_OUTCOME_FOLD: object
+  HostHealthSummarySchema: object
+  MAX_SAFE_NAME_LENGTH: const (number)
+  MISSION_EXIT_CODES: object
+  MISSION_OUTCOMES: array
+  MISSION_RESULT_SCHEMA_VERSION: const (number)
+  MissionResultSchema: object
+  Pacer: class
+  PersistedMissionResultSchema: object
+  RESULT_GOAL_OUTCOMES: array
+  RESULT_MISSION_OUTCOMES: array
+  RESULT_STRATEGIES: array
+  ResultDefectSchema: object
+  ResultEngineSchema: object
+  ResultHangSchema: object
+  ResultTargetSchema: object
+  ResultUsageSchema: object
+  SitePolicySchema: object
+  UnsafeNameError: class
+  assertInsideRoot: function
+  assertSafeName: function
+  attributeCrash: function
+  combineOutcomes: function
+  contentHash: function
+  evaluateGate: function
+  fileDraft: function
+  fingerprintMarker: function
+  foldGoalOutcome: function
+  gatingDefects: function
+  gaussian: function
+  hasOwnFrame: function
+  isBrokenRun: function
+  isGoalOutcome: function
+  isUnboundedHeapGrowth: function
+  isWithinQuietHours: function
+  looksLikeRendererOom: function
+  makeRng: function
+  nextOpenAfter: function
+  occurrenceComment: function
+  outcomeExitCode: function
+  resolveThrottle: function
+  safeChildPath: function
+  safeRunPolicy: function
+  seedFrom: function
+  simulateTiming: function
+  targetsFor: function
+  worstOutcome: function
+
+# @jevitate/explore (307 exports)
+  ALREADY_VETOED_REASON: const (string)
+  ANSWER_FITS_INSTRUCTIONS: const (string)
+  ANSWER_FITS_QUESTION: const (string)
+  ANSWER_PAGES_CHARS: const (number)
+  ANSWER_VETO_BELOW: const (number)
+  API_CREDENTIAL_HEADERS: array
+  BoundsTracker: class
+  BudgetMonitor: class
+  CONVERSATION_GUIDE: const (string)
+  CORRELATION_WINDOW_MS: const (number)
+  CoverageTracker: class
+  CrashWatch: class
+  DEFAULT_ADVERSARIAL_TIME_BUDGET_MS: const (number)
+  DEFAULT_ALLOWED_WRITES: array
+  DEFAULT_BOUNDS: object
+  DEFAULT_CLICK_TIMEOUT_MS: const (number)
+  DEFAULT_COVERAGE_SUFFICIENCY_THRESHOLDS: object
+  DEFAULT_COVERAGE_THRESHOLDS: object
+  DEFAULT_HANG_REPLAYS: const (number)
+  DEFAULT_LONG_POLL_MS: const (number)
+  DEFAULT_OVERFLOW_VIEWPORT_THRESHOLD: const (number)
+  DEFAULT_STALL_MS: const (number)
+  DEFAULT_VERIFY_REPLAYS: const (number)
+  DEFERRED_EFFECT_MAX_MS: const (number)
+  DEGRADED_STEP_MAJORITY: const (number)
+  DEMO_HIGHLIGHT_MS: const (number)
+  DEMO_OVERLAY_ATTR: const (string)
+  DEMO_OVERLAY_HIDE_STYLE: const (string)
+  DESTRUCTIVE: object
+  DemoOverlay: class
+  EXPLORE: const (string)
+  FORM_MISUSE_STRATEGIES: array
+  FORM_TEXT_MAX_CHARS: const (number)
+  FieldValueLog: class
+  FillHelper: class
+  FirstPartyOrigins: class
+  FixtureNotFoundError: class
+  GOAL_ALREADY_MET_QUESTION: const (string)
+  GOAL_ECHO_OVERLAP: const (number)
+  GOAL_ECHO_RUN_CHARS: const (number)
+  GOAL_IS_SAVE_INSTRUCTIONS: const (string)
+  GOAL_IS_SAVE_QUESTION: const (string)
+  GOAL_IS_SIGN_IN_INSTRUCTIONS: const (string)
+  GOAL_IS_SIGN_IN_QUESTION: const (string)
+  GOAL_MET_INSTRUCTIONS: const (string)
+  GOAL_MET_QUESTION: const (string)
+  HANG_PROBE_MS: const (number)
+  HOST_SAMPLE_INTERVAL_MS: const (number)
+  HeapLog: class
+  HostHealthSampler: class
+  Http5xxOracle: class
+  InvariantDefectLog: class
+  InvariantMonitor: class
+  LAG_CORROBORATING_LOAD_PER_CORE: const (number)
+  LAST_CHANCE_NOTE: const (string)
+  LIST_OPTION_CAP: const (number)
+  MAX_DONE_REJECTIONS: const (number)
+  MAX_IDLE_STEPS: const (number)
+  MAX_MOVING_SCROLLS: const (number)
+  MAX_QUIET_WAITS: const (number)
+  MAX_REPEAT_TYPE_SIGNALS: const (number)
+  MAX_REPORT_REJECTIONS: const (number)
+  MAX_SIDE_EFFECTS: const (number)
+  MESSAGE_FIELD: object
+  MissionSafety: class
+  MissionSessions: class
+  NOT_REPLAYED: object
+  NO_ANSWER_REASON: const (string)
+  NoProgressDetector: class
+  ONLY_GLOBAL_NAVIGATION: const (string)
+  OPS: array
+  OPS_NEEDING_TARGET: object
+  ObservedPages: class
+  PAGE_TEXT_GUIDE: const (string)
+  PAID: object
+  PROMPT_INJECTION_GUARD: const (string)
+  PROMPT_PAGE_TEXT_CHARS: const (number)
+  PageMonitor: class
+  PageSignalCollector: class
+  READ_ONLY_NOTE: const (string)
+  REDACTION_MASK: const (string)
+  RELOAD_TIMEOUT_MS: const (number)
+  RENDER_BASELINE_RENDERS: const (number)
+  RENDER_SLOWDOWN_FACTOR: const (number)
+  RENDER_SLOWDOWN_FLOOR_MS: const (number)
+  RENDER_TREND_RENDERS: const (number)
+  RENDER_WAIT_MS: const (number)
+  REPLY_MAX_CHARS: const (number)
+  ReadOnlyGuard: class
+  RequestCapture: class
+  RunRecorder: class
+  SELECT_OPTION_INSTRUCTIONS: const (string)
+  SESSION_END: object
+  SETTLE_QUIET_MS: const (number)
+  SHORT_FIELD_MAX_WORDS: const (number)
+  SINGLE_LINE_MAX_CHARS: const (number)
+  STARVATION_WINDOW_MS: const (number)
+  STARVED_EVENT_LOOP_LAG_MS: const (number)
+  STARVED_LOAD_PER_CORE: const (number)
+  STREAMING_CONTENT: object
+  SafetyPolicy: class
+  ScopeUnderivableError: class
+  SecretFieldSpecError: class
+  SideEffectGuard: class
+  SideEffectLog: class
+  TARGET_FREE_ACTIONS: array
+  TARGET_LIVENESS_PROBE_MS: const (number)
+  TRANSCRIPT_CONTROL_CAP: const (number)
+  TargetUnresponsiveError: class
+  TotpSeedError: class
+  TranscriptLog: class
+  UPLOAD_OP_GUIDE: const (string)
+  UnauthorizedExploreTargetError: class
+  ValueCapturingGenerationPort: class
+  VetoedAnswers: class
+  WAIT_OP_MS: const (number)
+  WITHHELD_ANSWER_NOTE: const (string)
+  WRITE_METHODS: object
+  act: function
+  advisoryTitle: function
+  affordedOp: function
+  answerNotFoundReason: function
+  assertAuthorizedExploreTarget: function
+  assertSeedReachable: function
+  assertTargetAnswering: function
+  assessCoverageSufficiency: function
+  authorJourney: function
+  autoDecidePostdoc: function
+  awaitWrites: function
+  boundSecretField: function
+  boundaryValueCandidates: function
+  buildCrashReport: function
+  buildJudgmentState: function
+  busyIndicatorOf: function
+  candidateId: function
+  capMessage: function
+  chatReply: function
+  checkFieldValue: function
+  classifyHang: function
+  classifyRequest: function
+  clickTimeoutMs: function
+  controlFields: function
+  controlKey: function
+  controlRisk: function
+  coverageStateFingerprint: function
+  coveredByInterceptors: function
+  currentEnvironment: function
+  decide: function
+  decodeBase32: function
+  defaultLoadPerCore: function
+  defectTitle: function
+  degradedEnvironmentOutcome: function
+  demoOverlayFor: function
+  describeAction: function
+  describeAssertionSpec: function
+  describeCheck: function
+  describeFailure: function
+  describeStatus: function
+  describeUnreachable: function
+  detectForms: function
+  detectOverflow: function
+  disambiguate: function
+  draftForCrash: function
+  draftForDefect: function
+  draftForHang: function
+  echoesGoal: function
+  editCandidates: function
+  emptyRecording: function
+  endpointOf: function
+  errorPageReason: function
+  evaluateNetworkCheck: function
+  exactLiterals: function
+  explore: function
+  failureLine: function
+  fieldKind: function
+  finishDeclaredRun: function
+  goalAsksFor: function
+  goalAsksForChange: function
+  goalAsksForReply: function
+  goalListsSeveral: function
+  groundAnswer: function
+  groupStepSignals: function
+  hangDetail: function
+  hangFinding: function
+  hangFingerprint: function
+  hangOutcome: function
+  hangRoute: function
+  hasApiCredentials: function
+  headingHint: function
+  hostProbe: function
+  hotp: function
+  http5xxSignalOf: function
+  invariantFingerprint: function
+  isActionOrChromeName: function
+  isAdvisoryConsoleError: function
+  isAuthorizedExploreTarget: function
+  isDisclosureControl: function
+  isExercisable: function
+  isInScope: function
+  isLoginLikeUrl: function
+  isNavControl: function
+  isNavigationTimeout: function
+  isNon5xxResourceConsoleError: function
+  isResourceLoadEcho: function
+  isSecretLike: function
+  isTargetUnresponsive: function
+  isUnreachableTarget: function
+  jevitateCodeRoots: function
+  judgeAnswerFits: function
+  judgeGoalCompletion: function
+  judgeGoalMet: function
+  maskSecretFields: function
+  matchGlob: function
+  matchOption: function
+  measurePageTiming: function
+  messageClass: function
+  monitorFor: function
+  noActionShortfall: function
+  normalizeAllowlist: function
+  normalizeRoute: function
+  observeAfterStep: function
+  occluderOf: function
+  outOfScopeHangNote: function
+  p50: function
+  pagesContext: function
+  parseFirstNumber: function
+  parseInterceptor: function
+  parseNumbers: function
+  parseSecretField: function
+  pathGlob: function
+  pendingEvidence: function
+  perceive: function
+  pickMisuseAction: function
+  planMisuseEpisode: function
+  playwrightLivenessProbe: function
+  probeResponsive: function
+  quoteIsOnlyControlNames: function
+  recordCoverageHang: function
+  recordingStepCount: function
+  redactContext: function
+  redactControl: function
+  redactPageText: function
+  redactText: function
+  redactUrl: function
+  refusalNote: function
+  reloadPage: function
+  replayAndDetectHang: function
+  replayTargetWaitMs: function
+  replayWouldRepeatWrite: function
+  reportAnswer: function
+  reproduceHang: function
+  reproductionStatus: function
+  requestEndpoint: function
+  requestHeadersOf: function
+  resolveBounds: function
+  resolveCoverageSufficiencyThresholds: function
+  resolveCoverageThresholds: function
+  resolveMissionFixture: function
+  resolveRouteScope: function
+  routeOf: function
+  runAdversarialMission: function
+  runFeatureMission: function
+  runGoalBasedMission: function
+  runInductionMission: function
+  safetyRefusalsFromTranscript: function
+  sampleHeap: function
+  scopeGlobs: function
+  scopePredicate: function
+  scrollPositionAt: function
+  secretFieldContext: function
+  secretFieldNeedsValue: function
+  secretFieldSecrets: function
+  secretFieldValue: function
+  secretFieldsToFill: function
+  secretPlaceholder: function
+  seedPath: function
+  seedRedirectReason: function
+  sendCandidates: function
+  sendable: function
+  shouldCheckOverflow: function
+  signalFingerprint: function
+  signalKey: function
+  snapshot: function
+  srOnlyLabelOf: function
+  startRouteGlobs: function
+  starvationAttributionFromEnv: function
+  starvedHostSentence: function
+  summarizeTimings: function
+  targetCandidates: function
+  targetStoppedAnswering: function
+  targetUnresponsiveMessage: function
+  textMatcher: function
+  thirdPartyOrigin: function
+  toPath: function
+  totp: function
+  tryTriage: function
+  unreadablePageTiming: function
+  urlMatcher: function
+  vacuousCheckMessage: function
+  validateDenyPatterns: function
+  valueFor: function
+  valueStatedInGoal: function
+  valuesStatedInGoal: function
+  verifyFix: function
+  verifyReplayVerdict: function
+  visibleBusyIndicator: function
+  withheldReason: function
+
+# @jevitate/findings (20 exports)
+  DIFF_STATUSES: array
+  RUN_MODES: array
+  SARIF_SCHEMA: const (string)
+  classify: function
+  consolidate: function
+  diffRuns: function
+  findingKey: function
+  identityBasis: function
+  renderJUnit: function
+  renderReportMarkdown: function
+  renderSarif: function
+  requestIdentity: function
+  routeTemplate: function
+  runFromMissionResult: function
+  runFromUxReport: function
+  runIdOf: function
+  sameScope: function
+  severityOf: function
+  stampToIso: function
+  xmlEscape: function
+
+# @jevitate/inbox (23 exports)
+  FindingSchema: object
+  FsInboxStore: class
+  HumanApprovalRequiredError: class
+  IllegalTransitionError: class
+  InboxIdConflictError: class
+  InboxItemAlreadyResolvedError: class
+  InboxItemKindSchema: object
+  InboxItemNotFoundError: class
+  InboxItemSchema: object
+  InboxItemStatusSchema: object
+  LockTimeoutError: class
+  SAFE_INBOX_ID_RE: object
+  SecretSchema: object
+  ThreadEntrySchema: object
+  asSecret: function
+  assertSafeInboxId: function
+  durableWritesEnabled: function
+  flushIfDurable: function
+  resolveTransition: function
+  revealSecret: function
+  toSummary: function
+  withIdLock: function
+  writeFileAtomic: function
+
+# @jevitate/interpreter (32 exports)
+  BufferingSink: class
+  DEFAULT_IN_VIEWPORT_MIN: const (number)
+  PostconditionFailed: class
+  RecordingInterpreter: class
+  ReplayTargetError: class
+  anchorLocator: function
+  applyTextEdit: function
+  attrOf: function
+  boxesOf: function
+  boxesOverlap: function
+  checkAssertion: function
+  compareStyle: function
+  describeTextEdit: function
+  descriptorLocator: function
+  descriptorToTarget: function
+  evaluateVisual: function
+  installFlashRecorder: function
+  intersectionArea: function
+  intersectionRatio: function
+  isVisualAssertion: function
+  parseColor: function
+  parseNumber: function
+  readAssertionEvidence: function
+  readAssertionText: function
+  readFlashes: function
+  resolveTarget: function
+  runStep: function
+  rungLocator: function
+  sizeViolation: function
+  styleChannel: function
+  stylesOf: function
+  textIncludesCI: function
+
+# @jevitate/journey (17 exports)
+  AnnotationDraftMismatchError: class
+  AnnotationDraftSchema: object
+  AnnotationDraftStepSchema: object
+  FsJourneyStore: class
+  JourneyRegistry: class
+  JourneySchema: object
+  ParamValidationError: class
+  SECRET_PARAM_NAME_RE: object
+  applyAnnotationDraft: function
+  deriveParamSchema: function
+  describeStep: function
+  flatJourneySteps: function
+  formatAnnotationChanges: function
+  intentCoverage: function
+  secretParamNames: function
+  secretParamValues: function
+  validateParams: function
+
+# @jevitate/load (8 exports)
+  LoadHarnessSetupError: class
+  UnauthorizedLoadTargetError: class
+  assertAuthorizedTarget: function
+  computeLatencyPercentiles: function
+  deriveActorSeeds: function
+  modeledCapacityReport: function
+  percentile: function
+  runLoadTest: function
+
+# @jevitate/mcp-facade (22 exports)
+  ALLOWED_TOOLS: array
+  FORBIDDEN_TOOLS: array
+  aiGenerateText: function
+  facadeApproveAction: function
+  facadeCancelCommand: function
+  facadeGetCommand: function
+  facadeGetSiteHealth: function
+  facadeGetThread: function
+  facadeListIncoming: function
+  facadeQueueAction: function
+  facadeQueueRetrieval: function
+  findCapabilities: function
+  isMissionResultId: function
+  isQueuedMissionId: function
+  listNamedJourneyTools: function
+  listToolNames: function
+  missionResultFileName: function
+  missionStatus: function
+  parseMissionOutcome: function
+  parseResultOutcome: function
+  queueExploration: function
+  runJourney: function
+
+# @jevitate/missions (17 exports)
+  BudgetExceedsCeilingError: class
+  FsMissionQueueStore: class
+  FsMissionTargetStore: class
+  MISSION_BOUNDS_CEILING: object
+  MISSION_STRATEGIES: array
+  MissionRequestSchema: object
+  MissionTargetRegistry: class
+  MissionTargetSchema: object
+  QUEUED_MISSION_STATUSES: array
+  QUEUED_SCREENSHOT_MODES: array
+  QueuedMissionSchema: object
+  SAFE_ID_RE: object
+  SECRET_FIELD_SPEC_RE: object
+  UnknownOrUnpromotedMissionTargetError: class
+  enqueueMission: function
+  isHttpOrigin: function
+  targetAllowlist: function
+
+# @jevitate/playwright (49 exports)
+  AdmissionTimeoutError: class
+  BrowserCrashedError: class
+  BrowserNotInstalledError: class
+  BrowserOpenTimeoutError: class
+  BrowserPool: class
+  ConflictingEmulationError: class
+  DEFAULT_ADMISSION_TIMEOUT_MS: const (number)
+  DEFAULT_CLOSE_TIMEOUT_MS: const (number)
+  DEFAULT_CONTEXT_MEMORY_BYTES: const (number)
+  DEFAULT_LINUX_CHROMIUM_ARGS: array
+  DEFAULT_OPEN_TIMEOUT_MS: const (number)
+  DEFAULT_PAGE_UNRESPONSIVE_MS: const (number)
+  DEFAULT_PRESSURE_THRESHOLDS: object
+  DarwinResourceSignals: class
+  LinuxResourceSignals: class
+  PageLivenessWatchdog: class
+  PlaywrightBrowserPort: class
+  ResourceSignalError: class
+  UnknownDeviceError: class
+  Win32ResourceSignals: class
+  admissionViolation: function
+  browserPoolOptionsFromEnv: function
+  closeSharedBrowserPool: function
+  closestDeviceNames: function
+  configureSharedBrowserPool: function
+  cpuBusyPercent: function
+  createBrowserPool: function
+  createResourceSignals: function
+  defaultDarwinSignalDeps: object
+  defaultHostSignalDeps: object
+  defaultLinuxSignalDeps: object
+  defaultMaxContexts: function
+  defaultWin32SignalDeps: object
+  emulationContextOptions: function
+  errnoCode: function
+  explainLaunchFailure: function
+  knownDeviceNames: function
+  pageLostReason: function
+  pageUnresponsiveMsFromEnv: function
+  parseMeminfoBytes: function
+  parsePsiAvg10: function
+  parseViewport: function
+  parseVmPressureLevel: function
+  parseVmStatAvailableBytes: function
+  probeReachable: function
+  resolveEmulation: function
+  resolveLaunchArgs: function
+  sharedBrowserPool: function
+  withOpenDeadline: function
+
+# @jevitate/recorder (24 exports)
+  CAPPED_STABILITY: object
+  EID_ATTRIBUTE: const (string)
+  RECORDING_VERSION: const (string)
+  RECORD_BINDING: const (string)
+  Recorder: class
+  anchorLocator: function
+  assembleRecording: function
+  assembleWithValues: function
+  buildCandidates: function
+  checkpointToSpliceAt: function
+  computeDescriptor: function
+  descriptorToLocator: function
+  findAnchor: function
+  findOrdinalAmong: function
+  installRecorderListener: function
+  isSecretField: function
+  looksGenerated: function
+  pathOf: function
+  pathOrRaw: function
+  readElementFacts: function
+  recordPatch: function
+  resolvesToSameElement: function
+  rungLocator: function
+  validateCandidates: function
+
+# @jevitate/recording (73 exports)
+  ACTION_OPS: array
+  ACTOR_NAME_RE: object
+  ATTR_NAME_RE: object
+  AUTH_SECRET_REF_RE: object
+  AssertionSchema: object
+  AuthoringTakeSchema: object
+  COMPARE_OPS: array
+  CONFIDENT_VARIABLE_THRESHOLD: const (number)
+  FsRecordingStore: class
+  INVARIANT_HTTP_METHODS: array
+  INVARIANT_ID_RE: object
+  InvariantExpressionError: class
+  InvariantSpecError: class
+  InvariantSpecSchema: object
+  JSON_PATH_EACH: object
+  MAX_BUDGETS: const (number)
+  MAX_INVARIANTS: const (number)
+  MAX_OBSERVABLES: const (number)
+  MAX_SETTLE_WITHIN_MS: const (number)
+  MIN_SETTLE_POLL_MS: const (number)
+  OBSERVABLE_NAME_RE: object
+  PostdocDecisionSchema: object
+  PostdocDecisionsSchema: object
+  READ_RPC_VERB: object
+  RecordingSchema: object
+  STYLE_CHANNELS: array
+  STYLE_PROPERTIES: array
+  SecretMaterializationError: class
+  TargetDescriptorSchema: object
+  UNKNOWN: const (symbol)
+  WRITE_METHODS: object
+  alignTraces: function
+  applyDiff: function
+  applyPostdoc: function
+  boundVariables: function
+  captureRefs: function
+  classifyColumns: function
+  diffColumns: function
+  diffRecordings: function
+  diffTakes: function
+  evaluateInvariantExpression: function
+  expressionObservables: function
+  fitInteractionPolicy: function
+  flattenBaseFillSteps: function
+  formatSpecPath: function
+  globRegex: function
+  invariantActors: function
+  invariantAuthSecretRefs: function
+  invariantGate: function
+  invariantObserver: function
+  isWriteRequest: function
+  jsonPathHasEach: function
+  matchesPattern: function
+  matchesResponseStatus: function
+  mergeInvariantSpecs: function
+  parseInvariantExpression: function
+  parseJsonPath: function
+  patternRegex: function
+  probeUrl: function
+  promoteToVariable: function
+  readJsonPath: function
+  readJsonPathList: function
+  resolveHttpUrl: function
+  rpcMethodOf: function
+  spliceRecording: function
+  stepSignature: function
+  strictSignature: function
+  substituteCaptureRefs: function
+  textEditProblem: function
+  urlTemplate: function
+  validateInvariantSpec: function
+  walkExpression: function
+  writeClassifier: function
+
+# @jevitate/regression (15 exports)
+  FlakyNotCommittableError: class
+  NeverFailedError: class
+  appendOracleStep: function
+  commitRegression: function
+  deriveOracleFromTranscript: function
+  fingerprintFailure: function
+  flattenWithUrls: function
+  loadRegressions: function
+  makeSingleShotReproduces: function
+  matchesFingerprint: function
+  minimizeRecording: function
+  oracleFromAssertion: function
+  replayRegression: function
+  reproduceFailure: function
+  reproduceFailureAt: function
+
+# @jevitate/runtime (10 exports)
+  JourneyRunner: class
+  PolicyEnforcementError: class
+  SiteGateRefusedError: class
+  enterSiteGate: function
+  extractTail: function
+  flattenRecording: function
+  healRecording: function
+  isWriteStep: function
+  postconditionOf: function
+  throttleClassOf: function
+
+# @jevitate/screenplay (16 exports)
+  BrowseTheWeb: class
+  BrowseTheWebToken: object
+  CastActor: class
+  Click: object
+  CountOf: object
+  Enter: object
+  EnterSecret: object
+  IsVisible: object
+  MissingAbilityError: class
+  Navigate: object
+  PaceInteractions: class
+  PaceInteractionsToken: object
+  Target: class
+  TextOf: object
+  ValueOf: object
+  tryAbility: function
+
+# @jevitate/secrets (7 exports)
+  CliSecretManager: class
+  Secret: class
+  SecretAmbiguousBindingError: class
+  SecretOriginMismatchError: class
+  SecretUnresolvableError: class
+  StubSecretManager: class
+  assertOriginBound: function
+
+# @jevitate/skills (2 exports)
+  loadManifest: function
+  parseFrontmatter: function
+
+# @jevitate/sources (37 exports)
+  DEFAULT_ACK_DIR: const (string)
+  DEFAULT_LOCK_PATH: function
+  DEFAULT_TRUST_DIR: const (string)
+  EmbeddedSecretError: class
+  FederatedJourneyRegistry: class
+  FsAckStore: class
+  FsTrustStore: class
+  GitSourceManager: class
+  HashMismatchError: class
+  JevitateLockSchema: object
+  JevitateManifestSchema: object
+  LocalSource: class
+  PACKAGE_NAME: const (string)
+  RemoteSource: class
+  SharedJourneyFileSchema: object
+  SourceValidationError: class
+  UndeclaredOriginError: class
+  UndeclaredTouError: class
+  UnknownSourceError: class
+  UntrustedRiskyJourneyError: class
+  canonicalJourneyHash: function
+  canonicalJson: function
+  classifyRisk: function
+  collectNavigateOrigins: function
+  execGit: function
+  flattenSteps: function
+  hasEmbeddedSecretValue: function
+  isTrusted: function
+  loadJourneyFiles: function
+  loadManifest: function
+  publishJourney: function
+  readLock: function
+  requireDeclaredTou: function
+  resolveForRun: function
+  surfaceForAck: function
+  validateForPublish: function
+  writeLock: function
+
+# @jevitate/storage-sqlite (5 exports)
+  SqliteActivityRepository: class
+  SqliteBudgetRepository: class
+  SqliteSitePolicyRepository: class
+  migrateToLatest: function
+  openDatabase: function
+
+# @jevitate/ux (87 exports)
+  APPLIES_QUESTION_ID: const (string)
+  CALIBRATED_QUALITY_POLICY: object
+  CALIBRATION_KNOWN_APP_CLASSES: array
+  DEFAULT_MAX_FINDINGS_PER_ROUTE: const (number)
+  DEFAULT_MIN_CONFIDENCE: const (number)
+  DEFAULT_QUALITY_POLICY: object
+  GRADER_FILTER_KAPPA_GATE: const (number)
+  GROUNDING_UNNAMED: const (number)
+  IMPACT_RANK: object
+  JevQuestionSpecSchema: object
+  MAX_FINDINGS_PER_ROUTE_ENV: const (string)
+  MIN_CONFIDENCE_ENV: const (string)
+  MaxFindingsPerRouteError: class
+  MinConfidenceError: class
+  MissingAppContextError: class
+  PromptAssetError: class
+  QUALITY_LABELS: array
+  QUALITY_SHOW_ENV: const (string)
+  QualityPolicyError: class
+  RedactionUnavailableError: class
+  RubricEntrySchema: object
+  RubricLoadError: class
+  SIGNAL_IMPACT: object
+  SIGNAL_RULES: object
+  SPECIFICS_INSTRUCTIONS: const (string)
+  SignalFindingError: class
+  UX: const (string)
+  UX_EVIDENCE_FILE_VERSION: const (number)
+  UX_EVIDENCE_KEYS: array
+  UX_PROMPTS: object
+  UxAnalyzer: class
+  UxEvidenceFileError: class
+  UxFindingError: class
+  UxPromptsSchema: object
+  V1_RUBRIC: array
+  a11yChecks: function
+  adjudicate: function
+  applyRubricDescriptions: function
+  buildReport: function
+  buildState: function
+  calibrationCaveat: function
+  calibrationNoteFor: function
+  clamp01: function
+  combineConfidence: function
+  controlKey: function
+  defaultQualityPolicy: function
+  deriveRefs: function
+  describeCandidate: function
+  detectDuplicateCreates: function
+  detectDuplicateWrites: function
+  detectFailedSubmits: function
+  detectFriction: function
+  detectHungRequests: function
+  detectInertControls: function
+  detectInternalIds: function
+  detectJourneySignals: function
+  detectRepeatedReplies: function
+  detectSignals: function
+  detectStuckJobs: function
+  detectUrlMismatches: function
+  evaluateFlag: function
+  evidenceFromFile: function
+  fillTemplate: function
+  generateSpecifics: function
+  gradeCandidates: function
+  gradeQuestion: function
+  graderMayFilterByDefault: function
+  groundFindings: function
+  judgeScreen: function
+  loadRubric: function
+  loadV1Rubric: function
+  makeFinding: function
+  makeSignalFinding: function
+  normalizeText: function
+  parseQualityPolicy: function
+  parseUxEvidenceFile: function
+  persistableScreen: function
+  policyFilters: function
+  questionKey: function
+  recommend: function
+  redactEvidence: function
+  resolveMaxFindingsPerRoute: function
+  resolveMinConfidence: function
+  resolveQualityPolicy: function
+  round2: function
+  routeOf: function
+  withSignalFindings: function

@@ -4,10 +4,9 @@
  * `@jevitate/example-site` (a devDependency) and is only ever imported from
  * `*.test.ts`. Vitest resolves it directly via the source alias.
  */
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserSession } from "@jevitate/playwright";
+import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
+import type { Op } from "./actions.js";
 
 const port = new PlaywrightBrowserPort();
 
@@ -21,9 +20,7 @@ export async function withSession<T>(
   body: (session: BrowserSession) => Promise<T>,
   baseUrl = "http://127.0.0.1:1/",
 ): Promise<T> {
-  const profileDir = await mkdtemp(join(tmpdir(), prefix));
   const session = await port.open({
-    profileDir,
     headless: true,
     allowedOrigins: [baseUrl],
     baseUrl,
@@ -32,7 +29,6 @@ export async function withSession<T>(
     return await body(session);
   } finally {
     await session.close();
-    await rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -53,3 +49,68 @@ export const INBOX_FIXTURE_HTML = `<!doctype html><html><body>
   <ul><li><a href="/thread/1">First thread</a></li></ul>
   <button type="button">Compose</button>
 </body></html>`;
+
+/** One scripted decision: an op and, for a target op, the control index it acts on. */
+export interface ScriptedStep {
+  readonly op: Op;
+  readonly target?: string;
+  readonly confidence?: number;
+  /** This decision's answer to the advisory "goal already met?" head (#91); unanswered when absent. */
+  readonly goalMet?: number;
+}
+
+/** The candidate-action id decide() offers for a scripted step: `<op>:<index>` or a bare op. */
+export function actionId(step: ScriptedStep): string {
+  return step.target !== undefined ? `${step.op}:${step.target}` : step.op;
+}
+
+/**
+ * A JudgmentPort that plays a fixed sequence of decisions in decide()'s candidate-action format
+ * (`{ action: choice("<op>:<index>" | "<op>") }`), repeating the last step once exhausted. Every
+ * call's arguments are kept for payload assertions.
+ */
+export class ScriptedJudge implements JudgmentPort {
+  #i = 0;
+  readonly calls: Array<{ state: JudgmentState; questions: Record<string, Question> }> = [];
+  /** Every goal-completion (noul-only) call, for payload assertions. */
+  readonly goalCalls: Array<{ state: JudgmentState; questions: Record<string, Question> }> = [];
+  constructor(private readonly seq: readonly ScriptedStep[]) {
+    if (seq.length === 0) throw new Error("ScriptedJudge needs at least one step");
+  }
+  /** The (redacted) state shown on each call. */
+  get states(): JudgmentState[] {
+    return this.calls.map((c) => c.state);
+  }
+  /** The candidate action ids offered on each call. */
+  get actionOptions(): Array<readonly string[]> {
+    return this.calls.map((c) => {
+      const q = c.questions.action;
+      return q?.kind === "choice" ? q.options : [];
+    });
+  }
+  /**
+   * The answer to every noul question (the goal-completion check a proposed `done` triggers):
+   * P(yes). Default 0.9 — a scripted `done` is grounded unless a test says otherwise.
+   */
+  goalMetProbability = 0.9;
+  /** Per-question overrides of `goalMetProbability`, by noul question name (e.g. the #188 sign-in scope head). */
+  noulProbabilities: Record<string, number> = {};
+  async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
+    if (!("action" in args.questions)) {
+      this.goalCalls.push(args);
+      const out: Record<string, Answer> = {};
+      for (const [name, q] of Object.entries(args.questions)) {
+        const p = this.noulProbabilities[name] ?? this.goalMetProbability;
+        if (q.kind === "noul") out[name] = { kind: "noul", value: p >= 0.5, probability: p };
+      }
+      return out;
+    }
+    this.calls.push(args);
+    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)];
+    this.#i += 1;
+    if (cur === undefined) throw new Error("ScriptedJudge: no step");
+    const action: Answer = { kind: "choice", value: actionId(cur), confidence: cur.confidence ?? 0.9 };
+    if (cur.goalMet === undefined) return { action };
+    return { action, goalAlreadyMet: { kind: "noul", value: cur.goalMet >= 0.5, probability: cur.goalMet } };
+  }
+}

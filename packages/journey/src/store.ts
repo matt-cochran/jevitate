@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Journey, JourneyMetadata } from "./journey.js";
 import { JourneySchema } from "./journey.js";
@@ -16,15 +16,25 @@ export interface JourneyStore {
   list(): Promise<JourneyMetadata[]>;
 }
 
+const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 /**
- * Rejects an `id` containing a path separator or `..` segment, since `id`
- * may originate from external/less-trusted callers and is used to build a
- * filesystem path. Mirrors `FsRecordingStore`'s `assertSafeId`.
+ * A Journey id: `<id>`, or `<namespace>/<id>` for a shared Journey in a namespace folder
+ * (`journeys/<namespace>/<id>.json`, typically a git submodule of shared Journeys). Each segment is
+ * a safe name — no path separator beyond the one, no `..`, no dot-folder — since an id may come
+ * from a less-trusted caller (MCP) and builds a filesystem path.
  */
-function assertSafeId(id: string): void {
-  if (id.includes("/") || id.includes("\\") || id.includes("..")) {
+function parseId(id: string): { readonly ns: string | null; readonly base: string } {
+  const parts = id.split("/");
+  if (parts.length > 2 || id.includes("\\") || id.includes("..") || !parts.every((p) => SAFE_SEGMENT.test(p))) {
     throw new Error(`Invalid journey id (path traversal risk): ${id}`);
   }
+  return parts.length === 2 ? { ns: parts[0] as string, base: parts[1] as string } : { ns: null, base: parts[0] as string };
+}
+
+/** A namespaced Journey is reported under `<namespace>/<file id>`; its file keeps its own plain id. */
+function withNamespace(j: Journey, ns: string | null, base: string): Journey {
+  return ns === null ? j : { ...j, metadata: { ...j.metadata, id: `${ns}/${base}` } };
 }
 
 function isNodeError(err: unknown, code: string): boolean {
@@ -45,24 +55,26 @@ export class FsJourneyStore {
   constructor(private readonly dir: string) {}
 
   private pathFor(id: string): string {
-    return join(this.dir, `${id}.json`);
+    const { ns, base } = parseId(id);
+    return ns === null ? join(this.dir, `${base}.json`) : join(this.dir, ns, `${base}.json`);
   }
 
   async put(j: Journey): Promise<void> {
     // Fail-closed: validate BEFORE any I/O, so an invalid Journey is never
     // written to disk.
-    const validated = JourneySchema.parse(j);
-    assertSafeId(validated.metadata.id);
+    const { ns, base } = parseId(j.metadata.id);
+    // A namespaced Journey's file keeps its own plain id (portable across the repos that share it).
+    const validated = JourneySchema.parse(ns === null ? j : { ...j, metadata: { ...j.metadata, id: base } });
 
     const serialized = JSON.stringify(validated);
-    await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    await writeFile(this.pathFor(validated.metadata.id), serialized, {
+    await mkdir(ns === null ? this.dir : join(this.dir, ns), { recursive: true, mode: 0o700 });
+    await writeFile(this.pathFor(j.metadata.id), serialized, {
       mode: 0o600,
     });
   }
 
   async get(id: string): Promise<Journey | null> {
-    assertSafeId(id);
+    const { ns, base } = parseId(id);
     let raw: string;
     try {
       raw = await readFile(this.pathFor(id), "utf8");
@@ -75,7 +87,7 @@ export class FsJourneyStore {
     const parsed = JSON.parse(raw) as Journey;
     // Defense-in-depth: re-validate on read too, in case the file was
     // hand-edited or otherwise corrupted on disk.
-    return JourneySchema.parse(parsed);
+    return withNamespace(JourneySchema.parse(parsed), ns, base);
   }
 
   async list(): Promise<JourneyMetadata[]> {
@@ -90,20 +102,34 @@ export class FsJourneyStore {
     }
 
     const results: JourneyMetadata[] = [];
-    for (const entry of entries) {
-      if (!entry.endsWith(".json")) {
-        continue;
+    const readAll = async (dir: string, ns: string | null, names: readonly string[]): Promise<void> => {
+      for (const entry of names) {
+        if (!entry.endsWith(".json")) continue;
+        try {
+          const raw = await readFile(join(dir, entry), "utf8");
+          const parsed = JourneySchema.parse(JSON.parse(raw));
+          results.push(withNamespace(parsed, ns, entry.slice(0, -".json".length)).metadata);
+        } catch {
+          // Defensive skip: list() is a lifecycle operation, not a hard read
+          // path — one corrupt/unparseable file shouldn't break listing
+          // everything else.
+          continue;
+        }
       }
+    };
+    await readAll(this.dir, null, entries);
+    // Namespace folders one level down (shared Journeys, e.g. git submodules): `<ns>/<id>`.
+    for (const ns of entries) {
+      if (!SAFE_SEGMENT.test(ns)) continue;
+      let inner: string[];
       try {
-        const raw = await readFile(join(this.dir, entry), "utf8");
-        const parsed = JourneySchema.parse(JSON.parse(raw));
-        results.push(parsed.metadata);
+        const st = await stat(join(this.dir, ns));
+        if (!st.isDirectory()) continue;
+        inner = await readdir(join(this.dir, ns));
       } catch {
-        // Defensive skip: list() is a lifecycle operation, not a hard read
-        // path — one corrupt/unparseable file shouldn't break listing
-        // everything else.
         continue;
       }
+      await readAll(join(this.dir, ns), ns, inner);
     }
     return results;
   }

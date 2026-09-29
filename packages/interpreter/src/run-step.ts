@@ -1,8 +1,22 @@
+import { access } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import type { Assertion, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
-import { BrowseTheWebToken, Click, Enter, Navigate } from "@jevitate/screenplay";
-import { checkAssertion, pollUntil, PostconditionFailed } from "./assertion.js";
+import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
+import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+import { applyTextEdit } from "./rich-text.js";
+import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
+
+/**
+ * The recorded target resolved to exactly ONE element (anchor, else exact rung + nth), as a
+ * Screenplay Target — or a typed `ReplayTargetError`. Never a guess.
+ */
+async function strictTarget(actor: Actor, d: TargetDescriptor, opts: ResolveTargetOptions): Promise<Target> {
+  const page = actor.ability(BrowseTheWebToken).session.page;
+  const locator = await resolveTarget(page, d, opts);
+  return Target.named(descriptorToTarget(d).description).locatedBy(() => locator);
+}
+import { checkAssertion, pollUntil, textIncludesCI, PostconditionFailed } from "./assertion.js";
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
 
@@ -51,8 +65,8 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
  * an action whose expected outcome didn't materialize must never be
  * swallowed.
  *
- * Handles all 10 `Step` kinds: `navigate | click | fill | waitFor | assert |
- * extract | select | press | forEach` resolve to `{kind:"done"}` on success
+ * Handles all 11 `Step` kinds: `navigate | click | fill | waitFor | assert |
+ * extract | select | upload | press | forEach` resolve to `{kind:"done"}` on success
  * (or throw); `handback` performs no action and resolves to
  * `{kind:"awaiting_human"}` without checking its `resume` assertion — see
  * that case below.
@@ -76,6 +90,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
+  targetOpts: ResolveTargetOptions = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   switch (step.kind) {
@@ -87,7 +102,7 @@ export async function runStep(
       return { kind: "done" };
     }
     case "click": {
-      await Click.on(descriptorToTarget(step.target)).performAs(actor);
+      await Click.on(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "click");
       }
@@ -95,7 +110,7 @@ export async function runStep(
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
-      await Enter.theText(text).into(descriptorToTarget(step.target)).performAs(actor);
+      await Enter.theText(text).into(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "fill");
       }
@@ -114,7 +129,7 @@ export async function runStep(
     }
     case "extract": {
       const page = actor.ability(BrowseTheWebToken).session.page;
-      const locator = descriptorToTarget(step.target).resolve(page);
+      const locator = await resolveTarget(page, step.target, targetOpts);
       const value = step.attr ? await locator.getAttribute(step.attr) : await locator.innerText();
       if (value === null) {
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
@@ -128,9 +143,26 @@ export async function runStep(
     case "select": {
       const value = resolveValue(step.value, vars);
       const page = actor.ability(BrowseTheWebToken).session.page;
-      await descriptorToTarget(step.target).resolve(page).selectOption(value);
+      await (await resolveTarget(page, step.target, targetOpts)).selectOption(value);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "select");
+      }
+      return { kind: "done" };
+    }
+    case "upload": {
+      // Re-attach the SAME fixture the recording names (or a `{var}` binding).
+      // A redacted path throws in `resolveValue`; a path that is gone fails
+      // fast here with the path named, never attaching some other file.
+      const file = resolveValue(step.file, vars);
+      try {
+        await access(file);
+      } catch (err) {
+        throw new Error(`fixture not found: ${file}`, { cause: err });
+      }
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
+      if (!(await checkAssertion(actor, step.expect))) {
+        throw new PostconditionFailed(step.expect, "upload");
       }
       return { kind: "done" };
     }
@@ -139,6 +171,22 @@ export async function runStep(
       await page.keyboard.press(step.key);
       if (!(await checkAssertion(actor, step.expect))) {
         throw new PostconditionFailed(step.expect, "press");
+      }
+      return { kind: "done" };
+    }
+    case "editText": {
+      // The same edit the run performed (#148): the recorded anchor is placed in the target's CURRENT
+      // text — a quote no longer there fails closed (throws), never replacing the whole element.
+      const page = actor.ability(BrowseTheWebToken).session.page;
+      const value = step.value === undefined ? undefined : resolveValue(step.value, vars);
+      await applyTextEdit(page, await resolveTarget(page, step.target, targetOpts), {
+        anchor: step.anchor,
+        action: step.action,
+        ...(value === undefined ? {} : { value }),
+        ...(step.format === undefined ? {} : { format: step.format }),
+      });
+      if (!(await checkAssertion(actor, step.expect))) {
+        throw new PostconditionFailed(step.expect, "editText");
       }
       return { kind: "done" };
     }
@@ -282,6 +330,7 @@ async function evaluateAssertionInRowOnce(
   a: Assertion,
   rowLocator: Locator,
 ): Promise<boolean> {
+  if (isVisualAssertion(a)) return (await evaluateVisual(a, (d) => resolveInRoot(rowLocator, d))).held;
   switch (a.kind) {
     case "visible":
       return resolveInRoot(rowLocator, a.target).isVisible();
@@ -291,11 +340,20 @@ async function evaluateAssertionInRowOnce(
     }
     case "textIncludes": {
       const text = await resolveInRoot(rowLocator, a.target).innerText();
-      return text.includes(a.text);
+      return textIncludesCI(text, a.text);
     }
     case "count": {
       const n = await resolveInRoot(rowLocator, a.target).count();
       return (a.min === undefined || n >= a.min) && (a.max === undefined || n <= a.max);
+    }
+    case "valueEquals": {
+      const control = resolveInRoot(rowLocator, a.target);
+      if ((await control.count()) !== 1) return false;
+      const value = await control.inputValue({ timeout: 1_000 }).then(
+        (v) => v,
+        () => null,
+      );
+      return value === a.value;
     }
   }
 }

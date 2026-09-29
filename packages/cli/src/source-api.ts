@@ -52,6 +52,15 @@ export class NoDeclaredOriginsError extends Error {
   }
 }
 
+/** Parses `site`'s origin, or `null` if it isn't a valid absolute URL. */
+function originOf(site: string): string | null {
+  try {
+    return new URL(site).origin;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Injected seams for the distributed-sources CLI (`jevitate source ...` and
  * `jevitate journey publish`). Every filesystem root, the git port, and the
@@ -291,10 +300,16 @@ export async function publishJourneyToSource(
   if (!journey.metadata.promoted) {
     throw new NotPromotedError(`journey '${req.id}' is not promoted; promote it before publishing`);
   }
+  // #125: `explore-author-journey` writes RELATIVE `navigate` urls (the recorded steps are
+  // relative to `recording.site`), so `collectNavigateOrigins` — which only resolves ABSOLUTE
+  // navigate urls — finds nothing to derive from. Fall back to `recording.site` itself: it's
+  // the origin the whole Recording was authored against, and exactly what an explore-authored
+  // Journey's relative navigates implicitly stay within.
+  const navigateOrigins = collectNavigateOrigins(journey.recording);
+  const siteOrigin = originOf(journey.recording.site);
+  const derivedOrigins = navigateOrigins.length > 0 ? navigateOrigins : siteOrigin ? [siteOrigin] : [];
   const declaredOrigins =
-    req.declareOrigins && req.declareOrigins.length > 0
-      ? req.declareOrigins
-      : collectNavigateOrigins(journey.recording);
+    req.declareOrigins && req.declareOrigins.length > 0 ? req.declareOrigins : derivedOrigins;
   if (declaredOrigins.length === 0) {
     throw new NoDeclaredOriginsError(
       `journey '${req.id}' declares no origins and navigates to no absolute origin; pass --declare-origin <origin>`,

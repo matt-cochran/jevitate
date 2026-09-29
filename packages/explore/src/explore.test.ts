@@ -1,10 +1,12 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
+import { FakeGenerationGateway, type JudgmentPort } from "@jevitate/ai-core";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { startServer } from "@jevitate/example-site";
-import { explore, type Op } from "./index.js";
-import { withSession } from "./testkit.js";
+import { explore } from "./index.js";
+import { ScriptedJudge, withSession } from "./testkit.js";
 
 let site: { url: string; close(): Promise<void> };
 beforeAll(async () => {
@@ -13,21 +15,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await site.close();
 });
-
-/** A JudgmentPort that plays a fixed sequence of op+target decisions. */
-class ScriptedJudge implements JudgmentPort {
-  #i = 0;
-  constructor(private readonly seq: ReadonlyArray<{ op: Op; target?: string }>) {}
-  async systemOne(args: { questions: Record<string, unknown> }): Promise<Record<string, Answer>> {
-    const cur = this.seq[Math.min(this.#i, this.seq.length - 1)]!;
-    this.#i += 1;
-    const out: Record<string, Answer> = { op: { kind: "choice", value: cur.op, confidence: 0.9 } };
-    if (args.questions.target && cur.target !== undefined) {
-      out.target = { kind: "choice", value: cur.target, confidence: 0.9 };
-    }
-    return out;
-  }
-}
 
 describe("explore — bounded perceive->decide->act->record loop (Task 9)", () => {
   it(
@@ -82,7 +69,7 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
         "explore-exhaust-",
         async (session) => {
           const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
-          const judge = new ScriptedJudge([{ op: "wait" }]); // never done
+          const judge = new ScriptedJudge([{ op: "wait" }]); // never done (a cap below MAX_QUIET_WAITS, so the budget ends it first)
           return explore({
             actor,
             judge,
@@ -90,25 +77,26 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
             goal: "loop forever",
             allowlist: [site.url],
             startUrl: `${site.url}/login`,
-            bounds: { maxDecisions: 4 },
+            bounds: { maxDecisions: 2 },
           });
         },
         site.url,
       );
       expect(run.stop).toBe("exhausted");
-      expect(run.decisions).toBe(4);
+      expect(run.decisions).toBe(2);
     },
     120_000,
   );
 
   it(
-    "stops as no-progress when repeated actions never change the page",
+    "stops as no-progress when a repeated non-wait action never changes the page",
     async () => {
       const run = await withSession(
         "explore-noprogress-",
         async (session) => {
           const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
-          const judge = new ScriptedJudge([{ op: "click", target: "0" }]); // click the textbox forever
+          // Scroll a page too short to scroll, forever: the action runs but the page never moves.
+          const judge = new ScriptedJudge([{ op: "scroll_down" }]);
           return explore({
             actor,
             judge,
@@ -146,4 +134,233 @@ describe("explore — bounded perceive->decide->act->record loop (Task 9)", () =
       site.url,
     );
   });
+});
+
+describe("explore — an overlay opened by a click covers sr-only controls behind it (#90)", () => {
+  const SR_ONLY = "position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden";
+  let overlayServer: Server;
+  let overlayOrigin: string;
+
+  beforeAll(async () => {
+    overlayServer = createServer((req, res) => {
+      res
+        .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+        .end(
+          `<!doctype html><html><body>
+            <button type="button" id="open" onclick="document.getElementById('inspector').style.display='block'">Open inspector</button>
+            <div style="margin:40px">
+              <input type="radio" name="plan" id="a" style="${SR_ONLY}" />
+              <label for="a" style="display:inline-block;padding:12px 24px;background:#cde">Plan A</label>
+              <input type="radio" name="plan" id="b" style="${SR_ONLY}" />
+              <label for="b" style="display:inline-block;padding:12px 24px;background:#cde">Plan B</label>
+            </div>
+            <div id="inspector" data-testid="inspector"
+              style="display:none;position:fixed;top:0;left:0;bottom:0;width:100%;background:rgba(255,255,255,.95)">
+              <button type="button" aria-label="Close inspector"
+                onclick="document.getElementById('inspector').style.display='none'">Close inspector</button>
+            </div>
+          </body></html>`,
+        );
+    });
+    await new Promise<void>((resolve) => overlayServer.listen(0, "127.0.0.1", resolve));
+    overlayOrigin = `http://127.0.0.1:${(overlayServer.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    overlayServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => overlayServer.close((e) => (e ? reject(e) : resolve())));
+  });
+
+  it(
+    "the sr-only radios behind the opened inspector are not offered again, and no click ever times out",
+    async () => {
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-overlay-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [overlayOrigin]));
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "open the inspector",
+            allowlist: [overlayOrigin],
+            startUrl: overlayOrigin,
+            bounds: { maxDecisions: 5 },
+          });
+        },
+        overlayOrigin,
+      );
+
+      // The FIRST decision (before the inspector opens) sees both radios as candidates; the SECOND
+      // (right after the click that opened it) must not — the overlay now covers them.
+      expect(judge.states.length).toBeGreaterThanOrEqual(2);
+      const beforeOpen = judge.states[0]!.controls.join("\n");
+      expect(beforeOpen).toContain("Plan A");
+      const afterOpen = judge.states[1]!.controls.join("\n");
+      expect(afterOpen).not.toContain("Plan A");
+      expect(afterOpen).not.toContain("Plan B");
+
+      // Never attempted, never timed out: no transcript entry mentions a Playwright interception.
+      const timeouts = run.transcript.filter((t) => typeof t.reason === "string" && /intercepts pointer events/.test(t.reason));
+      expect(timeouts).toHaveLength(0);
+      expect(run.stop).toBe("done");
+    },
+    30_000,
+  );
+});
+
+describe("explore — a control the safety policy refuses is never re-offered (#168)", () => {
+  let paidServer: Server;
+  let paidOrigin: string;
+
+  beforeAll(async () => {
+    paidServer = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html><body><button type="button">Buy now</button></body></html>`);
+    });
+    await new Promise<void>((resolve) => paidServer.listen(0, "127.0.0.1", resolve));
+    paidOrigin = `http://127.0.0.1:${(paidServer.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    paidServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => paidServer.close((e) => (e ? reject(e) : resolve())));
+  });
+
+  it(
+    "a refused paid control is refused once, dropped from the candidates, and never re-chosen",
+    async () => {
+      // Scripted to re-pick the same (only) control 3 times in a row — the #168 dogfood repro. Without
+      // the per-run exclusion set it would be refused 3 times running (burning 3 of the run's steps).
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "click", target: "0" }, { op: "click", target: "0" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-168-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [paidOrigin]));
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "read what the page shows",
+            allowlist: [paidOrigin],
+            startUrl: paidOrigin,
+            bounds: { maxDecisions: 5 },
+          });
+        },
+        paidOrigin,
+      );
+
+      // Offered on the first decision, refused, and never offered again.
+      expect(judge.states[0]!.controls.join("\n")).toContain("Buy now");
+      for (const s of judge.states.slice(1)) expect(s.controls.join("\n")).not.toContain("Buy now");
+
+      const refusals = run.transcript.filter((t) => typeof t.reason === "string" && t.reason.includes("refused by the safety policy"));
+      expect(refusals).toHaveLength(1);
+      // The 2nd decision has nothing left to act on (the only control was excluded) — fails closed,
+      // never a 2nd/3rd refusal and never a no-progress stall from repeating the same refusal.
+      expect(run.stop).not.toBe("no-progress");
+    },
+    30_000,
+  );
+});
+
+describe("explore — typed stops instead of throws (owner ruling 1)", () => {
+  it(
+    "a model decision that stays unavailable ends the run `inconclusive` with its transcript and Recording",
+    async () => {
+      const run = await withSession(
+        "explore-inconclusive-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
+          const judge = {
+            async systemOne(): Promise<never> {
+              throw new Error("judgment provider unavailable");
+            },
+          };
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "sign in",
+            allowlist: [site.url],
+            startUrl: `${site.url}/login`,
+          });
+        },
+        site.url,
+      );
+      expect(run.stop).toBe("inconclusive");
+      expect(run.failure?.message).toBe("model decision unavailable: judgment provider unavailable");
+      expect(run.transcript).toHaveLength(1);
+      expect(run.transcript[0]).toMatchObject({ op: null, actOk: false });
+      expect(run.recording.pages[0]?.steps[0]?.step.kind).toBe("navigate");
+    },
+    120_000,
+  );
+
+  it(
+    "an unavailable value generator is a helper failure: the step fails, and the run carries on",
+    async () => {
+      const run = await withSession(
+        "explore-helper-down-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
+          const judge = new ScriptedJudge([{ op: "type", target: "0" }, { op: "done" }]);
+          const gen = {
+            async generate(): Promise<never> {
+              throw new Error("generation provider unavailable");
+            },
+          };
+          return explore({
+            actor,
+            judge,
+            gen,
+            goal: "sign in",
+            allowlist: [site.url],
+            startUrl: `${site.url}/login`,
+          });
+        },
+        site.url,
+      );
+      expect(run.stop).toBe("done");
+      expect(run.transcript[0]).toMatchObject({
+        op: "type",
+        actOk: false,
+        reason: "value generation unavailable: generation provider unavailable",
+      });
+      expect(run.decisions).toBe(2);
+    },
+    120_000,
+  );
+
+  it(
+    "a page that dies mid-run ends `crashed` (page-closed), never a thrown error",
+    async () => {
+      const run = await withSession(
+        "explore-crash-",
+        async (session) => {
+          const actor = CastActor.named("explore").whoCan(new BrowseTheWeb(session, [site.url]));
+          const scripted = new ScriptedJudge([{ op: "click", target: "1" }]);
+          // The judge closes the page before answering: the loop's next page read hits a dead page.
+          const judge: JudgmentPort = {
+            async systemOne(args) {
+              await session.page.close();
+              return scripted.systemOne(args);
+            },
+          };
+          return explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "sign in",
+            allowlist: [site.url],
+            startUrl: `${site.url}/login`,
+          });
+        },
+        site.url,
+      );
+      expect(run.stop).toBe("crashed");
+      expect(run.failure?.kind).toBe("page-closed");
+      expect(run.transcript.length).toBeLessThanOrEqual(1);
+      expect(run.recording.pages[0]?.steps[0]?.step.kind).toBe("navigate");
+    },
+    120_000,
+  );
 });

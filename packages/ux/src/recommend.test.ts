@@ -32,7 +32,7 @@ function fixtures() {
   };
   const redacted = redactEvidence(evidence, [SECRET]);
   const finding = makeFinding(
-    { rubricItemId: "primary-action", evidenceRefs: [{ id: "control:0" }, { id: "visibleText" }], severity: "major", confidence: 0.8, recommendation: "base", tier: "semantic" },
+    { rubricItemId: "primary-action", evidenceRefs: [{ id: "control:0" }, { id: "visibleText" }], severity: "major", confidence: 0.8, recommendation: "base", observation: "obs", userImpact: "impact", route: "/checkout", tier: "semantic" },
     rubric,
     redacted,
   );

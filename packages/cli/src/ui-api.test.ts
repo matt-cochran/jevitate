@@ -84,6 +84,9 @@ afterEach(async () => {
     const s = servers.pop()!;
     await s.close();
   }
+  // Every server binds the same default port: let fetch's connection pool observe the closed
+  // sockets before the next test's server reuses that port.
+  await new Promise((resolve) => setTimeout(resolve, 20));
 });
 
 describe("startUiServer — bind + token", () => {
@@ -402,6 +405,15 @@ describe("startUiServer — health", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ ok: true, pending: 0 });
+  });
+
+  it("GET /api/health reports the serving build — this build's engine by default, never 0.0.0 (#112)", async () => {
+    const { currentEngineInfo } = await import("./engine.js");
+    const get = async (handle: { port: number; token: string }) =>
+      (await fetch(`http://127.0.0.1:${handle.port}/api/health`, { headers: { "x-jevitate-token": handle.token } })).json();
+    expect(await get(await start({ inboxDir: await tmpDir() }))).toMatchObject(currentEngineInfo());
+    const engine = { version: "9.8.7", commit: "abc1234", builtAt: "2026-09-24T00:00:00Z" };
+    expect(await get(await start({ inboxDir: await tmpDir(), engine }))).toMatchObject(engine);
   });
 });
 

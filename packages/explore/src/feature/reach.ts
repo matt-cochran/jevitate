@@ -22,6 +22,9 @@ export function reachFrontierState(params: {
   actor: Actor;
   item: FrontierItem;
   snapshotNow: () => Promise<Snapshot>;
+  homeUrl?: string;
+  currentUrl?: () => string;
+  timeoutMs?: number;
 }): Promise<ReachResult> {
   return coverageReach({ ...params, fingerprintOf: stateFingerprint });
 }

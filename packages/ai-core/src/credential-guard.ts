@@ -1,4 +1,4 @@
-import { CredentialKey } from "./credentials.js";
+import { ALL_CREDENTIAL_KEYS, type CredentialKey } from "./credentials.js";
 
 export class CredentialLeakError extends Error {
   readonly code = "E_CREDENTIAL_LEAK" as const;
@@ -17,7 +17,7 @@ export class CredentialLeakError extends Error {
 export function assertNoOutboundCredential(
   payload: unknown,
   store: { read(k: CredentialKey): string | undefined },
-  keys: readonly CredentialKey[] = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"],
+  keys: readonly CredentialKey[] = ALL_CREDENTIAL_KEYS,
 ): void {
   const haystack = typeof payload === "string" ? payload : JSON.stringify(payload);
   for (const k of keys) {
@@ -26,13 +26,22 @@ export function assertNoOutboundCredential(
   }
 }
 
+/** The default sink a `SecretLeakError` names: a payload bound for a model. */
+export const SECRET_IN_MODEL_PAYLOAD = "an outbound model payload";
+
 export class SecretLeakError extends Error {
   readonly code = "E_SECRET_LEAK" as const;
-  constructor(readonly index: number) {
+  /**
+   * `where` names what carried the value (#219) — "an outbound model payload" by default; a sink
+   * that is not a model payload (the Recording, a result file) names itself, so a refusal never
+   * misattributes its source.
+   */
+  constructor(
+    readonly index: number,
+    readonly where: string = SECRET_IN_MODEL_PAYLOAD,
+  ) {
     // NOTE: never include the value (or its length) in the message.
-    super(
-      `a registered secret value appeared in an outbound model payload — refused (floor #6, never-to-model)`,
-    );
+    super(`a registered secret value appeared in ${where} — refused (floor #6, never-to-model)`);
     this.name = "SecretLeakError";
   }
 }
@@ -50,13 +59,32 @@ export class SecretLeakError extends Error {
  * enforced in ONE place rather than reinvented per package. Value-based on
  * purpose: it proves the redactor upstream actually removed the value, and
  * fails closed if it did not. Blank/empty entries are ignored (a "" would
- * match everything and is never a real secret).
+ * match everything and is never a real secret). A secret is matched raw AND
+ * in its `encodeURIComponent` form (`secretForms`).
  */
-export function assertNoSecretInPayload(payload: unknown, secrets: readonly string[]): void {
+export function assertNoSecretInPayload(
+  payload: unknown,
+  secrets: readonly string[],
+  where: string = SECRET_IN_MODEL_PAYLOAD,
+): void {
   if (secrets.length === 0) return;
   const haystack = typeof payload === "string" ? payload : JSON.stringify(payload);
   for (let i = 0; i < secrets.length; i++) {
     const s = secrets[i];
-    if (s && s.length > 0 && haystack.includes(s)) throw new SecretLeakError(i);
+    if (!s || s.length === 0) continue;
+    for (const form of secretForms(s)) {
+      if (haystack.includes(form)) throw new SecretLeakError(i, where);
+    }
   }
+}
+
+/**
+ * The forms a registered secret is matched in: its raw value and — when it
+ * differs — its `encodeURIComponent` form (how a secret appears once it has
+ * ridden into a URL). Shared by `redactText` and `assertNoSecretInPayload` so
+ * the scrub and its proof always agree on what counts as the secret.
+ */
+export function secretForms(secret: string): readonly string[] {
+  const encoded = encodeURIComponent(secret);
+  return encoded === secret ? [secret] : [secret, encoded];
 }

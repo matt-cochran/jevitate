@@ -26,6 +26,9 @@ test("throws on unknown citationId", () => {
         severity: "minor",
         confidence: 0.8,
         recommendation: "x",
+        observation: "o",
+        userImpact: "u",
+        route: "/r",
         tier: "semantic",
       },
       rubric,
@@ -43,6 +46,9 @@ test("throws on dangling evidenceRef", () => {
         severity: "minor",
         confidence: 0.8,
         recommendation: "x",
+        observation: "o",
+        userImpact: "u",
+        route: "/r",
         tier: "semantic",
       },
       rubric,
@@ -60,6 +66,9 @@ test("throws when no evidenceRefs supplied at all", () => {
         severity: "minor",
         confidence: 0.8,
         recommendation: "x",
+        observation: "o",
+        userImpact: "u",
+        route: "/r",
         tier: "semantic",
       },
       rubric,
@@ -76,6 +85,9 @@ test("builds a finding when both resolve", () => {
       severity: "minor",
       confidence: 0.8,
       recommendation: "x",
+        observation: "o",
+        userImpact: "u",
+        route: "/r",
       tier: "semantic",
     },
     rubric,
@@ -89,7 +101,7 @@ test("builds a finding when both resolve", () => {
 test("the error is a typed UxFindingError", () => {
   try {
     makeFinding(
-      { rubricItemId: "nope", evidenceRefs: [{ id: "control:0" }], severity: "minor", confidence: 0.8, recommendation: "x", tier: "semantic" },
+      { rubricItemId: "nope", evidenceRefs: [{ id: "control:0" }], severity: "minor", confidence: 0.8, recommendation: "x", observation: "o", userImpact: "u", route: "/r", tier: "semantic" },
       rubric,
       evidence,
     );
@@ -97,4 +109,55 @@ test("the error is a typed UxFindingError", () => {
   } catch (e) {
     expect(e).toBeInstanceOf(UxFindingError);
   }
+});
+
+test("specificity gate: a finding without an observation cannot be built", () => {
+  expect(() =>
+    makeFinding(
+      {
+        rubricItemId: "nielsen-1",
+        evidenceRefs: [{ id: "control:0" }],
+        severity: "minor",
+        confidence: 0.8,
+        recommendation: "Rename the button",
+        observation: "   ",
+        userImpact: "u",
+        route: "/r",
+        tier: "semantic",
+      },
+      rubric,
+      evidence,
+    ),
+  ).toThrow(/observation/);
+});
+
+test("a built finding carries its observation, route, screen and a default occurrence count of 1", () => {
+  const f = makeFinding(
+    {
+      rubricItemId: "nielsen-1",
+      evidenceRefs: [{ id: "control:0" }],
+      severity: "minor",
+      confidence: 0.8,
+      recommendation: "Show a saving spinner on the Save button",
+      observation: 'Clicking button "Save" shows no saving state',
+      userImpact: "The user clicks Save twice",
+      route: "/settings",
+      controls: ['button "Save"'],
+      tier: "semantic",
+    },
+    rubric,
+    evidence,
+  );
+  expect(f).toMatchObject({ route: "/settings", screenId: "s1", occurrences: 1, screenIds: ["s1"], controls: ['button "Save"'] });
+  expect(f.observation).toContain("Save");
+});
+
+test("rejects a confidence outside [0,1]", () => {
+  expect(() =>
+    makeFinding(
+      { rubricItemId: "nielsen-1", evidenceRefs: [{ id: "control:0" }], severity: "minor", confidence: 1.4, recommendation: "x", observation: "o", userImpact: "u", route: "/r", tier: "semantic" },
+      rubric,
+      evidence,
+    ),
+  ).toThrow(/confidence/);
 });

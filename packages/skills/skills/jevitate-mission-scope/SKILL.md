@@ -1,6 +1,6 @@
 ---
 name: jevitate-mission-scope
-description: Reads a diff, pull request, changelog, or user story and scopes change-driven testing — identifies at-risk routes/features, maps them to existing promoted Journeys, runs the most relevant ones, and recommends which newly-discovered repros to promote. Use when a user wants to know "what should I test" after a code change, rather than testing everything or picking targets blindly.
+description: Turn a diff, pull request, changelog or user story into targeted jevitate testing. Finds at-risk routes and features, maps them to promoted Journeys (`journey find` / `find_capabilities`) and runs those, scopes bounded missions where nothing covers a gap (including queued missions on promoted targets), and recommends which new repros to promote or capture as regressions. Use when the user asks "what should I test?" after a code change, or wants a change-scoped check.
 ---
 
 You scope testing to what actually changed. You never drive a browser yourself —
@@ -54,6 +54,8 @@ tool to scope a **bounded** mission at the specific at-risk area:
   --url <authorized-url>` (bounded misuse + a trusted hard-signal defect oracle).
 - For state coverage of the changed area: `jevitate explore --strategy coverage
   --url <authorized-url>`.
+- In CI, the same scoping is `jevitate check --suite <file> --changed-routes '<glob>'`: only the
+  Journeys and goals touching those routes run (see `jevitate-ci-check`).
 - Only if you cannot reach an authorized target at all (or `jevitate explore`
   is genuinely absent from your environment) do you stop and report the gap —
   never fall back to a generic browser-automation tool; that would bypass every
@@ -86,22 +88,28 @@ quantity.
 
 `queue_exploration` runs against a PROMOTED mission target, never a raw URL.
 When you want to queue a scoped mission at an at-risk area via MCP:
-- `jevitate mission target add <id> --url <authorized-url> [--goal ...] [--route
-  <glob> ...] --json` registers the target (unpromoted).
+- `jevitate mission target add <id> --name <name> --authorized-origin
+  <authorized-origin> --base-url <url> [--description <text>] --json`
+  registers the target (unpromoted). Note the target's own registration takes
+  NO `--goal`/`--route` — those are `queue_exploration` call arguments
+  (`target`, `goal`, `feature`, `route`, ...), supplied per-enqueue, not baked
+  into the target itself.
 - `jevitate mission target list --json` shows registered targets and their
   promoted/unpromoted state.
 - `jevitate mission target promote <id> --json` promotes it — a human-gated act,
-  same as Journey promotion. Only a promoted target is enqueueable.
+  same as Journey promotion (`jevitate journey promote <id>`). Only a promoted
+  target is enqueueable.
 
 Then `queue_exploration({ target: "<id>", ... })` (via the `jevitate mcp`
 server, registered with `jevitate mcp --print-config ...` or `jevitate init`)
 enqueues a bounded mission and returns a `missionId`.
 
-## Known gaps
+An app whose API lives on another origin declares it on the target:
+`--authorized-origin <app-origin> --api-origin <api-origin>` (repeatable; each a
+bare http(s) origin). A queued mission can reach only those origins.
 
-- The MCP inbox/command-queue tools (`queue_retrieval`, `queue_action`,
-  `get_command`, `list_incoming`, `get_thread`, `approve_action`,
-  `cancel_command`, `get_site_health`) are registered on the `jevitate mcp`
-  server but return a typed `not_implemented` error today — the wired tools are
-  `find_capabilities`, `run_journey`, `queue_exploration`, and
-  `ai_generate_text`. Scoping and running work fully through those four.
+Queued missions run when the queue is drained: `run_queued_missions` over MCP (it drains once),
+or `jevitate mission run --once --real --json` (`--watch` keeps draining).
+`get_mission_result({ id: missionId })` reports `queued`/`running` (`pending: true`), the typed
+result once done, or `failed`. `queue_exploration` only enqueues — treat the returned `missionId`
+as "accepted," not "finished," until the result says otherwise.

@@ -1,13 +1,16 @@
 import type { Command } from "commander";
 import {
   envCredentialStore,
+  ALL_CREDENTIAL_KEYS,
   FEATURE_KEYS,
   requireKeys,
   MissingCredentialError,
   collectMissingKeys,
+  envAliasesFor,
   FakeGenerationGateway,
   OpenRouterGenerationGateway,
   GEN_TASKS,
+  UsageTracker,
   type CredentialKey,
   type Feature,
   type SecureKeyIO,
@@ -15,11 +18,14 @@ import {
   type GenTaskKind,
   type CatalogModel,
   type ModelConstraints,
-  type OpenRouterCall,
 } from "@jevitate/ai-core";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import type { CliDeps } from "./program.js";
 import { resolveDataDir } from "./data-dir.js";
+import { loadLocalCredentials } from "./credentials-file.js";
+import { realOpenRouterCall } from "./openrouter-call.js";
+import { resolveUsagePricing } from "./usage-config.js";
+import { emitJsonOrRefusal } from "./cli-refusal.js";
 
 /**
  * Additive, optional wiring for `@jevitate/ai-core` threaded through `CliDeps`.
@@ -103,10 +109,22 @@ export function realSecureIO(): SecureKeyIO {
       const path = resolveDataDir(["credentials.json"]);
       await mkdir(dirname(path), { recursive: true });
       let existing: Record<string, string> = {};
+      let raw: string | undefined;
       try {
-        existing = JSON.parse(await readFile(path, "utf8"));
-      } catch {
-        // no existing file yet — start fresh
+        raw = await readFile(path, "utf8");
+      } catch (err) {
+        // Only a MISSING file starts fresh; any other read failure fails closed.
+        const missing = typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+        if (!missing) throw err;
+      }
+      if (raw !== undefined) {
+        // Never silently overwrite a file we cannot parse — that would drop the
+        // other stored key. Fail closed with an actionable message instead.
+        try {
+          existing = JSON.parse(raw);
+        } catch {
+          throw new Error(`${path} is not valid JSON — fix or delete it, then re-run setup`);
+        }
       }
       existing[key] = value;
       await writeFile(path, JSON.stringify(existing, null, 2), { mode: 0o600 });
@@ -114,30 +132,12 @@ export function realSecureIO(): SecureKeyIO {
   };
 }
 
-/** Lazily imports `ai` + `@openrouter/ai-sdk-provider` so the CLI builds and
- *  runs `--json`/fake paths without either package resolvable. The key is
- *  placed ONLY in the `Authorization` header, never in `body`/`prompt`. */
-async function realOpenRouterCall(): Promise<OpenRouterCall> {
-  const { generateObject } = await import("ai");
-  const { createOpenRouter } = await import("@openrouter/ai-sdk-provider");
-  return async ({ model, schema, body, authHeader }) => {
-    const openrouter = createOpenRouter({ headers: { Authorization: authHeader } });
-    const start = Date.now();
-    const { object } = await generateObject({
-      model: openrouter(model),
-      schema,
-      prompt: JSON.stringify(body),
-    });
-    return { object, latencyMs: Date.now() - start };
-  };
-}
-
 function buildStore(ai: AiCliDeps | undefined) {
-  return envCredentialStore(ai?.env ?? process.env, ai?.localConfig ?? {});
+  return envCredentialStore(ai?.env ?? process.env, ai?.localConfig ?? loadLocalCredentials());
 }
 
 export function registerAiCommands(program: Command, deps: CliDeps): void {
-  const ai = program.command("ai");
+  const ai = program.command("ai").description("check or configure the model gateway credentials jevitate's AI features need");
 
   ai.command("status")
     .option("--json", "emit a JSON envelope")
@@ -156,9 +156,16 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
         emitJsonLine(program, envelope);
       } else {
         const out = program.configureOutput().writeOut;
+        // `withAliasHint`: e.g. "TYPESAFE_API_KEY (or TYPESAFE_JEV_API_KEY)" — an accepted env
+        // alias (issue #83) is worth surfacing here since this is exactly where a user decides
+        // what to set; unchanged for a key with no alias.
+        const withAliasHint = (k: CredentialKey) => {
+          const aliases = envAliasesFor(k);
+          return aliases.length === 0 ? k : `${k} (or ${aliases.join(", ")})`;
+        };
         for (const feature of FEATURES) {
           const { missing } = data[feature];
-          out?.(`${feature}: ${missing.length === 0 ? "ready" : `missing ${missing.join(", ")}`}\n`);
+          out?.(`${feature}: ${missing.length === 0 ? "ready" : `missing ${missing.map(withAliasHint).join(", ")}`}\n`);
         }
         process.exitCode = 0;
       }
@@ -209,6 +216,8 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
       const store = buildStore(deps.ai);
       try {
         let gateway: GenerationPort;
+        // #163: a live call's usage and cost ride on the result (the fake/injected paths make none).
+        let usage: UsageTracker | undefined;
         if (deps.ai?.gateway) {
           gateway = deps.ai.gateway;
         } else if (real) {
@@ -217,7 +226,7 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
             store,
             catalog: deps.ai?.catalog ?? DEFAULT_CATALOG,
             constraints: deps.ai?.constraints ?? DEFAULT_CONSTRAINTS,
-            call: await realOpenRouterCall(),
+            call: await realOpenRouterCall((usage = new UsageTracker(resolveUsagePricing(deps.ai?.env ?? process.env)))),
           });
         } else if (fake) {
           gateway = new FakeGenerationGateway();
@@ -238,7 +247,8 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
           );
           return;
         }
-        const result = await gateway.generate(task as GenTaskKind, parsedInput as never);
+        const generated = await gateway.generate(task as GenTaskKind, parsedInput as never);
+        const result = usage === undefined ? generated : { ...generated, usage: usage.snapshot() };
         const envelope = ok(result);
         if (json) {
           emitJsonLine(program, envelope);
@@ -268,15 +278,14 @@ export function registerAiCommands(program: Command, deps: CliDeps): void {
  *  JSON envelope itself never carries provider error text at all. */
 function redactCredentials(message: string, store: { read(k: CredentialKey): string | undefined }): string {
   let out = message;
-  for (const key of ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY"] as const) {
+  for (const key of ALL_CREDENTIAL_KEYS) {
     const value = store.read(key);
     if (value) out = out.split(value).join("***REDACTED***");
   }
   return out;
 }
 
+/** The envelope (success, or a refusal with --json); a refusal without --json is a human stderr line (#218). */
 function emitJsonLine(program: Command, envelope: JsonEnvelope<unknown>): void {
-  const writeOut = program.configureOutput().writeOut;
-  writeOut?.(`${JSON.stringify(envelope)}\n`);
-  process.exitCode = envelope.ok ? 0 : 1;
+  emitJsonOrRefusal(program, envelope);
 }

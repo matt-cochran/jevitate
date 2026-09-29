@@ -1,13 +1,15 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams } from "@jevitate/journey";
+import type { SiteGateDeps } from "@jevitate/runtime";
+import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { sessionLaunchOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
 import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitate/load";
+import { JourneyRequiresAuthError } from "./journey-api.js";
+import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 
 /** Distinct from `@jevitate/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
 export class UnknownLoadJourneyError extends Error {}
@@ -19,12 +21,9 @@ export interface RunJourneyLoadTestOptions {
   concurrency: number;
   iterationsPerActor: number;
   /**
-   * Governs deterministic actor fan-out/scheduling only (see
-   * `@jevitate/load`'s `RunLoadTestConfig.seed` doc comment) — the real
-   * `JourneyRunner` this function drives per pool member has no pacing
-   * hook, so this `seed` does NOT (yet) produce human-speed pacing of the
-   * real run the way `modeledCapacityReport`'s `seed` drives
-   * `simulateTiming()`. Known gap, deferred to a future slice.
+   * Governs deterministic actor fan-out/scheduling, and seeds each actor's human-like pacing when a
+   * site policy declares one (`jevitate site policy set <origin>`): actor N's pacing is reproducible
+   * from `seed` and N.
    */
   seed: number;
   authorizedOrigins: readonly string[];
@@ -37,6 +36,25 @@ export interface RunJourneyLoadTestOptions {
    * to `() => new PlaywrightBrowserPort()`.
    */
   browserPortFactory?: () => BrowserPort;
+  /**
+   * Playwright storageState JSON to seed EVERY pool member's session from (CLI `--storage-state`,
+   * #118) — the deterministic authenticated pre-step a Journey authored behind a login needs.
+   * Contains live session cookies: handed only to the browser, never logged, never returned in
+   * the report.
+   */
+  storageState?: string;
+  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
+  browser?: BrowserLaunchOptions;
+  /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`) — applied to EVERY pool member's session. */
+  emulation?: EmulationSpec;
+  /** The site-policy gate (`jevitate site policy set`): only its pacing applies to a load run. */
+  siteGate?: SiteGateDeps;
+  /**
+   * #247 (`--env`/`--base-url`): load-test this environment — the Journey's recorded URLs move onto
+   * its baseUrl (which must still be an `--authorized-origin`); a step on an origin it does not
+   * allow is refused before any browser opens. Absent: the recorded site, as before.
+   */
+  environment?: ResolvedJourneyEnvironment;
 }
 
 /**
@@ -49,18 +67,28 @@ export interface RunJourneyLoadTestOptions {
  *
  * NOTE on "seeded ⇒ reproducible / human-paced" (corrected post-review):
  * `opts.seed` makes the ACTOR POOL's composition reproducible (via
- * `deriveActorSeeds` inside `runLoadTest`) — it does not yet make the real
- * run human-paced, because `JourneyRunner` (constructed below) has no
- * pacing hook to seed. Only the offline `modeledCapacityReport` path is
- * genuinely human-paced today, via `@jevitate/domain`'s `simulateTiming()`.
+ * `deriveActorSeeds` inside `runLoadTest`), and — with a site policy that declares pacing — each
+ * actor's clicks and keystrokes are human-paced, seeded from `seed` and the actor's index. A load
+ * run is the operator's deliberate burst: the policy's throttles, budgets and quiet hours do not
+ * refuse it; only its pacing applies.
  */
 export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promise<CapacityReport> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
-  const journey = await registry.get(opts.id);
-  if (!journey) {
+  const stored = await registry.get(opts.id);
+  if (!stored) {
     throw new UnknownLoadJourneyError(`unknown journey '${opts.id}'`);
+  }
+  const journey = applyJourneyEnvironment(stored, opts.environment);
+  const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
+
+  // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
+  // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
+  if (journey.metadata.requiresAuth === true && opts.storageState === undefined) {
+    throw new JourneyRequiresAuthError(
+      `journey '${opts.id}' requires auth (metadata.requiresAuth) — run with --storage-state <file>`,
+    );
   }
 
   validateParams(deriveParamSchema(journey.recording), opts.params);
@@ -75,16 +103,18 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     iterationsPerActor: opts.iterationsPerActor,
     seed: opts.seed,
     runnerFactory: async (actorIndex): Promise<LoadActorRunner> => {
-      const profileDir = await mkdtemp(join(tmpdir(), `jevitate-load-actor-${actorIndex}-`));
       const port = browserPortFactory();
       const session = await port.open({
-        profileDir,
-        headless: true,
-        allowedOrigins: [journey.recording.site],
+        ...sessionLaunchOptions(opts.browser),
+        allowedOrigins,
         baseUrl: journey.recording.site,
+        ...opts.emulation,
+        ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       });
+      const gate = await gateJourney(opts.siteGate, journey.recording, { enforceLimits: false, runId: `load-${opts.seed}-${actorIndex}` });
       const actor = CastActor.named(`load-actor-${actorIndex}`).whoCan(
-        new BrowseTheWeb(session, [journey.recording.site]),
+        new BrowseTheWeb(session, allowedOrigins),
+        ...gate.abilities,
       );
       const runner = new JourneyRunner(actor, new RecordingInterpreter());
 
@@ -107,7 +137,6 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
             remainingIterations--;
             if (remainingIterations <= 0) {
               await session.close();
-              await rm(profileDir, { recursive: true, force: true });
             }
           }
         },

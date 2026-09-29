@@ -43,6 +43,31 @@ describe("FsMissionQueueStore", () => {
     expect(list.map((m) => m.id).sort()).toEqual(["m-1", "m-2"]);
   });
 
+  it("claim is exclusive: only the first drain gets a mission (#117)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mqs-"));
+    const store = new FsMissionQueueStore(dir);
+    await store.enqueue(mkMission("m-1"));
+    const o = { pid: 1, host: "h", claimedAtIso: "2026-09-25T00:00:00Z" };
+    const claims = await Promise.all([store.claim("m-1", o), store.claim("m-1", o), new FsMissionQueueStore(dir).claim("m-1", o)]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    await expect(store.claim("../escape", o)).rejects.toThrow();
+    // The claim records its owner (so a later drain can tell a dead drain's mission from a live one).
+    expect(await store.claimOwner("m-1")).toEqual(o);
+    expect(await store.claimOwner("m-2")).toBeNull();
+    // A claim file is not a mission: list() still returns exactly the queued records.
+    expect((await store.list()).map((m) => m.id)).toEqual(["m-1"]);
+  });
+
+  it("update rewrites an existing mission's lifecycle, re-validated; an unknown id is refused", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mqs-"));
+    const store = new FsMissionQueueStore(dir);
+    await store.enqueue(mkMission("m-1"));
+    await store.update({ ...mkMission("m-1"), status: "done", resultId: "explore-2026-09-20T00-00-01-000Z", exitCode: 0 });
+    expect(await store.get("m-1")).toMatchObject({ status: "done", resultId: "explore-2026-09-20T00-00-01-000Z" });
+    await expect(store.update({ ...mkMission("m-9"), status: "running" })).rejects.toThrow(/unknown mission/);
+    await expect(store.update({ ...mkMission("m-1"), status: "bogus" } as never)).rejects.toThrow();
+  });
+
   it("get on a missing id returns null", async () => {
     const dir = mkdtempSync(join(tmpdir(), "mqs-"));
     const store = new FsMissionQueueStore(dir);

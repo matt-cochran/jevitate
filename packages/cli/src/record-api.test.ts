@@ -1,5 +1,4 @@
 import { mkdtemp, readFile, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -7,9 +6,9 @@ import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ProfileManager } from "@jevitate/daemon";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
 import { RecordingInterpreter } from "@jevitate/interpreter";
-import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
+import type { BrowserPort, BrowserSession, OpenOptions } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
-import { runRecording, resolveRecordAllowlist, type RecorderLike } from "./record-api.js";
+import { runRecording, resolveRecordAllowlist, waitForEnterKey, type RecorderLike } from "./record-api.js";
 
 /**
  * A schema-valid demonstrated Recording the fake recorder hands back — a real
@@ -62,6 +61,8 @@ function fakeSession(finalUrl: string): { session: BrowserSession; closed: () =>
     page,
     async startTracing() {},
     async stopTracingToFile() {},
+    async saveStorageState() {},
+    admission: undefined,
     async close() {
       closedFlag = true;
     },
@@ -118,7 +119,7 @@ describe("runRecording", () => {
     const { recorder, calls } = fakeRecorder(DEMO_RECORDING);
     const browserPort: BrowserPort = { async open() { return session; } };
 
-    let capturedProfileDir = "";
+    let capturedOpen: OpenOptions | undefined;
     const result = await runRecording({
       url: "https://fixture.test/login",
       allowlist: ["https://fixture.test"],
@@ -126,7 +127,7 @@ describe("runRecording", () => {
       outDir,
       browserPortFactory: () => ({
         async open(o) {
-          capturedProfileDir = o.profileDir;
+          capturedOpen = o;
           return browserPort.open(o);
         },
       }),
@@ -157,13 +158,13 @@ describe("runRecording", () => {
     expect(result.pages).toBe(1);
     expect(result.finalUrl).toBe("https://fixture.test/inbox");
 
-    // Cleanup: session closed and the temp profile dir removed.
+    // Cleanup: session closed; it was a throwaway pooled context (no on-disk profile).
     expect(closed()).toBe(true);
-    expect(capturedProfileDir).not.toBe("");
-    expect(existsSync(capturedProfileDir)).toBe(false);
+    expect(capturedOpen).toBeDefined();
+    expect(capturedOpen?.persistentProfile).toBeUndefined();
   });
 
-  it("still closes the session and removes the profile dir when stop() throws", async () => {
+  it("still closes the session when stop() throws", async () => {
     const { session, closed } = fakeSession("https://fixture.test/inbox");
     const recorder: RecorderLike = {
       async install() {},
@@ -172,14 +173,14 @@ describe("runRecording", () => {
         throw new Error("assembly failed");
       },
     };
-    let capturedProfileDir = "";
+    let capturedOpen: OpenOptions | undefined;
     await expect(
       runRecording({
         url: "https://fixture.test/login",
         allowlist: ["https://fixture.test"],
         browserPortFactory: () => ({
           async open(o) {
-            capturedProfileDir = o.profileDir;
+            capturedOpen = o;
             return session;
           },
         }),
@@ -188,7 +189,7 @@ describe("runRecording", () => {
       }),
     ).rejects.toThrow(/assembly failed/);
     expect(closed()).toBe(true);
-    expect(existsSync(capturedProfileDir)).toBe(false);
+    expect(capturedOpen?.persistentProfile).toBeUndefined();
   });
 });
 
@@ -240,5 +241,24 @@ describe("record command — wiring (no real browser)", () => {
     expect(parsed).toMatchObject({ ok: true, data: { steps: 2, pages: 1, finalUrl: "https://fixture.test/inbox" } });
     const onDisk = JSON.parse(await readFile(parsed.data.recordingPath, "utf8"));
     expect(RecordingSchema.parse(onDisk).site).toBe("https://fixture.test");
+  });
+});
+
+describe("waitForEnterKey (#124: SIGINT saves the take, instead of killing the process)", () => {
+  it("resolves on SIGINT — registering a listener means Node does not fall back to killing the process", async () => {
+    const promise = waitForEnterKey();
+    // Synthetic emit — never raises a real OS signal, so it cannot affect the test runner itself;
+    // it only invokes whatever listener `waitForEnterKey` registered via `process.on("SIGINT", ...)`.
+    process.emit("SIGINT");
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("removes its SIGINT listener once resolved (no leak across takes)", async () => {
+    const before = process.listenerCount("SIGINT");
+    const promise = waitForEnterKey();
+    expect(process.listenerCount("SIGINT")).toBe(before + 1);
+    process.emit("SIGINT");
+    await promise;
+    expect(process.listenerCount("SIGINT")).toBe(before);
   });
 });
