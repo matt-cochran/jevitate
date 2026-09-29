@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
@@ -104,16 +104,21 @@ describe("mcp-api wired handlers", () => {
 
   it("#118: run_journey passes an optional storageState PATH through to the runner seam", async () => {
     const calls: Array<{ id: string; params: Record<string, string>; storageState?: string }> = [];
+    // #255: a storageState path is confined to the server's path roots and must exist.
+    const stateDir = mkdtempSync(join(tmpdir(), "jev-mcp-state-"));
+    const statePath = join(stateDir, "state.json");
+    writeFileSync(statePath, "{}");
     const tools = buildMcpTools({
       ...baseDeps,
+      pathRoots: [stateDir],
       runJourney: async (id, params, storageState) => {
         calls.push({ id, params, storageState });
         return { outcome: "ok", journeyId: id };
       },
     });
     const runTool = tools.find((t) => t.name === "run_journey")!;
-    const result = await runTool.handler({ id: "checkout", params: {}, storageState: "/tmp/state.json" });
-    expect(calls).toEqual([{ id: "checkout", params: {}, storageState: "/tmp/state.json" }]);
+    const result = await runTool.handler({ id: "checkout", params: {}, storageState: statePath });
+    expect(calls).toEqual([{ id: "checkout", params: {}, storageState: statePath }]);
     expect(result.isError).toBeUndefined();
 
     // Omitted entirely when not given — never fabricated.

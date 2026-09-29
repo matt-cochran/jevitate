@@ -4,7 +4,7 @@ import { logsRoot, resultDirsFor } from "./project-dir.js";
 import { resolveDataDir } from "./data-dir.js";
 import { commandPath } from "./cli-refusal.js";
 import { fail, type JsonEnvelope } from "./envelope.js";
-import { type CliDeps, resolveDbPath, resolveInboxDir, resolveJourneysDir, resolveMissionTargetsDir } from "./cli-shared.js";
+import { type CliDeps, buildExploreGateways, resolveDbPath, resolveInboxDir, resolveJourneysDir, resolveMissionTargetsDir } from "./cli-shared.js";
 
 /**
  * #254 — CLI parity with MCP. The CLI commands that mirror an MCP tool (`inbox …`, `mission queue`,
@@ -23,6 +23,10 @@ export function mcpToolDeps(deps: CliDeps, over: Partial<McpApiDeps> = {}): McpA
     recordingsDir: logsRoot(),
     resultDirsFor: (resultId: string) => resultDirsFor(resultId),
     inboxDir: resolveInboxDir(deps),
+    // #255: run_journey's environment / self-heal options resolve exactly as `journey run`'s flags do.
+    ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+    ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
+    selfHealGateways: (sel) => buildExploreGateways(deps, sel),
     ...over,
   };
 }
