@@ -122,7 +122,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixtures: MCP_JOURNEY,
     selfHealer: "MCP runs are fail-closed: a broken step quarantines, never heals",
   },
-  "check-api.ts runJourneyProgrammatically": {
+  "check-execute.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
     policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
     selfHealer: "check never self-heals: a broken step fails the gate",
@@ -173,30 +173,30 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
-  "check-api.ts runExploration": {
+  "check-execute.ts runExploration": {
     hostHealth: SEAM,
     successAssertion: "a suite goal passes success specs as successChecks",
     nowIso: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
   },
-  "check-api.ts runCoverageMission": {
+  "check-execute.ts runCoverageMission": {
     hostHealth: SEAM,
     nowIso: SEAM,
   },
-  "check-api.ts runAdversarialCliMission": {
+  "check-execute.ts runAdversarialCliMission": {
     hostHealth: SEAM,
     headless: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
     nowIso: SEAM,
   },
-  "check-api.ts runFeatureCliMission": {
+  "check-execute.ts runFeatureCliMission": {
     hostHealth: SEAM,
     headless: SEAM,
     nowIso: SEAM,
   },
-  "check-api.ts runUsabilityMission": {
+  "check-execute.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
     configPath: SEAM,
@@ -207,7 +207,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariants: "usability refuses declared invariants (#150)",
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
-  "check-api.ts runVerifyFix": {
+  "check-execute.ts runVerifyFix": {
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
     invariantFiles: "the result persists its invariant spec",
     allowLogCmd: "never enabled from a suite; targets.json may opt in",
@@ -314,7 +314,7 @@ describe("surface wiring — every mission option is passed by every surface, or
 
   it("finds the surfaces (the analysis itself is not vacuous)", () => {
     const keys = sites.map((s) => s.key);
-    for (const k of ["program.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-api.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
+    for (const k of ["program.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-execute.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
       expect(keys, k).toContain(k);
     }
   }, 120_000);
