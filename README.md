@@ -38,47 +38,72 @@ and hands each one back as a deterministic artifact.
 
 ## Quick start
 
-Needs Node.js 20+. This first run needs **no API keys**: the adversarial mission plans its misuse
-in code.
+Needs Node.js 20+ and an app running locally (examples use `http://localhost:3000`).
+
+**1. Install**
 
 ```bash
 npm install -g @jevitate/cli
 npx playwright install chromium          # the browser Jevitate drives
+```
 
-# Point it at a form in an app you're running locally, and try to break it:
+**2. Set up the repo**. Run this from your app's repository:
+
+```bash
+jevitate init
+```
+
+It creates `.jevitate/` (Journeys, regressions, baselines, logs, and an example
+`environments.json`), installs [agent skills](./docs/agents.md) for Claude Code, Codex, Cursor
+and `AGENTS.md`, registers the MCP server, and asks for any missing keys (`TYPESAFE_API_KEY` for
+Jev's judgment, `OPENROUTER_API_KEY` for text generation). Keys are optional for step 3. Without a
+terminal (CI, a coding agent), `init` never prompts: it reports which keys are missing, and you
+add them later with `jevitate ai setup <generation|judgment>`. It ends with a short **next steps**
+list that fits what it set up.
+
+**3. First run: try to break a form.** No keys needed, because the adversarial mission plans its
+misuse in code:
+
+```bash
 jevitate explore --strategy adversarial --url http://localhost:3000/settings --fake-ai
 ```
 
 It double-submits, feeds empty, boundary, long, unicode and invalid values, cancels and reloads
-mid-edit, and acts while a save is still pending. It then prints a short summary: the outcome
-(`clean`, `defects-found`, `inconclusive`, …), each defect with its fingerprint, the result file
-and a `next:` step. The full result (each defect's evidence, the paths of its Recording, transcript
-and ready-to-file issue drafts) is written under `.jevitate/logs/<date>/` (see [where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things));
-add `--json` to print it as a JSON envelope instead. The exit code is the outcome ([table below](#mission-outcomes-and-exit-codes)).
+mid-edit, and acts while a save is still pending. It prints the outcome (`clean`,
+`defects-found`, `inconclusive`, …), each defect with its fingerprint, the result file and a
+`next:` step. The full result (evidence, the Recording, a ready-to-file issue draft) goes under
+`.jevitate/logs/<date>/` ([where jevitate keeps things](./docs/operations.md#where-jevitate-keeps-things)).
+`--json` prints it as a JSON envelope instead. The exit code is the outcome
+([table below](#mission-outcomes-and-exit-codes)).
 
-- Jevitate only visits the `--url`'s origin. Add `--allow <origin>` for each origin the app needs
-  (include the app's own origin too, since `--allow` replaces the default).
+- Jevitate only visits the `--url`'s origin. Add `--allow <origin>` for each origin the app needs,
+  and include the app's own origin too, since `--allow` replaces the default.
 - `--fake-ai` swaps the mission's advisory model calls for deterministic stand-ins. Nothing it
   reports depends on them.
 - Logged-in app? Add `--storage-state auth.json` ([authentication](./docs/authentication.md)).
 
-**Goal-directed runs** use a model to decide what to do next. Set up keys once
-(`TYPESAFE_API_KEY` for Jev, `OPENROUTER_API_KEY` for text generation):
+With keys, a **goal-directed run** reaches an end state, and code checks it:
 
 ```bash
-jevitate init        # prompts for missing keys; installs agent skills; registers the MCP server
 jevitate explore --url http://localhost:3000/profile --goal "set the last name to Litmus and save" \
   --success 'requestMade:PUT /api/profile' --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus' \
   --real
 ```
 
-`jevitate init` only prompts for keys at a real terminal. Run without a TTY (CI, a coding agent —
-see below), it never prompts: it completes the rest of init and reports which keys are still
-missing, in both the human summary and the `--json` envelope. Set the keys yourself (or via env
-vars) and configure them with `jevitate ai setup <generation|judgment>`.
+It succeeds only if the save request was sent and the value survived a reload. The model saying
+"done" doesn't count.
 
-The run succeeds only if the save request was sent and the value survived a reload, checked by
-code. The model saying "done" doesn't count.
+**4. Next steps**
+
+| To | Run | Docs |
+| --- | --- | --- |
+| keep a flow as a replayable Journey | `jevitate explore-author-journey --url <url> --goal "…" --success "…" --id checkout --name Checkout --real`, then `jevitate journey promote checkout` | [journeys](./docs/journeys.md) |
+| record a flow by clicking through it | `jevitate record --url <url>` | [journeys](./docs/journeys.md#record-a-flow-by-demonstration) |
+| replay it anywhere | `jevitate journey run checkout --env staging` | [environments](./docs/journeys.md#environments---env) |
+| make a narrated demo | `jevitate demo "Save your display name" --env local --success "…" --real` | [demos](./docs/journeys.md#demo-an-aspect-from-a-one-line-request) |
+| prove a fix, with evidence | `jevitate verify-fix --result <run>.result.json --fingerprint <fp> --record-video` | [verification](./docs/verification.md) |
+| gate CI | `jevitate check --suite jevitate-suite.json` (JUnit + SARIF; exit 1 = a gating finding) | [ci](./docs/ci.md) |
+| let your coding agent drive | ask it in plain words. The skills and MCP tools `init` installed do the rest | [agents](./docs/agents.md) |
 
 ## See it work
 
