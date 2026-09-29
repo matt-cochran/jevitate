@@ -178,6 +178,7 @@ boolean, and a number is a JSON number.
 | Scope and coverage | `scope` (`"app"`), `minControlCoverage`, `requireFormSubmit` | `scope`: coverage, exploratory; the others: adversarial |
 | Overflow (#149) | `checkOverflow`, `ignoreOverflow` | coverage, exploratory, adversarial, usability |
 | Usability | `show`, `minConfidence`, `maxFindingsPerPage` | usability |
+| Demo mode (#245) | `headed`, `slowMo` (ms), `recordVideo` (a directory, resolved against the suite file), `overlay` (`false` = `--no-overlay`) | every goal and mission |
 
 - An item that sets an option that does not apply to it is refused, naming the path
   (`$.targets[0].missions[1].fixture: does not apply to a coverage mission item`), just as
@@ -198,6 +199,10 @@ boolean, and a number is a JSON number.
   `explore --persona` for the RBAC diff). An item with `actor`, `persona` or `personas` cannot also
   set its own `storageState`.
 - Journey and `verifyFix` items take `storageState` too (a path, or `null`).
+- **Demo mode is per item and off by default (#245).** A check stays headless, CI included:
+  `JEVITATE_HEADED` does not apply to `check`. An item (or a target default) sets `headed: true`
+  to show its browser — refused at preflight when there is no display, like `--headed` — or
+  `recordVideo: "videos"` to record it headless; the item's result then lists `videoPaths`.
 - `saveStorageState` (like `explore --save-storage-state`) is refused when it resolves inside a
   repo's `.jevitate/`, which never holds sessions or secrets: write it under `~/.jevitate/` or
   outside the repo.

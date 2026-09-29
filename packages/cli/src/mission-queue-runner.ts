@@ -248,6 +248,11 @@ export interface RealExecutorOptions {
   /** Builds fresh gateways (and a fresh usage tracker) per model-driven mission. */
   readonly gateways: () => Promise<{ judge: JudgmentPort; gen: GenerationPort; usage: UsageTracker }>;
   readonly browserPortFactory?: () => BrowserPort;
+  /**
+   * Launch options only — typed `BrowserLaunchOptions`, never the demo-mode `BrowserRunOptions`
+   * (#245): a queued mission (what MCP `queue_exploration` feeds) runs unattended, so it is always
+   * headless, unrecorded and overlay-free; `mission run` takes no --headed/--record-video flags.
+   */
   readonly browser?: BrowserLaunchOptions;
   /**
    * `~/.jevitate/targets.json`, by origin (#142 follow-up): a queued mission NEVER carries its own

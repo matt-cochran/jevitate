@@ -21,7 +21,9 @@ import {
   resolveSourceApiDeps,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
-  browserOption,
+  browserRunFromFlags,
+  withDemoFlags,
+  type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
   emulationFromFlags,
@@ -108,7 +110,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
       }
     });
 
-  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>"))))
+  withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("run <id>")))), { recordVideo: true })
     .option("--dir <path>", "journeys directory (default: ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option(
@@ -139,6 +141,14 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
 
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", `storage state not found: ${storageState}`));
+        return;
+      }
+      // #245: demo mode, resolved (a headed run without a display refused) before any browser opens.
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       let journeyRunEmulation: EmulationSpec | undefined;
@@ -193,7 +203,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           policy,
           selfHealer,
           browserPortFactory: deps.explore?.browserPortFactory,
-          ...browserOption(this.opts<BrowserLaunchFlags>()),
+          ...(browser === undefined ? {} : { browser }),
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state).

@@ -69,8 +69,10 @@ import { type EmulationSpec } from "@jevitate/playwright";
 import {
   type CliDeps,
   type BrowserLaunchFlags,
+  type DemoFlags,
   withBrowserLaunchFlags,
-  browserLaunchFromFlags,
+  withDemoFlags,
+  browserRunFromFlags,
   type EmulationFlags,
   withEmulationFlags,
   emulationFromFlags,
@@ -81,6 +83,7 @@ import {
   GatewaySelectionError,
   buildExploreGateways,
 } from "./cli-shared.js";
+import { multiWindowWarning } from "./browser-run-options.js";
 
 /**
  * Registers `jevitate explore` (every strategy: goal, coverage, exploratory, adversarial, usability, feature, multi-run).
@@ -89,10 +92,13 @@ import {
 export function registerExploreCommands(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
   withEmulationFlags(
     withFixtureFlags(
-      withBrowserLaunchFlags(
-        program
-          .command("explore")
-          .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+      withDemoFlags(
+        withBrowserLaunchFlags(
+          program
+            .command("explore")
+            .description("goal-directed exploration -> a deterministic Recording (authoring/test plane)"),
+        ),
+        { recordVideo: true, overlay: true },
       ),
     ),
   )
@@ -470,7 +476,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         checkOverflow?: boolean;
         ignoreOverflow: string[];
         json?: boolean;
-      } & BrowserLaunchFlags & FixtureFlags & EmulationFlags>();
+      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags>();
       // #210: one output rule for every strategy — the envelope with --json, a human summary without.
       const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
@@ -503,6 +509,18 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         if (!(err instanceof SecretArgError)) throw err;
         emitExplore(fail("E_EXPLORE_ARGS", err.message));
         return;
+      }
+      // #245 demo mode: resolved (and a headed run without a display refused, exit 64) before any
+      // browser opens — a multi-run's every run re-resolves the same flags.
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(o, deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      if (browser?.headed === true && (wantsMultiRun(o) || o.actor.length > 1)) {
+        program.configureOutput().writeErr?.(multiWindowWarning(o.actor.length > 1 ? "several --actor sessions" : "--repeat/--persona"));
       }
       // Repeat-and-vote (#141) / persona matrix (#143): the same command, run sequentially and aggregated.
       if (wantsMultiRun(o)) {
@@ -561,7 +579,6 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
-      const browser = browserLaunchFromFlags(o);
       // #149: refused BEFORE any browser opens (an unknown --device, or --viewport + --device together).
       let emulation: EmulationSpec | undefined;
       try {

@@ -1,6 +1,7 @@
 // check-types.ts — `jevitate check` option, result and error types (#231).
 import { type GenerationPort, type JudgmentPort, type UsageAggregate, type UsageTracker } from "@jevitate/ai-core";
-import type { BrowserLaunchOptions, BrowserPort } from "@jevitate/playwright";
+import type { BrowserPort } from "@jevitate/playwright";
+import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import { type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff } from "@jevitate/findings";
 import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
@@ -98,7 +99,7 @@ export interface RunCheckOptions {
   /** Where a target's `secretFields` read their values (default `process.env`). */
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly browserPortFactory?: () => BrowserPort;
-  readonly browser?: BrowserLaunchOptions;
+  readonly browser?: BrowserRunOptions;
   readonly runners?: Partial<CheckRunners>;
   /** Clock seams. */
   readonly now?: () => number;

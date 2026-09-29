@@ -1,6 +1,10 @@
 import { FsJourneyStore, JourneyRegistry, deriveParamSchema, validateParams, type Journey } from "@jevitate/journey";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { join } from "node:path";
+import { PlaywrightBrowserPort, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { artifactStamp } from "./mission-journal.js";
+import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
@@ -53,8 +57,8 @@ export interface RunJourneyProgrammaticallyOptions {
   storageState?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  browser?: BrowserRunOptions;
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   emulation?: EmulationSpec;
   /**
@@ -98,7 +102,7 @@ export async function promoteJourney(dir: string, id: string): Promise<Journey> 
  */
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord }> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[] }> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -135,14 +139,19 @@ export async function runJourneyProgrammatically(
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     const port = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
+    // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
+    const videoDir =
+      opts.browser?.recordVideo === undefined
+        ? undefined
+        : runVideoDir(opts.browser, join(opts.browser.recordVideo.dir ?? logsDirFor(), `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}.json`));
     const session = await port.open({
-      headless: true,
+      ...sessionLaunchOptions(opts.browser, videoDir),
       allowedOrigins: [journey.recording.site],
       baseUrl: journey.recording.site,
-      ...opts.browser,
       ...opts.emulation,
       ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
     });
+    const closeSession = closeOnce(() => session.close());
     try {
       const actor = CastActor.named("cli-runner").whoCan(
         new BrowseTheWeb(session, [journey.recording.site]),
@@ -155,11 +164,13 @@ export async function runJourneyProgrammatically(
       } finally {
         await gate.done();
       }
-      if (fx === undefined) return result;
+      // #245: the context closed (its video finalized) before the result naming it is returned.
+      const videos = await finalizeVideos(videoDir, closeSession);
+      if (fx === undefined) return { ...result, ...videos };
       await fx.restore();
-      return { ...result, fixtures: fx.record() };
+      return { ...result, ...videos, fixtures: fx.record() };
     } finally {
-      await session.close();
+      await closeSession();
     }
   } finally {
     await fx?.restore();

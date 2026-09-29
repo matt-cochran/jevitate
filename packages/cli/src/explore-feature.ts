@@ -3,7 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec } from "@jevitate/recording";
 import type { HostHealthSampler, InvariantDefect, SafetyConfig } from "@jevitate/explore";
@@ -68,15 +69,14 @@ export interface RunFeatureCliMissionOptions {
    * (`ScopeUnderivableError`, a usage error) before any browser opens.
    */
   readonly routeGlobs?: readonly string[];
-  readonly headless?: boolean;
   /** No-progress watchdog (CLI `--stall-timeout`, #114): ends the run `stalled` (inconclusive). Default 120s. */
   readonly stallTimeoutMs?: number;
   /** Step/action budget (CLI `--max-actions` / `--max-decisions`). */
   readonly bounds?: Partial<Bounds>;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  readonly browser?: BrowserRunOptions;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -130,6 +130,8 @@ export type FeatureCliMissionResult = Omit<FeatureRunResult, "outcome"> & {
   readonly engine: EngineInfo;
   /** One Recording per distinct discovered path (`feature-<stamp>-path-<n>.json`). */
   readonly recordingPaths: string[];
+  /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
+  readonly videoPaths?: string[];
   /** The shared decision transcript (`feature-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
   /** The persisted typed result (`feature-<stamp>.result.json`), readable via MCP `get_mission_result`. */
@@ -173,20 +175,21 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   // #149: refused BEFORE any browser opens.
   resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
-  const launch = {
-    headless: opts.headless ?? true,
-    allowedOrigins: [...opts.allowlist],
-    baseUrl: origin,
-    ...opts.browser,
-    ...opts.emulation,
-    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  };
   // Persist recordings + transcript + a typed result, like the goal and
   // coverage missions do (ticket #78 — previously nothing was written).
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
   const journal = new MissionJournal(join(outDir, `feature-${stamp}.json`));
+  // #245: the mission session and every hang-replay session are shown/recorded alike.
+  const videoDir = runVideoDir(opts.browser, journal.recordingPath);
+  const launch = {
+    ...sessionLaunchOptions(opts.browser, videoDir),
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+    ...opts.emulation,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+  };
   // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
   const { disarmKillSwitch, health, session, snapshotter } = await launchArmed({
     hostHealth: opts.hostHealth,
@@ -198,6 +201,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       target: { seedUrl: opts.seedUrl, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
       recordingPath: journal.recordingPath,
       hostHealth: hooks.hostHealth,
+      ...(videoDir === undefined ? {} : { videoDir }),
       transcriptPath: journal.transcriptPath,
       transcript: () => journal.transcript,
       ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
@@ -220,6 +224,11 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
+  // #159/#245: persisted and closed once — early (before the result is written) when recording video.
+  const closeSession = closeOnce(async () => {
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
+    await closeQuietly(session);
+  });
   try {
     const actor = CastActor.named("feature-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runFeatureMission({
@@ -236,6 +245,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
       ...(opts.safety === undefined ? {} : { safety: opts.safety }),
       hostHealth: health,
+      demoOverlay: demoOverlayOf(opts.browser),
     });
 
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);
@@ -298,6 +308,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const host = await finishHostHealth(health, applyServerLogOutcome(preLogOutcome, serverLogRun));
     const missionOutcome: MissionOutcome = host.outcome;
     const exitCode = missionExitCode(missionOutcome);
+    // #245: every context closed (videos finalized) before the result naming them is written.
+    const videos = await finalizeVideos(videoDir, closeSession);
     const typed = {
       ...result,
       // #209: one name — a frontier that emptied having proved nothing about the feature is not
@@ -311,6 +323,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       missionOutcome,
       exitCode,
       recordingPaths,
+      ...videos,
       transcriptPath: journal.transcriptPath,
       engine: currentEngineInfo(),
       target: {
@@ -333,7 +346,6 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     disarmKillSwitch();
     health.stop();
     await serverLog?.abort();
-    await persistStorageState(session, opts.saveStorageState, snapshotter);
-    await closeQuietly(session);
+    await closeSession();
   }
 }

@@ -14,7 +14,9 @@ import {
   type CliDeps,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
-  browserLaunchFromFlags,
+  browserRunFromFlags,
+  withDemoFlags,
+  type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
   emulationFromFlags,
@@ -28,10 +30,13 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
   // 4 intermittent (fired on some but not all replays — never reported as fixed) · 64 usage error.
   withEmulationFlags(
     withFixtureFlags(
-      withBrowserLaunchFlags(
-        program
-          .command("verify-fix")
-          .description("replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay"),
+      withDemoFlags(
+        withBrowserLaunchFlags(
+          program
+            .command("verify-fix")
+            .description("replay a defect's repro from a mission result (or the ledger); passes only if the defect signal is absent on every replay"),
+        ),
+        { recordVideo: true },
       ),
     ),
   )
@@ -82,6 +87,7 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           secret: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
+          DemoFlags &
           FixtureFlags &
           EmulationFlags
       >();
@@ -105,8 +111,11 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
         return;
       }
       let verifyFixEmulation: EmulationSpec | undefined;
+      // #245: demo mode, resolved (a headed run without a display refused) before any browser opens.
+      let browser: ReturnType<typeof browserRunFromFlags>;
       const fingerprint = o.fingerprint ?? positional;
       try {
+        browser = browserRunFromFlags(o, deps.explore?.env ?? process.env);
         verifyFixEmulation = emulationFromFlags(o);
         if (fingerprint === undefined) throw new Error("a fingerprint is required: verify-fix <fp> or --fingerprint <fp>");
         if (o.fingerprint !== undefined && positional !== undefined && o.fingerprint !== positional) {
@@ -131,7 +140,7 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           fixtureFlags: o,
           secrets: o.secret,
           browserPortFactory: deps.explore?.browserPortFactory,
-          browser: browserLaunchFromFlags(o),
+          browser,
           ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });

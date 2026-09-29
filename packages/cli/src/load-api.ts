@@ -3,6 +3,7 @@ import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { sessionLaunchOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
@@ -95,10 +96,9 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     runnerFactory: async (actorIndex): Promise<LoadActorRunner> => {
       const port = browserPortFactory();
       const session = await port.open({
-        headless: true,
+        ...sessionLaunchOptions(opts.browser),
         allowedOrigins: [journey.recording.site],
         baseUrl: journey.recording.site,
-        ...opts.browser,
         ...opts.emulation,
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       });

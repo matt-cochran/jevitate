@@ -203,6 +203,37 @@ flags:
 jevitate journey run checkout --browser-channel chrome --browser-arg=--lang=de
 ```
 
+## Demo mode: watching a run
+
+Headless is the default everywhere, `check` and CI included; demo mode is opt-in (#245). The flags
+are resolved in one place (`packages/cli/src/browser-run-options.ts`), so every browser a run opens
+— the mission's own, hang-replay sessions, `--actor` observers, verify-fix replays — is shown and
+recorded the same way.
+
+| Flag | What it does | Commands |
+| --- | --- | --- |
+| `--headed` / `JEVITATE_HEADED=1` | A visible Chromium window | `explore` (every strategy), `journey run`, `verify-fix`, `regression capture`, `regression run` |
+| `--slow-mo <ms>` | Playwright `slowMo`: each browser operation is delayed this long. A non-negative integer (else exit 64). With `--headed` and no `--slow-mo`: 250 | the same |
+| `--record-video [dir]` | A Playwright video of each browser context. Works headless too | `explore`, `journey run`, `verify-fix` |
+| `--no-overlay` | With `--headed`: hide the on-page overlay (step, intent, target highlight, outcome banner) | `explore` |
+
+- **Videos.** A run's videos go in its own folder, `<run>.videos/`, next to the run's result (or
+  under `--record-video <dir>`): `explore-<stamp>.videos/`, `usability-<stamp>.videos/`,
+  `verify-fix-<stamp>.videos/` beside the mission result, `journey-<id>-<stamp>.videos/` in the logs
+  dir. The run closes its browser contexts before it writes its result, so every listed video is
+  complete. The paths are in the result as `videoPaths` (an additive field of the unified result
+  schema, `schemaVersion` 1) and in the human summary as `VIDEO` lines. A run killed by
+  SIGINT/SIGTERM lists the files already there, but cannot wait for a context to close, so its last
+  video may be truncated.
+- **No display.** `--headed` needs one: on Linux, with neither `DISPLAY` nor `WAYLAND_DISPLAY` set
+  (WSL2 without WSLg, a CI container), the command is refused before any browser launches —
+  `error E_EXPLORE_ARGS: --headed needs a display …` (exit 64) — and suggests `--record-video`.
+- **Several windows.** `--repeat`, `--persona` and `--actor` runs open more than one browser; with
+  `--headed` each is shown and a one-line warning is printed on stderr. Nothing is refused.
+- **Never headed:** `mission run` (what MCP `queue_exploration` feeds) runs unattended and takes no
+  demo flags; `load run` and `source run` stay headless too. In a `check` suite an item opts in with
+  its own `headed`/`slowMo`/`recordVideo`/`overlay` options (see [CI](ci.md)).
+
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`

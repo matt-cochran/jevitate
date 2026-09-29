@@ -101,6 +101,26 @@ jevitate regression run saved-means-stored --dir demo-regressions   # reproduces
 jevitate regression run saved-means-stored --dir demo-regressions   # fixed (exit 0)
 ```
 
+### Watch it run (demo mode)
+
+Every run is headless by default, CI included. To show an audience what jevitate does, open a
+visible browser and slow it down, or record it:
+
+```bash
+# A visible Chromium, each browser operation slowed by 250 ms (override with --slow-mo <ms>):
+jevitate explore --strategy adversarial --url http://127.0.0.1:5190/demo/profile --fake-ai --headed
+
+# Headless, recorded: the videos are listed in the result (videoPaths) and the summary (VIDEO)
+jevitate explore --strategy adversarial --url http://127.0.0.1:5190/demo/profile --fake-ai --record-video
+```
+
+`--headed` (or `JEVITATE_HEADED=1`), `--slow-mo <ms>` and `--record-video [dir]` work on every
+`explore` strategy, `journey run` and `verify-fix`; `regression capture|run` take `--headed` and
+`--slow-mo`. A headed explore run also shows an on-page overlay (hide it with `--no-overlay`).
+`--headed` needs a display: without one (no `DISPLAY`/`WAYLAND_DISPLAY` on Linux; WSL2 needs WSLg)
+it is refused (exit 64) — use `--record-video` instead. See
+[operations: demo mode](./docs/operations.md#demo-mode-watching-a-run).
+
 ## Why Jevitate?
 
 Hand-written E2E tests check the paths someone thought of. The bugs that reach users tend to sit

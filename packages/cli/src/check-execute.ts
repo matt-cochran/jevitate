@@ -6,6 +6,7 @@ import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { resolveRouteScope } from "@jevitate/explore";
 import { type SuiteExploreOptions } from "./suite-explore-options.js";
+import { type BrowserRunOptions } from "./browser-run-options.js";
 import { substituteSetupRefs } from "./mission-fixtures.js";
 import { type ConsolidatedDefect } from "@jevitate/findings";
 import { CLI_ADVERSARIAL_STRATEGIES, parseSuccessSpec } from "./explore-api.js";
@@ -56,6 +57,17 @@ function bounds(maxActions: number | undefined, maxDecisions: number | undefined
   return Object.keys(b).length > 0 ? b : undefined;
 }
 
+/** A goal/mission item's `browser` (#245): the check's launch options plus the item's demo-mode options. */
+function itemBrowser(base: BrowserRunOptions | undefined, x: SuiteExploreOptions): BrowserRunOptions | undefined {
+  const demo: BrowserRunOptions = {
+    ...(x.headed === true ? { headed: true } : {}),
+    ...(x.slowMo === undefined ? {} : { slowMo: x.slowMo }),
+    ...(x.recordVideo === undefined ? {} : { recordVideo: { dir: x.recordVideo } }),
+    ...(x.overlay === false ? { overlay: false } : {}),
+  };
+  return Object.keys(demo).length === 0 ? base : { ...base, ...demo };
+}
+
 export async function execute(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
   const { opts, runners } = ctx;
   const t = item.t.target;
@@ -69,10 +81,12 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
   const setup = item.setup;
   const x: SuiteExploreOptions = setup?.x ?? {};
   const session = setup !== undefined ? setup.storageState : sessionOf(t, item.journey?.storageState ?? item.verify?.storageState);
+  // #245: an item's demo mode (headed/slowMo/recordVideo/overlay) on top of the check's launch flags.
+  const browser = itemBrowser(opts.browser, x);
   const common = {
     outDir: ctx.resultsDir,
     ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-    ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+    ...(browser === undefined ? {} : { browser }),
     ...(session === undefined ? {} : { storageState: session }),
     ...(x.saveStorageState === undefined ? {} : { saveStorageState: x.saveStorageState }),
   };

@@ -50,7 +50,7 @@ const RUNNER_KEYS: Readonly<Record<string, string>> = {
   verifyFix: "runVerifyFix",
 };
 
-const SEAM = "test seam (clock / headless / injected ports) — never a user setting";
+const SEAM = "test seam (clock / injected ports) — never a user setting";
 const MCP_NARROW = "MCP verify_fix takes only a result id + fingerprint: operator settings come from targets.json, never an MCP argument";
 const QUEUE_NO_ENV_SECRETS = "a queued spec's authFrom.secret is refused at enqueue: a request never chooses which env var is sent";
 const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site policy` default";
@@ -62,8 +62,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
   "explore-cli.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
   "explore-cli.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
-  "explore-cli.ts runAdversarialCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
-  "explore-cli.ts runFeatureCliMission": { hostHealth: SEAM, headless: SEAM, nowIso: SEAM },
+  "explore-cli.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
+  "explore-cli.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "explore-cli.ts runExploreMultiRun": { nowIso: SEAM },
   "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait" },
   "explore-cli.ts runUsabilityMission": {
@@ -154,7 +154,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
     hostHealth: SEAM,
-    headless: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
     issueFiler: QUEUE_NARROW,
@@ -166,7 +165,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "mission-queue-runner.ts runFeatureCliMission": {
     hostHealth: SEAM,
-    headless: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
@@ -186,14 +184,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "check-execute.ts runAdversarialCliMission": {
     hostHealth: SEAM,
-    headless: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
     nowIso: SEAM,
   },
   "check-execute.ts runFeatureCliMission": {
     hostHealth: SEAM,
-    headless: SEAM,
     nowIso: SEAM,
   },
   "check-execute.ts runUsabilityMission": {

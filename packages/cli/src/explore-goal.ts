@@ -3,7 +3,8 @@ import { sessionLostReason } from "./session-check.js";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
@@ -82,8 +83,8 @@ export interface RunExplorationOptions {
   readonly outDir?: string;
   /** Testing seam — defaults to a real `PlaywrightBrowserPort`. */
   readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  readonly browser?: BrowserRunOptions;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -184,6 +185,8 @@ export interface RunExplorationResult {
   readonly actions: number;
   /** Every Recording the run wrote (#195: one list on every strategy) — a goal run writes one. */
   readonly recordingPaths: string[];
+  /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
+  readonly videoPaths?: string[];
   /** @deprecated since 0.2.0 (#195) — use `recordingPaths[0]`; removed in the next minor. */
   readonly recordingPath: string;
   /**
@@ -340,19 +343,21 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const primaryState = opts.actors?.primary.storageState ?? opts.storageState;
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const launch = {
-    headless: true,
-    allowedOrigins: [...opts.allowlist],
-    baseUrl: origin,
-    ...opts.browser,
-    ...opts.emulation,
-    ...(primaryState !== undefined ? { storageState: primaryState } : {}),
-  };
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   // Crash-safe: the transcript and partial Recording are flushed after every step. `MissionJournal`
   // itself creates `outDir` synchronously (mkdirSync).
   const journal = new MissionJournal(join(outDir, `explore-${artifactStamp(iso)}.json`));
+  // #245: every session this run opens (mission, observers, hang replays) is shown/recorded alike.
+  const videoDir = runVideoDir(opts.browser, journal.recordingPath);
+  const shown = sessionLaunchOptions(opts.browser, videoDir);
+  const launch = {
+    ...shown,
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+    ...opts.emulation,
+    ...(primaryState !== undefined ? { storageState: primaryState } : {}),
+  };
   // Crash-safe on SIGTERM/SIGINT too (#94): a partial `inconclusive` result is written from
   // whatever the journal has already flushed, and the process exits with the conventional code.
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
@@ -370,6 +375,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       hostHealth: hooks.hostHealth,
       transcriptPath: journal.transcriptPath,
       transcript: () => journal.transcript,
+      ...(videoDir === undefined ? {} : { videoDir }),
       ...(runUsage === undefined ? {} : { usage: runUsage }),
       ...(opts.saveStorageState === undefined ? {} : { storageState: { path: opts.saveStorageState, snapshot: hooks.snapshot } }),
     }),
@@ -380,7 +386,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   const observers =
     opts.actors === undefined || opts.actors.observers.length === 0
       ? undefined
-      : observerSessions(portFactory, { headless: true, allowedOrigins: [...opts.allowlist], baseUrl: origin, ...opts.browser }, opts.actors.observers);
+      : observerSessions(portFactory, { ...shown, allowedOrigins: [...opts.allowlist], baseUrl: origin }, opts.actors.observers);
   // Backend log correlation (#142): opened BEFORE the mission runs so its window covers the seed
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
@@ -400,6 +406,11 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
+  // #159/#245: persisted and closed once — early (before the result is written) when recording video.
+  const closeSession = closeOnce(async () => {
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
+    await closeQuietly(session);
+  });
   try {
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
@@ -436,6 +447,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(observers === undefined ? {} : { observers }),
       ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
       hostHealth: health,
+      demoOverlay: demoOverlayOf(opts.browser),
     });
     await observers?.close();
 
@@ -485,6 +497,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       opts.issueFiler ?? NO_FILER,
       iso,
     );
+    // #245: every context closed (videos finalized) before the result naming them is written.
+    const videos = await finalizeVideos(videoDir, closeSession);
 
     const result: RunExplorationResult = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
@@ -512,6 +526,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       actions: mission.run.actions,
       recordingPaths: [journal.recordingPath],
       recordingPath: journal.recordingPath,
+      ...videos,
       transcriptPath: journal.transcriptPath,
       transcript: serverLogRun?.transcript ?? mission.transcript,
       exitCode: goalExitCode(goalOutcome),
@@ -579,7 +594,6 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
     await observers?.close().catch(() => undefined);
-    await persistStorageState(session, opts.saveStorageState, snapshotter);
-    await closeQuietly(session);
+    await closeSession();
   }
 }

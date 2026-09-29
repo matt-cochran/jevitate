@@ -18,7 +18,9 @@ import {
   makeRealBrowserActor,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
-  browserLaunchFromFlags,
+  browserRunFromFlags,
+  withDemoFlags,
+  type DemoFlags,
   type EmulationFlags,
   withEmulationFlags,
   emulationFromFlags,
@@ -37,7 +39,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   // `runRegressionCapture`.
   const regression = program.command("regression").description("capture, run and manage regression tests from discovered failures");
 
-  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture"))))
+  withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture")))))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
     .requiredOption("--id <id>", "regression id (used for the committed <id>.recording.json/<id>.meta.json filenames)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
@@ -58,6 +60,14 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
     .option("--force", "overwrite an existing regression id's committed files (default: refused, #213)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
+      // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       const flags = this.opts<{
         from: string;
         id: string;
@@ -123,7 +133,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           force,
           makeActor: async () => {
             await replayFixture?.reset();
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browser, deps.explore?.browserPortFactory);
             opened.push(close);
             if (replayFixture !== undefined) {
               rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
@@ -160,13 +170,21 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   // `regression capture` wrote — a step-oracle, network-check, or declared-invariant one) and
   // reports "reproduces" or "fixed". The one CLI/MCP surface `loadRegressions`/`replayRegression`
   // (`@jevitate/regression`) previously had none of.
-  withBrowserLaunchFlags(withEmulationFlags(regression.command("run")))
+  withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(regression.command("run"))))
     .argument("<id>", "the committed regression id (its <id>.recording.json/<id>.meta.json)")
     .option("--dir <path>", "regressions directory (default: ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)", positiveIntArg)
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
+      // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+      } catch (err) {
+        emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       const { dir, attempts, storageState, json, ...emulationFlags } = this.opts<
         { dir?: string; attempts?: string; storageState?: string; json?: boolean } & EmulationFlags
       >();
@@ -205,7 +223,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           regressionsDir,
           ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
           makeActor: async () => {
-            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation, browserLaunchFromFlags(this.opts<BrowserLaunchFlags>()), deps.explore?.browserPortFactory);
+            const { actor, close } = await makeRealBrowserActor(recording.site, storageState, runEmulation, browser, deps.explore?.browserPortFactory);
             opened.push(close);
             return actor;
           },

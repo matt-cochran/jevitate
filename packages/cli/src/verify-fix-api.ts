@@ -16,7 +16,10 @@ import {
   type FixtureSpec,
   type MissionFixtures,
 } from "./mission-fixtures.js";
-import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { dirname as dirnameOf, join as joinPath, resolve as resolveFile } from "node:path";
+import { listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { artifactStamp } from "./mission-journal.js";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
   assertAuthorizedExploreTarget,
@@ -56,7 +59,8 @@ export interface RunVerifyFixOptions {
   /** Overrides the storageState recorded with the mission (CLI `--storage-state`). */
   readonly storageState?: string;
   readonly browserPortFactory?: () => BrowserPort;
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched and shown (#245: `--headed`/`--slow-mo`/`--record-video`). Default: headless. */
+  readonly browser?: BrowserRunOptions;
   /** Settle ceiling after the replay (ms). */
   readonly settleCeilingMs?: number;
   /** Per-target settle/hang configuration, keyed by origin (`~/.jevitate/targets.json`). */
@@ -97,6 +101,8 @@ export interface VerifyFixReport extends VerifyFixResult {
   readonly title?: string;
   /** The fixture every replay started from (#140/#144): the mission's identity and this run's setup/restore log. */
   readonly fixtures?: FixtureRecord & { readonly missionIdentity: string };
+  /** #245: `--record-video` files of every replay session (each closed, so finalized). */
+  readonly videoPaths?: string[];
 }
 
 export class VerifyFixInputError extends Error {
@@ -319,6 +325,10 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
+  // #245: every replay (and observer) session is shown/recorded alike — videos in
+  // `verify-fix-<stamp>.videos/` beside the mission result (or under `--record-video <dir>`).
+  const videoDir = runVideoDir(opts.browser, joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(new Date().toISOString())}.json`));
+  const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {
     ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
@@ -383,7 +393,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
                 openObservers: () =>
                   observerSessions(
                     portFactory,
-                    { headless: true, allowedOrigins: [...mission.target.allowlist], baseUrl: origin, ...opts.browser },
+                    { ...shown, allowedOrigins: [...mission.target.allowlist], baseUrl: origin },
                     observers.map((o) => ({ name: o.name, storageState: o.storageStatePath })),
                   ),
               }),
@@ -392,10 +402,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
       : undefined;
   const openSession = async (): Promise<VerifySession> => {
     const session = await portFactory().open({
-      headless: true,
+      ...shown,
       allowedOrigins: [...mission.target.allowlist],
       baseUrl: origin,
-      ...opts.browser,
       ...effectiveEmulation,
       ...(storageState !== undefined ? { storageState } : {}),
     });
@@ -462,6 +471,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
     ...(finding.title === undefined ? {} : { title: finding.title }),
     ...(fx === undefined ? {} : { fixtures: { ...fx.record(), missionIdentity: mission.fixtures?.identity ?? "none" } }),
+    // Every replay closed its own session (finalizing its video) before verifyFix returned.
+    ...(videoDir === undefined ? {} : { videoPaths: listVideos(videoDir) }),
   };
 }
 
