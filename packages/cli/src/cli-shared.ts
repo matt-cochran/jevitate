@@ -102,7 +102,11 @@ export interface CliDeps {
   /** Optional, additive: `@jevitate/explore` wiring (see explore-api.ts). */
   explore?: ExploreCliDeps;
   /** Optional, additive: `mission run` wiring — tests inject the executor so no browser opens. */
-  missions?: { execute?: QueuedMissionExecutor };
+  missions?: {
+    execute?: QueuedMissionExecutor;
+    /** Optional, additive (#255): the mission queue directory (default ~/.jevitate/missions/queue) — `mission run/queue/result` and `jevitate mcp`. */
+    queueDir?: string;
+  };
   /** Optional, additive: `jevitate record` wiring (see record-api.ts). */
   record?: RecordCliDeps;
   /** Optional, additive: `jevitate init` wiring (see init-skills.ts). Omitted

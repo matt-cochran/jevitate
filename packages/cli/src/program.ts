@@ -87,7 +87,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerRecordCommands(program, deps);
   registerRegressionCommands(program, deps);
   registerMissionCommands(program, deps);
-  registerServeCommands(program, deps);
+  registerServeCommands(program, deps, buildProgram);
   registerInboxCommands(program, deps); // #254: MCP inbox tools from the CLI
   registerUxCommands(program, deps);
   registerAiCommands(program, deps);

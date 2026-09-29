@@ -8,6 +8,7 @@ import { startUiServer } from "./ui-api.js";
 import { intArg } from "./cli-args.js";
 import { renderPrintConfig, type McpHarness } from "./init-mcp.js";
 import { mcpToolDeps } from "./mcp-cli-bridge.js";
+import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import {
   type CliDeps,
   resolveJourneysDir,
@@ -18,7 +19,7 @@ import {
 } from "./cli-shared.js";
 
 /** Registers the long-running servers: `jevitate mcp` and `jevitate ui`. */
-export function registerServeCommands(program: Command, deps: CliDeps): void {
+export function registerServeCommands(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
   // Additive: `jevitate mcp` (Ticket #20) — start an MCP stdio server that
   // exposes ONLY `@jevitate/mcp-facade`'s allowlisted tools (never the raw
   // browser primitives in FORBIDDEN_TOOLS). This is the subcommand form of the
@@ -71,7 +72,10 @@ export function registerServeCommands(program: Command, deps: CliDeps): void {
             call: await realOpenRouterCall(),
           });
         // #254: the same default stores the CLI's `inbox`/`mission queue`/`mission result` read (mcpToolDeps).
-        await startMcpServer(mcpToolDeps(deps, { journeysDir: resolveJourneysDir(deps, dir), credentialStore: aiStore, generationGateway }));
+        // #255: the CLI-mirroring tools run the SAME program in process, over the same journeys dir.
+        const journeysDir = resolveJourneysDir(deps, dir);
+        const runCli = makeInProcessCliRunner(() => buildProgram({ ...deps, journeysDir }));
+        await startMcpServer(mcpToolDeps(deps, { journeysDir, credentialStore: aiStore, generationGateway, runCli }));
       } catch (err) {
         emitJson(program, fail("E_MCP_SERVE", String(err instanceof Error ? err.message : err)));
       }

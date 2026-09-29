@@ -19,7 +19,7 @@ export function mcpToolDeps(deps: CliDeps, over: Partial<McpApiDeps> = {}): McpA
     journeysDir: resolveJourneysDir(deps),
     sitePolicyDbPath: resolveDbPath(deps),
     missionTargetsDir: resolveMissionTargetsDir(deps),
-    missionQueueDir: resolveDataDir(["missions", "queue"]),
+    missionQueueDir: deps.missions?.queueDir ?? resolveDataDir(["missions", "queue"]),
     recordingsDir: logsRoot(),
     resultDirsFor: (resultId: string) => resultDirsFor(resultId),
     inboxDir: resolveInboxDir(deps),

@@ -239,7 +239,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         if (!(err instanceof MissingCredentialError || err instanceof GatewaySelectionError)) throw err;
         gatewayRefusal = err.message;
       }
-      const queue = new FsMissionQueueStore(o.dir ?? resolveDataDir(["missions", "queue"]));
+      const queue = new FsMissionQueueStore(o.dir ?? deps.missions?.queueDir ?? resolveDataDir(["missions", "queue"]));
       const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
       // #142 follow-up: ~/.jevitate/targets.json's per-origin logSources/logDefect/allowLogCmd — a
       // queued mission never carries its own (never an MCP argument); this is the operator's only
