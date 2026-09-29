@@ -244,6 +244,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--goal <text>` | natural-language goal / job (required for --strategy goal and usability) |  |  |  |  |
 | `--hang-replay-writes` | let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed) |  |  |  |  |
 | `--hang-replays <n>` | fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed) |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--ignore-no-progress <pattern>` | a route / action label / busy indicator where ui-no-progress is expected (repeatable, * wildcard) | `[]` |  |  |  |
 | `--ignore-overflow <selector>` | a CSS selector (repeatable) whose overflow is intentional — excluded from the horizontal-overflow signal, like --ignore-no-progress | `[]` |  |  |  |
@@ -263,6 +264,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--min-agreement <k>` | with --repeat: runs a finding (and the outcome) must recur in to count (default: a majority of N) |  |  |  |  |
 | `--min-confidence <n>` | (--strategy usability) findings below this FINDING confidence (0..1, a finding's own violation/applicability/grounding score — NOT its quality-grade confidence, a separate independent-grader number shown as finding.quality.confidence) are suppressed and counted in report.suppressed; default JEVITATE_UX_MIN_CONFIDENCE, then ~/.jevitate/config.json ux.minConfidence, then 0.3 |  |  |  |  |
 | `--min-control-coverage <ratio>` | adversarial: share of the target's controls (0..1) a run must exercise before 'found nothing' is clean (default 0.25); below it the run is inconclusive |  |  |  |  |
+| `--no-overlay` | with --headed: hide the on-page overlay (step, intent, target highlight, outcome banner) |  |  |  |  |
 | `--no-require-form-submit` | adversarial: do not require a submitted form for a clean result (default: required when the target has a form) |  |  |  |  |
 | `--out <dir>` | directory to write the emitted Recording |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
@@ -270,6 +272,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState"}]} |  |  |  |  |
 | `--read-rpc <glob>` | a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes | `[]` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways (requires keys) | `false` |  |  |  |
+| `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--repeat <n>` | run the mission N times, one after another, each in a fresh browser context, and vote (#141): findings seen in fewer than --min-agreement runs are reported as flaky, not counted |  |  |  |  |
 | `--reply-ceiling-ms <ms>` | conversational pages: hard ceiling on one reply wait, however busy the page stays (default 180000; never below --reply-wait-ms) |  |  |  |  |
 | `--reply-max-chars <n>` | conversational pages: cap on each generated chat message (goal and usability; default 300) |  |  |  |  |
@@ -282,6 +285,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000) |  |  |  |  |
 | `--settle-ignore <pattern>` | a request URL pattern the target marks as background (never pending work; repeatable, * wildcard) | `[]` |  |  |  |
 | `--show <labels>` | opt-in filter on the quality grade (comma list of actionable,relevant-minor,generic,wrong); others are suppressed and counted; default JEVITATE_UX_SHOW, then ~/.jevitate/config.json ux.show, then ALL grades — the grader is uncalibrated (#133), so by default every finding is shown with its grade |  |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--stall-timeout <seconds>` | --strategy coverage/exploratory and --feature: end the run inconclusive (stalled) when no step completes within this many seconds (default 120) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (deterministic login pre-step); must exist |  |  |  |  |
 | `--strategy <name>` | exploration strategy: goal (default) \| coverage \| exploratory \| adversarial \| usability (UX review: ranked, cited findings) | `goal` |  |  |  |
@@ -381,6 +385,44 @@ jevitate journey [command]
 
 manage and run promoted Journeys (regression-test replays)
 
+### journey annotate
+
+```
+jevitate journey annotate [options] <id>
+```
+
+draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
+| `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--approve` | apply the reviewed draft to the Journey (shows the diff; refused if the Journey changed since the draft) | `false` |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
+| `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--real` | draft with the live OpenRouter generation gateway (requires keys) | `false` |  |  |  |
+| `--storage-state <file>` | Playwright storageState JSON to start the replay authenticated; must exist |  |  |  |  |
+| `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
 ### journey find
 
 ```
@@ -474,19 +516,24 @@ jevitate journey run [options] <id>
 | --- | --- | --- | --- | --- | --- |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--fake-ai` | use deterministic fake gateways for self-heal (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
+| `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full | `fail-closed` |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
@@ -590,12 +637,14 @@ jevitate load run [options] <journeyId>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--authorized-origin <origin>` | allowed load-test target origin (repeatable) — required, fails closed if omitted | `[]` |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--concurrency <n>` | pool size | `1` |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--iterations <n>` | iterations per actor | `1` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
@@ -953,10 +1002,12 @@ jevitate regression capture [options]
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--force` | overwrite an existing regression id's committed files (default: refused, #213) | `false` |  |  |  |
 | `--from <file>` | path to the schema-valid failing Recording JSON to capture |  |  | yes |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | regression id (used for the committed <id>.recording.json/<id>.meta.json filenames) |  |  | yes |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--result <file>` | mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay |  |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist |  |  |  |  |
 | `--summary <text>` | optional human-readable bug summary recorded in the meta sidecar |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -978,12 +1029,16 @@ jevitate regression run [options] <id>
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--attempts <n>` | fresh-context replays for a declared-invariant oracle (default 3) |  |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | regressions directory (default: ~/.jevitate/regressions) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
@@ -1311,12 +1366,15 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--fingerprint <fp>` | the defect/hang fingerprint to verify |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--hang-replay-writes` | let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed) |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--invariants <file>` | re-check a declared-invariant defect with these invariant files (repeatable) instead of the spec saved with the mission | `[]` |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--regressions-dir <path>` | regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions) |  |  |  |  |
 | `--replays <n>` | fresh-context replays that confirm a fix (default 3) |  |  |  |  |
 | `--result <path>` | the mission's <stem>.result.json (written next to its Recording); default: the fingerprint's ledger entry (#195) |  |  |  |  |
 | `--secret <value|env:VAR>` | REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment | `[]` |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | override the storageState the mission ran with |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
