@@ -34,6 +34,9 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *    `environmentDegraded` — findings (a hang, a click timeout, a no-progress stop) met while the host
  *    was starved: advisory, never a defect or hang finding, never failing the run. Both are additive
  *    (schemaVersion 1): every result written since #203 carries them; older results parse without.
+ *  - `videoPaths` — #245, additive (schemaVersion 1): the Playwright videos a `--record-video` run
+ *    wrote (every browser context it opened, oldest first), finalized before the result is written.
+ *    Absent when the run did not record.
  *
  * Everything else on a result is strategy-specific (a goal run's `checks`/`answer`, a coverage run's
  * `coverage`, an adversarial run's `advisories`/`scope`, a usability run's `report`): the schema lets
@@ -168,6 +171,8 @@ export const MissionResultSchema = z
     /** #203 — additive: optional so results written before it still parse. */
     hostHealth: HostHealthSummarySchema.optional(),
     environmentDegraded: z.array(EnvironmentDegradedSchema).optional(),
+    /** #245 — additive: the run's `--record-video` files (absent when it did not record). */
+    videoPaths: z.array(z.string().min(1)).optional(),
   })
   .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
     message: "goalOutcome is present on every goal result and on no other",
@@ -212,4 +217,6 @@ export interface MissionResultCore {
   /** #203: every result written now carries the host's health and its environment-degraded findings. */
   readonly hostHealth: HostHealthSummary;
   readonly environmentDegraded: readonly EnvironmentDegraded[];
+  /** #245: the run's `--record-video` files (absent when it did not record). */
+  readonly videoPaths?: readonly string[];
 }

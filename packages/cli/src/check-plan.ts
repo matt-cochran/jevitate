@@ -8,6 +8,7 @@ import { parseLogSourceSpecs } from "./log-sources.js";
 import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
+import { assertHeadedDisplay } from "./browser-run-options.js";
 import { effectiveExploreOptions, type ExploreItemKind, type SuiteExploreOptions } from "./suite-explore-options.js";
 import { FixtureSpecError, SETUP_REF, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
 import { parseSuccessSpec, resolveExploreAllowlist, type ServerLogOptions } from "./explore-api.js";
@@ -225,6 +226,8 @@ function itemSetup(
   const t = p.target;
   const env = opts.env ?? process.env;
   const x = effectiveExploreOptions(t.explore, item.explore, kind);
+  // #245: a headed item without a display is refused here, before anything runs (use recordVideo).
+  assertHeadedDisplay(x.headed === true, env);
   let storageState = sessionOf(t, item.storageState);
   if (item.storageState !== undefined && item.storageState !== null && !existsSync(item.storageState)) {
     throw new Error(`storage state not found: ${item.storageState}`);

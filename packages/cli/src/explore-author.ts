@@ -1,6 +1,7 @@
 /** Journey authoring behind `jevitate explore-author-journey`: a model-driven run that authors a promotable Journey. */
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort } from "@jevitate/playwright";
+import { sessionLaunchOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion } from "@jevitate/recording";
 import {
@@ -127,10 +128,9 @@ async function authorViaBrowser(args: AuthorViaBrowserArgs): Promise<AuthorJourn
   const portFactory = args.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
   const session = await port.open({
-    headless: true,
+    ...sessionLaunchOptions(args.browser),
     allowedOrigins: [...args.allowlist],
     baseUrl: args.origin,
-    ...args.browser,
     ...(args.storageState !== undefined ? { storageState: args.storageState } : {}),
   });
 

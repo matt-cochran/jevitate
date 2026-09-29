@@ -201,6 +201,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
       args: resolveLaunchArgs(opts.args, this.#platform),
       ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
       ...(opts.channel !== undefined ? { channel: opts.channel } : {}),
+      ...(opts.slowMo !== undefined && opts.slowMo > 0 ? { slowMo: opts.slowMo } : {}),
     };
     const launchKey = JSON.stringify(launchOptions);
     const pool = this.#pool ?? sharedBrowserPool();
@@ -217,6 +218,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
         baseURL: opts.baseUrl,
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
         ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
+        ...(opts.recordVideo === undefined ? {} : { recordVideo: { dir: opts.recordVideo.dir } }),
       },
     );
     let page: Page;
@@ -233,7 +235,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
       await lease.release().catch(() => undefined);
       throw err;
     }
-    return pooledSession(lease, page, this.#watch(page), this.#probe);
+    return pooledSession(lease, page, this.#watch(page), this.#probe, await videoPathOf(page));
   }
 
   async #openPersistent(opts: OpenOptions, dir: string, emulation: ReturnType<typeof resolveEmulation>): Promise<BrowserSession> {
@@ -248,16 +250,20 @@ export class PlaywrightBrowserPort implements BrowserPort {
         args: resolveLaunchArgs(opts.args, this.#platform),
         ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
         ...(opts.channel !== undefined ? { channel: opts.channel } : {}),
+        ...(opts.slowMo !== undefined && opts.slowMo > 0 ? { slowMo: opts.slowMo } : {}),
         ...(emulation === undefined ? {} : emulationContextOptions(emulation)),
+        ...(opts.recordVideo === undefined ? {} : { recordVideo: { dir: opts.recordVideo.dir } }),
       });
     } catch (err) {
       throw explainLaunchFailure(err, opts);
     }
     const page = context.pages()[0] ?? (await context.newPage());
     const watchdog = this.#watch(page);
+    const videoPath = await videoPathOf(page);
     return {
       page,
       admission: undefined,
+      ...(videoPath === undefined ? {} : { videoPath }),
       async startTracing() {
         await context.tracing.start({ screenshots: true, snapshots: true });
       },
@@ -285,11 +291,21 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 }
 
+/** #245: the page's video file path when its context records one, else undefined (never throws). */
+async function videoPathOf(page: Page): Promise<string | undefined> {
+  try {
+    return (await page.video()?.path()) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function pooledSession(
   lease: ContextLease<BrowserContext>,
   page: Page,
   watchdog: PageLivenessWatchdog | undefined,
   probe: (url: string) => Promise<string | null>,
+  videoPath: string | undefined,
 ): BrowserSession {
   const context = lease.context;
   /** After a browser crash every session operation surfaces the crash, not a vague "target closed". */
@@ -299,6 +315,7 @@ function pooledSession(
   return {
     page,
     admission: lease.admission,
+    ...(videoPath === undefined ? {} : { videoPath }),
     async startTracing() {
       alive();
       await context.tracing.start({ screenshots: true, snapshots: true });

@@ -19,6 +19,11 @@ export interface BrowserSession {
    */
   captureStorageState?(): Promise<string>;
   /**
+   * #245: where this session's Playwright video is being written — set only when it was opened with
+   * `recordVideo`. The file is finalized when the session closes (its context closes).
+   */
+  readonly videoPath?: string;
+  /**
    * #213: a fast pre-flight check that something is listening at `url`'s origin — a plain-words
    * reason when it definitely is not (connection refused, host not found), else null. Missions call
    * it before the first navigation so a target that is not running fails in milliseconds, not after
@@ -36,6 +41,8 @@ export interface BrowserSession {
  *  - `channel`: a Playwright browser channel (e.g. `chrome`, `msedge`).
  *  - `args`: extra Chromium command-line switches. On Linux these EXTEND
  *    `DEFAULT_LINUX_CHROMIUM_ARGS` (see `resolveLaunchArgs`), never replace it.
+ *  - `slowMo` (#245): Playwright's `slowMo` — every browser operation is slowed by this many ms so an
+ *    audience can follow a demo. Absent (the default): no delay.
  *
  * Headedness is NOT here: `OpenOptions.headless` is its single source of truth.
  */
@@ -43,6 +50,7 @@ export interface BrowserLaunchOptions {
   executablePath?: string;
   channel?: string;
   args?: readonly string[];
+  slowMo?: number;
 }
 
 /**
@@ -69,6 +77,8 @@ export interface OpenOptions extends BrowserLaunchOptions {
   baseUrl: string;
   viewport?: ViewportSize;
   device?: string;
+  /** #245: record a Playwright video of this session's context into `dir` (see `BrowserSession.videoPath`). */
+  recordVideo?: { dir: string };
 }
 
 export interface BrowserPort {

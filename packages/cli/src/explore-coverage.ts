@@ -3,7 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, resolveEmulation, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { DefectRecord, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
@@ -77,8 +78,8 @@ export interface RunCoverageMissionOptions {
   /** Where the repro Recordings are written. Default `.jevitate/logs/<date>` (project, else `~/.jevitate`). */
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  readonly browser?: BrowserRunOptions;
   /**
    * Playwright storageState JSON to seed the session from (CLI `--storage-state`) —
    * the deterministic authenticated pre-step. Contains live session cookies: it is
@@ -166,6 +167,8 @@ export interface RunCoverageMissionResult {
   /** The persisted typed result (`<strategy>-<stamp>.result.json`: `coverage-` or `exploratory-`). */
   readonly resultPath: string;
   readonly recordingPaths: string[];
+  /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
+  readonly videoPaths?: string[];
   /** The shared decision transcript (`<strategy>-<stamp>.transcript.json`). */
   readonly transcriptPath: string;
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
@@ -201,14 +204,6 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   const resolvedEmulation = resolveEmulation(opts.emulation);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const launch = {
-    headless: true,
-    allowedOrigins: [...opts.allowlist],
-    baseUrl: origin,
-    ...opts.browser,
-    ...opts.emulation,
-    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  };
   const outDir = opts.outDir ?? logsDirFor();
   const iso = (opts.nowIso ?? (() => new Date().toISOString()))();
   const stamp = artifactStamp(iso);
@@ -217,6 +212,15 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // reader finds a result by its content (#211), never by this prefix.
   const filePrefix = opts.strategy ?? "coverage";
   const journal = new MissionJournal(join(outDir, `${filePrefix}-${stamp}.json`));
+  // #245: the mission session and every hang-replay session are shown/recorded alike.
+  const videoDir = runVideoDir(opts.browser, journal.recordingPath);
+  const launch = {
+    ...sessionLaunchOptions(opts.browser, videoDir),
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+    ...opts.emulation,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+  };
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
   const runUsage = opts.usage?.scope();
   // #226: the kill switch is armed BEFORE the host sampler and the browser launch (see launch-armed.ts).
@@ -230,6 +234,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
       recordingPath: journal.recordingPath,
       hostHealth: hooks.hostHealth,
+      ...(videoDir === undefined ? {} : { videoDir }),
       transcriptPath: journal.transcriptPath,
       transcript: () => journal.transcript,
       ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -254,6 +259,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
+  // #159/#245: persisted and closed once — early (before the result is written) when recording video.
+  const closeSession = closeOnce(async () => {
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
+    await closeQuietly(session);
+  });
   try {
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
@@ -282,6 +292,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
         ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
       },
       hostHealth: health,
+      demoOverlay: demoOverlayOf(opts.browser),
     });
 
     // #149: every repro Recording (per-state, and each defect's own) is stamped with the emulation
@@ -339,6 +350,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     const failure = result.failure ?? host.failure ?? coverageFailure;
 
     const exitCode = missionExitCode(missionOutcome);
+    // #245: every context closed (videos finalized) before the result naming them is written.
+    const videos = await finalizeVideos(videoDir, closeSession);
     const typed = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       hangs: result.hangs,
@@ -364,6 +377,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       exitCode,
       ...(failure === undefined ? {} : { failure }),
       recordingPaths,
+      ...videos,
       transcriptPath: journal.transcriptPath,
       sideEffects: result.sideEffects ?? [],
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
@@ -391,7 +405,6 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     disarmKillSwitch();
     health.stop();
     await serverLog?.abort();
-    await persistStorageState(session, opts.saveStorageState, snapshotter);
-    await closeQuietly(session);
+    await closeSession();
   }
 }

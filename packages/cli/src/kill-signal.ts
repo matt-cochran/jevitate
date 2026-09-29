@@ -10,6 +10,7 @@ import { formatMissionHuman } from "./cli-output.js";
 import { resultPathFor, writeMissionResult } from "./mission-journal.js";
 import { transcriptPathFor } from "./transcript-file.js";
 import { writeKillSnapshot } from "./storage-state-snapshot.js";
+import { listVideos } from "./browser-run-options.js";
 
 /**
  * Crash-safe termination (#94). `jevitate explore`/`explore --strategy usability` runs are commonly
@@ -65,6 +66,12 @@ export interface KillableMission {
    * killed run reports every step it took even when the file lags or lives elsewhere (#120).
    */
   readonly transcript?: () => readonly TranscriptEntry[] | undefined;
+  /**
+   * #245: the run's `--record-video` folder. A killed run lists the files already there as
+   * `videoPaths` — best effort: the signal cannot await a context close, so the last video may be
+   * truncated (the shared pool's close is started, not awaited).
+   */
+  readonly videoDir?: string;
   /** The run's host-health summary so far (#203): a killed run's result carries it like every other result. */
   readonly hostHealth?: () => HostHealthSummary | undefined;
   /** The run's usage tracker: the tokens already spent are part of the killed run's result (#120). */
@@ -191,6 +198,8 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
   const usage = safely(() => mission.usage?.snapshot());
   const report = safely(mission.partialReport);
   const hostHealth = safely(mission.hostHealth);
+  const videoDir = mission.videoDir;
+  const videoPaths = videoDir === undefined ? undefined : safely(() => listVideos(videoDir));
   return {
     // #220: the unified result schema's common fields (a kill is always the canonical `inconclusive`).
     schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
@@ -208,6 +217,7 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
     hangs: [],
     recordingPaths: [mission.recordingPath],
     recordingPath: mission.recordingPath,
+    ...(videoPaths === undefined ? {} : { videoPaths }),
     transcriptPath,
     resultPath: resultPathFor(mission.recordingPath),
     ...(mission.target === undefined ? {} : { target: { ...mission.target, allowlist: [...mission.target.allowlist] } }),

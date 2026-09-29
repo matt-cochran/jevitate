@@ -3,6 +3,7 @@ import type { SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { PlaywrightBrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
+import { sessionLaunchOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult } from "@jevitate/runtime";
@@ -77,8 +78,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   const gate = await gateJourney(siteGate, file.recording, { enforceLimits: true });
   const port = new PlaywrightBrowserPort();
   const session = await port.open({
-    ...browser,
-    headless: true,
+    ...sessionLaunchOptions(browser),
     allowedOrigins,
     baseUrl: file.recording.site,
     ...emulation,

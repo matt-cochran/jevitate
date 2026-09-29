@@ -125,6 +125,8 @@ export function formatMissionHuman(result: unknown): string {
   for (const l of uxLines(result)) lines.push(l);
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
+  // #245: the run's --record-video files.
+  for (const v of arr(result.videoPaths)) if (str(v) !== undefined) lines.push(`${tag("VIDEO")}${str(v)}`);
   const resultPath = str(result.resultPath);
   if (resultPath !== undefined) lines.push(`${tag("RESULT")}${resultPath}`);
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
@@ -300,6 +302,8 @@ export function formatVerifyFixHuman(report: unknown, opts: { readonly result?: 
     const fired = attempts.filter((a) => a.fired === true).length;
     lines.push(`${tag("REPLAYS")}${attempts.length} fresh replay(s), signal fired in ${fired}`);
   }
+  // #245: the replays' --record-video files.
+  for (const v of arr(report.videoPaths)) if (str(v) !== undefined) lines.push(`${tag("VIDEO")}${str(v)}`);
   const resultFlag = opts.result === undefined ? "" : ` --result ${opts.result}`;
   lines.push(
     verdict === "fixed"

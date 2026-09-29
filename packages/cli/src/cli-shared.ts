@@ -3,7 +3,7 @@
  * (#231): deps and path resolution, JSON/human output, browser/emulation flags, AI gateway selection.
  */
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
 import { Command } from "commander";
 import type { ProfileManager } from "@jevitate/daemon";
@@ -53,6 +53,8 @@ import { type RunResolvedJourney } from "./source-run-api.js";
 import { FsTrustStore, FsAckStore, DEFAULT_LOCK_PATH, type GitExec, type GhPort } from "@jevitate/sources";
 import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
 import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
+import { nonNegativeIntArg } from "./cli-args.js";
+import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
 export interface RecordCliDeps {
@@ -211,13 +213,12 @@ export async function makeRealBrowserActor(
   site: string,
   storageState?: string,
   emulation?: EmulationSpec,
-  browser?: BrowserLaunchOptions,
+  browser?: BrowserRunOptions,
   portFactory: () => BrowserPort = () => new PlaywrightBrowserPort(),
 ): Promise<{ actor: Actor; close: () => Promise<void> }> {
   const port = portFactory();
   const session = await port.open({
-    ...browser,
-    headless: true,
+    ...sessionLaunchOptions(browser),
     allowedOrigins: [site],
     baseUrl: site,
     ...emulation,
@@ -262,6 +263,61 @@ export function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOpti
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
   };
   return Object.keys(launch).length > 0 ? launch : undefined;
+}
+
+/** Raw commander values of the demo-mode flags (#245). `overlay` is `--no-overlay`'s attribute. */
+export interface DemoFlags {
+  headed?: boolean;
+  slowMo?: number;
+  recordVideo?: boolean | string;
+  overlay?: boolean;
+}
+
+/** Which demo-mode flags a command takes: every one shows (`--headed`/`--slow-mo`); some record and overlay. */
+export interface DemoFlagSet {
+  /** `--record-video [dir]` — the command lists the videos in its result. */
+  readonly recordVideo?: boolean;
+  /** `--no-overlay` — the command runs an explore mission (the overlay lives in `@jevitate/explore`). */
+  readonly overlay?: boolean;
+}
+
+/**
+ * Adds the demo-mode flags (#245) to a browser-driving command. Headless stays the default; these
+ * are all opt-in and resolved by `browserRunFromFlags` (which also reads `JEVITATE_HEADED`).
+ */
+export function withDemoFlags(cmd: Command, set: DemoFlagSet = {}): Command {
+  cmd
+    .option("--headed", "show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video")
+    .option("--slow-mo <ms>", `slow every browser operation by this many ms (default ${HEADED_DEFAULT_SLOW_MO_MS} with --headed, else 0)`, nonNegativeIntArg);
+  if (set.recordVideo === true) {
+    cmd.option("--record-video [dir]", "record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths");
+  }
+  if (set.overlay === true) cmd.option("--no-overlay", "with --headed: hide the on-page overlay (step, intent, target highlight, outcome banner)");
+  return cmd;
+}
+
+/**
+ * The runner's `browser` option for the parsed `--browser-*` and demo flags, or `undefined` when none
+ * were given. `--headed` (or `JEVITATE_HEADED=1`) without a display throws `HeadedWithoutDisplayError`
+ * HERE — before any browser launches — which every command reports as its usage error (exit 64).
+ */
+export function browserRunFromFlags(
+  o: BrowserLaunchFlags & DemoFlags,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): BrowserRunOptions | undefined {
+  const headed = o.headed === true || headedFromEnv(env);
+  assertHeadedDisplay(headed, env, platform);
+  const run: BrowserRunOptions = {
+    ...browserLaunchFromFlags(o),
+    ...(headed ? { headed: true } : {}),
+    ...(o.slowMo === undefined ? {} : { slowMo: o.slowMo }),
+    ...(o.recordVideo === undefined || o.recordVideo === false
+      ? {}
+      : { recordVideo: typeof o.recordVideo === "string" ? { dir: resolvePath(o.recordVideo) } : {} }),
+    ...(o.overlay === false ? { overlay: false } : {}),
+  };
+  return Object.keys(run).length > 0 ? run : undefined;
 }
 
 /** `{ browser }` for the parsed `--browser-*` flags, or `{}` when none were given — spread into a runner's options. */

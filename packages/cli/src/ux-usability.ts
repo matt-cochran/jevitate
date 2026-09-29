@@ -3,7 +3,8 @@ import { logsDirFor } from "./project-dir.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
-import { PlaywrightBrowserPort, type BrowserLaunchOptions, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
+import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
 import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
@@ -68,8 +69,8 @@ export interface RunUsabilityMissionOptions {
   readonly conversation?: ConversationOptions;
   readonly outDir?: string;
   readonly browserPortFactory?: () => BrowserPort;
-  /** How Chromium is launched (executable/channel/extra args). Default: pinned Chromium. */
-  readonly browser?: BrowserLaunchOptions;
+  /** How Chromium is launched (executable/channel/extra args) and shown (#245 demo mode). Default: pinned Chromium, headless. */
+  readonly browser?: BrowserRunOptions;
   /** Per-mission viewport/device emulation (#149, CLI `--viewport <W>x<H>` / `--device "<name>"`). */
   readonly emulation?: EmulationSpec;
   /**
@@ -161,6 +162,8 @@ export interface RunUsabilityMissionResult {
   readonly hangs: HangFinding[];
   /** Every Recording the review wrote (#195: one list on every strategy) — a review writes one. */
   readonly recordingPaths: string[];
+  /** #245: `--record-video` files, finalized before this result was written (absent when not recording). */
+  readonly videoPaths?: string[];
   /** The UX report; `null` when the analysis was unavailable (see `analysisUnavailable`). */
   readonly report: UxReport | null;
   readonly reportPath: string | null;
@@ -279,14 +282,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   const port = portFactory();
-  const launch = {
-    headless: true,
-    allowedOrigins: [...opts.allowlist],
-    baseUrl: origin,
-    ...opts.browser,
-    ...opts.emulation,
-    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-  };
   const collected: UxEvidence[] = [];
   const history: ScreenRef[] = [];
   // #149: one signal finding per distinct fingerprint (route + element) — a wide table seen across
@@ -306,6 +301,15 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   // screenshots. Crash-safe: the transcript and partial Recording are flushed after every step.
   const journal = new MissionJournal(join(outDir, `usability-${stamp}.recording.json`), transcriptPathFor(reportPath));
   const screenshotDir = join(outDir, `usability-${stamp}.screens`);
+  // #245: shown/recorded like every other strategy's session (videos in `usability-<stamp>.videos/`).
+  const videoDir = runVideoDir(opts.browser, reportPath);
+  const launch = {
+    ...sessionLaunchOptions(opts.browser, videoDir),
+    allowedOrigins: [...opts.allowlist],
+    baseUrl: origin,
+    ...opts.emulation,
+    ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
+  };
   // A bound secret (or TOTP seed) is a run secret too: masked on screen, redacted everywhere.
   const secrets = [...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)];
   // #163: this run's own share of a (possibly shared) tracker: its usage and sidecar.
@@ -328,6 +332,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       target: { seedUrl: opts.url, allowlist: [...opts.allowlist], ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}) },
       recordingPath: journal.recordingPath,
       hostHealth: hooks.hostHealth,
+      ...(videoDir === undefined ? {} : { videoDir }),
       transcriptPath: journal.transcriptPath,
       transcript: () => journal.transcript,
       ...(runUsage === undefined ? {} : { usage: runUsage }),
@@ -363,6 +368,11 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     secrets,
     onTranscriptEntry: journalListener,
   });
+  // #159/#245: persisted and closed once — early (before the result is written) when recording video.
+  const closeSession = closeOnce(async () => {
+    await persistStorageState(session, opts.saveStorageState, snapshotter);
+    await closeQuietly(session);
+  });
   try {
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     // #150 — usability's own budget wiring: a plain `InvariantMonitor` reads a budget's declared
@@ -389,6 +399,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       onTranscriptEntry: serverLog?.onTranscriptEntry ?? journalListener,
       onRecording: journal.onRecording,
       hostHealth: health,
+      demoOverlay: demoOverlayOf(opts.browser),
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       actor,
       judge: opts.judge,
@@ -602,6 +613,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(jobFailure === undefined ? {} : { wouldHaveBeen: jobFailure.message }),
     });
     const runOutcome: MissionOutcome = host.outcome;
+    // #245: every context closed (videos finalized) before the result naming them is written.
+    const videos = await finalizeVideos(videoDir, closeSession);
     const base = {
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "usability" as const,
@@ -611,6 +624,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
       recordingPaths: [journal.recordingPath],
+      ...videos,
       resultPath: resultPathFor(journal.recordingPath),
       hangs: hang === undefined ? [] : [hang],
       timing: run.timing,
@@ -687,7 +701,6 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     // (no drain wait) rather than leaving them open until process exit.
     await serverLog?.abort();
     // #159: reaches this even when the mission above threw — the context is still open here.
-    await persistStorageState(session, opts.saveStorageState, snapshotter);
-    await closeQuietly(session);
+    await closeSession();
   }
 }
