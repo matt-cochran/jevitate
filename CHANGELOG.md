@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.2.0] – unreleased
+## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one
 contract. Every result now carries one versioned schema (`schemaVersion: 1`) whose
