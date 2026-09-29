@@ -18,6 +18,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
 import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
   resolveDbPath,
@@ -31,6 +32,7 @@ import {
   collectParam,
   emitJson,
   emitUsageLine,
+  environmentSeams,
   GatewaySelectionError,
   buildGenerationGateway,
 } from "./cli-shared.js";
@@ -42,7 +44,7 @@ import {
  * Journey changed since the draft). The model never edits a Journey on its own.
  */
 export function registerJourneyAnnotateCommand(journey: Command, program: Command, deps: CliDeps): void {
-  withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("annotate <id>"))))
+  withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("annotate <id>")))))
     .description(
       "draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; " +
         "writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)",
@@ -55,8 +57,8 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
     .option("--approve", "apply the reviewed draft to the Journey (shows the diff; refused if the Journey changed since the draft)", false)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const fixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState, real, fakeAi, approve, json, ...emulationFlags } = this.opts<{
+      const ownFixtureFlags = this.opts<FixtureFlags>();
+      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -64,13 +66,13 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         fakeAi?: boolean;
         approve?: boolean;
         json?: boolean;
-      } & EmulationFlags>();
+      } & EmulationFlags & EnvironmentFlags>();
       const out = program.configureOutput().writeOut;
       const journeysDir = resolveJourneysDir(deps, dir);
 
       if (approve === true) {
-        if (real === true || fakeAi === true || Object.keys(param).length > 0 || storageState !== undefined) {
-          emitJson(program, fail("E_JOURNEY_ANNOTATE_ARGS", "--approve applies an existing draft: it replays nothing, so it takes no --real/--fake-ai/--param/--storage-state"));
+        if (real === true || fakeAi === true || Object.keys(param).length > 0 || storageStateFlag !== undefined || envName !== undefined || baseUrl !== undefined) {
+          emitJson(program, fail("E_JOURNEY_ANNOTATE_ARGS", "--approve applies an existing draft: it replays nothing, so it takes no --real/--fake-ai/--param/--storage-state/--env/--base-url"));
           return;
         }
         try {
@@ -91,6 +93,24 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         return;
       }
 
+      // #247: --env/--base-url choose where the replay runs — the same resolver as `journey run`
+      // (unknown env / bad file / secret in environments.json → 64, nothing opened).
+      let environment: ResolvedJourneyEnvironment | undefined;
+      try {
+        environment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+      } catch (err) {
+        if (!isEnvironmentError(err)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      // The environment's fixtures/hooks apply when the flags name none (hooks still need --allow-shell-hooks).
+      const fixtureFlags: FixtureFlags = {
+        ...ownFixtureFlags,
+        ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
+        ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
+      };
+      // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
+      const storageState = storageStateFlag ?? environment?.storageState;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_ANNOTATE_ARGS", `storage state not found: ${storageState}`));
         return;
@@ -123,11 +143,13 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
             ...browserOption(this.opts<BrowserLaunchFlags>()),
             ...(emulation === undefined ? {} : { emulation }),
             ...(storageState !== undefined ? { storageState } : {}),
+            ...(environment === undefined ? {} : { environment }),
             fixtures: (site) => {
               const fx = buildMissionFixtures(fixtureFlags, {
-                allowlist: [site],
+                allowlist: environment === undefined ? [site] : environment.allowedOrigins,
                 baseUrl: site,
                 ...(storageState !== undefined ? { storageState } : {}),
+                ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
               });
               checkSetupRefs({ "--param": Object.values(param) }, fx);
               return fx;
@@ -152,7 +174,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         }
         process.exitCode = exit;
       } catch (err) {
-        if (err instanceof SiteGateRefusedError) emitJson(program, fail(err.code, err.message));
+        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) emitJson(program, fail(err.code, err.message));
         else if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
         else if (err instanceof JourneyRequiresAuthError) emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", err.message));
         else if (err instanceof ParamValidationError) emitJson(program, fail("E_INVALID_PARAMS", err.message));

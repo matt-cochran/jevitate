@@ -180,6 +180,7 @@ never overwrites it):
 ```bash
 jevitate journey run checkout --env staging
 jevitate journey run checkout --base-url https://pr-123.preview.example.com   # an ad-hoc environment
+jevitate journey annotate checkout --env staging --real
 jevitate regression run cart-total --env local
 jevitate load run checkout --env staging --authorized-origin https://staging.example.com
 ```
@@ -212,7 +213,8 @@ the environment's origin, the same per-origin file queued missions use:
 }
 ```
 
-`journey run`, `regression run` and `load run` start from the environment's `storageState` when
+`journey run`, `journey annotate`, `regression run` and `load run` start from the environment's
+`storageState` when
 `--storage-state` is not given (paths are relative to `targets.json`). `personas` holds one session
 per persona for commands that run as a named persona. Secret fields are read from the environment
 variable at run time and never written anywhere. A Journey's own vault `secretRefs` stay bound to

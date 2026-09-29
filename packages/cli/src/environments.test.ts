@@ -321,6 +321,21 @@ describe("journey run --env / --base-url (CLI)", () => {
     expect(h.opens[0]?.storageState).toBe(state);
   });
 
+  it("journey annotate takes --env through the same resolver: rebased replay, unknown env 64, never with --approve", async () => {
+    const dir = await seed();
+    const environmentsFile = envFile({ local: { baseUrl: "http://localhost:3000" } });
+    const h = harness({ environmentsFile });
+    const r = await h.run(["journey", "annotate", "login", "--dir", dir, "--env", "local", "--fake-ai", "--json"]);
+    expect(r.out.ok, JSON.stringify(r.out)).toBe(true);
+    expect(h.opens[0]).toMatchObject({ allowedOrigins: ["http://localhost:3000"], baseUrl: "http://localhost:3000" });
+    const unknown = await harness({ environmentsFile }).run(["journey", "annotate", "login", "--dir", dir, "--env", "prod", "--fake-ai", "--json"]);
+    expect(unknown.out.error?.code).toBe("E_ENV_UNKNOWN");
+    expect(unknown.code).toBe(64);
+    const approve = await harness({ environmentsFile }).run(["journey", "annotate", "login", "--dir", dir, "--env", "local", "--approve", "--json"]);
+    expect(approve.out.error?.code).toBe("E_JOURNEY_ANNOTATE_ARGS");
+    expect(approve.code).toBe(64);
+  });
+
   it("regression run and load run refuse an unknown --env the same way (exit 64)", async () => {
     const regressions = join(root, "regressions");
     mkdirSync(regressions);

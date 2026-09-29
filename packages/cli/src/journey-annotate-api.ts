@@ -111,9 +111,9 @@ export interface AnnotateJourneyResult {
  * and fail-closed policy as `journey run`) with an observing interpreter, then drafts. A replay that
  * stops early still drafts the steps it reached (`replay.outcome: "stopped"`).
  *
- * Seam for environments (#247): every browser/session option `journey run` takes rides in `opts` and
- * is handed to `runJourneyProgrammatically` unchanged, so an environment option added there reaches
- * annotate by passing it through here (surface-wiring lists it until then).
+ * Environments (#247): every browser/session option `journey run` takes rides in `opts` and is
+ * handed to `runJourneyProgrammatically` unchanged — including `environment` (`--env`/`--base-url`,
+ * resolved by `resolveJourneyEnvironment`), so the replay is rebased and allowlisted exactly as a run.
  */
 export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<AnnotateJourneyResult> {
   const journey = await loadJourney(opts.dir, opts.id);
