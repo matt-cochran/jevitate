@@ -1,6 +1,6 @@
 ---
 name: jevitate-ux-review
-description: Produce ranked, cited, advisory usability findings for a flow — offline over a saved Recording (`jevitate ux <recording> --app-class`) or live over an authorized target (`jevitate explore --strategy usability --goal --app-class`). Use when a human wants a UX/usability critique of a journey, not a pass/fail functional test. Findings are advisory and never gate a run.
+description: Produce ranked, cited, advisory usability findings (preview) for a flow — offline over a saved Recording (`jevitate ux <recording> --app-class`, MCP `ux_review`) or live on an authorized target (`jevitate explore --strategy usability --goal --app-class`, MCP `run_exploration`). Use when the user wants a UX or usability critique, not a pass/fail test. Findings are advisory and never gate a run.
 ---
 
 You produce a UX review: ranked, cited, evidence-anchored usability findings for
@@ -39,6 +39,9 @@ verdict.
   gateway: `--real` (live, after `jevitate ai setup`) or `--fake-ai` (a
   deterministic pipeline smoke that will NOT produce a real review). No
   selection fails closed.
+
+Over MCP: `ux_review` is the offline mode (`recording`, `appClass`, …); `run_exploration`
+with `strategy: "usability"` is the live mode. Usability is not a queueable mission strategy.
 
 Prefer OFFLINE when a Recording already exists — it is cheaper, deterministic,
 and touches no live site. Use LIVE only when there is no Recording and the human

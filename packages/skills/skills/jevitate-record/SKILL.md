@@ -1,6 +1,6 @@
 ---
 name: jevitate-record
-description: Capture a demonstrated browser flow into a Recording (`jevitate record --url`) and post-process it — diff multiple takes, review/classify fill steps (postdoc), fit a timing policy, promote a value to a variable — via the jevitate CLI. Use to record human-demonstrated takes and turn them into a parameterized, replayable artifact.
+description: Record a flow the human clicks through (`jevitate record --url`, CLI only, headed), then post-process the takes: diff them, classify values as constants, variables or hand-backs (postdoc), fit a timing policy, and promote a value to a variable (`jevitate recording ...`, MCP `recordings`). Use when the user wants to demonstrate a flow themselves. If they want jevitate to find and save the flow for them, use `explore-author-journey` (jevitate-explore).
 ---
 
 You drive Jevitate's human-driven authoring mode (RxD): capturing a take from a
@@ -13,7 +13,8 @@ headed browser demonstration a human performs — you launch it and they drive.
 - `jevitate record --url <authorized-url> [--intent "<framing>"] [--retro
   "<note>"] [--allow <origin>] [--out <dir>] --json` opens a headed browser at
   an authorized origin and records the human's demonstrated flow into a
-  `Recording` JSON file (default `~/.jevitate/recordings`). The session is
+  `Recording` JSON file (default `.jevitate/logs/<date>/` in the repo, else
+  `~/.jevitate/logs/<date>/`). The session is
   headed by design — a record session IS a live human demonstration; add
   `--headless` only when a caller explicitly asks. The target must be
   authorized (`--allow` REPLACES the default allowlist when given at all —
@@ -28,6 +29,10 @@ headed browser demonstration a human performs — you launch it and they drive.
 - The emitted `recordingPath` is the take you then feed into the diff/postdoc
   flow below. Capture two or more takes of the same flow (varying the data each
   time) when you want `diff` to classify which values are variables.
+
+- `record` is never an MCP tool (a person does the clicking). As an agent, give the human the
+  command to run, and wait for the `recordingPath` it prints. `diff`/`fit`/`postdoc`/`promote`
+  are available over MCP as the `recordings` tool (`action`).
 
 ## Diff multiple takes
 
