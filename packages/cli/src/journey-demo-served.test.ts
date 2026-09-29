@@ -11,7 +11,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { DEMO_OVERLAY_ATTR, DEMO_OVERLAY_HIDE_STYLE } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
-import { demoJourney } from "./journey-demo-api.js";
+import { TITLE_CARD_MIN_MS, demoJourney } from "./journey-demo-api.js";
 import type { CaptureLayer } from "./demo-capture.js";
 
 /**
@@ -195,6 +195,81 @@ describe("jevitate journey demo — served (#248)", () => {
       // No secret anywhere: captions/subtitles, guide, the envelope, stderr.
       for (const text of [vtt, md, r.out, r.err]) expect(text).not.toContain(SECRET);
       expect(vtt + md).toContain("«redacted»");
+    },
+    120_000,
+  );
+
+  it(
+    "the video opens on the title card and its cues line up with the video's own timeline",
+    async () => {
+      const journeysDir = join(dir, "j4");
+      await new FsJourneyStore(journeysDir).put(tokenJourney());
+      const video = join(dir, "out4", "token.webm");
+      const pace = 600;
+      const result = await demoJourney({
+        dir: journeysDir,
+        id: "token",
+        params: { apiToken: SECRET },
+        video,
+        paceMs: pace,
+        browserPortFactory: () => new PlaywrightBrowserPort(),
+      });
+      expect(result.outcome).toBe("ok");
+      const cues = parseVtt(readFileSync(join(dir, "out4", "token.vtt"), "utf8"));
+      const first = cues[0]!;
+      // Cues count from the video's first frame: step 1 starts right after the title card is held
+      // (never seconds later, which is what a clock started before the recorder had frames gave).
+      expect(first.start).toBeGreaterThanOrEqual(TITLE_CARD_MIN_MS - 50);
+      expect(first.start).toBeLessThan(TITLE_CARD_MIN_MS + 2500);
+
+      // Decode the WebM in Chromium and look at the frames around the first cue: just before it the
+      // title card (its blue banner) is on screen; just after it, the step-1 caption (a dark panel), no card.
+      const reader = await new PlaywrightBrowserPort().open({ headless: true, allowedOrigins: [origin], baseUrl: origin });
+      try {
+        await reader.page.goto(`${origin}/app`);
+        const frames = await reader.page.evaluate(
+          async ({ src, times }) => {
+            const v = document.createElement("video");
+            v.muted = true;
+            v.src = src;
+            await new Promise((r, j) => {
+              v.onloadeddata = r;
+              v.onerror = () => j(new Error("video decode failed"));
+            });
+            if (!Number.isFinite(v.duration)) {
+              v.currentTime = 1e6;
+              await new Promise((r) => (v.ontimeupdate = r));
+            }
+            const c = document.createElement("canvas");
+            c.width = v.videoWidth;
+            c.height = v.videoHeight;
+            const g = c.getContext("2d")!;
+            const out: { t: number; title: number; dark: number }[] = [];
+            for (const t of times) {
+              v.currentTime = Math.max(0, t);
+              await new Promise((r) => (v.onseeked = r));
+              g.drawImage(v, 0, 0);
+              const d = g.getImageData(0, 0, c.width, c.height).data;
+              let title = 0;
+              let dark = 0;
+              for (let i = 0; i < d.length; i += 4) {
+                const [r, gr, b] = [d[i]!, d[i + 1]!, d[i + 2]!];
+                if (b > 110 && b - r > 60 && b - gr > 40 && r < 90) title++; // the title card's blue
+                else if (r < 45 && gr < 50 && b < 70) dark++; // the caption panel
+              }
+              out.push({ t, title: title / (d.length / 4), dark: dark / (d.length / 4) });
+            }
+            return out;
+          },
+          { src: `data:video/webm;base64,${readFileSync(video).toString("base64")}`, times: [(first.start - 400) / 1000, (first.start + pace / 2) / 1000] },
+        );
+        const [card, caption] = frames;
+        expect(card!.title, JSON.stringify(frames)).toBeGreaterThan(0.01);
+        expect(caption!.title, JSON.stringify(frames)).toBeLessThan(0.002);
+        expect(caption!.dark, JSON.stringify(frames)).toBeGreaterThan(0.004);
+      } finally {
+        await reader.close();
+      }
     },
     120_000,
   );

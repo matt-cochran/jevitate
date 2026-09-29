@@ -15,6 +15,7 @@ import { assertNoSecretInPayload, redactText } from "@jevitate/ai-core";
 import { DemoOverlay } from "@jevitate/explore";
 import type { StepObserver } from "@jevitate/interpreter";
 import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
+import type { Page } from "playwright";
 import type { TargetDescriptor } from "@jevitate/recording";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { captureStepScreenshot, SecretPixelMask, type CaptureLayer } from "./demo-capture.js";
@@ -175,6 +176,92 @@ function targetOf(s: FlatJourneyStep): TargetDescriptor | null {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** The title card is on screen at least this long (ms), whatever `--pace` is. */
+export const TITLE_CARD_MIN_MS = 1200;
+/** How long the title card waits for the recorder's first frame (ms) before going on regardless. */
+export const FIRST_FRAME_WAIT_MS = 5_000;
+
+/**
+ * Holds a card on screen for `ms`, re-applying it as it goes: the page is still on its initial
+ * about:blank, whose document the browser may replace right after it opens (wiping the card).
+ */
+async function holdCard(overlay: DemoOverlay, page: Page, ms: number): Promise<void> {
+  const until = Date.now() + ms;
+  for (;;) {
+    const left = until - Date.now();
+    if (left <= 0) return;
+    await sleep(Math.min(250, left));
+    await overlay.refresh(page);
+  }
+}
+
+/**
+ * The demo video's clock (#248). Playwright's recorder stamps frames with the compositor's wall time
+ * and the WebM starts at the FIRST frame — which, on a loaded host, lands 1–3 s after the page
+ * opened. A frame probe (`page.screencast`, a second client of the same screencast: it is handed the
+ * latest frame at once, then every new one) reads that first frame's wall time; the probe stops after
+ * one frame. Without a probe (no video, or a page without `screencast`) the clock starts at `open`.
+ */
+class VideoClock {
+  #openedAt: number | undefined;
+  #firstFrameAt: number | undefined;
+  #first: Promise<void> = Promise.resolve();
+
+  opened(page: Page, video: boolean): void {
+    this.#openedAt = Date.now();
+    const screencast = (page as Partial<Pick<Page, "screencast">>).screencast;
+    if (!video || screencast === undefined) return;
+    let seen: () => void = () => undefined;
+    const got = new Promise<void>((r) => {
+      seen = r;
+    });
+    this.#first = got;
+    let stopped = false;
+    const stop = (): void => {
+      if (stopped) return;
+      stopped = true;
+      void screencast.stop().catch(() => undefined);
+    };
+    screencast
+      .start({
+        onFrame: ({ timestamp }) => {
+          if (this.#firstFrameAt === undefined) {
+            this.#firstFrameAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+            seen();
+            // Off the frame callback: stopping from inside it would wait on this very frame's ack.
+            setTimeout(stop, 0);
+          }
+        },
+      })
+      .catch(() => seen());
+    setTimeout(() => {
+      seen();
+      stop();
+    }, FIRST_FRAME_WAIT_MS).unref();
+  }
+
+  /**
+   * Resolves once the recorder has its first frame (bounded by {@link FIRST_FRAME_WAIT_MS}),
+   * calling `repaint` every 250 ms meanwhile (a page that paints nothing yields no frame).
+   */
+  async recording(repaint: () => Promise<void>): Promise<void> {
+    let waiting = true;
+    const done = this.#first.then(() => {
+      waiting = false;
+    });
+    while (waiting) {
+      await Promise.race([done, sleep(250)]);
+      if (waiting) await repaint();
+    }
+  }
+
+  /** ms on the video's timeline: from its first frame, else from when the page opened. */
+  since(): number {
+    const start = this.#firstFrameAt ?? this.#openedAt;
+    return start === undefined ? 0 : Math.max(0, Date.now() - start);
+  }
+}
+
 /** `<dir>/<name>.assets` for `<dir>/<name>.md`. */
 export function guideAssetsDir(guide: string): string {
   return join(dirname(guide), `${basename(guide).replace(/\.md$/i, "")}.assets`);
@@ -215,20 +302,22 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
   const layers = [mask.layer(), ...(opts.captureLayers ?? [])];
   try {
     const overlay = new DemoOverlay(secrets);
-    // The video starts with the session's page (the last thing `open` makes): cues count from there.
-    let videoStart: number | undefined;
+    // The video's timeline starts at its FIRST FRAME, which under load arrives seconds after the page
+    // opens (on about:blank): cues count from that frame, not from `open`, and the title card waits for
+    // it — else the card is shown before anything is recorded and every cue runs late.
+    const clock = new VideoClock();
     const basePort = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
     const timedPort = (): BrowserPort => {
       const port = basePort();
       return {
         open: async (o) => {
           const session = await port.open(o);
-          videoStart = performance.now();
+          clock.opened(session.page, opts.video !== undefined);
           return session;
         },
       };
     };
-    const since = (): number => performance.now() - (videoStart ?? performance.now());
+    const since = (): number => clock.since();
 
     const steps: Array<{ number: number; caption: string; expectedResult?: string; startMs: number; endMs?: number; screenshot?: string }> = [];
     const captureErrors: string[] = [];
@@ -247,7 +336,10 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
         if (index === 0) {
           if (draft) await overlay.watermark(page, DEMO_DRAFT_MARK);
           await overlay.card(page, title, "title");
-          await sleep(pace);
+          // An idle about:blank paints nothing new: the card's own paint is what the recorder (and
+          // the clock's probe) may be waiting for. Its hold starts once the video has frames.
+          await clock.recording(() => overlay.refresh(page));
+          await holdCard(overlay, page, Math.max(pace, TITLE_CARD_MIN_MS));
         }
         closeLast();
         const caption = captionOf(s, redact);
