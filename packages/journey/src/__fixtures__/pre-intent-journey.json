@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "id": "save-settings",
+    "name": "Save settings",
+    "description": "Opens settings, enters a display name and saves",
+    "promoted": true,
+    "params": ["displayName"],
+    "authoredBy": "jev-driven",
+    "createdAtIso": "2026-09-20T12:00:00.000Z",
+    "requiresAuth": false
+  },
+  "recording": {
+    "version": "1",
+    "site": "http://127.0.0.1:1",
+    "startedAtIso": "2026-09-20T12:00:00.000Z",
+    "intent": "save a display name in settings",
+    "pages": [
+      {
+        "url": "/settings",
+        "title": "Settings",
+        "steps": [
+          {
+            "step": { "kind": "navigate", "url": "/settings", "expect": { "kind": "visible", "target": { "role": "heading", "name": "Settings" } } },
+            "timing": { "atMs": 0, "durationMs": 120, "gapBeforeMs": 0 }
+          },
+          {
+            "step": {
+              "kind": "fill",
+              "target": { "label": "Display name" },
+              "value": { "var": "displayName" },
+              "expect": { "kind": "visible", "target": { "label": "Display name" } }
+            },
+            "timing": { "atMs": 900, "durationMs": 300, "gapBeforeMs": 780 },
+            "variableName": "displayName"
+          },
+          {
+            "step": { "kind": "click", "label": "save", "target": { "role": "button", "name": "Save" }, "expect": { "kind": "textIncludes", "target": { "testId": "status" }, "text": "Saved" } },
+            "timing": { "atMs": 1500, "durationMs": 200, "gapBeforeMs": 300 },
+            "marker": "checkpoint"
+          },
+          {
+            "step": { "kind": "assert", "check": { "kind": "urlIncludes", "text": "/settings" } }
+          }
+        ]
+      }
+    ]
+  }
+}

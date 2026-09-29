@@ -245,6 +245,17 @@ export interface RecordedStep {
    * `enumerationId` above.
    */
   chunk?: string;
+  /**
+   * #246 intent (optional, additive): what the user is trying to do at this step and how it serves
+   * the Journey's `metadata.goal`. Documentation only — never replayed, never executed. Drafted by
+   * `jevitate journey annotate` and written here only through a human approval.
+   */
+  objective?: string;
+  /**
+   * #246 intent (optional, additive): what should change after this step, in words (a demo caption).
+   * The code check stays the step's own `expect` assertion; this text is never evaluated.
+   */
+  expectedResult?: string;
 }
 
 export interface PageSegment {
@@ -630,6 +641,8 @@ const RecordedStepSchema = z
     variableName: z.string().optional(),
     enumerationId: z.string().optional(),
     chunk: z.string().optional(),
+    objective: z.string().max(2000).optional(),
+    expectedResult: z.string().max(2000).optional(),
   })
   .strict();
 

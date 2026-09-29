@@ -158,6 +158,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
   "journey promote": { cases: [["nope"]] },
+  "journey annotate": {
+    base: ["nope", "--fake-ai"],
+    cases: [["nope", "--fake-ai"], ["nope", "--fake-ai", "--storage-state", missing], ["nope", "--approve"], ["nope", "--approve", "--fake-ai"]],
+  },
   "journey publish": { cases: [["nope", "--to", "nowhere"]] },
   "source add": { exempt: "its input is a remote git URL: a failed clone is a runtime failure (2)" },
   "source list": { exempt: "a listing" },

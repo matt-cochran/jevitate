@@ -55,6 +55,7 @@ const MCP_NARROW = "MCP verify_fix takes only a result id + fingerprint: operato
 const QUEUE_NO_ENV_SECRETS = "a queued spec's authFrom.secret is refused at enqueue: a request never chooses which env var is sent";
 const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site policy` default";
 const MCP_JOURNEY = "MCP run_journey takes only id + params + a storageState path (invariant #5)";
+const ANNOTATE_OBSERVER = "#246: only `journey annotate` replays with an observing interpreter (before/after evidence); every run uses the plain one";
 const QUEUE_NARROW = "a queued mission carries only what MissionRequest allows (a closed schema an MCP agent fills)";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
@@ -112,7 +113,11 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
-  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT },
+  "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER },
+  "journey-annotate-api.ts runJourneyProgrammatically": {
+    policy: "annotate replays with the fail-closed safeRunPolicy() — it documents a Journey, never heals one",
+    selfHealer: "annotate never self-heals: a broken step stops the replay and drafts only the reached steps",
+  },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
@@ -121,11 +126,13 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     emulation: MCP_JOURNEY,
     fixtures: MCP_JOURNEY,
     selfHealer: "MCP runs are fail-closed: a broken step quarantines, never heals",
+    interpreter: ANNOTATE_OBSERVER,
   },
   "check-execute.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
     policy: "a suite Journey replays with the fail-closed safeRunPolicy()",
     selfHealer: "check never self-heals: a broken step fails the gate",
+    interpreter: ANNOTATE_OBSERVER,
   },
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────

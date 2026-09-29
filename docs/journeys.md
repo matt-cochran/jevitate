@@ -45,6 +45,7 @@ gaps"). `explore-author-journey` is the direct path today.
 jevitate journey list
 jevitate journey run checkout --param sku=A1 --storage-state auth.json
 jevitate journey run checkout --self-heal hybrid --real     # repair a broken step under policy
+jevitate journey annotate checkout --real                   # draft each step's objective (see below)
 jevitate load run checkout --authorized-origin http://localhost:3000 --concurrency 5 --iterations 10 --seed 1
 ```
 
@@ -67,6 +68,95 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
+
+## Journey format reference
+
+A Journey is one JSON file, `.jevitate/journeys/<id>.json` (`<namespace>/<id>.json` for a shared
+Journey): `{ "metadata": {…}, "recording": {…} }`. Both objects are closed: an unknown or misspelt
+key is refused when the file is read.
+
+| `metadata` field | Required | Meaning |
+|---|---|---|
+| `id` | yes | The Journey's id (letters, digits, `.`, `_`, `-`); also its file name |
+| `name` | yes | A short human name |
+| `description` | no | One line, shown by `journey find` |
+| `promoted` | yes | `true` only after `journey promote` (the human approval gate) |
+| `params` | yes | Names of the `--param` values it takes |
+| `secretRefs` | no | Password-manager references for `vault-autofill` runs |
+| `authoredBy` | no | `human-demonstration` or `jev-driven` |
+| `createdAtIso` | yes | When it was written |
+| `requiresAuth` | no | `true`: refuses to start without `--storage-state` |
+| `goal` | no | What the Journey achieves, in one sentence |
+| `persona` | no | Who does it |
+| `role` | no | The account role it runs as (which environment session it needs) |
+| `preconditions` | no | `[{ "description", "fixture"?, "hook"?, "login"? }]`: the seed data and login it needs, linked to the `--fixtures` file and `--before` hook that set it up |
+| `successCriteria` | no | `[{ "description", "check"? }]`: the end state that shows it worked; `check` is any [assertion](./success-checks.md) that checks it in code |
+| `parameters` | no | `[{ "name", "description"?, "secret"? }]`: its inputs. `secret: true` marks a value (a password, a token) that is redacted wherever it is shown. A declared parameter never carries a value |
+
+`recording` holds `version`, `site` (the origin it runs on), optional `intent`, and `pages[]`, each
+with `url` and `steps[]`. Every step is `{ "step": {…}, … }`: the action (`navigate`, `click`,
+`fill`, `select`, `press`, `upload`, `editText`, `waitFor`, `extract`, `forEach`, `assert`,
+`handback`) with its `expect` assertion, plus optional metadata:
+
+| Step field | Meaning |
+|---|---|
+| `objective` | What the user is trying to do at this step, and how it serves the `goal` |
+| `expectedResult` | What should change after the step, in words: a demo caption. The code check stays the step's own `expect` |
+| `timing`, `marker`, `variableName`, `enumerationId`, `chunk` | Recording metadata (pacing, checkpoints, parameter binding, postdoc grouping) |
+
+The intent fields (`goal`, `persona`, `role`, `preconditions`, `successCriteria`, `parameters`,
+`objective`, `expectedResult`) are optional and additive. A Journey without them validates and runs
+exactly as before, and none of them changes what a replay does. They can be written by hand, or
+drafted with `journey annotate`.
+
+A secret parameter's value is redacted in the `journey run` output, in `journey annotate`'s
+evidence, drafts and output, and in anything sent to a model. A parameter whose name looks like a
+credential (`password`, `token`, `apiKey`, `otp`, …) is treated as secret even when the Journey
+does not declare it.
+
+## Annotate a Journey: draft its intent, then approve it
+
+`journey annotate` drafts a Journey's intent by replaying it:
+
+```bash
+jevitate journey annotate checkout --param sku=A1 --real      # or --fake-ai for a deterministic smoke
+# review or edit .jevitate/journeys/.drafts/checkout.annotations.json
+jevitate journey annotate checkout --approve                    # the human gate: shows the diff, then writes
+```
+
+1. It replays the Journey the way `journey run` does: the same `--param`, `--storage-state`,
+   fixture, browser and emulation flags, the same site policy, and a fail-closed run policy. It
+   never self-heals.
+2. Before and after each step it reads the page: the URL, the main heading and the visible text,
+   redacted of secret parameter values before anything else sees them.
+3. The model sees each step's value-free description, the page before and after it, and the
+   Journey's goal (or its name and intent when there is no goal yet). It drafts the step's
+   `objective` and `expectedResult` where they are missing. It then drafts `goal` and
+   `successCriteria` when those are missing. These are the versioned `journey.step` and
+   `journey.goal` generation tasks.
+4. The drafts go to a sidecar, `.jevitate/journeys/.drafts/<id>.annotations.json`, and never into
+   the Journey. The command prints the diff that approving would apply.
+
+`jevitate init` adds `journeys/.drafts/` to `.jevitate/.gitignore` (re-running `init` on an
+existing project adds the line once), so an unapproved draft is never committed by accident: the
+text reaches the repo only as part of the Journey, after `--approve`.
+
+The draft is plain JSON: edit any text, or delete an entry, before approving. `--approve` validates
+the draft and shows the diff. It then writes only the four intent fields (`goal`,
+`successCriteria`, and each step's `objective` and `expectedResult`) and removes the draft. It
+never promotes the Journey or changes an action or an assertion. The draft is bound to the
+Journey's content hash, so if the Journey changed after the draft was made, approval is refused
+(`E_JOURNEY_ANNOTATIONS_STALE`) and nothing is written: draft it again.
+
+| Exit | When |
+|---|---|
+| `0` | The draft was written after a full replay, or the approval was applied |
+| `2` | The replay stopped early (a broken step, or a handback): the draft covers only the steps it reached |
+| `64` | Bad arguments, an unknown Journey, a bad `--param`, no gateway (`E_AI_SETUP_REQUIRED`), no draft (`E_JOURNEY_ANNOTATIONS_NOT_FOUND`), an invalid draft (`E_INVALID_ANNOTATIONS_DRAFT`), or a stale draft (`E_JOURNEY_ANNOTATIONS_STALE`) |
+
+`journey run` reports how many steps have no `objective`: a `note:` line on stderr, and `intent`
+(`steps`, `withObjective`, `withoutObjective`, …) in the result. This is informational and never
+fails a run.
 
 ## Site policies
 

@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (79 exports)
+# @jevitate/ai-core (85 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -24,8 +24,14 @@
   GoalAnswerInput: object
   GoalAnswerOutput: object
   JEV_PRICE_TABLE: object
+  JOURNEY_GOAL_INSTRUCTIONS: const (string)
+  JOURNEY_STEP_INSTRUCTIONS: const (string)
   JevJudgmentGateway: class
   JevResponseError: class
+  JourneyGoalInput: object
+  JourneyGoalOutput: object
+  JourneyStepInput: object
+  JourneyStepOutput: object
   MAX_CHOICE_OPTIONS: const (number)
   MissingCredentialError: class
   ModelConstraintsSchema: object
@@ -525,12 +531,23 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (6 exports)
+# @jevitate/journey (17 exports)
+  AnnotationDraftMismatchError: class
+  AnnotationDraftSchema: object
+  AnnotationDraftStepSchema: object
   FsJourneyStore: class
   JourneyRegistry: class
   JourneySchema: object
   ParamValidationError: class
+  SECRET_PARAM_NAME_RE: object
+  applyAnnotationDraft: function
   deriveParamSchema: function
+  describeStep: function
+  flatJourneySteps: function
+  formatAnnotationChanges: function
+  intentCoverage: function
+  secretParamNames: function
+  secretParamValues: function
   validateParams: function
 
 # @jevitate/load (8 exports)
