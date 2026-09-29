@@ -29,12 +29,14 @@ export function http5xxSignalOf(
   response: { status(): number; url(): string },
   firstParty?: FirstPartyOrigins,
   headers?: Readonly<Record<string, string>>,
+  method?: string,
 ): Http5xxSignal | null {
   const status = response.status();
   if (status < 500) return null;
   if (firstParty !== undefined && firstParty.thirdParty(response.url(), headers) !== null) return null;
   const url = redactUrl(response.url());
-  return { kind: "http-5xx", detail: `${status} ${url}`, url, status };
+  // #250: the request's method (`PUT`, …) rides along for evidence captions; never part of the fingerprint.
+  return { kind: "http-5xx", detail: `${status} ${url}`, url, status, ...(method === undefined ? {} : { method: method.toUpperCase() }) };
 }
 
 /** Request headers without throwing (a stub request may not expose them). */

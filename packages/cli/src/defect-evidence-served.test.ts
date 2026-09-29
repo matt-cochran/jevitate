@@ -6,13 +6,14 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Page } from "playwright";
-import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
+import { FakeGenerationGateway, FakeJudgmentGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
 import { PersistedMissionResultSchema } from "@jevitate/domain";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { consolidate, renderJUnit, renderReportMarkdown, renderSarif } from "@jevitate/findings";
-import { runExploration } from "./explore-api.js";
+import { runAdversarialCliMission, runExploration } from "./explore-api.js";
+import { stepCaption } from "./defect-evidence.js";
 import { loadRunFile } from "./report-api.js";
-import { runVerifyFix } from "./verify-fix-api.js";
+import { parsePersistedMission, runVerifyFix } from "./verify-fix-api.js";
 
 /**
  * #250 served acceptance — the example-site defect: Save answers `PUT /api/profile → 500` while the
@@ -41,9 +42,28 @@ const profilePage = `<!doctype html><html><body style="background:#fff;font:16px
   });
 </script></main></body></html>`;
 
+/** A form whose Save answers 500 SLOWLY: a step taken while it is pending must not get the blame. */
+const slowFormPage = `<!doctype html><html><body style="background:#fff;font:16px sans-serif"><main>
+<h1>Settings</h1>
+<form id="f">
+<label>Display name <input name="displayName" type="text"></label>
+<label>Email <input name="email" type="email"></label>
+<button type="submit">Save</button>
+</form>
+<p id="status"></p>
+<script>
+  document.getElementById("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await fetch("/api/slow-profile", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+    document.getElementById("status").textContent = "Saved";
+  });
+</script></main></body></html>`;
+
 beforeAll(async () => {
   app = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
+    if (path === "/settings") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(slowFormPage);
+    if (path === "/api/slow-profile") return void setTimeout(() => res.writeHead(500, { "content-type": "application/json" }).end("{}"), 600);
     if (path === "/profile") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(profilePage);
     if (path === "/api/profile") return void res.writeHead(broken ? 500 : 200, { "content-type": "application/json" }).end("{}");
     res.writeHead(404).end();
@@ -192,5 +212,50 @@ describe("defect evidence (served, real Chromium)", () => {
       }
     },
     420_000,
+  );
+
+  it(
+    "a 500 answered while the NEXT step runs marks the step that issued the request (the Save click), captioned with its method",
+    async () => {
+      const outDir = await mkdtemp(join(tmpdir(), "jev-250-attr-"));
+      try {
+        // act-while-pending: fill a field, click Save (left pending), fill another field. The PUT's
+        // 500 lands during that last fill — it must still be blamed on the Save click.
+        const r = await runAdversarialCliMission({
+          seedUrl: `${origin}/settings`,
+          allowlist: [origin],
+          strategies: ["act-while-pending"],
+          bounds: { maxDecisions: 1 },
+          judgment: new FakeJudgmentGateway({ looksBroken: { kind: "noul", value: false, probability: 0.1 } }),
+          generation: new FakeGenerationGateway(),
+          outDir,
+          evidenceVideo: true,
+          browserPortFactory: () => new PlaywrightBrowserPort(),
+        });
+        const d = r.defects.find((x) => x.kind === "http-5xx") as
+          | ((typeof r.defects)[number] & { evidence?: { failingStep?: number; signal?: string; reproduced?: boolean; videoPath?: string } })
+          | undefined;
+        expect(d, JSON.stringify(r.defects.map((x) => x.kind))).toBeDefined();
+        const mission = parsePersistedMission(JSON.parse(readFileSync(r.resultPath, "utf8")));
+        const flat = (mission.recording?.pages ?? []).flatMap((p) => p.steps);
+        const marked = flat[(d?.evidence?.failingStep ?? 0) - 1];
+        // The marked step is the one that issued the failing request: the click on Save …
+        expect(marked?.step.kind).toBe("click");
+        expect(JSON.stringify((marked?.step as { target?: unknown }).target)).toContain("Save");
+        expect(stepCaption(marked!)).toMatch(/Save/);
+        // … and a later step (the fill taken while it was pending) exists, but is not blamed.
+        expect(flat.length).toBeGreaterThan(d?.evidence?.failingStep ?? 0);
+        expect(d?.repro.recordingStepIndex).toBe((d?.evidence?.failingStep ?? 0) - 1);
+        const firstSeen = d?.repro.steps.find((e) => e.step === d.firstSeenStep);
+        expect(firstSeen?.op).toBe("click");
+        // The caption names the method, and the replay (stopping at Save) saw the 500 again.
+        expect(d?.evidence?.signal).toBe("server returned 500 (PUT /api/slow-profile)");
+        expect(d?.evidence?.reproduced).toBe(true);
+        expect(existsSync(d?.evidence?.videoPath ?? "")).toBe(true);
+      } finally {
+        await rm(outDir, { recursive: true, force: true });
+      }
+    },
+    300_000,
   );
 });

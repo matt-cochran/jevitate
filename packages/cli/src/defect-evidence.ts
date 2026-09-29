@@ -163,7 +163,8 @@ export function defectSignalText(d: Record<string, unknown>, secrets: readonly s
   const kind = str(d.kind) ?? "defect";
   const signals = Array.isArray(d.signals) ? d.signals.filter(isRecord) : [];
   const own = signals.find((s) => s.kind === kind) ?? signals[0];
-  const method = str(d.method);
+  // The request's method: the defect's own (goal/usability runners), else its signal's (adversarial).
+  const method = str(d.method) ?? str(own?.method);
   let text: string;
   if (kind === "http-5xx") {
     const url = str(own?.url) ?? str(d.url) ?? "";
