@@ -61,3 +61,4 @@ export * from "./declared-invariants.js";
 export * from "./budget.js";
 export * from "./third-party.js";
 export * from "./http-5xx.js";
+export * from "./demo-overlay.js";

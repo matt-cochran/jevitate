@@ -241,7 +241,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (472 exports)
+# @jevitate/explore (478 exports)
   act: function
   ActArgs: interface
   ActResult: interface
@@ -348,6 +348,12 @@
   DEFERRED_EFFECT_MAX_MS: variable
   DEGRADED_STEP_MAJORITY: variable
   degradedEnvironmentOutcome: function
+  DEMO_HIGHLIGHT_MS: variable
+  DEMO_OVERLAY_ATTR: variable
+  DEMO_OVERLAY_HIDE_STYLE: variable
+  DemoOverlay: class
+  demoOverlayFor: function
+  DemoOverlayIntent: interface
   describeAction: function
   describeAssertionSpec: function
   describeCheck: function

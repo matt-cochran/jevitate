@@ -52,6 +52,7 @@ import {
   type InvariantReport,
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
+import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 
 /**
  * runFeatureMission — a capability-scoped variant of proof-by-induction
@@ -265,6 +266,8 @@ export type FeatureMissionParams = {
   reachTimeoutMs?: number;
   /** The shared safety policy (#116): session-ending / destructive / paid / --deny'd controls are never clicked. */
   safety?: SafetyConfig;
+  /** #245: show the on-page demo overlay (display only; invisible to the run). Default off: nothing injected. */
+  demoOverlay?: boolean;
 };
 
 export async function runFeatureMission(params: FeatureMissionParams): Promise<FeatureRunResult> {
@@ -289,7 +292,9 @@ export async function runFeatureMission(params: FeatureMissionParams): Promise<F
   // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule).
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
-  const result = { ...(await runFeatureFrontier(params, declared, safety, budget)), ...safety.result() };
+  const overlay = demoOverlayFor(params.demoOverlay, params.secrets ?? []);
+  const result = { ...(await runFeatureFrontier(params, declared, safety, budget, overlay)), ...safety.result() };
+  await overlay?.finish(`jevitate · feature — ${result.outcome}`, result.outcome === "exhausted" || result.outcome === "cap" || result.outcome === "path-cap" || result.outcome === "budget");
   // #195: the shared end-of-run path — a never.response hit to the LAST action is never lost.
   if (declared !== null) await finishDeclaredRun(declared);
   return {
@@ -304,6 +309,7 @@ async function runFeatureFrontier(
   declared: Declared | null,
   safety: MissionSafety,
   budget: BudgetMonitor | null,
+  overlay: DemoOverlay | null = null,
 ): Promise<FeatureRunResult> {
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
@@ -531,6 +537,20 @@ async function runFeatureFrontier(
           });
         }
         continue;
+      }
+      // #245: the demo overlay says what is about to happen and highlights the target (display only).
+      if (overlay !== null) {
+        await overlay.announce(
+          sessions.page,
+          {
+            step: transcript.nextStep,
+            strategy: "feature",
+            op: item.op,
+            target: item.control.name || item.control.summary,
+            why: `exercise the "${params.scope.name}" capability`,
+          },
+          item.control,
+        );
       }
       watchdog.during(`acting on "${item.control.name || item.op}"`);
       if (declared !== null) await guard(declared.monitor.before(sessions.actor));

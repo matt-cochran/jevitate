@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Locator, Page, Request } from "playwright";
-import { endpointOf, redactText, redactUrl, type SecretField, type Snapshot, type TranscriptEntry } from "@jevitate/explore";
+import { DEMO_OVERLAY_HIDE_STYLE, endpointOf, redactText, redactUrl, type SecretField, type Snapshot, type TranscriptEntry } from "@jevitate/explore";
 import type { RunSignalCapture, SignalRequest, SignalScreen, SignalStep } from "@jevitate/ux";
 
 /** Secret-bearing inputs — the same predicate as `@jevitate/recorder`'s `isSecretField`, in CSS. */
@@ -301,7 +301,8 @@ export class UsabilityCapture {
       ];
       try {
         mkdirSync(this.#opts.screenshotDir, { recursive: true });
-        await page.screenshot({ path, mask, maskColor: MASK_COLOR, fullPage: true, timeout: SCREENSHOT_TIMEOUT_MS });
+        // #245: the demo overlay (when shown) is hidden for the capture — evidence never contains it.
+        await page.screenshot({ path, mask, maskColor: MASK_COLOR, fullPage: true, style: DEMO_OVERLAY_HIDE_STYLE, timeout: SCREENSHOT_TIMEOUT_MS });
         shot = path;
       } catch {
         shot = null;
