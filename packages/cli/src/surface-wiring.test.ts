@@ -51,10 +51,9 @@ const RUNNER_KEYS: Readonly<Record<string, string>> = {
 };
 
 const SEAM = "test seam (clock / injected ports) — never a user setting";
-const MCP_NARROW = "MCP verify_fix takes only a result id + fingerprint: operator settings come from targets.json, never an MCP argument";
+const MCP_NARROW = "#255: MCP verify_fix takes the CLI's replay options, but operator-only settings (cmd: log sources, re-sending paid/destructive hang writes, redaction literals) come from targets.json, never an MCP argument";
 const QUEUE_NO_ENV_SECRETS = "a queued spec's authFrom.secret is refused at enqueue: a request never chooses which env var is sent";
 const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site policy` default";
-const MCP_JOURNEY = "MCP run_journey takes only id + params + a storageState path (invariant #5)";
 const ANNOTATE_OBSERVER = "#246: only `journey annotate` replays with an observing interpreter (before/after evidence); every run uses the plain one";
 const QUEUE_NARROW = "a queued mission carries only what MissionRequest allows (a closed schema an MCP agent fills)";
 const MASK_INTERNAL = "#250/#251: the pixel mask is built inside the run from the Journey's secret params; only a demo shares its own";
@@ -106,19 +105,11 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "check-cli.ts runCheck": { env: SEAM, now: SEAM, nowIso: SEAM },
   "mcp-api.ts runVerifyFix": {
     evidencePaceMs: EVIDENCE_PACE,
-    screenshots: MCP_NARROW,
-    storageState: MCP_NARROW,
     browserPortFactory: SEAM,
-    browser: SEAM,
-    settleCeilingMs: MCP_NARROW,
-    replays: MCP_NARROW,
-    invariantFiles: MCP_NARROW,
+    settleCeilingMs: "verify-fix reuses the recorded run's render wait",
     allowLogCmd: MCP_NARROW,
     hangReplayWrites: MCP_NARROW,
-    fixtureFlags: MCP_NARROW,
     secrets: MCP_NARROW,
-    emulation: "replays under the finding's own recorded emulation",
-    allowEmulationOverride: MCP_NARROW,
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
@@ -146,15 +137,9 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "mcp-api.ts runJourneyProgrammatically": {
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
-    screenshots: NO_SCREENSHOTS_HERE,
     account: SITE_ACCOUNT,
-    browser: MCP_JOURNEY,
     browserPortFactory: SEAM,
-    emulation: MCP_JOURNEY,
-    fixtures: MCP_JOURNEY,
-    selfHealer: "MCP runs are fail-closed: a broken step quarantines, never heals",
     interpreter: ANNOTATE_OBSERVER,
-    environment: MCP_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
     mask: MASK_INTERNAL,
@@ -168,8 +153,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
@@ -185,18 +168,13 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     actors: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runCoverageMission": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
-    strategy: "the queue has no exploratory strategy (MISSION_STRATEGIES)",
     stallTimeoutMs: QUEUE_NARROW,
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
@@ -208,8 +186,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
-    evidenceVideo: "#250: a queued mission records no video, so it captures no evidence clip",
-    screenshots: NO_SCREENSHOTS_HERE,
     hostHealth: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
     nowIso: SEAM,

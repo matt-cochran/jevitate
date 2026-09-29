@@ -590,7 +590,7 @@
   queueExploration: function
   runJourney: function
 
-# @jevitate/missions (16 exports)
+# @jevitate/missions (17 exports)
   BudgetExceedsCeilingError: class
   FsMissionQueueStore: class
   FsMissionTargetStore: class
@@ -600,6 +600,7 @@
   MissionTargetRegistry: class
   MissionTargetSchema: object
   QUEUED_MISSION_STATUSES: array
+  QUEUED_SCREENSHOT_MODES: array
   QueuedMissionSchema: object
   SAFE_ID_RE: object
   SECRET_FIELD_SPEC_RE: object

@@ -1025,6 +1025,7 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 | --- | --- | --- | --- | --- | --- |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use) |  |  |  |  |
+| `--evidence-video` | per defect: a captioned evidence clip of its minimal repro + before/at screenshots (defects[].evidence) |  |  |  |  |
 | `--feature <name>` | feature: the capability to test (goal-based: the objective) |  |  |  |  |
 | `--goal <text>` | goal-based: the objective (exactly one of --goal/--feature/--route) |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret) |  |  |  |  |
@@ -1032,8 +1033,11 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 | `--max-actions <n>` | budget: max actions (bounded by the queue's ceiling) |  |  |  |  |
 | `--max-candidates <n>` | budget: max candidates |  |  |  |  |
 | `--max-decisions <n>` | budget: max decisions |  |  |  |  |
-| `--route <glob>` | coverage/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective) |  |  |  |  |
-| `--strategy <strategy>` | goal-based \| coverage \| adversarial \| feature (required) |  | `goal-based`, `coverage`, `adversarial`, `feature` |  |  |
+| `--persona <name>` | run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path |  |  |  |  |
+| `--record-video` | record a video of the run (headless too), written next to its result; listed as videoPaths |  |  |  |  |
+| `--route <glob>` | coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective) |  |  |  |  |
+| `--screenshots [mode]` | masked screenshots + index.md next to the result: screens (default, one per distinct screen) \| steps (one per step) |  |  |  |  |
+| `--strategy <strategy>` | goal-based \| coverage \| exploratory \| adversarial \| feature (required) |  | `goal-based`, `coverage`, `exploratory`, `adversarial`, `feature` |  |  |
 | `--success <spec>` | goal-based: the independent success check (required there), e.g. urlIncludes:/done — the `explore --success` page-check forms |  |  |  |  |
 | `--targets-dir <path>` | mission targets directory (default: ~/.jevitate/missions/targets) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
