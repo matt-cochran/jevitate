@@ -122,6 +122,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     policy: "a demo replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
+  "demo-aspect-api.ts runJourneyProgrammatically": {
+    account: SITE_ACCOUNT,
+    interpreter: "#249: a clean-path candidate replay only needs its verdict (the demo/annotate stages observe their own replays)",
+    policy: "a clean-path candidate replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
+    selfHealer: "a clean-path candidate never self-heals: a step it cannot do without is kept",
+  },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,

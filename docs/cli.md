@@ -15,6 +15,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
+- [`demo`](#demo): demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
 - [`diff`](#diff): classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
 - [`explore`](#explore): goal-directed exploration -> a deterministic Recording (authoring/test plane)
 - [`explore-author-journey`](#explore-author-journey): Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
@@ -183,6 +184,95 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
 | `--target-build <id>` | the target's build/commit id, stamped on every result |  |  |  |  |
+
+## demo
+
+```
+jevitate demo [command]
+```
+
+demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
+
+### demo approve
+
+```
+jevitate demo approve [options] <id>
+```
+
+the one human approval of a DRAFT demo: shows the Journey and its annotations, renders the final demo (no DRAFT marks) on the environment it was made on, then applies the annotations and promotes the Journey; a replay that no longer works promotes nothing (exit 1)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
+| `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
+| `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--out <dir>` | write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir) |  |  |  |  |
+| `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
+| `--storage-state <file>` | Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist |  |  |  |  |
+| `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+### demo create
+
+```
+jevitate demo create [options] <aspect>
+```
+
+explore a named non-production environment toward <aspect> (checked by --success), minimize the path to its essential steps (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide); nothing is promoted until `demo approve <id>` (also: jevitate demo "<aspect>")
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `aspect` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
+| `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--dir <path>` | journeys directory (default: ~/.jevitate/journeys) |  |  |  |  |
+| `--env <name>` | the named environment to demo on (.jevitate/environments.json); required, and never one flagged production: true |  |  |  |  |
+| `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
+| `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
+| `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
+| `--id <id>` | the Journey id (default: demo-<aspect slug>) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--max-actions <n>` | hard cap on explored actions |  |  |  |  |
+| `--max-decisions <n>` | hard cap on model decisions |  |  |  |  |
+| `--out <dir>` | write the demo (demo.webm + demo.vtt + guide.md with guide.assets/) into this folder (default: a fresh folder in the logs dir) |  |  |  |  |
+| `--pace <ms>` | how long each step's caption shows before it acts (default 1500) |  |  |  |  |
+| `--persona <name>` | the persona whose session (~/.jevitate/targets.json personas) the demo runs as |  |  |  |  |
+| `--real` | use live Jev + OpenRouter gateways (requires keys) | `false` |  |  |  |
+| `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
+| `--start <path>` | the app path exploration starts from (default /) |  |  |  |  |
+| `--storage-state <file>` | Playwright storageState JSON to start authenticated (default: the environment's session in ~/.jevitate/targets.json); must exist |  |  |  |  |
+| `--success <spec>` | independent success check that proves the aspect was shown, e.g. textIncludes:testId=status\|Saved (required) |  |  |  |  |
+| `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ## diff
 

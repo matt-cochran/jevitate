@@ -163,6 +163,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | **Real apps** | storage-state logins, bound secrets and TOTP, fixtures that reset state around every replay, repeat-and-vote, persona and multi-actor runs ([auth](./docs/authentication.md), [fixtures](./docs/fixtures.md), [multi-run](./docs/multi-run.md)) |
 | **Evidence** | hangs (confirmed by replay), page timing, backend log correlation, redacted issue drafts ([exploration](./docs/exploration.md), [operations](./docs/operations.md)) |
 | **Journeys** | author a replayable flow from a goal, replay, self-heal under policy, load-test, share ([Journeys](./docs/journeys.md)) |
+| **Demos** | `journey demo` renders a Journey as a narrated video, `.vtt` subtitles and a step-by-step guide; `demo "<aspect>" --env <name> --success <check>` explores, minimizes, annotates and drafts one from a one-line request, and `demo approve <id>` promotes it ([demos](./docs/journeys.md#demo-an-aspect-from-a-one-line-request)) |
 | **Usability review** | ranked, cited findings grounded in what the run observed. Advisory, never a gate |
 
 ## Use it from your coding agent

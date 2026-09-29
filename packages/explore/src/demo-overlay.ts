@@ -91,7 +91,9 @@ const OVERLAY_RUNTIME = String.raw`(() => {
     "@keyframes jev-fade{0%,70%{opacity:1}100%{opacity:0}}" +
     ".banner{position:fixed;left:50%;top:16px;transform:translateX(-50%);max-width:calc(100vw - 32px);padding:10px 18px;border-radius:10px;" +
     "font:600 14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;background:rgba(21,128,61,.94);box-shadow:0 6px 24px rgba(0,0,0,.35)}" +
-    ".banner.bad{background:rgba(185,28,28,.94)}.banner.title{background:rgba(30,58,138,.94);font-size:18px;padding:14px 22px}";
+    ".banner.bad{background:rgba(185,28,28,.94)}.banner.title{background:rgba(30,58,138,.94);font-size:18px;padding:14px 22px}" +
+    ".mark{position:fixed;left:16px;top:16px;padding:6px 12px;border:3px solid rgba(220,38,38,.95);border-radius:8px;color:rgba(220,38,38,.95);" +
+    "background:rgba(255,255,255,.8);font:800 18px/1 system-ui,-apple-system,Segoe UI,sans-serif;letter-spacing:.25em}";
   let host = null;
   let parts = null;
   let tracking = 0;
@@ -126,7 +128,7 @@ const OVERLAY_RUNTIME = String.raw`(() => {
     act.append(verb, target);
     const why = document.createElement("div"); why.className = "why";
     panel.append(head, act, why);
-    parts = { panel, head, verb, target, why, box: mk("box"), banner: mk("banner") };
+    parts = { panel, head, verb, target, why, box: mk("box"), banner: mk("banner"), mark: mk("mark") };
     root.appendChild(host);
     return parts;
   };
@@ -177,6 +179,14 @@ const OVERLAY_RUNTIME = String.raw`(() => {
       p.banner.hidden = false;
       return true;
     },
+    mark(text) {
+      const p = ensure();
+      if (p === null) return false;
+      p.mark.textContent = text;
+      p.mark.hidden = false;
+      host.setAttribute("data-jevitate-watermark", text);
+      return true;
+    },
   };
   Object.defineProperty(window, "__jevitateOverlay", { value: api, enumerable: false, configurable: false });
 })()`;
@@ -224,6 +234,7 @@ export class DemoOverlay {
   readonly #pages = new WeakSet<Page>();
   #panel: PanelState | null = null;
   #banner: BannerState | null = null;
+  #watermark: string | null = null;
   #lastPage: Page | null = null;
 
   constructor(secrets: readonly string[]) {
@@ -257,20 +268,23 @@ export class DemoOverlay {
   async #render(page: Page): Promise<void> {
     const panel = this.#panel;
     const banner = this.#banner;
-    if (panel === null && banner === null) return;
+    const mark = this.#watermark;
+    if (panel === null && banner === null && mark === null) return;
     await bounded(
       (async () => {
         // A string expression (CDP `Runtime.evaluate`): installs the runtime once per document.
         await page.evaluate(OVERLAY_RUNTIME);
         await page.evaluate(
-          ([p, b]) => {
-            const api = (window as unknown as { __jevitateOverlay?: { panel(s: unknown): boolean; banner(s: unknown): boolean } }).__jevitateOverlay;
+          ([p, b, m]) => {
+            const api = (window as unknown as { __jevitateOverlay?: { panel(s: unknown): boolean; banner(s: unknown): boolean; mark(s: string): boolean } })
+              .__jevitateOverlay;
             if (api === undefined) return false;
             if (p !== null) api.panel(p);
             if (b !== null) api.banner(b);
+            if (m !== null) api.mark(m);
             return true;
           },
-          [panel, banner] as const,
+          [panel, banner, mark] as const,
         );
       })(),
     );
@@ -333,6 +347,18 @@ export class DemoOverlay {
     this.#watch(page);
     this.#lastPage = page;
     this.#banner = { text: this.#clean(text, 200), tone };
+    await this.#render(page);
+  }
+
+  /**
+   * #249: a persistent watermark (e.g. `DRAFT`) in the corner of every frame from now on, kept across
+   * navigations and captions; the host carries it as `data-jevitate-watermark` for checks.
+   */
+  async watermark(page: Page, text: string): Promise<void> {
+    if (page.isClosed()) return;
+    this.#watch(page);
+    this.#lastPage = page;
+    this.#watermark = this.#clean(text, 40);
     await this.#render(page);
   }
 

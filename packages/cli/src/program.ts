@@ -30,6 +30,7 @@ import { registerLoadCommands } from "./load-cli.js";
 import { registerExploreCommands } from "./explore-cli.js";
 import { registerVerifyFixCommands } from "./verify-fix-cli.js";
 import { registerAuthorJourneyCommands } from "./author-journey-cli.js";
+import { registerDemoCommands } from "./demo-aspect-cli.js";
 import { registerRecordCommands } from "./record-cli.js";
 import { registerRegressionCommands } from "./regression-cli.js";
 import { registerMissionCommands } from "./mission-cli.js";
@@ -81,6 +82,7 @@ export function buildProgram(deps: CliDeps): Command {
   );
 
   registerAuthorJourneyCommands(program, deps);
+  registerDemoCommands(program, deps);
   registerRecordCommands(program, deps);
   registerRegressionCommands(program, deps);
   registerMissionCommands(program, deps);

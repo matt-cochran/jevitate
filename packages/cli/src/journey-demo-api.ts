@@ -1,7 +1,16 @@
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { FsJourneyStore, describeStep, flatJourneySteps, secretParamValues, type FlatJourneyStep, type Journey } from "@jevitate/journey";
+import {
+  FsJourneyStore,
+  applyAnnotationDraft,
+  describeStep,
+  flatJourneySteps,
+  secretParamValues,
+  type AnnotationDraft,
+  type FlatJourneyStep,
+  type Journey,
+} from "@jevitate/journey";
 import { assertNoSecretInPayload, redactText } from "@jevitate/ai-core";
 import { DemoOverlay } from "@jevitate/explore";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
@@ -50,7 +59,17 @@ export interface DemoJourneyOptions extends Omit<RunJourneyProgrammaticallyOptio
   paceMs?: number;
   /** Extra screenshot layers (e.g. pixel masking, #250/#251); the overlay is always hidden. */
   captureLayers?: readonly CaptureLayer[];
+  /**
+   * #249: a reviewed-but-unapproved annotation draft (#246) whose goal / criteria / objectives /
+   * expected results narrate this demo. Applied in memory only — the stored Journey is untouched.
+   */
+  annotations?: AnnotationDraft;
+  /** #249: an unapproved demo — a `DRAFT` watermark on the overlay, and every output marked DRAFT. */
+  draft?: boolean;
 }
+
+/** #249: the mark every output of an unapproved demo carries. */
+export const DEMO_DRAFT_MARK = "DRAFT";
 
 export interface DemoStep {
   /** 1-based. */
@@ -92,21 +111,30 @@ function vttText(s: string): string {
   return s.replace(/\s+/g, " ").trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** The WebVTT subtitles: one cue per step (`step-N`), in order; the goal as a leading NOTE. */
-export function demoSubtitles(title: string, steps: readonly DemoStep[]): string {
+/**
+ * The WebVTT subtitles: one cue per step (`step-N`), in order; the goal as a leading NOTE. A draft
+ * (#249) says so in a NOTE and at the start of every cue.
+ */
+export function demoSubtitles(title: string, steps: readonly DemoStep[], draft = false): string {
   const note = title.replace(/\s+/g, " ").replace(/-->/g, "->").trim();
-  const cues = steps.map((s) => `step-${s.number}\n${vttTime(s.cue.startMs)} --> ${vttTime(s.cue.endMs)}\n${vttText(s.caption)}\n`);
-  return ["WEBVTT\n", ...(note === "" ? [] : [`NOTE ${note}\n`]), ...cues].join("\n");
+  const mark = draft ? `[${DEMO_DRAFT_MARK}] ` : "";
+  const cues = steps.map((s) => `step-${s.number}\n${vttTime(s.cue.startMs)} --> ${vttTime(s.cue.endMs)}\n${vttText(`${mark}${s.caption}`)}\n`);
+  const draftNote = draft ? [`NOTE ${DEMO_DRAFT_MARK}: not yet approved (jevitate demo approve)\n`] : [];
+  return ["WEBVTT\n", ...draftNote, ...(note === "" ? [] : [`NOTE ${note}\n`]), ...cues].join("\n");
 }
 
 function oneLine(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-/** The Markdown guide (all text already redacted); `assets` is the screenshots folder's name. */
-export function demoGuide(journey: Journey, title: string, steps: readonly DemoStep[], assets: string, redact: (s: string) => string): string {
+/**
+ * The Markdown guide (all text already redacted); `assets` is the screenshots folder's name. A draft
+ * (#249) carries `DRAFT` in its title and a watermark line under it.
+ */
+export function demoGuide(journey: Journey, title: string, steps: readonly DemoStep[], assets: string, redact: (s: string) => string, draft = false): string {
   const m = journey.metadata;
-  const lines: string[] = [`# ${oneLine(redact(m.name))}`, ""];
+  const lines: string[] = [`# ${draft ? `${DEMO_DRAFT_MARK}: ` : ""}${oneLine(redact(m.name))}`, ""];
+  if (draft) lines.push(`> **${DEMO_DRAFT_MARK}** — not yet approved. Review it, then run \`jevitate demo approve ${m.id}\` to promote the Journey and render the final demo.`, "");
   lines.push(`**Goal:** ${oneLine(title)}`, "");
   if (m.persona !== undefined || m.role !== undefined) {
     const who = [m.persona, m.role === undefined ? undefined : `role: ${m.role}`].filter((x): x is string => x !== undefined);
@@ -165,8 +193,11 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
   const pace = opts.paceMs ?? DEMO_DEFAULT_PACE_MS;
   if (!Number.isSafeInteger(pace) || pace < 0 || pace > DEMO_MAX_PACE_MS) throw new DemoArgsError(`--pace must be an integer from 0 to ${DEMO_MAX_PACE_MS} (got ${pace})`);
 
-  const journey = await new FsJourneyStore(opts.dir).get(opts.id);
-  if (journey === null) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
+  const stored = await new FsJourneyStore(opts.dir).get(opts.id);
+  if (stored === null) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
+  // #249: a draft's annotations narrate the demo without being written into the Journey.
+  const journey = opts.annotations === undefined ? stored : applyAnnotationDraft(stored, opts.annotations).journey;
+  const draft = opts.draft === true;
   const secrets = secretParamValues(journey, opts.params);
   const redact = (s: string): string => redactText(s, secrets);
   const flat = flatJourneySteps(journey);
@@ -205,6 +236,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
         const s = flat[index];
         if (s === undefined) return;
         if (index === 0) {
+          if (draft) await overlay.watermark(page, DEMO_DRAFT_MARK);
           await overlay.card(page, title, "title");
           await sleep(pace);
         }
@@ -243,7 +275,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       },
     };
 
-    const { video, guide, paceMs: _pace, captureLayers: _layers, ...runOpts } = opts;
+    const { video, guide, paceMs: _pace, captureLayers: _layers, annotations: _annotations, draft: _draft, ...runOpts } = opts;
     const browser = video === undefined ? opts.browser : { ...opts.browser, recordVideo: { dir: work } };
     const run = await runJourneyProgrammatically({
       ...runOpts,
@@ -287,7 +319,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
 
     const result: { video?: string; subtitles?: string; guide?: string; steps: DemoStep[] } = { steps: done };
     if (video !== undefined && videoFile !== undefined) {
-      const vtt = demoSubtitles(title, done);
+      const vtt = demoSubtitles(title, done, draft);
       assertNoSecretInPayload(vtt, secrets, "demo subtitles"); // the last line: never at rest
       await mkdir(dirname(video), { recursive: true });
       await copyFile(videoFile, video);
@@ -308,7 +340,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
           return { ...s, screenshot: to };
         }),
       );
-      const md = demoGuide(journey, title, placed, basename(assets), redact);
+      const md = demoGuide(journey, title, placed, basename(assets), redact, draft);
       assertNoSecretInPayload(md, secrets, "demo guide");
       await writeFile(guide, md);
       Object.assign(result, { guide, steps: placed });
