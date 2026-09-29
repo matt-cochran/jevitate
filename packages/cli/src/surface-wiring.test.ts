@@ -127,6 +127,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixtures: MCP_JOURNEY,
     selfHealer: "MCP runs are fail-closed: a broken step quarantines, never heals",
     interpreter: ANNOTATE_OBSERVER,
+    environment: MCP_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,

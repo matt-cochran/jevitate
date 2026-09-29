@@ -96,6 +96,8 @@ export interface RunCheckOptions {
   readonly aiMode?: "real" | "fake";
   /** Per-origin settle/hang configuration (`~/.jevitate/targets.json`). */
   readonly targetsConfig?: Readonly<Record<string, TargetConfig>>;
+  /** #247: the environments file a Journey item's `env` names (default: the repo's `.jevitate/environments.json`). */
+  readonly environmentsFile?: string;
   /** Where a target's `secretFields` read their values (default `process.env`). */
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly browserPortFactory?: () => BrowserPort;

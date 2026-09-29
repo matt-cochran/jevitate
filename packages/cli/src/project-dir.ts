@@ -112,6 +112,31 @@ export function findGitRoot(cwd: string): string | null {
   }
 }
 
+/** The repo's committed environments file (#247, see environments.ts), under `.jevitate/`. */
+export const ENVIRONMENTS_FILE = "environments.json";
+
+/** What `jevitate init` writes when the repo has no environments file (never overwritten). */
+export const ENVIRONMENTS_SCAFFOLD = {
+  $comment: [
+    "Named environments for `jevitate journey run <id> --env <name>` (also regression run, load run, check-suite journey items).",
+    "Journeys keep app-relative paths; --env moves them onto the environment's baseUrl. --base-url <origin> overrides it for one run.",
+    "Each entry: baseUrl (an origin, required), allow (other origins a step may be on, e.g. an auth provider), fixtures (a fixtures file,",
+    "relative to this file), hooks ({ before, after } shell commands; they still need --allow-shell-hooks).",
+    "This file is committed: NEVER put secrets or sessions here. Storage states and secret fields live in ~/.jevitate/targets.json,",
+    "keyed by the environment's origin: { \"<origin>\": { \"storageState\": \"...\", \"secretFields\": [\"label=Password=env:APP_PASSWORD\"],",
+    "\"personas\": { \"admin\": { \"storageState\": \"...\" } } } }.",
+  ],
+  local: { baseUrl: "http://localhost:3000", allow: [] as string[] },
+} as const;
+
+/** Writes `ENVIRONMENTS_SCAFFOLD` to `<projectDir>/environments.json` unless one exists. Returns whether it did (or would). */
+export function scaffoldEnvironmentsFile(projectDir: string, opts: { readonly dryRun?: boolean } = {}): string | null {
+  const path = join(projectDir, ENVIRONMENTS_FILE);
+  if (existsSync(path)) return null;
+  if (opts.dryRun !== true) writeFileSync(path, `${JSON.stringify(ENVIRONMENTS_SCAFFOLD, null, 2)}\n`, { flag: "wx" });
+  return path;
+}
+
 export interface ProjectInitReport {
   /** The project data dir, or null when not in a git repository (then `~/.jevitate` is used). */
   readonly dir: string | null;
@@ -161,7 +186,7 @@ function normalizeIgnoreLine(line: string): string {
 
 /**
  * Creates the repo's `.jevitate/` (`jevitate init`): `journeys/`, `regressions/`, `baselines/`,
- * `logs/`, and a `.gitignore` (`PROJECT_GITIGNORE`) that keeps run output and anything secret or
+ * `logs/`, an example `environments.json` (#247), and a `.gitignore` (`PROJECT_GITIGNORE`) that keeps run output and anything secret or
  * machine-local out of the repo. Idempotent and never overwriting: an existing `.gitignore` keeps
  * every line it has and gains only the entries it lacks, each once; a second run changes nothing.
  */
@@ -177,6 +202,9 @@ export function initProjectDir(cwd: string, opts: { readonly dryRun?: boolean } 
       if (opts.dryRun !== true) mkdirSync(p, { recursive: true });
     }
   }
+  // #247: an example environments file (JSON has no comments: `$comment` documents the shape).
+  const envFile = scaffoldEnvironmentsFile(dir, opts);
+  if (envFile !== null) created.push(envFile);
   const ignore = join(dir, ".gitignore");
   const current = existsSync(ignore) ? readFileSync(ignore, "utf8") : null;
   const present = new Set((current ?? "").split(/\r?\n/).map(normalizeIgnoreLine).filter((l) => l !== ""));

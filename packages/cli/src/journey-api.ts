@@ -11,6 +11,7 @@ import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner, type JourneyRunResult, type SelfHealer, type SiteGateDeps } from "@jevitate/runtime";
 import { gateJourney } from "./site-gate-cli.js";
 import { substituteSetupRefs, type FixtureRecord, type MissionFixtures } from "./mission-fixtures.js";
+import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 
 /**
  * Distinct from `@jevitate/journey`'s `ParamValidationError` so CLI/API callers
@@ -74,6 +75,13 @@ export interface RunJourneyProgrammaticallyOptions {
    * `StepObserver` (before/after page evidence). Default: a plain `RecordingInterpreter`.
    */
   interpreter?: RecordingInterpreter;
+  /**
+   * The environment to run against (#247, `--env`/`--base-url`, from `resolveJourneyEnvironment`):
+   * the Journey's recorded same-origin URLs move onto its `baseUrl` and the run's allowlist is its
+   * `allowedOrigins`; a step on any other origin is refused before any fixture or browser.
+   * Absent: the Journey's recorded site, exactly as before.
+   */
+  environment?: ResolvedJourneyEnvironment;
 }
 
 /**
@@ -130,10 +138,13 @@ export async function runJourneyProgrammatically(
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
-  const journey = await registry.get(opts.id);
-  if (!journey) {
+  const stored = await registry.get(opts.id);
+  if (!stored) {
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
+  // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
+  const journey = applyJourneyEnvironment(stored, opts.environment);
+  const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
 
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
@@ -170,7 +181,7 @@ export async function runJourneyProgrammatically(
         : runVideoDir(opts.browser, join(opts.browser.recordVideo.dir ?? logsDirFor(), `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(new Date().toISOString())}.json`));
     const session = await port.open({
       ...sessionLaunchOptions(opts.browser, videoDir),
-      allowedOrigins: [journey.recording.site],
+      allowedOrigins,
       baseUrl: journey.recording.site,
       ...opts.emulation,
       ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
@@ -178,7 +189,7 @@ export async function runJourneyProgrammatically(
     const closeSession = closeOnce(() => session.close());
     try {
       const actor = CastActor.named("cli-runner").whoCan(
-        new BrowseTheWeb(session, [journey.recording.site]),
+        new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
       const runner = new JourneyRunner(actor, opts.interpreter ?? new RecordingInterpreter(), undefined, undefined, opts.selfHealer);

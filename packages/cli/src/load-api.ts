@@ -9,6 +9,7 @@ import { RecordingInterpreter } from "@jevitate/interpreter";
 import { JourneyRunner } from "@jevitate/runtime";
 import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitate/load";
 import { JourneyRequiresAuthError } from "./journey-api.js";
+import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
 
 /** Distinct from `@jevitate/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
 export class UnknownLoadJourneyError extends Error {}
@@ -48,6 +49,12 @@ export interface RunJourneyLoadTestOptions {
   emulation?: EmulationSpec;
   /** The site-policy gate (`jevitate site policy set`): only its pacing applies to a load run. */
   siteGate?: SiteGateDeps;
+  /**
+   * #247 (`--env`/`--base-url`): load-test this environment — the Journey's recorded URLs move onto
+   * its baseUrl (which must still be an `--authorized-origin`); a step on an origin it does not
+   * allow is refused before any browser opens. Absent: the recorded site, as before.
+   */
+  environment?: ResolvedJourneyEnvironment;
 }
 
 /**
@@ -69,10 +76,12 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
-  const journey = await registry.get(opts.id);
-  if (!journey) {
+  const stored = await registry.get(opts.id);
+  if (!stored) {
     throw new UnknownLoadJourneyError(`unknown journey '${opts.id}'`);
   }
+  const journey = applyJourneyEnvironment(stored, opts.environment);
+  const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
 
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
@@ -97,14 +106,14 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       const port = browserPortFactory();
       const session = await port.open({
         ...sessionLaunchOptions(opts.browser),
-        allowedOrigins: [journey.recording.site],
+        allowedOrigins,
         baseUrl: journey.recording.site,
         ...opts.emulation,
         ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
       });
       const gate = await gateJourney(opts.siteGate, journey.recording, { enforceLimits: false, runId: `load-${opts.seed}-${actorIndex}` });
       const actor = CastActor.named(`load-actor-${actorIndex}`).whoCan(
-        new BrowseTheWeb(session, [journey.recording.site]),
+        new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
       const runner = new JourneyRunner(actor, new RecordingInterpreter());

@@ -76,6 +76,11 @@ export interface CliDeps {
    */
   logs?: { readonly autoPrune: boolean; readonly logsRoot?: string; readonly configPath?: string };
   journeysDir?: string;
+  /**
+   * Optional, additive (#247): the environments file `--env` reads (default: the repo's
+   * `.jevitate/environments.json`, found from the working directory).
+   */
+  environmentsFile?: string;
   /** Optional, additive: overrides the mission-targets store directory
    *  (default: ~/.jevitate/missions/targets). Same dir `queue_exploration`
    *  resolves promoted targets from. */
@@ -140,6 +145,14 @@ export const DEFAULT_INBOX_DIR = resolveDataDir(["inbox"]);
 
 export function resolveDbPath(deps: CliDeps, flag?: string): string {
   return flag ?? deps.dbPath ?? DEFAULT_DB_PATH;
+}
+
+/** #247: where `--env` reads environments and per-origin sessions from (test seams; real defaults). */
+export function environmentSeams(deps: CliDeps): { environmentsFile?: string; targetsFile?: string } {
+  return {
+    ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+    ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
+  };
 }
 
 /**
@@ -215,16 +228,18 @@ export async function makeRealBrowserActor(
   emulation?: EmulationSpec,
   browser?: BrowserRunOptions,
   portFactory: () => BrowserPort = () => new PlaywrightBrowserPort(),
+  /** #247: an environment's allowed origins (default: just `site`). */
+  allowedOrigins: readonly string[] = [site],
 ): Promise<{ actor: Actor; close: () => Promise<void> }> {
   const port = portFactory();
   const session = await port.open({
     ...sessionLaunchOptions(browser),
-    allowedOrigins: [site],
+    allowedOrigins: [...allowedOrigins],
     baseUrl: site,
     ...emulation,
     ...(storageState !== undefined ? { storageState } : {}),
   });
-  const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [site]));
+  const actor = CastActor.named("regression-capture").whoCan(new BrowseTheWeb(session, [...allowedOrigins]));
   return {
     actor,
     close: () => session.close(),

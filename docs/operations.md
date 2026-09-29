@@ -167,6 +167,7 @@ walking up from the working directory.
 | `journeys/`: named Journeys; shared ones as git submodules under `journeys/<shared>/` | `credentials.json`, `config.json`, `targets.json` |
 | `regressions/`: committed regression artifacts | `profiles/`, browser storage states, the site-policy `db.sqlite` |
 | `baselines/`: `baseline tag` snapshots | `inbox/`, `missions/` (the queue), `trust/`, `sources/` (clones) |
+| `environments.json`: named environments for `--env` ([journeys](./journeys.md#environments---env)) | per-environment sessions and secret fields, in `targets.json` by origin |
 | `logs/<date>/`: run output (not committed) | `journeys/` and `logs/` when you are not in a repo |
 
 `.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`

@@ -96,6 +96,7 @@ export function buildProgram(deps: CliDeps): Command {
       journeysDir: resolveJourneysDir(deps),
       sitePolicyDbPath: resolveDbPath(deps),
       ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
+      ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
       ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
       browserLaunch: (flags) => browserLaunchFromFlags(flags as BrowserLaunchFlags),
     },

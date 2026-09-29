@@ -16,6 +16,7 @@ import { loadRunFile } from "./report-api.js";
 import { GOAL_ONLY_OUTCOMES } from "@jevitate/domain";
 import { type CheckGateways, type CheckRunners, type RunCheckOptions } from "./check-types.js";
 import { type Json, type Planned, type Stamp, actionsOf, fixturesFor, isRecord, journeyStepUrl, recordingSteps, sessionOf, stampResultFile, targetFixtures } from "./check-plan.js";
+import { applyJourneyEnvironment } from "./environments.js";
 
 // ── execution ────────────────────────────────────────────────────────────────
 
@@ -124,10 +125,14 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
   const targetSafety = config?.safety === undefined ? {} : { safety: config.safety };
 
   if (item.kind === "journey" && item.journey !== undefined) {
-    const j = item.t.journeys.get(item.journey.id);
-    if (j === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
+    const stored = item.t.journeys.get(item.journey.id);
+    if (stored === undefined) return { status: "error", actions: 0, error: { type: "journey", message: `Journey ${item.journey.id} not loaded` } };
     const startedAt = (opts.nowIso ?? (() => new Date().toISOString()))();
     const sj = item.journey;
+    // #247: the item's environment (resolved and checked at preflight); its session when the item and target name none.
+    const environment = item.t.environments?.get(sj);
+    const j = applyJourneyEnvironment(stored, environment);
+    const journeySession = session ?? (sj.storageState === null ? undefined : environment?.storageState);
     const r = await withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({
       ...(siteGate === undefined ? {} : { siteGate }),
       dir: t.journeysDir ?? opts.journeysDir,
@@ -137,8 +142,9 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
       // #170: the item's session (default: the target's), exactly as `journey run --storage-state` (#118), and its fixtures.
-      ...(session === undefined ? {} : { storageState: session }),
-      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, session), site) }),
+      ...(journeySession === undefined ? {} : { storageState: journeySession }),
+      ...(item.t.fixturesFile === undefined ? {} : { fixtures: (site: string) => fixturesFor(targetFixtures(item.t, journeySession), site) }),
+      ...(environment === undefined ? {} : { environment }),
     }));
     const at = r.outcome === "quarantined" ? r.at : undefined;
     const url = journeyStepUrl(j, at);

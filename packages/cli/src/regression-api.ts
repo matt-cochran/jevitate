@@ -27,6 +27,7 @@ import {
 } from "@jevitate/regression";
 import { parseSuccessSpec } from "./explore-api.js";
 import { assertAuthorizedExploreTarget, monitorFor, evaluateNetworkCheck, describeCheck, verifyFix, type SuccessCheck } from "@jevitate/explore";
+import { rebaseRecording, type ResolvedJourneyEnvironment } from "./environments.js";
 import { parsePersistedMission, findFinding, type PersistedMission, type PersistedFinding } from "./verify-fix-api.js";
 
 /** #213: `--id <id>` already names a committed regression — refused unless `--force`, checked
@@ -439,6 +440,12 @@ export interface RunRegressionRunOptions {
   readonly makeActor: () => Promise<Actor>;
   /** Fresh-context replays for a declared-invariant oracle (mirrors `verify-fix --replays`). Default 3. */
   readonly attempts?: number;
+  /**
+   * #247 (`--env`/`--base-url`): replay against this environment — the committed Recording's
+   * same-origin URLs (and an invariant oracle's baseUrl/allowlist) move onto it; a step on an origin
+   * it does not allow is refused before any browser opens. Absent: the recorded site, as before.
+   */
+  readonly environment?: ResolvedJourneyEnvironment;
 }
 
 export type RegressionRunVerdict = "reproduces" | "fixed" | "inconclusive" | "intermittent";
@@ -469,8 +476,14 @@ export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<R
   } catch {
     throw new RegressionNotFoundError(opts.id, opts.regressionsDir);
   }
+  const env = opts.environment;
+  if (env !== undefined) recording = rebaseRecording(recording, env);
 
-  const oracle = meta.oracle;
+  const stored = meta.oracle;
+  const oracle =
+    env === undefined || stored?.kind !== "invariant"
+      ? stored
+      : { ...stored, baseUrl: `${env.baseUrl}${new URL(stored.baseUrl).pathname}`, allowlist: [...env.allowedOrigins] };
   if (oracle === undefined) {
     const actor = await opts.makeActor();
     const outcome = await replayRegression(actor, recording);

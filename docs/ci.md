@@ -111,6 +111,11 @@ relative paths resolve against the suite file):
   anything runs.
 - `journeys`: promoted Journeys only. Each one must run on an origin in the target's allowlist.
   Journeys follow the site policy for their origin ([site policies](./journeys.md#site-policies)).
+  A Journey's object form takes `env` (a name from `.jevitate/environments.json`) and/or `baseUrl`
+  (an origin) to run it against that environment instead of its recorded site, exactly as
+  `journey run --env`/`--base-url` ([environments](./journeys.md#environments---env)); the
+  environment's origin must be on the target's allowlist. An unknown environment, or a step on an
+  origin the environment does not allow, refuses the suite before anything runs.
 - `invariants`: checked around every action of every goal and mission of the target. A target that
   has invariants but no goals and no missions gets a model-free invariant sweep: the feature
   frontier from `url`. To lint the files themselves in an earlier, browser-free CI step, run
