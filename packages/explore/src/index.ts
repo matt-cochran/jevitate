@@ -62,3 +62,5 @@ export * from "./budget.js";
 export * from "./third-party.js";
 export * from "./http-5xx.js";
 export * from "./demo-overlay.js";
+// #251: the coverage page-state fingerprint (a new screen = a new state), for `--screenshots` dedupe.
+export { stateFingerprint as coverageStateFingerprint } from "./coverage/fingerprint.js";

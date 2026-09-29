@@ -6,6 +6,7 @@ import { SiteGateRefusedError } from "@jevitate/runtime";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { ok, fail } from "./envelope.js";
 import { UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { formatScreenshotsLine, parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import {
   annotateJourney,
   approveJourneyAnnotations,
@@ -25,6 +26,8 @@ import {
   resolveJourneysDir,
   type BrowserLaunchFlags,
   withBrowserLaunchFlags,
+  withScreenshotsFlag,
+  type ScreenshotsFlags,
   browserOption,
   type EmulationFlags,
   withEmulationFlags,
@@ -44,7 +47,7 @@ import {
  * Journey changed since the draft). The model never edits a Journey on its own.
  */
 export function registerJourneyAnnotateCommand(journey: Command, program: Command, deps: CliDeps): void {
-  withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("annotate <id>")))))
+  withScreenshotsFlag(withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(journey.command("annotate <id>"))))))
     .description(
       "draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; " +
         "writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)",
@@ -58,7 +61,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, screenshots: screenshotsFlag, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -66,13 +69,24 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         fakeAi?: boolean;
         approve?: boolean;
         json?: boolean;
-      } & EmulationFlags & EnvironmentFlags>();
+      } & EmulationFlags & EnvironmentFlags & ScreenshotsFlags>();
       const out = program.configureOutput().writeOut;
       const journeysDir = resolveJourneysDir(deps, dir);
 
       if (approve === true) {
-        if (real === true || fakeAi === true || Object.keys(param).length > 0 || storageStateFlag !== undefined || envName !== undefined || baseUrl !== undefined) {
-          emitJson(program, fail("E_JOURNEY_ANNOTATE_ARGS", "--approve applies an existing draft: it replays nothing, so it takes no --real/--fake-ai/--param/--storage-state/--env/--base-url"));
+        if (
+          real === true ||
+          fakeAi === true ||
+          Object.keys(param).length > 0 ||
+          storageStateFlag !== undefined ||
+          envName !== undefined ||
+          baseUrl !== undefined ||
+          screenshotsFlag !== undefined
+        ) {
+          emitJson(
+            program,
+            fail("E_JOURNEY_ANNOTATE_ARGS", "--approve applies an existing draft: it replays nothing, so it takes no --real/--fake-ai/--param/--storage-state/--env/--base-url/--screenshots"),
+          );
           return;
         }
         try {
@@ -116,8 +130,10 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         return;
       }
       let emulation: EmulationSpec | undefined;
+      let screenshots: ScreenshotsSpec | undefined;
       try {
         emulation = emulationFromFlags(emulationFlags);
+        screenshots = parseScreenshotsArg(screenshotsFlag);
       } catch (err) {
         emitJson(program, fail("E_JOURNEY_ANNOTATE_ARGS", err instanceof Error ? err.message : String(err)));
         return;
@@ -142,6 +158,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
             browserPortFactory: deps.explore?.browserPortFactory,
             ...browserOption(this.opts<BrowserLaunchFlags>()),
             ...(emulation === undefined ? {} : { emulation }),
+            ...(screenshots === undefined ? {} : { screenshots }),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             fixtures: (site) => {
@@ -170,6 +187,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
           );
           out?.(formatAnnotationChanges(result.proposed));
           out?.(`draft: ${result.draftPath}\nreview or edit it, then apply it: jevitate journey annotate ${id} --approve\n`);
+          if (result.screenshotIndex !== undefined) out?.(formatScreenshotsLine(result));
           emitUsageLine(program, data);
         }
         process.exitCode = exit;
