@@ -12,6 +12,9 @@ security bug, and how to report one.
 - MCP missions can only target a *promoted* mission target, a human act
   (`jevitate mission target promote`).
 - `load run` refuses to start without `--authorized-origin`.
+- `jevitate demo` explores and writes, so it needs a named environment (`--env`) and refuses one
+  flagged `production: true` in `.jevitate/environments.json`, before anything runs. `demo approve`
+  re-checks it.
 
 **Bounded.**
 
@@ -130,6 +133,11 @@ built-in verb (`Preview*`, `Recalculate*`, …).
 - Code, not the model, types a bound secret into a field. The model sees `«secret:VAR»`.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
+- Demo video, defect evidence clips and step screenshots (`demo`, `journey demo`,
+  `--evidence-video`, `--record-video`, `--screenshots`) mask every registered secret in pixels,
+  from the video's first frame, and re-prove the mask at every step. This fails closed: a clip or
+  image whose mask cannot be proven is not written, and the reason is recorded. The demo overlay
+  is hidden in screenshots.
 
 **Page text is data, not instructions.** Model prompts carry a prompt-injection guard, and page
 content is passed as untrusted data.

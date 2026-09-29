@@ -96,7 +96,9 @@ test that proves it refuses.
    repeat guard refuses re-firing the same write (RPC-aware, so gRPC-web reads aren't writes).
 4. Secrets: redaction before any model call (fail closed), a field bound to an environment
    variable and typed by code (the model sees `«secret:VAR»`), TOTP computed locally, and
-   storage-state contents never persisted in artifacts.
+   storage-state contents never persisted in artifacts, and registered secrets masked in the pixels
+   of every video and screenshot by a display-only layer (a capture whose mask can't be proven is
+   skipped, never written).
 5. Prompt injection: page text as data, and the guard in every model prompt.
 6. Bounds: action and decision ceilings, no-progress detection, stall timeouts, and a kill switch
    that still writes an honest partial result.

@@ -92,13 +92,16 @@ that exposes only domain tools:
   `inconclusive`, `hang`, `intermittent`) plus fingerprinted defects with evidence.
 - `verify_fix`: after the agent changes code, replay the finding in fresh sessions.
 
-Raw browser tools (`browser_click`, `page_evaluate`, `get_cookies`, …) are on a forbidden list,
+Every CLI command is reachable over MCP (and the reverse, enforced by a test), so an agent can
+also annotate a Journey or render a demo. Raw browser tools (`browser_click`, `page_evaluate`,
+`get_cookies`, …) are on a forbidden list,
 and the served tool list is checked against the allowlist. The model inside the tool can choose
 what to try next, but defects are decided by code: HTTP 5xx, uncaught exceptions, hangs, declared
 invariants. Secrets are redacted before any model call.
 
 The loop that works for me: agent edits code → `verify_fix` → still reproduces → agent keeps
-going. No screenshots to squint at.
+going. No screenshots to squint at, unless you ask for them: `--evidence-video` attaches a captioned
+clip of each defect's repro, with secrets masked in the pixels.
 
 Repo: https://github.com/matt-cochran/jevitate (`docs/agents.md`). `jevitate init` installs skills
 and registers the server for Claude Code, Codex and Cursor.

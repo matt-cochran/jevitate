@@ -38,7 +38,9 @@ jevitate explore --strategy goal --url http://localhost:3000/projects/new \
   `verify-fix` re-binds the referenced variables.
 - A setup that fails, times out or leaves a `${setup.x}` unresolved ends the run `inconclusive`
   as a configuration error. A mission never runs on unknown state.
-- A target can declare its fixtures in `~/.jevitate/targets.json` instead of passing `--fixtures`.
+- A target can declare its fixtures in `~/.jevitate/targets.json` instead of passing `--fixtures`. A
+  Journey run with `--env` can also take them (and `hooks`) from its environment in
+  `.jevitate/environments.json` ([environments](./journeys.md#environments---env)).
 - `--fixtures`/`--before`/`--after` are supported only with `--strategy goal` (the default): they
   refuse to start with any other strategy.
 

@@ -213,7 +213,7 @@ recorded the same way.
 
 | Flag | What it does | Commands |
 | --- | --- | --- |
-| `--headed` / `JEVITATE_HEADED=1` | A visible Chromium window | `explore` (every strategy), `journey run`, `verify-fix`, `regression capture`, `regression run` |
+| `--headed` / `JEVITATE_HEADED=1` | A visible Chromium window | `explore` (every strategy), `journey run`, `journey demo`, `demo`, `demo approve`, `verify-fix`, `regression capture`, `regression run` |
 | `--slow-mo <ms>` | Playwright `slowMo`: each browser operation is delayed this long. A non-negative integer (else exit 64). With `--headed` and no `--slow-mo`: 250 | the same |
 | `--record-video [dir]` | A Playwright video of each browser context. Works headless too | `explore`, `journey run`, `verify-fix` |
 | `--no-overlay` | With `--headed`: hide the on-page overlay (step, intent, target highlight, outcome banner) | `explore` |
