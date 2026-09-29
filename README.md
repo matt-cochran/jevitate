@@ -198,12 +198,14 @@ Run non-interactively like this, `init` never prompts for keys — it reports wh
 and exits 0 regardless, since the rest of init (skills, MCP registration) still succeeded. Set the
 keys separately with `jevitate ai setup <generation|judgment>`.
 
-The MCP server exposes an allowlist of domain tools (`queue_exploration`, `get_mission_result`,
-`verify_fix`, `run_journey`, …). Raw browser tools such as `browser_click` or `page_evaluate` are
-forbidden. An agent can ask for a mission, but it never drives the page. Every MCP tool also has a
-CLI command: `mission queue` / `mission result`, and `inbox list | show | command | queue-retrieval |
-queue-action | health` for the human-in-the-loop inbox. Approving or cancelling stays human-only, in
-`jevitate ui`. See [agents and MCP](./docs/agents.md).
+The MCP server exposes an allowlist of domain tools (`run_journey`, `queue_exploration`,
+`get_mission_result`, `verify_fix`, `annotate_journey`, `create_demo`, `run_check`, …). MCP is a
+convenience for agents that could run the CLI anyway, so every CLI command is reachable over MCP and
+every MCP tool from the CLI; the tools that mirror a command run it in process with typed, closed
+arguments and confined paths. Only `mcp`, `ui`, `init`, `ai setup`, `record` and trusting a source
+stay off MCP, each for a stated reason. Raw browser tools such as `browser_click` or `page_evaluate`
+are forbidden: an agent asks for a mission or a Journey, it never drives the page. Approving or
+cancelling an inbox item stays human-only, in `jevitate ui`. See [agents and MCP](./docs/agents.md).
 
 ## Safety
 
