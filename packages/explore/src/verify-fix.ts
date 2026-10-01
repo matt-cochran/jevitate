@@ -227,6 +227,17 @@ export async function verifyFix(params: VerifyFixParams): Promise<VerifyFixResul
     }
     return { ...base, verdict: "fixed", observedFingerprints: [], replay, reason: `the replay settled within the bound (${attempt.detail})`, attempts };
   }
+  // #301: a markup-injection defect is found by DOM inspection for the run's inert canary, which a
+  // replay's signal fingerprints never carry — "fixed" from a replay alone would be a false pass.
+  if (params.defectKind === "markup-injection") {
+    return {
+      ...base,
+      verdict: "inconclusive",
+      observedFingerprints: [],
+      replay: { outcome: "failed", at: -1, error: "not replayed" },
+      reason: "a markup-injection defect is re-checked by re-running the adversarial mission (its canary check); a replay alone proves nothing",
+    };
+  }
   const declared = params.defectKind === "invariant" ? params.invariant : undefined;
   if (params.defectKind === "invariant" && (declared === undefined || !declared.spec.invariants.some((i) => i.id === declared.id))) {
     return {

@@ -76,6 +76,22 @@ security bug, and how to report one.
   `--settle-ignore` are listed but never make a control unclickable a second time.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
+- **Inert markup canaries (#301).** The adversarial boundary values include an HTML-injection canary
+  (`<i data-jev-canary="TOKEN">jevTOKEN</i>`) and an attribute-break canary
+  (`jevTOKEN" data-jev-canary="TOKEN`). The token is random per submission. Neither contains a
+  script, an event handler, a `javascript:` URL or anything else that executes, in the app or in
+  its users' browsers. The run only inspects the DOM for an element carrying the canary attribute,
+  after submit and after loading the page again with a plain GET (a form is never re-sent). A hit
+  means the input was rendered unescaped (`markup-injection`, stored or reflected). The canary
+  never attempts exploitation. Its values go only to the `--allow` origins, through the same gated
+  actions, paid/destructive guards and budgets as every other value. Canaries the app accepts stay
+  in its data like any other boundary value, so reset state between runs (below). See
+  [exploration](./exploration.md#adversarial-scope-form-misuse-and-coverage).
+- **Identity changes (#300).** An adversarial action that switches the signed-in identity (a "Sign
+  in as demo" shortcut) is detected from hashed auth state, never raw cookie or token values. That
+  step's invariants are not judged against the new identity, the control is never clicked again,
+  and the run returns to the original identity in a fresh session (or stops `inconclusive`,
+  `identity-changed`).
 
 **Runs change the app's state — reset it between runs.** The guardrails above keep a run from
 clicking what it must not; they do not undo what it legitimately did. An adversarial run submits

@@ -9,6 +9,12 @@ behaviour changes).
 
 ### Added
 
+- Adversarial `boundary-submit` checks whether a field's input is rendered as markup. It submits
+  inert canaries with a per-submission random token: `<i data-jev-canary="T">jevT</i>` and an
+  attribute break, `jevT" data-jev-canary="T`, with no script or event handler. It then inspects the
+  DOM after submit and after reloading the page. A hit is a `markup-injection` defect, `stored` or
+  `reflected`; text that stays escaped is not a defect. Boundary values also gain an oversize
+  (~100 KB) value and RTL-override and zero-width characters (#301).
 - `init` and `ai status` name each key, its provider and its source (env var or
   `~/.jevitate/credentials.json`), and report an env var that overrides a stored key; `--json`
   adds `sources` per feature (#268).
@@ -41,6 +47,11 @@ behaviour changes).
 
 ### Fixed
 
+- Adversarial runs notice when an action switches the signed-in identity (a "Continue as demo"
+  shortcut on a login page). The step's invariants are not judged against the new identity, the
+  control is not clicked again, and the run returns to the original identity in a fresh session.
+  Each switch is listed in `identityChanges`. A run that can't return stops `inconclusive` with
+  `stop: "identity-changed"` (#300).
 - Key entry is masked with `•`, and its instructions stay on screen (#269).
 - A multi-run (`--persona`/`--repeat`) forwards a bare `--screenshots`/`--record-video` to each
   run instead of writing to `./true` (#290).

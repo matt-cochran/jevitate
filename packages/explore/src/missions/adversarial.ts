@@ -76,6 +76,8 @@ import {
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
+import { AuthRequestLog, clearAuthState, identityChange, readIdentity, type IdentityFingerprint } from "../adversarial/identity.js";
+import { CanaryTokens, canaryPayloadOf, canaryTokenOf, markupFingerprint, renderedCanaries } from "../adversarial/markup-canary.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -128,12 +130,33 @@ export interface DefectRepro {
   readonly recording?: Recording;
 }
 
+/**
+ * #301 — a field whose submitted input the app rendered as MARKUP: the inert canary
+ * (`<i data-jev-canary=…>` or an attribute break) became a real element/attribute in the page's DOM.
+ */
+export interface MarkupInjection {
+  /** The field's accessible name. */
+  readonly field: string;
+  /** `html`: an injected element; `attribute`: a quoted attribute value broken out of. */
+  readonly payload: "html" | "attribute";
+  /** The (redacted) page the canary was submitted on. */
+  readonly submittedOn: string;
+  /** The (redacted) page it was found rendered as markup on. */
+  readonly renderedOn: string;
+  /** Seen right after the submit settled. */
+  readonly afterSubmit: boolean;
+  /** Seen after the page was loaded again (a GET of the same URL — never a re-sent form). */
+  readonly afterReload: boolean;
+  /** Persisted (seen after a reload, or on a later page): `stored`; else `reflected`. */
+  readonly stored: boolean;
+}
+
 export interface AdversarialDefect {
   /** Stable identity (16 hex): same bug, same fingerprint — across steps and across runs. */
   readonly fingerprint: string;
   /** Every signal fingerprint seen with it (the cascade one broken call fires). */
   readonly related: string[];
-  readonly kind: DefectSignal["kind"] | "invariant";
+  readonly kind: DefectSignal["kind"] | "invariant" | "markup-injection";
   readonly title: string;
   /** Normalized route (path pattern) of the page it was first seen on. */
   readonly route: string;
@@ -145,6 +168,8 @@ export interface AdversarialDefect {
   readonly invariantReason?: string;
   /** For a DECLARED invariant (#86): its id, expression, before/after values, action and evidence. */
   readonly invariant?: InvariantViolation;
+  /** For a `markup-injection` defect (#301): the field, the pages, and stored vs reflected. */
+  readonly markupInjection?: MarkupInjection;
   readonly firstSeenStep: number;
   readonly occurrences: number;
   readonly occurrenceSteps: number[];
@@ -200,7 +225,35 @@ export type AdversarialStop =
    */
   | "targets-refused"
   /** #226: the app stopped answering navigation mid-run (e.g. its server froze): `inconclusive`, `failure.kind: "target-unresponsive"`. */
-  | "target-unresponsive";
+  | "target-unresponsive"
+  /**
+   * #300: an action switched the signed-in identity and the original one could not be restored (no
+   * fresh session from the original storage state, or it no longer signs in as the same identity):
+   * `inconclusive`, `failure.kind: "identity-changed"` — a defect found before still wins.
+   */
+  | "identity-changed";
+
+/**
+ * #300 — one time an action switched the signed-in identity (a "Continue as demo" shortcut on a
+ * login page, a "switch user" control). The step's invariants were NOT judged (they were declared
+ * for the original identity), the control is never picked again, and the run went back to the start
+ * URL in a fresh session from the original storage state. Names auth state by name only — never a
+ * cookie or token value.
+ */
+export interface IdentityChange {
+  /** The transcript step whose action switched the identity. */
+  readonly step: number;
+  /** What was acted on (control name or op). */
+  readonly action: string;
+  /** The (redacted) URL the action landed on. */
+  readonly url: string;
+  /** Normalized route of that URL. */
+  readonly route: string;
+  /** What changed (auth entries by name: appeared, removed, re-issued, another subject). */
+  readonly reason: string;
+  /** Whether the original identity was restored (false ⇒ the run stopped: `stop: "identity-changed"`). */
+  readonly restored: boolean;
+}
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
@@ -234,6 +287,8 @@ export interface AdversarialOutcome {
   readonly sideEffectsTruncated?: number;
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
+  /** #300: every action that switched the signed-in identity (present when one did). */
+  readonly identityChanges?: IdentityChange[];
 }
 
 export interface AdversarialMissionParams {
@@ -375,6 +430,7 @@ interface StepFinding {
   readonly signals: DefectSignal[];
   readonly invariantReason?: string;
   readonly invariant?: InvariantViolation;
+  readonly markupInjection?: MarkupInjection;
 }
 
 interface MutableDefect extends Omit<StepFinding, "related"> {
@@ -447,6 +503,7 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
     signals: d.signals,
     ...(d.invariantReason === undefined ? {} : { invariantReason: d.invariantReason }),
     ...(d.invariant === undefined ? {} : { invariant: d.invariant }),
+    ...(d.markupInjection === undefined ? {} : { markupInjection: d.markupInjection }),
     firstSeenStep: d.firstSeenStep,
     occurrences: d.occurrenceSteps.length,
     occurrenceSteps: [...d.occurrenceSteps],
@@ -497,6 +554,9 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
         });
   declared?.attach(params.page);
+  /** #300: when the run's pages last fired an auth-shaped request (time only). */
+  const authRequests = new AuthRequestLog();
+  authRequests.attach(params.page);
   // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule).
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared);
@@ -506,6 +566,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     collector = new PageSignalCollector(page, Date.now, params.allowlist);
     crashWatch = new CrashWatch(page);
     declared?.attach(page);
+    authRequests.attach(page);
     armed = false;
   });
   const heap = new HeapLog();
@@ -536,6 +597,14 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     ...(params.hangs === undefined ? {} : { hangConfig: params.hangs }),
     ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
   };
+
+  /** #301: this run's inert canary tokens, and every one submitted (token → field, page, payload). */
+  const canaries = new CanaryTokens();
+  const submittedCanaries = new Map<string, { readonly field: string; readonly submittedOn: string; readonly payload: "html" | "attribute" }>();
+  const reportedCanaries = new Set<string>();
+  /** #300: the identity the run started as (hashes only), read once the seed page settled. */
+  let baseline: IdentityFingerprint | null = null;
+  const identityChanges: IdentityChange[] = [];
 
   const finish = (
     outcome: AdversarialOutcome["outcome"],
@@ -575,6 +644,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
       ...(declared === null ? {} : { invariants: declared.report() }),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
+      ...(identityChanges.length === 0 ? {} : { identityChanges: [...identityChanges] }),
       ...safety.result(),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
@@ -710,6 +780,37 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     return restartAtSeed();
   };
 
+  /**
+   * #300 — after an action switched the signed-in identity: a FRESH session from the original storage
+   * state (the only way back to the identity the run was given), at the start URL in a new Recording
+   * segment, whose identity must match the baseline again. When no fresh session can be opened, or
+   * the restored one is not the original identity, the run cannot go on (`identity-changed`).
+   */
+  const restoreIdentity = async (): Promise<
+    { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop; why: string }
+  > => {
+    const unrestorable = (detail: string): { ok: false; stop: AdversarialStop; why: string } => ({
+      ok: false,
+      stop: "identity-changed",
+      why: `the signed-in identity changed and the original one could not be restored (${detail})`,
+    });
+    if (!(await sessions.fresh())) {
+      // No fresh session: only a SIGNED-OUT original identity can be restored in place, by clearing
+      // the session's auth state (cookies and auth-named storage) on the current page.
+      if (baseline === null || baseline.entries.size > 0) {
+        return unrestorable("no fresh session can be opened from the original storage state");
+      }
+      await clearAuthState(sessions.page);
+    }
+    const back = await restartAtSeed();
+    if (!back.ok) {
+      return back.stop === "scope-unreachable" ? unrestorable("the start URL no longer stays in scope") : { ok: false, stop: back.stop, why: `reset after the identity change ended: ${back.stop}` };
+    }
+    const still = baseline === null ? null : identityChange(baseline, await readIdentity(sessions.page), { authRequest: false });
+    if (still !== null) return unrestorable(`the fresh session is not the original identity: ${still}`);
+    return back;
+  };
+
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
   const verdict = (): MissionOutcome =>
     combineOutcomes([
@@ -773,9 +874,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
    * findings, or null when nothing broke.
    */
-  const adjudicate = async (action: InvariantAction | null = null): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
-    const invariantResult = params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
-    const declaredResult = declared === null ? null : await declared.after(sessions.actor, armed ? action : null);
+  const adjudicate = async (
+    action: InvariantAction | null = null,
+    opts: { readonly identitySwitched?: boolean } = {},
+  ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
+    // #300: after an identity switch no invariant is judged — they were declared for the original
+    // identity — and what the monitor observed for this action is dropped. Hard signals still count.
+    const skip = opts.identitySwitched === true;
+    if (skip) declared?.discardPending();
+    const invariantResult: { ok: boolean; reason?: string } =
+      !skip && params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
+    const declaredResult = declared === null || skip ? null : await declared.after(sessions.actor, armed ? action : null);
     armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
@@ -927,7 +1036,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       // Guardrail #3: the generation call receives only the redacted hard-signal details (never
       // raw form state) + the URL. A triage failure is data (`unavailable`), never a lost defect.
       const summary =
-        f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.signals.map((s) => s.detail).join("; ");
+        f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.kind === "markup-injection" ? f.title : f.signals.map((s) => s.detail).join("; ");
       const triage = await tryTriage(params.generation, { failureSummary: summary, url: f.url });
       defects.set(f.fingerprint, {
         ...f,
@@ -1051,6 +1160,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       });
       return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
     }
+    // #300: who the run is signed in as (or that it is signed out), before any action.
+    baseline = await readIdentity(sessions.page);
     let snap = seed.snapshot;
     // A perception's timing is reported ONCE — on the first step decided on it — so a run whose
     // strategies found nothing to do on a page does not count that page's load several times.
@@ -1125,12 +1236,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
      * denied submit is attempted (and its refusal recorded) once, not every turn.
      */
     const refusedIds = new Set<string>();
+    /** #300: controls whose action switched the signed-in identity — never acted on again. */
+    const identitySwitchers = new Set<string>();
     /**
      * A click-afforded control the safety policy refuses (#116: `--deny`, paid, destructive) is never
      * offered as a target (#193) — withheld at planning, its refusal recorded once, like the
      * frontier missions do (#186).
      */
     const refuses = (c: Control): boolean => {
+      // #300: a control that switched the signed-in identity is never offered again (silently: its
+      // switch is already in the transcript and in `identityChanges`).
+      if (identitySwitchers.has(controlIdentity(c))) return true;
       if (affordedOp(c) !== "click") return false;
       const withheld = safety.withholds("click", c, (reason) =>
         transcript.record({
@@ -1164,6 +1280,87 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     /** How many episodes each strategy has run (rotates its form, field and value). */
     const rounds = new Map<MisuseStrategy, number>();
     let stop: AdversarialStop | null = null;
+    /** Why the run stopped, when that stop is itself the failure (#300 `identity-changed`). */
+    let stopFailure: MissionFailure | undefined;
+    /** Wall-clock time the first action since the last adjudication fired (#300: auth requests since then). */
+    let chainStart: number | null = null;
+    /** #301: canary tokens submitted since the last adjudicated step (checked after it, and after a reload). */
+    const chainCanaries = new Set<string>();
+
+    /**
+     * #301 — after a settled step: is any canary of this run rendered as MARKUP? When this step's
+     * chain submitted one, the page is loaded again (a GET of the same in-scope URL — never a re-sent
+     * form) and checked again: seen after that ⇒ stored, seen only before ⇒ reflected. A canary first
+     * seen on a later page is stored. DOM inspection only — the payload is inert.
+     */
+    const checkCanaries = async (): Promise<"ok" | "reloaded"> => {
+      const submitted = [...chainCanaries];
+      chainCanaries.clear();
+      const authorized = (u: string): boolean => isAuthorizedExploreTarget(u, params.allowlist);
+      const afterSubmit = await renderedCanaries(sessions.page, canaries.prefix, authorized);
+      const submittedOn = redactUrl(sessions.page.url());
+      let afterReload = new Set<string>();
+      let reloadedOn = submittedOn;
+      const reload = submitted.length > 0 && inScope(sessions.page.url());
+      if (reload) {
+        const url = sessions.page.url();
+        await Navigate.to(url).performAs(sessions.actor);
+        recorder.navigate(url, now());
+        lastRecordedTarget = null;
+        await perceiveNow().catch(() => undefined);
+        afterReload = await renderedCanaries(sessions.page, canaries.prefix, authorized);
+        reloadedOn = redactUrl(sessions.page.url());
+      }
+      const found: StepFinding[] = [];
+      for (const token of new Set([...afterSubmit, ...afterReload])) {
+        const sub = submittedCanaries.get(token);
+        if (sub === undefined || reportedCanaries.has(token)) continue;
+        reportedCanaries.add(token);
+        const justSubmitted = submitted.includes(token);
+        const seenAfterSubmit = afterSubmit.has(token);
+        const seenAfterReload = afterReload.has(token);
+        const stored = seenAfterReload || !justSubmitted;
+        const renderedOn = seenAfterSubmit ? submittedOn : reloadedOn;
+        const route = normalizeRoute(sub.submittedOn);
+        const what = sub.payload === "html" ? "unescaped HTML" : "an unescaped attribute value";
+        found.push({
+          fingerprint: markupFingerprint(route, sub.field, sub.payload),
+          related: [markupFingerprint(route, sub.field, sub.payload)],
+          kind: "markup-injection",
+          title: `Input "${sub.field}" rendered as markup (${what}) on ${normalizeRoute(renderedOn)} — ${stored ? "stored" : "reflected"}`,
+          route,
+          url: sub.submittedOn,
+          signals: [],
+          markupInjection: {
+            field: sub.field,
+            payload: sub.payload,
+            submittedOn: sub.submittedOn,
+            renderedOn,
+            afterSubmit: seenAfterSubmit,
+            afterReload: seenAfterReload,
+            stored,
+          },
+        });
+      }
+      if (reload || found.length > 0) {
+        const at = transcript.nextStep;
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "canary-check",
+          actOk: true,
+          reason:
+            found.length === 0
+              ? `inert canary not rendered as markup${reload ? " (checked after submit and after reloading the page)" : ""}`
+              : `defect: ${found.map((f) => f.title).join("; ")}`,
+          snapshot: snap,
+        });
+        if (found.length > 0) await fold(at, found);
+      }
+      return reload ? "reloaded" : "ok";
+    };
 
     /**
      * SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
@@ -1329,6 +1526,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       // A snapshot armed by an episode that ended without an adjudication (budget, disabled target)
       // is stale: the next action gets a fresh one, so no effect is attributed to the wrong action.
       armed = false;
+      chainStart = null;
 
       // A perception's timing is reported once — on the first step decided on it.
       let stepSnap = snap;
@@ -1356,6 +1554,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         isChrome,
         disclosures: { revealed, barren },
         rng: Math.random,
+        canary: () => canaries.next(),
         ...extra,
       });
       let episode = planMisuseEpisode(planning(snap, strategy));
@@ -1464,6 +1663,23 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           break;
         }
         if (s.op === "click" && s.control !== null) disabledNow.delete(controlIdentity(s.control));
+        // #300: a control that switched the signed-in identity is never acted on again (a strategy
+        // that re-plans it from the live snapshot gets a no-op, counted against no budget).
+        if (s.control !== null && identitySwitchers.has(controlIdentity(s.control))) {
+          transcript.record({
+            op: null,
+            control: s.control,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: ran,
+            actOk: false,
+            reason: joinReasons([s.note, "this control switched the signed-in identity earlier in the run — not acted on again"]),
+            snapshot: stepSnap,
+            ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          });
+          stepTiming = undefined;
+          break;
+        }
         // The shared safety policy (#116): a paid / session-ending / destructive / --deny'd control is
         // never clicked — a no-op like a disabled target, counted against no budget.
         const unsafe = safety.gate(s.op, s.control);
@@ -1528,10 +1744,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         }
         const at = now();
         const firedAt = Date.now();
+        if (chainStart === null) chainStart = firedAt;
         const firedStep = transcript.nextStep;
         safety.mark(transcript.nextStep, s.op, s.control);
         const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
+        // #301: an inert canary typed into a field is registered (token → field, page, payload).
+        const token = result.ok ? canaryTokenOf(value) : null;
+        if (token !== null && value !== undefined && s.control !== null) {
+          submittedCanaries.set(token, { field: s.control.name || s.control.summary, submittedOn: redactUrl(actedOn), payload: canaryPayloadOf(value) });
+          chainCanaries.add(token);
+        }
         if (result.ok) {
           recordAction(s, value, at, result.submittedVia);
           markFired(firedAt, firedStep);
@@ -1587,6 +1810,61 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           pendingEarlier = pendingEarlier || result.ok;
           continue;
         }
+        // #300: did this action switch the signed-in identity? Then its invariants are not judged,
+        // the control is never picked again, and the run goes back to the original identity.
+        const since = chainStart ?? firedAt;
+        chainStart = null;
+        const switched =
+          baseline === null
+            ? null
+            : identityChange(baseline, await readIdentity(sessions.page), { authRequest: authRequests.since(since) });
+        if (switched !== null) {
+          chainCanaries.clear();
+          const switchVerdict = await adjudicate(null, { identitySwitched: true });
+          const landed = redactUrl(sessions.page.url());
+          const actionName = s.control?.name ?? s.op;
+          transcript.record({
+            ...entry,
+            reason:
+              joinReasons([
+                reason,
+                `identity changed (${switched}): invariants not judged; "${actionName}" is not picked again`,
+                switchVerdict?.reason,
+              ]) ?? "identity changed",
+          });
+          if (switchVerdict !== null) {
+            await fold(step, switchVerdict.findings);
+            foldAdvisories(step, switchVerdict.advisories);
+          }
+          if (s.control !== null) {
+            refusedIds.add(controlIdentity(s.control));
+            identitySwitchers.add(controlIdentity(s.control));
+          }
+          last = null;
+          const back = await restoreIdentity();
+          identityChanges.push({ step, action: actionName, url: landed, route: normalizeRoute(landed), reason: switched, restored: back.ok });
+          transcript.record({
+            op: null,
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "identity-reset",
+            actOk: back.ok,
+            reason: back.ok
+              ? "restored the original identity: reset to the start URL in a fresh session from the original storage state"
+              : back.why,
+            snapshot: back.ok ? back.snapshot : snap,
+            ...(back.ok ? { timing: back.timing } : {}),
+          });
+          if (!back.ok) {
+            stop = back.stop;
+            if (back.stop === "identity-changed") stopFailure = { kind: "identity-changed", message: back.why };
+            break;
+          }
+          snap = back.snapshot;
+          snapTiming = undefined;
+          break;
+        }
         const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
         const soft = verdict === null ? await softJudgment(stepSnap) : {};
         const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
@@ -1599,6 +1877,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           await fold(step, verdict.findings);
           foldAdvisories(step, verdict.advisories);
         }
+        // #301: was a submitted canary rendered as markup (after submit, after reload)?
+        const canaryCheck = await checkCanaries();
         const after = await observeAfter(step, s.control?.name ?? s.op);
         if (after.kind === "stop") {
           stop = after.stop;
@@ -1606,6 +1886,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         }
         // The rest of the episode was planned for a page that is gone.
         if (after.kind === "reset") break;
+        if (canaryCheck === "reloaded") {
+          // The canary check loaded the page again: the rest of the episode's plan is stale.
+          observeTarget(snap);
+          break;
+        }
         observeTarget(snap);
         // #193: what did this click reveal? A form that was not there before → remember the control
         // as the way back to it (and, for a disclosure, run this strategy's episode on it now); a
@@ -1661,6 +1946,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       const late = await declared.flushResponses().catch(() => null);
       if (late !== null && late.violations.length > 0) await fold(Math.max(1, transcript.nextStep - 1), late.violations.map(declaredFinding));
     }
+    if (stop === "identity-changed") return finish(budgetVerdict(), stop, defects.size > 0 ? undefined : stopFailure);
     return finish(stop === "budget" ? budgetVerdict() : verdict(), stop);
   } catch (e) {
     const failure = describeFailure(e, crashWatch.signals());

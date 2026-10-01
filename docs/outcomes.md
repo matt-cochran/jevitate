@@ -114,6 +114,7 @@ above, so it needs no separate exit-code mapping):
 | `not-rendered` | the target page never rendered. When the start page itself answered 5xx, that is an `http-5xx` defect and the run is `defects-found`. |
 | `scope-unreachable` | the start URL did not stay in scope (e.g. it redirected to a login page) |
 | `target-unresponsive` | the app stopped answering mid-run (e.g. its server froze): a navigation got no response — `inconclusive`, `failure.kind: "target-unresponsive"`, `failure.message` in plain words (`the app stopped responding to navigation to /app (timed out before any response)`), never `crashed` and never a stack trace |
+| `identity-changed` | an action switched the signed-in identity (#300, listed in `identityChanges`) and the original identity could not be restored: no fresh session could be opened from the original storage state, or the fresh session was someone else. `inconclusive`, `failure.kind: "identity-changed"`. A defect found before still wins. A switch that was restored doesn't stop the run. |
 | `hang` | the app under test hung |
 | `crashed` | the engine failed |
 
