@@ -209,6 +209,16 @@ export function scrollIntoViewForProbe(node: Node): void {
 }
 
 /**
+ * BROWSER CODE — the element's box lies wholly outside the viewport (#294). A visually-hidden
+ * (sr-only / skip-link) element is never judged here (see `isHiddenSamePageAnchor` / the label path).
+ */
+export function outsideViewport(node: Node): boolean {
+  const r = (node as HTMLElement).getBoundingClientRect();
+  if ((r.width <= 1 && r.height <= 1) || r.left <= -1_000 || r.top <= -1_000) return false;
+  return r.right <= 0 || r.bottom <= 0 || r.left >= window.innerWidth || r.top >= window.innerHeight;
+}
+
+/**
  * A same-page anchor (`<a href="#…">` whose target is THIS page) that is visually hidden by the
  * clip-to-nothing idiom — a "Skip to content" link is the common case. Playwright's actionability
  * treats it as clickable (non-zero-ish box, not `display:none`), so without this check the gate lets
@@ -279,6 +289,8 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
     if (!visible) return "target not visible";
     if (!enabled) return "target not enabled";
     if (cover !== null) return `target obscured by ${cover}`;
+    // #294: still wholly outside the viewport after being brought into view: nothing can reach it.
+    if (await handle.evaluate(outsideViewport).catch(() => false)) return "target not reachable: it lies outside the visible page (off-screen)";
     if (await isHiddenSamePageAnchor(handle, control, page.url())) {
       return "target not actionable: visually-hidden skip link";
     }

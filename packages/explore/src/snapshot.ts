@@ -224,6 +224,13 @@ interface ControlFacts {
    * centre-point occlusion probe cannot see the overlay).
    */
   readonly outsideModal: boolean;
+  /**
+   * #294: the control's box lies wholly outside what the page can ever bring into view — a fixed
+   * element (or one in a fixed panel, like a closed drawer translated off-screen) outside the
+   * viewport, or an in-flow element outside the document's scrollable area. Never judged inside a
+   * scroll container (scrolling it may reach the control) or for a visually-hidden (sr-only) one.
+   */
+  readonly unreachable: boolean;
 }
 
 /**
@@ -270,6 +277,31 @@ function readControlFacts(node: Node): ControlFacts {
     return modal || (ms.position === "fixed" && mr.width * mr.height >= 0.25 * window.innerWidth * window.innerHeight);
   });
   const outsideModal = modals.length > 0 && !modals.some((m) => m === el || m.contains(el));
+  // #294: wholly outside what scrolling can ever bring into view.
+  let unreachable = false;
+  if (!clippedOffscreen && rect.width > 0 && rect.height > 0) {
+    let fixedBox: DOMRect | null = null;
+    let scroller = false;
+    for (let a: Element | null = el; a !== null && a !== document.documentElement; a = a.parentElement) {
+      const s = window.getComputedStyle(a as HTMLElement);
+      if (s.position === "fixed") {
+        fixedBox = (a as HTMLElement).getBoundingClientRect();
+        break;
+      }
+      if (a !== el && a !== document.body && /(auto|scroll)/.test(`${s.overflowX} ${s.overflowY}`)) scroller = true;
+    }
+    const outside = (r: DOMRect, w: number, h: number, dx: number, dy: number): boolean =>
+      r.right + dx <= 0 || r.bottom + dy <= 0 || r.left + dx >= w || r.top + dy >= h;
+    if (fixedBox !== null) {
+      // A fixed panel never scrolls: off the viewport (itself or the control in it) is unreachable.
+      unreachable =
+        outside(fixedBox, window.innerWidth, window.innerHeight, 0, 0) ||
+        (!scroller && outside(rect, window.innerWidth, window.innerHeight, 0, 0));
+    } else if (!scroller) {
+      const root = document.scrollingElement ?? document.documentElement;
+      unreachable = outside(rect, root.scrollWidth, root.scrollHeight, window.scrollX, window.scrollY);
+    }
+  }
 
   const roleAttr = norm(el.getAttribute("role")).split(" ")[0] ?? "";
   const roleByTag: Record<string, string> = {
@@ -449,6 +481,7 @@ function readControlFacts(node: Node): ControlFacts {
     richText,
     clippedOffscreen,
     outsideModal,
+    unreachable,
   };
 }
 
@@ -585,6 +618,9 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
       if (!raw.visible && raw.inputType !== "file") continue;
       // #272: behind an open modal — never offered (a click there is intercepted by the modal).
       if (raw.outsideModal) continue;
+      // #294: a control no scroll can bring into view (a closed panel translated off-screen) is not
+      // actionable — never offered (a hidden file input stays: `upload` needs no visible element).
+      if (raw.unreachable && raw.inputType !== "file") continue;
       // Occlusion — the ONE shared predicate (./occlusion.ts), also used by act()'s gate: a control
       // a user cannot click (covered by an overlay, or by an ancestor at its own centre) is not
       // offered. Off-screen controls stay eligible (scroll ops reach them).
