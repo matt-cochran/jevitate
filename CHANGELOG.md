@@ -45,6 +45,9 @@ behaviour changes).
 - A goal with no `--success` that asks for a change no longer performs a destructive write
   ("Remove" → `RemoveMember`) unless `--allow-writes` or `--allow-destructive` is passed: the
   control is refused and a destructive request an action fires is blocked (#270).
+- A goal asks for a `--paid` control by its action word: a trailing live estimate
+  ("(≈ 4–10 credits)") and confirmation words are ignored (#280).
+- The budget guard reads an estimate range at its high end ("≈ 50–90 credits" counts as 90) (#279).
 
 ### Fixed
 

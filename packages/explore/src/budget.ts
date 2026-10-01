@@ -18,7 +18,15 @@ import type { BudgetDeclaration, BudgetGuard, ObservedValue } from "@jevitate/re
 
 /** Minimal reader a `BudgetMonitor` needs: mechanically reads one named observable (never a model). */
 export interface ObservableReader {
-  readObservable(page: Page, name: string): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }>;
+  /**
+   * `worstCase` (#279: a guard's cost estimate): a range reads at its HIGH end — every number the
+   * read finds counts, the largest magnitude wins — unless the observable names an explicit `index`.
+   */
+  readObservable(
+    page: Page,
+    name: string,
+    opts?: { readonly worstCase?: boolean },
+  ): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }>;
 }
 
 export interface BudgetStepEvidence {
@@ -229,9 +237,10 @@ export class BudgetMonitor {
 
   async #estimate(page: Page, guard: BudgetGuard): Promise<number | null> {
     if (typeof guard.estimate === "number") return guard.estimate;
-    const r = await this.#reader.readObservable(page, guard.estimate);
+    // #279: the guard caps the WORST case — "≈ 50–90 credits" is guarded as 90, never 50.
+    const r = await this.#reader.readObservable(page, guard.estimate, { worstCase: true });
     if (r.unreadable || typeof r.value !== "number") return null;
-    return r.value;
+    return Math.abs(r.value);
   }
 }
 

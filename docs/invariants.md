@@ -267,7 +267,9 @@ as a credits balance that pays for real provider calls:
   `stop: "budget"`. The mission outcome is `inconclusive`, or `defects-found` if a defect was
   already found. It is never `clean` and never `crashed`.
 - `guard` (optional) refuses a paid action whose `estimate × factor` would cross the remaining
-  budget. A missing estimate is refused, never treated as zero.
+  budget. A missing estimate is refused, never treated as zero. A numeric `dom` estimate is read
+  at its worst case: a range such as "≈ 50–90 credits" counts as 90 (an explicit
+  `number: { index }` is kept as declared).
 - `settle` keeps reading after the run ends, to catch a charge that lands late.
 - An unreadable observable stops the run (`onUnreadable: "stop"`, the default) rather than being
   treated as unspent.
