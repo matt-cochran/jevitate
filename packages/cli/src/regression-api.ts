@@ -334,7 +334,7 @@ async function replayAndCheckNetwork(makeActor: () => Promise<Actor>, recording:
   // network to go idle before reading what was captured, or a fast write can be missed entirely.
   await monitor.waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
   monitor.stopCapture(capture);
-  const result = evaluateNetworkCheck(asSuccessCheck(check), capture.requests(), capture.truncated);
+  const result = evaluateNetworkCheck(asSuccessCheck(check), capture.sent(), capture.truncated);
   return !result.passed;
 }
 

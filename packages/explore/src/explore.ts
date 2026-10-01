@@ -728,6 +728,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     firstParty,
     ignoreRequests: urlMatcher(cfg.settle?.ignoreRequests),
   });
+  /** The writes earlier clicks fired that are still in flight, named (#283). */
+  const inflightWrites = (): string =>
+    [...new Set(sideEffects.inflight().map((w) => `${w.method} ${w.path}`))].join(", ");
   // #223: the main document's HTTP status per URL — an answer on a 404 / error page is no answer.
   const documentStatus = new Map<string, number>();
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
@@ -1533,6 +1536,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // The page says work is under way (#92): "blocked" is premature while a job the page reports
         // is still running. Code defers it into a bounded job wait; past the budget it stands.
         const job = await readInProgressStatus(page);
+        // #283: likewise while a write an earlier click fired is still in flight (the request IS the job).
+        if (job === null && jobWaitedMs < jobWaitMs && sideEffects.inflight().length > 0) {
+          const what = inflightWrites();
+          const w = await awaitWrites(monitorFor(page), sideEffects, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
+          jobWaitedMs = w.resolved ? 0 : jobWaitedMs + w.waitedMs;
+          const note = `blocked deferred: ${what} (sent by an earlier click) is still in flight — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.resolved ? "it resolved" : `still in flight; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          history.push(note);
+          record(true, note, { op: "wait" });
+          idleSteps = 0;
+          idleSince = null;
+          quietWaits = 0;
+          lastActedOp = "wait";
+          statusAfter = "waiting";
+          continue;
+        }
         if (job !== null && jobWaitedMs < jobWaitMs) {
           const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
           jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
@@ -1592,6 +1612,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             w.cleared
               ? `the in-progress status ${job} cleared`
               : `the page still shows ${job} — the app is still working; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+          })`;
+          changed = true;
+          quietWaits = 0;
+          record(true, note);
+        } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && sideEffects.inflight().length > 0) {
+          // #283: a write an earlier click fired is still in flight (a unary RPC the server holds open
+          // while its job runs, past the long-poll threshold): pending work, wherever the page shows
+          // it. Observe it until it resolves, bounded by the job-wait budget — never "nothing is pending".
+          const what = inflightWrites();
+          const w = await awaitWrites(monitorFor(page), sideEffects, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
+          jobWaitedMs = w.resolved ? 0 : jobWaitedMs + w.waitedMs;
+          note = `waited ${(w.waitedMs / 1000).toFixed(1)}s (${
+            w.resolved
+              ? `${what} (sent by an earlier click) resolved`
+              : `${what} (sent by an earlier click) is still in flight — the app is still working; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
           })`;
           changed = true;
           quietWaits = 0;

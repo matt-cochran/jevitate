@@ -192,6 +192,12 @@ export interface CapturedRequest {
   readonly startedAt?: number;
   /** The REQUEST's `content-type` header, when it sent one (#110). */
   readonly requestContentType?: string;
+  /**
+   * #283: the request was SENT but had not finished when the capture was read (a unary RPC the
+   * server holds open for minutes, or one its document abandoned without an end event). Only
+   * `RequestCapture.sent()` lists these; `status` is null.
+   */
+  readonly pending?: true;
 }
 
 /** Most requests a capture keeps; past it the oldest are dropped and `truncated` is set. */
@@ -204,6 +210,10 @@ const MAX_CAPTURED = 20_000;
  */
 export class RequestCapture {
   readonly #requests: CapturedRequest[] = [];
+  /** #283: requests sent since the capture started that have not finished (keyed by the request). */
+  readonly #inflight = new Map<object, CapturedRequest>();
+  /** #283: requests sent that never reported an end (their document went away first). */
+  readonly #unfinished: CapturedRequest[] = [];
   #truncated = false;
 
   /** @internal — fed by the page's monitor. */
@@ -215,9 +225,35 @@ export class RequestCapture {
     }
   }
 
+  /** @internal — the page's monitor saw `key` sent. */
+  began(key: object, r: CapturedRequest): void {
+    this.#inflight.set(key, { ...r, status: null, failed: false, pending: true });
+  }
+
+  /**
+   * @internal — `key` ended. `finished` is its finished record (then `add`ed), or null when the
+   * monitor had already forgotten it (its document was replaced): it stays "sent, never finished".
+   */
+  ended(key: object, finished: CapturedRequest | null): void {
+    const sent = this.#inflight.get(key);
+    this.#inflight.delete(key);
+    if (finished !== null) this.add(finished);
+    else if (sent !== undefined && this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
+  }
+
   /** The requests captured so far, in the order they finished. */
   requests(): CapturedRequest[] {
     return [...this.#requests];
+  }
+
+  /**
+   * Every request SENT since the capture started (#283): the finished ones (`requests()`), then the
+   * ones still in flight or abandoned without an end event (`pending: true`, `status: null`). A
+   * `requestMade` check is judged over these — a request counts once it was sent, whether or not
+   * its response has arrived.
+   */
+  sent(): CapturedRequest[] {
+    return [...this.#requests, ...this.#unfinished, ...this.#inflight.values()];
   }
 
   /** True when more requests finished than the capture keeps (the oldest were dropped). */
@@ -276,6 +312,18 @@ export class PageMonitor {
         startedAt,
         ...(requestContentType === undefined ? {} : { requestContentType }),
       });
+      for (const c of this.#captures) {
+        c.began(r, {
+          method: r.method().toUpperCase(),
+          url: redactUrl(r.url()),
+          path: pathOf(r.url()),
+          status: null,
+          failed: false,
+          resourceType: r.resourceType(),
+          startedAt,
+          ...(requestContentType === undefined ? {} : { requestContentType }),
+        });
+      }
       if (this.#ignore(r.url())) {
         this.#background.set(r, "ignored"); // the target's own background traffic: no activity either
         return;
@@ -317,7 +365,7 @@ export class PageMonitor {
           durationMs: Math.max(0, endedAt - started.startedAt),
         });
         for (const c of this.#captures) {
-          c.add({
+          c.ended(r, {
             method: started.method.toUpperCase(),
             url: redactUrl(started.url),
             path: pathOf(started.url),
@@ -330,6 +378,8 @@ export class PageMonitor {
             ...(started.requestContentType === undefined ? {} : { requestContentType: started.requestContentType }),
           });
         }
+      } else {
+        for (const c of this.#captures) c.ended(r, null);
       }
       if (!ignored) this.#touch();
     };
@@ -390,6 +440,16 @@ export class PageMonitor {
     return [...this.#inflight.entries()]
       .filter(([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r))
       .map(([, info]) => info);
+  }
+
+  /**
+   * Every request that has not finished yet (#283) — pending work AND requests the settle rule treats
+   * as background (a long-poll, a stream, a `--settle-ignore`d one). Settle never waits on the
+   * background ones, but a write a run's action fired is still in flight until it ENDS: a unary RPC
+   * the server holds open for minutes is demoted to "long-poll" for settling, never forgotten.
+   */
+  unfinished(): InflightRequest[] {
+    return [...this.#inflight.values()];
   }
 
   /** In-flight requests currently treated as background, and why. */

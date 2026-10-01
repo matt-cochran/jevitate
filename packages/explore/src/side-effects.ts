@@ -186,7 +186,10 @@ export class SideEffectGuard {
     this.#monitor.stopCapture(o.capture);
     const requests = o.capture.requests();
     // #130a: ANY request counts here (a read proves the click did something) — never just a write.
-    const inflightAny = this.#monitor.pending().some((r) => r.startedAt >= o.at);
+    // #283: in flight means NOT ENDED — a write the server holds open past the long-poll threshold is
+    // background for settling, but still this click's write (never forgotten, never re-fired).
+    const unfinished = this.#monitor.unfinished();
+    const inflightAny = unfinished.some((r) => r.startedAt >= o.at);
     const done: FiredWrite[] = requests
       .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r.url))
       .map((r) => ({
@@ -195,9 +198,7 @@ export class SideEffectGuard {
         status: r.status,
         rejected: (r.status !== null && r.status >= 400) || (r.status === null && r.failed),
       }));
-    const inflight = this.#monitor
-      .pending()
-      .filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r.url));
+    const inflight = unfinished.filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r.url));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
     if (done.length + pending.length === 0) return;
@@ -206,7 +207,7 @@ export class SideEffectGuard {
 
   /** Writes fired by this run's clicks that are still in flight now. */
   inflight(): FiredWrite[] {
-    const live = new Set(this.#monitor.pending());
+    const live = new Set(this.#monitor.unfinished());
     const out: FiredWrite[] = [];
     for (const f of this.#fired.values()) {
       for (const r of f.inflight) {
@@ -246,7 +247,7 @@ export class SideEffectGuard {
     if (f === undefined || f.route !== route) return { refuse: false };
     // Repeating a sign-in creates nothing (a retry after "Back to sign in", a 2FA restart).
     if (SIGN_IN_NAME.test(f.label)) return { refuse: false };
-    const live = new Set(this.#monitor.pending());
+    const live = new Set(this.#monitor.unfinished());
     const stillInFlight = f.inflight.filter((r) => live.has(r));
     const what = f.writes.map(describeWrite).join(", ");
     if (stillInFlight.length > 0) {
@@ -424,7 +425,7 @@ export class SideEffectLog {
         const m = this.#owner(r.startedAt);
         if (m !== undefined) push(m, r.method, r.url, r.status, r.startedAt ?? m.at);
       }
-      for (const r of monitor.pending()) {
+      for (const r of monitor.unfinished()) {
         const path = pathOf(r.url);
         if (!this.#isWrite({ method: r.method, path, contentType: r.requestContentType ?? null })) continue;
         const m = this.#owner(r.startedAt);

@@ -12,6 +12,8 @@ behaviour changes).
 - The repeated-side-effect guard ignores third-party writes and `--settle-ignore`d requests
   (telemetry and `csp-report` beacons, `m.stripe.com`), so a safe control can be clicked again
   (#274, #284).
+- `requestMade` matches a request once it is sent, and a write still in flight (a unary RPC held
+  open for minutes) counts as pending work for `wait` and `blocked` (#283).
 
 ## [0.2.0] – 2026-09-29
 

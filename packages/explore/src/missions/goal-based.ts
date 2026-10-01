@@ -578,7 +578,7 @@ async function adjudicatedRun(
               // Never before an action: the start state proves nothing was done.
               if (settledSteps < 2) return null;
               if (pageChecks.length > 0 && heldAtStep === null) return null;
-              const requests = capture?.requests() ?? [];
+              const requests = capture?.sent() ?? [];
               if (!networkChecks.every((c) => judgeNetworkCheck(c, requests, capture?.truncated ?? false, scope()).passed)) return null;
               return pageChecks.length > 0
                 ? `every --success check held (the page checks at settled step ${heldAtStep}; --success-when held)`
@@ -912,7 +912,7 @@ async function evaluateChecks(
   const results = new Map<number, SuccessCheckResult>();
   const needsSettle = checks.some((c) => c.kind !== "page");
   if (needsSettle) await monitorFor(page).waitSettled({ ceilingMs });
-  const requests = capture?.requests() ?? [];
+  const requests = capture?.sent() ?? [];
 
   const assertOn = async (actor: Actor, assertion: Assertion, when: string, check: SuccessCheck): Promise<SuccessCheckResult> => {
     const passed = await checkAssertion(actor, assertion, { timeoutMs });
