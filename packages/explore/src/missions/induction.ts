@@ -8,7 +8,6 @@ import {
   finishDeclaredRun,
   type DeclaredRun,
   InvariantMonitor,
-  recordingStepCount,
   type InvariantDefect,
   type InvariantReport,
 } from "../declared-invariants.js";
@@ -27,10 +26,9 @@ import type { HostHealthSampler } from "../host-health.js";
 import type { VerifySession } from "../verify-fix.js";
 import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "../mission-failure.js";
 import { summarizeTimings, type TimingSummary } from "../timing.js";
-import { controlIdentity, stateFingerprint } from "../coverage/fingerprint.js";
+import { controlIdentity } from "../coverage/fingerprint.js";
 import { reachFrontierState } from "../coverage/reach.js";
 import { StalledError } from "../stall-watchdog.js";
-import { isNavControl } from "../coverage/nav.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import {
   type CoverageSufficiency,
@@ -42,18 +40,17 @@ import type { SideEffect } from "../side-effects.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { type ClippingFinding, type OverflowFinding } from "../overflow.js";
 import {
-  extendPath,
   isTimeoutFailure,
   isUnactionableFailure,
   pathOf,
   resolveControl,
-  withSeed,
   seedPath as seedPathOf,
 } from "./induction-frontier/helpers.js";
 import { createFrontierContext, type FrontierState } from "./induction-frontier/context.js";
 import { loadSeed } from "./induction-frontier/seed.js";
 import { judgeState } from "./induction-frontier/judge.js";
 import { handleHangOrDeparture } from "./induction-frontier/hang-departure.js";
+import { settleTransition } from "./induction-frontier/settle.js";
 
 /**
  * Proof-by-induction (state-coverage) mission — spec §3.3.
@@ -484,62 +481,9 @@ async function runInductionFrontier(
         continue;
       }
 
-      ctx.frontier.markExercised(controlIdentity(liveControl));
-      if (!isNavControl(liveControl, decidedOn.url)) ctx.nonNavActionsExercised += 1;
-      else ctx.crossPageLinks.push(liveControl);
-
-      ctx.snap = await ctx.guard(ctx.takeSnapshot());
-      ctx.observe(ctx.snap);
-      // #303 (opt-in): what the action changed — on its transcript step (recorded next).
-      if (armed !== null && deltaLog !== null) {
-        armed.acted({ label: `${item.op} ${liveControl.name}`.trim(), recordIndex: 0, step: ctx.transcript.nextStep });
-        const d = await armed.perceived(pathOf(ctx.sessions.page.url())).catch(() => null);
-        if (d !== null) {
-          deltaLog.push({ delta: d.delta, action: d.delta.action });
-          ctx.transcript.attachDelta(ctx.transcript.nextStep, d.delta);
-        }
-        armed = null;
-      }
-      const newFingerprint = stateFingerprint(ctx.snap);
-      // #160: a toggle exercised once in each direction is dropped for the rest of the run instead
-      // of oscillating forever (the same fix as the feature mission's frontier, which shares this
-      // class).
-      ctx.frontier.noteTransition(item.fromFingerprint, liveControl, newFingerprint);
-      const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, ctx.snap.url);
-      ctx.transitionsExercised += 1;
-      if (declared !== null && ctx.seenHang.last === null) {
-        // Declared invariants (#86): judged on the settled state the action produced; the finding
-        // replays this path from the seed (the frontier's reach navigates there first).
-        const path = withSeed(branch, params.seedUrl);
-        const checked = await ctx.guard(declared.monitor.after(ctx.sessions.actor, { op: item.op, control: liveControl.name, url: actedOn }));
-        declared.lastRepro = { recordingStepIndex: recordingStepCount(path) - 1, recording: path };
-        for (const v of checked.violations) declared.log.add(v, declared.lastRepro);
-      }
-
-      // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
-      if (budget !== null && ctx.seenHang.last === null) {
-        const b = await ctx.guard(budget.afterSettle(ctx.sessions.page, ctx.transitionsExercised));
-        if (b.crossed) {
-          ctx.transcript.record({
-            op: item.op,
-            control: liveControl,
-            confidence: null,
-            chosenBy: "strategy",
-            strategy: "budget",
-            actOk: true,
-            reason: b.reason ?? "mission budget crossed",
-            snapshot: ctx.snap,
-          });
-          return {
-            outcome: "budget",
-            coverage: ctx.report(false),
-            recordings: [...ctx.statePaths.values()],
-            transcript: ctx.transcript.entries(),
-            timing: summarizeTimings(ctx.timings),
-            hangs: [...ctx.hangs.values()],
-          };
-        }
-      }
+      const settled = await settleTransition(ctx, item, { liveControl, actedOn, armed, result, decidedOn, decidedOnTiming });
+      if ("outcome" in settled) return settled;
+      const { newFingerprint, branch } = settled;
 
       const left = await handleHangOrDeparture(ctx, item, { liveControl, actedOn, armed, result, decidedOn, decidedOnTiming }, { newFingerprint, branch });
       if (left === "continue") continue;
