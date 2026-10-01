@@ -114,6 +114,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   after: { shape: "string", appliesTo: ["goal"] },
   allowShellHooks: { shape: "boolean", appliesTo: ["goal"] },
   hookTimeoutMs: { shape: "integer", appliesTo: ["goal"] },
+  // #243: named identities a fixture step authenticates as (`auth.identity`), not the item's own session
+  fixtureIdentity: { shape: "named-paths", appliesTo: ["goal"] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
   // #245 demo mode: opt-in per item (a check stays headless by default, CI included)

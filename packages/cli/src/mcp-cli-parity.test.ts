@@ -195,6 +195,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       viewport: "--viewport",
       device: "--device",
       fixtures: "--fixtures",
+      fixtureIdentity: "--fixture-identity",
       selfHeal: "--self-heal",
       real: "--real",
       fakeAi: "--fake-ai",
@@ -228,6 +229,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       allowEmulationOverride: "--allow-emulation-override",
       invariants: "--invariants",
       fixtures: "--fixtures",
+      fixtureIdentity: "--fixture-identity",
       extension: "--extension",
     },
     omitted: {

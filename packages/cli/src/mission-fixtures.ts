@@ -41,6 +41,8 @@ export const SECRET_FIELD_REF = /\$\{secretField\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 /** Either reference, matched in ONE pass (a substituted value is never re-expanded). */
 const STEP_REF = /\$\{(setup|secretField)\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const OUTPUT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A fixture identity's name (#243) — the same shape as a persona/actor name. */
+const IDENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 /** Keys that would make a fixtures file run a command: refused anywhere in a step. */
 const COMMAND_KEYS = new Set(["command", "cmd", "shell", "exec", "run", "script", "argv", "spawn", "before", "after"]);
@@ -130,6 +132,15 @@ export function secretFieldNames(spec: FixtureSpec | undefined): string[] {
   return [...names];
 }
 
+/** Every fixture identity (#243) a spec's steps authenticate as (`auth.identity`). */
+export function identityNames(spec: FixtureSpec | undefined): string[] {
+  const names = new Set<string>();
+  for (const s of [...(spec?.setup ?? []), ...(spec?.restore ?? [])]) {
+    if (s.auth !== undefined && s.auth.from !== "secretField" && s.auth.identity !== undefined) names.add(s.auth.identity);
+  }
+  return [...names];
+}
+
 /** A header value that is only references (and at most a scheme word) holds no literal credential. */
 function onlyReferences(value: string): boolean {
   if (value.search(STEP_REF) === -1) return false;
@@ -194,15 +205,21 @@ function parseAuth(v: unknown, where: string): RequestAuth {
   const scheme = opt("scheme");
   const header = opt("header");
   const extra = { ...(scheme === undefined ? {} : { scheme }), ...(header === undefined ? {} : { header: header.toLowerCase() }) };
+  // #243: authenticate this step as a NAMED identity (its own storageState), not the mission's session.
+  const identity = opt("identity");
+  if (identity !== undefined && !IDENTITY_NAME.test(identity)) {
+    throw new FixtureSpecError(`${where}.identity must be an identity name (1-64 of [A-Za-z0-9_.-], starting alphanumeric)`);
+  }
+  const as = identity === undefined ? {} : { identity };
   if (v.from === "cookies") {
-    allowed(["from"]);
-    return { from: "cookies" };
+    allowed(["from", "identity"]);
+    return { from: "cookies", ...as };
   }
   if (v.from === "localStorage") {
-    allowed(["from", "key", "scheme", "header"]);
+    allowed(["from", "key", "scheme", "header", "identity"]);
     const key = opt("key");
     if (key === undefined || key === "") throw new FixtureSpecError(`${where}.key (the localStorage item) is required`);
-    return { from: "localStorage", key, ...extra };
+    return { from: "localStorage", key, ...extra, ...as };
   }
   if (v.from === "secretField") {
     allowed(["from", "name", "scheme", "header"]);
@@ -492,6 +509,11 @@ export interface PersistedFixtures {
   readonly hooks?: { readonly before?: string; readonly after?: string };
   readonly outputs: Readonly<Record<string, string>>;
   readonly secretOutputs: readonly string[];
+  /**
+   * #243: the fixture identities the steps authenticated as → their storageState PATHS (never the
+   * contents), so `verify-fix`/regression capture re-mint as the same identities.
+   */
+  readonly identities?: Readonly<Record<string, string>>;
 }
 
 function sha256(text: string): string {
@@ -610,8 +632,17 @@ export class MissionFixtures {
         }
       }
     }
+    // #243: every `auth.identity` must be bound to a storageState file — refused here, before any
+    // browser or request (never a silent fall back to the mission's own session).
+    for (const name of identityNames(opts.spec)) {
+      if (opts.auth.identities?.[name] === undefined) {
+        throw new FixtureSpecError(
+          `the fixture authenticates as identity ${name}, which is not bound: pass --fixture-identity ${name}=<storageState> or declare personas.${name}.storageState for this origin in targets.json`,
+        );
+      }
+    }
     this.#opts = opts;
-    this.#specHash =sha256(canonical({ spec: opts.spec ?? null, hooks: this.hookHashes() ?? null })).slice(0, 16);
+    this.#specHash = sha256(canonical({ spec: opts.spec ?? null, hooks: this.hookHashes() ?? null })).slice(0, 16);
   }
 
   hookHashes(): PersistedFixtures["hooks"] | undefined {
@@ -669,8 +700,16 @@ export class MissionFixtures {
     };
   }
 
+  /** #243: the identities the spec's steps use → their storageState paths (paths only). */
+  identities(): Record<string, string> | undefined {
+    const names = identityNames(this.#opts.spec);
+    if (names.length === 0) return undefined;
+    return Object.fromEntries(names.sort().map((n) => [n, this.#opts.auth.identities?.[n] as string]));
+  }
+
   persisted(): PersistedFixtures {
     const hooks = this.hookHashes();
+    const identities = this.identities();
     return {
       identity: this.identity(),
       specHash: this.#specHash,
@@ -678,6 +717,7 @@ export class MissionFixtures {
       ...(hooks === undefined ? {} : { hooks }),
       outputs: this.publicOutputs(),
       secretOutputs: [...this.#secretNames].sort(),
+      ...(identities === undefined ? {} : { identities }),
     };
   }
 
@@ -889,7 +929,7 @@ export function recordingFixture(r: FixtureRecord): { identity: string; specHash
 
 
 /** What a mission result carries: the record (log, identity, outputs) plus what a replay needs to restore the same state. */
-export type MissionFixtureResult = FixtureRecord & Pick<PersistedFixtures, "spec" | "hooks">;
+export type MissionFixtureResult = FixtureRecord & Pick<PersistedFixtures, "spec" | "hooks" | "identities">;
 
 /**
  * Wraps a replay-session opener (hang reproduction, `verify-fix`, regression capture) so EVERY

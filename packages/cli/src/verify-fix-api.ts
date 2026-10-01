@@ -206,6 +206,8 @@ interface PersistedMissionFixtures {
   readonly spec?: unknown;
   readonly hooks: { readonly before?: string; readonly after?: string };
   readonly outputs: Readonly<Record<string, string>>;
+  /** #243: the fixture identities the mission's steps authenticated as → storageState paths. */
+  readonly identities?: Readonly<Record<string, string>>;
 }
 
 function asPersistedFixtures(v: unknown): PersistedMissionFixtures | undefined {
@@ -220,6 +222,9 @@ function asPersistedFixtures(v: unknown): PersistedMissionFixtures | undefined {
       ...(typeof hooks.after === "string" ? { after: hooks.after } : {}),
     },
     outputs: Object.fromEntries(Object.entries(outputs).filter((e): e is [string, string] => typeof e[1] === "string")),
+    ...(isRecord(v.identities)
+      ? { identities: Object.fromEntries(Object.entries(v.identities).filter((e): e is [string, string] => typeof e[1] === "string")) }
+      : {}),
   };
 }
 
@@ -422,7 +427,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
   const authTokenValues = [...(invariantAuthTokens?.values() ?? [])];
   const primaryActor = mission.target.actors?.find((a) => a.role === "primary")?.name;
-  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues]);
+  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues], target.personas);
   const declared =
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
       ? {
@@ -580,9 +585,13 @@ function missionFixtures(
   flags: FixtureFlags,
   storageState: string | undefined,
   secrets: readonly string[],
+  /** #243: the origin's targets.json personas — bind a fixture identity no flag or saved path names. */
+  personas?: TargetConfig["personas"],
 ): MissionFixtures | undefined {
   const saved = mission.fixtures;
-  if (saved === undefined && flags.fixtures === undefined && flags.before === undefined && flags.after === undefined) return undefined;
+  if (saved === undefined && flags.fixtures === undefined && flags.before === undefined && flags.after === undefined && (flags.fixtureIdentity ?? []).length === 0) {
+    return undefined;
+  }
   const bounds = { allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl };
   const hooks = saved?.hooks ?? {};
   const given = {
@@ -617,6 +626,9 @@ function missionFixtures(
       secretFields,
       secrets,
       ...(spec === undefined ? {} : { spec }),
+      // #243: re-mint as the SAME identities (the saved paths), unless re-bound by flag or persona.
+      ...(saved?.identities === undefined ? {} : { identities: saved.identities }),
+      ...(personas === undefined ? {} : { personas }),
     });
   } catch (e) {
     if (e instanceof FixtureSpecError) throw new VerifyFixInputError(`mission fixtures: ${e.message}`);

@@ -605,6 +605,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
               log: fx.record().log,
               ...(missionFixture.persisted.spec === undefined ? {} : { spec: missionFixture.persisted.spec }),
               ...(missionFixture.persisted.hooks === undefined ? {} : { hooks: missionFixture.persisted.hooks }),
+              ...(missionFixture.persisted.identities === undefined ? {} : { identities: missionFixture.persisted.identities }),
             },
           }),
       // #209: a goal-specific miss (`success-check-failed`, `vacuous-check`) is typed too — after an

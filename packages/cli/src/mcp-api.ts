@@ -58,7 +58,7 @@ import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
-import { McpArgError, argErrorBody, optBool, optEnum, optInt, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
+import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
 import { defaultMcpPathRoots } from "./mcp-paths.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS, cliToolInputSchema, runCliTool } from "./mcp-cli-tools.js";
@@ -519,6 +519,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const replays = optInt(args, "replays", 1);
     const invariantFiles = (optStringArray(args, "invariants") ?? []).map((f, i) => optPath({ [`invariants[${i}]`]: f }, `invariants[${i}]`, pathRoots)!);
     const fixtures = optPath(args, "fixtures", pathRoots);
+    const fixtureIdentity = optNamedSessions(args, "fixtureIdentity", pathRoots);
     const allowEmulationOverride = optBool(args, "allowEmulationOverride");
     const headed = optBool(args, "headed");
     const slowMo = optInt(args, "slowMo", 0);
@@ -535,7 +536,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         ...(storageState === undefined ? {} : { storageState }),
         ...(replays === undefined ? {} : { replays }),
         ...(invariantFiles.length === 0 ? {} : { invariantFiles }),
-        ...(fixtures === undefined ? {} : { fixtureFlags: { fixtures } }),
+        ...(fixtures === undefined && fixtureIdentity === undefined
+          ? {}
+          : { fixtureFlags: { ...(fixtures === undefined ? {} : { fixtures }), ...(fixtureIdentity === undefined ? {} : { fixtureIdentity }) } }),
         ...(allowEmulationOverride === undefined ? {} : { allowEmulationOverride }),
         ...(browser === undefined ? {} : { browser }),
         ...(screenshots === undefined ? {} : { screenshots }),
@@ -634,9 +637,11 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       throw new McpArgError(err instanceof Error ? err.message : String(err));
     }
     const fixturesFile = optPath(args, "fixtures", pathRoots);
+    const fixtureIdentity = optNamedSessions(args, "fixtureIdentity", pathRoots);
     // The environment's hooks apply as on the CLI; they need --allow-shell-hooks, which MCP never sets.
     const fixtureFlags = {
       ...(fixturesFile === undefined ? {} : { fixtures: fixturesFile }),
+      ...(fixtureIdentity === undefined ? {} : { fixtureIdentity }),
       ...(environment?.hooks?.before === undefined ? {} : { before: environment.hooks.before }),
       ...(environment?.hooks?.after === undefined ? {} : { after: environment.hooks.after }),
     };
@@ -690,7 +695,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
         "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); " +
-        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
+        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'fixtureIdentity' (#243: 'name=<storageState path>' entries re-binding a fixture step's auth.identity; default: the identities the mission recorded); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
         properties: {
@@ -707,6 +712,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           allowEmulationOverride: { type: "boolean" },
           invariants: { type: "array", items: { type: "string" } },
           fixtures: { type: "string" },
+          fixtureIdentity: { type: "array", items: { type: "string" } },
           extension: { type: "array", items: { type: "string" } },
         },
         required: ["id", "fingerprint"],
@@ -732,7 +738,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "server's own browser, never returned or logged. A Journey that declares metadata.requiresAuth refuses " +
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
-        "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
+        "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
         "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
@@ -749,6 +755,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           viewport: { type: "object", properties: { width: { type: "integer" }, height: { type: "integer" } }, required: ["width", "height"] },
           device: { type: "string" },
           fixtures: { type: "string" },
+          fixtureIdentity: { type: "array", items: { type: "string" } },
           selfHeal: { type: "string", enum: ["fail-closed", "hybrid", "full"] },
           real: { type: "boolean" },
           fakeAi: { type: "boolean" },

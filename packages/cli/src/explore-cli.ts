@@ -27,6 +27,8 @@ import {
   buildMissionFixtures,
   checkSetupRefs,
   checkUrlRefOrigin,
+  substituteUrlSetupRefs,
+  setupRefFreeUrl,
   invariantSetupTexts,
   substituteSpecSetupRefs,
   fixtureSetupFailedResult,
@@ -36,7 +38,6 @@ import {
 import {
   FixtureSetupError,
   FixtureSpecError,
-  SETUP_REF,
   UnboundSetupRefError,
   substituteSetupRefs,
   type MissionFixtures,
@@ -641,7 +642,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
               ...(o.issueRepo === undefined ? {} : { issueRepo: o.issueRepo }),
               ...(o.jevitateRepo === undefined ? {} : { jevitateRepo: o.jevitateRepo }),
             },
-            new URL(o.url).origin,
+            new URL(setupRefFreeUrl(o.url)).origin,
           );
         } catch (err) {
           if (err instanceof FilingConfigError) {
@@ -656,7 +657,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let target: TargetConfig | undefined;
       if (o.url !== undefined) {
         try {
-          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(o.url).origin, {
+          target = resolveTargetConfig(loadTargetsFile(deps.explore?.targetsConfigPath), new URL(setupRefFreeUrl(o.url)).origin, {
             settleIgnore: o.settleIgnore,
             ignoreNoProgress: o.ignoreNoProgress,
             apiPrefixes: o.apiPrefix,
@@ -1168,7 +1169,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         return;
       }
       const successWhen = o.successWhen === "held" || o.successWhen === "final" ? o.successWhen : undefined;
-      const allowlist = resolveExploreAllowlist(o.url, o.allow);
+      const allowlist = resolveExploreAllowlist(setupRefFreeUrl(o.url), o.allow);
       // Fixtures (#140/#144): the spec and every ${setup.x} reference are validated here, before any
       // browser or request; the setup itself runs just before the mission (below).
       let fx: MissionFixtures | undefined;
@@ -1176,11 +1177,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         checkUrlRefOrigin(o.url);
         fx = buildMissionFixtures(o, {
           allowlist,
-          baseUrl: o.url.replace(SETUP_REF, "0"),
+          baseUrl: setupRefFreeUrl(o.url),
           ...(primaryStorageState === undefined ? {} : { storageState: primaryStorageState }),
           secretFields,
           secrets: o.secret,
           ...(target?.fixtures === undefined ? {} : { targetFixtures: target.fixtures }),
+          ...(target?.personas === undefined ? {} : { personas: target.personas }),
         });
         checkSetupRefs({ "--url": o.url, "--goal": o.goal, "--success": o.success, ...invariantSetupTexts(invariants) }, fx);
       } catch (err) {
@@ -1215,7 +1217,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         try {
           await fx.setup();
           const b = fx.bindings();
-          url = substituteSetupRefs(o.url, b, { where: "--url" });
+          url = substituteUrlSetupRefs(o.url, b);
           goal = substituteSetupRefs(o.goal, b, { where: "--goal" });
           successChecks = o.success.map((spec) => parseSuccessSpec(substituteSetupRefs(spec, b, { where: "--success" })));
           // #187: ${setup.x} in the invariants (probe paths, deniedAs.open, capture routes), origin-fixed.
