@@ -199,7 +199,7 @@ export class InvariantMonitor {
       };
     });
     for (const [name, o] of Object.entries(spec.observe ?? {})) {
-      const path = "network" in o ? o.network.json : "probe" in o ? o.probe.json : undefined;
+      const path = "network" in o ? (o.network.json ?? o.network.request) : "probe" in o ? o.probe.json : undefined;
       if (path !== undefined) this.#jsonPaths.set(name, parseJsonPath(path));
     }
     for (const [name, c] of Object.entries(spec.capture ?? {})) {
@@ -315,23 +315,24 @@ export class InvariantMonitor {
           !this.#captures.has(name) && matchesUrlGlob(c.network.url, url) && (c.network.method === undefined || c.network.method.toUpperCase() === method),
       );
       if (hits.length === 0 && captureHits.length === 0) return;
+      // #295: a `request` observable reads the JSON payload the page SENT with this exchange — parsed
+      // only when one asks for it, with credential-named keys scrubbed before any path reads it.
+      const sentHits = hits.filter(([, o]) => o.network.request !== undefined);
+      const responseHits = hits.filter(([, o]) => o.network.request === undefined);
+      const evidence = `${method} ${redactUrl(url)} → ${response.status()}`;
+      if (sentHits.length > 0) {
+        const sent = requestJsonOf(response.request());
+        if (sent !== undefined) {
+          for (const [name] of sentHits) this.#setNetwork(name, sent, `request body of ${evidence}`);
+        }
+      }
+      if (responseHits.length === 0 && captureHits.length === 0) return;
       const read = response
         .body()
         .then((buf) => {
           if (buf.length > MAX_BODY_BYTES) return;
           const body: unknown = JSON.parse(buf.toString("utf8"));
-          const evidence = `${method} ${redactUrl(url)} → ${response.status()}`;
-          for (const [name] of hits) {
-            const path = this.#jsonPaths.get(name) ?? [];
-            if (jsonPathHasEach(path)) {
-              const list = readJsonPathList(body, path);
-              if (list !== undefined) this.#networkLists.set(name, { value: list.map((v) => this.#clip(v)), evidence });
-              continue;
-            }
-            const v = readJsonPath(body, path);
-            if (v === undefined) continue;
-            this.#network.set(name, { value: this.#clip(v), evidence });
-          }
+          for (const [name] of responseHits) this.#setNetwork(name, body, evidence);
           // #147: a capture binds ONCE, from a successful response (a failed create has no resource).
           if (response.status() >= 200 && response.status() < 300) {
             for (const [name] of captureHits) {
@@ -347,6 +348,19 @@ export class InvariantMonitor {
         });
       this.#pendingBodies.add(read);
     });
+  }
+
+  /** Records a `network` observable's latest value (a scalar, or a `[*]` path's list) read from `body`. */
+  #setNetwork(name: string, body: unknown, evidence: string): void {
+    const path = this.#jsonPaths.get(name) ?? [];
+    if (jsonPathHasEach(path)) {
+      const list = readJsonPathList(body, path);
+      if (list !== undefined) this.#networkLists.set(name, { value: list.map((v) => this.#clip(v)), evidence });
+      return;
+    }
+    const v = readJsonPath(body, path);
+    if (v === undefined) return;
+    this.#network.set(name, { value: this.#clip(v), evidence });
   }
 
   /** Snapshots the observables an action's invariants compare against (call right before acting). */
@@ -758,8 +772,17 @@ export class InvariantMonitor {
     for (const n of expressionObservables(ast)) {
       values[n] = { before: this.#shown(before.values.get(n)), after: this.#shown(after.values.get(n)) };
     }
+    // #295: a list (`[*]`) reads as its count in `values`; the detail also shows its items (already
+    // clipped and redacted when read), so a reordered list is visible as one.
+    const listed = (v: EvalValue | undefined): string | null =>
+      v !== undefined && v !== UNKNOWN && isList(v)
+        ? `[${v.slice(0, MAX_LIST_PREVIEW).map((item) => JSON.stringify(item)).join(", ")}${v.length > MAX_LIST_PREVIEW ? ", …" : ""}]`
+        : null;
     const detail = Object.entries(values)
-      .map(([n, v]) => `${n}: ${display(v.before)} → ${display(v.after)}`)
+      .map(([n, v]) => {
+        const items = listed(after.values.get(n));
+        return `${n}: ${display(v.before)} → ${display(v.after)}${items === null ? "" : ` ${items}`}`;
+      })
       .join("; ");
     const evidence = [...new Set(expressionObservables(ast).flatMap((n) => [before.evidence.get(n), after.evidence.get(n)]).filter((e): e is string => e !== undefined))];
     return make("require", decl.require ?? "", detail, values, evidence, settledForMs);
@@ -1013,3 +1036,44 @@ export class InvariantMonitor {
   }
 }
 
+/** Most items of a list observable a violation's detail shows (#295). */
+const MAX_LIST_PREVIEW = 10;
+
+/**
+ * Request-body keys that name a credential (#295): never read by a `request` observable — their
+ * values are replaced before any JSON path sees the payload, whatever the spec asks for.
+ */
+const CREDENTIAL_KEY =
+  /^(?:.*(?:pass(?:word|wd|code|phrase)?|secret|token|api[-_]?key|apikey|auth(?:orization)?|credential|session|cookie|otp|totp|mfa|pin|cvc|cvv|csc|ssn)|card[-_]?(?:number|no)|pan|private[-_]?key)$/i;
+
+/** The marker a scrubbed credential value reads as. */
+const SCRUBBED = "[redacted]";
+
+function scrubCredentials(v: unknown, depth = 0): unknown {
+  if (depth > 32) return SCRUBBED;
+  if (Array.isArray(v)) return v.map((item) => scrubCredentials(item, depth + 1));
+  if (v === null || typeof v !== "object") return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, item] of Object.entries(v)) out[k] = CREDENTIAL_KEY.test(k) ? SCRUBBED : scrubCredentials(item, depth + 1);
+  return out;
+}
+
+/**
+ * The JSON payload a request sent (#295), credential-named keys scrubbed; undefined when it sent no
+ * body, a body over `MAX_BODY_BYTES`, or one that is not JSON (a form post, protobuf) — unread, never
+ * guessed.
+ */
+function requestJsonOf(request: Request): unknown {
+  let raw: string | null;
+  try {
+    raw = request.postData();
+  } catch {
+    return undefined;
+  }
+  if (raw === null || raw === "" || Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) return undefined;
+  try {
+    return scrubCredentials(JSON.parse(raw) as unknown);
+  } catch {
+    return undefined;
+  }
+}

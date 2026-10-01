@@ -7,6 +7,12 @@ behaviour changes).
 
 ## [0.3.0] – unreleased
 
+### Added
+
+- Declared invariants can read a request's JSON payload (`network.request`) and compare lists in
+  order (`sameList(a, b)`), so "what was saved is what reloads" can be declared. Credential-named
+  keys are never read (#295).
+
 ### Fixed
 
 - The repeated-side-effect guard ignores third-party writes and `--settle-ignore`d requests
