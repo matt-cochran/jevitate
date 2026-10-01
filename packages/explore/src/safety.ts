@@ -53,6 +53,46 @@ const EXPLICIT_CHARGE = /\$\s?\d|\b\d+(?:\.\d+)?\s?(?:usd|dollars?|eur|gbp)\b|\(
 
 export type ControlRisk = "session-end" | "destructive" | "paid" | "denied";
 
+/**
+ * #280: a live cost estimate a paid control's name carries at its end — "(≈ 4–10 credits)",
+ * "[~$3]", "· ≈ 50 credits". It is the app's price tag, never the action: no goal can name it.
+ */
+const TRAILING_ESTIMATE = /\s*(?:[([][^()[\]]*\d[^()[\]]*[)\]]|[-–—·:|]?\s*[≈~]\s*\S.*)\s*$/u;
+
+/** A control's name without a trailing live cost estimate (#280): "Confirm analysis (≈ 4–10 credits)" → "Confirm analysis". */
+export function actionName(name: string): string {
+  let out = name.replace(/\s+/g, " ").trim();
+  for (let prev = ""; prev !== out; ) {
+    prev = out;
+    out = out.replace(TRAILING_ESTIMATE, "").trim();
+  }
+  return out === "" ? name.replace(/\s+/g, " ").trim() : out;
+}
+
+/** Words that confirm or connect, never name the action ("Confirm and draft the page" → draft). */
+const NON_ACTION_WORDS = new Set(["confirm", "and", "continue", "proceed", "ok", "okay", "yes", "now", "please", "then", "the", "a", "an", "my", "your", "this", "it", "to"]);
+
+/**
+ * Does the goal ask for an operator `--paid` control (#280)? Its ACTION word — the first word of its
+ * estimate-free name that is not a confirmation/connective ("Confirm analysis (≈ 4–10 credits)" →
+ * "analysis") — must appear in the goal, compared by a shared prefix (≥ 5 letters, or the whole word
+ * when shorter): "analyze it" asks for "Confirm analysis", "draft the page" for "Confirm and draft
+ * the page (≈ 50–90 credits)". A name with no action word is never asked for.
+ */
+export function goalAsksForAction(goal: string, name: string): boolean {
+  const words = actionName(name)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w !== "" && !NON_ACTION_WORDS.has(w));
+  const action = words[0];
+  if (action === undefined || action.length < 3 || /^\d+$/.test(action)) return false;
+  const need = action.slice(0, Math.min(5, action.length));
+  return goal
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .some((g) => g.startsWith(need) && (need.length === action.length ? g.length <= action.length + 3 : true));
+}
+
 export interface SafetyConfig {
   /**
    * Controls never clicked (repeatable CLI `--deny`): `/regex/flags` or a plain regex source over the
@@ -97,9 +137,11 @@ export function controlRisk(
   name: string,
   role?: string,
 ): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
-  const trimmed = name.replace(/\s+/g, " ").trim();
+  const full = name.replace(/\s+/g, " ").trim();
+  // #280: a trailing live estimate ("(≈ 50–90 credits)") is not part of the label's length.
+  const trimmed = actionName(full);
   if (trimmed === "" || trimmed.length > MAX_LABEL_LEN) return null;
-  if (role !== undefined && CHOICE_ROLES.has(role.toLowerCase()) && !EXPLICIT_CHARGE.test(trimmed)) return null;
+  if (role !== undefined && CHOICE_ROLES.has(role.toLowerCase()) && !EXPLICIT_CHARGE.test(full)) return null;
   for (const [risk, re] of [
     ["session-end", SESSION_END],
     ["destructive", DESTRUCTIVE],
@@ -214,11 +256,13 @@ export class SafetyPolicy {
   }
 
   /** The built-in category, else `paid` when an operator `--paid` pattern matches (#181). */
-  #risk(c: Pick<Control, "name" | "role" | "descriptor">): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string } | null {
+  #risk(
+    c: Pick<Control, "name" | "role" | "descriptor">,
+  ): { readonly risk: Exclude<ControlRisk, "denied">; readonly matched: string; readonly operator?: true } | null {
     const r = controlRisk(c.name, c.role);
     if (r !== null) return r;
     const name = c.name.replace(/\s+/g, " ").trim();
-    return name !== "" && this.#paid.some((m) => m(c)) ? { risk: "paid", matched: name } : null;
+    return name !== "" && this.#paid.some((m) => m(c)) ? { risk: "paid", matched: name, operator: true } : null;
   }
 
   /** The risk category of a control's name (for marking the side effects a click fired). */
@@ -235,7 +279,8 @@ export class SafetyPolicy {
     if (this.#allowDestructive) return null;
     const r = this.#risk(c);
     if (r === null) return null;
-    if (this.#goal !== null && goalAsksFor(this.#goal, r.matched)) return null;
+    // #280: an operator `--paid` match is asked for by its action word, never its whole (estimate-bearing) name.
+    if (this.#goal !== null && (r.operator === true ? goalAsksForAction(this.#goal, r.matched) : goalAsksFor(this.#goal, r.matched))) return null;
     const what = r.risk === "session-end" ? "ends the session" : r.risk === "destructive" ? "is destructive" : "may cost money or contact real people";
     return {
       risk: r.risk,

@@ -159,6 +159,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     allowVacuousChecks: QUEUE_NARROW,
     secrets: "redaction comes from the target's secret fields",
     fixture: QUEUE_NARROW,
+    typeFixtures: QUEUE_NARROW,
     nowIso: SEAM,
     filing: QUEUE_NARROW,
     issueFiler: QUEUE_NARROW,
@@ -195,6 +196,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
     hostHealth: SEAM,
+    typeFixtures: "#281: a file typed verbatim is an explore --type-fixture binding; a suite goal declares none",
     successAssertion: "a suite goal passes success specs as successChecks",
     nowIso: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",

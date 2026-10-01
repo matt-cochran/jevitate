@@ -10,11 +10,14 @@ import {
   resolveCoverageThresholds,
   parseSecretField,
   SecretFieldSpecError,
+  TypeFixtureSpecError,
   validateDenyPatterns,
   type CoverageThresholds,
   type SecretField,
   type SuccessCheck,
+  type TypeFixture,
 } from "@jevitate/explore";
+import { loadTypeFixtures } from "./type-fixture-file.js";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 import { InvariantsFileError, loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
@@ -189,6 +192,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option(
       "--totp <binding>",
       "goal/usability strategy: '<descriptor>=env:<VAR>' with $VAR a base32 TOTP seed (repeatable), e.g. 'label=Authentication code=env:APP_TOTP_SEED'. The 6-digit code is computed locally (RFC 6238) when the field is typed; the seed never reaches a model or disk",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--type-fixture <binding>",
+      "goal strategy: '<label|testId|type|id|name>=<value>=<file>' (repeatable), e.g. 'label=Paste your text=./fixtures/import.txt'. When the run types into a matching field, code types the file's exact text verbatim (line breaks kept, never paraphrased or capped); the model sees only «fixture:<file name>». Recorded as typed unless it holds a --secret",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
@@ -486,6 +495,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         secret: string[];
         secretField: string[];
         totp: string[];
+        typeFixture: string[];
         fixture?: string;
         storageState?: string;
         saveStorageState?: string;
@@ -823,6 +833,22 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ];
         } catch (err) {
           if (!(err instanceof SecretFieldSpecError)) throw err;
+          emitExplore(fail(err.code, err.message));
+          return;
+        }
+      }
+
+      // #281: fields typed with a file's exact text — read (and checked) before any browser opens.
+      let typeFixtures: TypeFixture[] = [];
+      if (o.typeFixture.length > 0) {
+        if (o.feature !== undefined || strategy !== "goal") {
+          emitExplore(fail("E_EXPLORE_ARGS", "--type-fixture is supported only with --strategy goal"));
+          return;
+        }
+        try {
+          typeFixtures = loadTypeFixtures(o.typeFixture);
+        } catch (err) {
+          if (!(err instanceof TypeFixtureSpecError)) throw err;
           emitExplore(fail(err.code, err.message));
           return;
         }
@@ -1247,6 +1273,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           bounds: Object.keys(bounds).length > 0 ? bounds : undefined,
           secrets: o.secret.length > 0 ? o.secret : undefined,
           ...(secretFields.length > 0 ? { secretFields } : {}),
+          ...(typeFixtures.length > 0 ? { typeFixtures } : {}),
           fixture: o.fixture,
           outDir: o.out,
           browserPortFactory: deps.explore?.browserPortFactory,

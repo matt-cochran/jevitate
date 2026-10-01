@@ -15,6 +15,8 @@ behaviour changes).
   DOM after submit and after reloading the page. A hit is a `markup-injection` defect, `stored` or
   `reflected`; text that stays escaped is not a defect. Boundary values also gain an oversize
   (~100 KB) value and RTL-override and zero-width characters (#301).
+- `explore --type-fixture '<descriptor>=<file>'` (MCP `typeFixture`) types a file's exact text into
+  a matching field: line breaks kept, never paraphrased or capped (#281).
 - `init` and `ai status` name each key, its provider and its source (env var or
   `~/.jevitate/credentials.json`), and report an env var that overrides a stored key; `--json`
   adds `sources` per feature (#268).
@@ -23,6 +25,9 @@ behaviour changes).
   `unreachable` or `missing`, plus a flag for a key that looks like another provider's.
   `ai setup` checks a key before storing it; `ai status` exits 2 on a bad key. `--no-verify`
   skips the check (#291).
+- Runs that use the live AI (`explore --real`, `check`, `journey … --real`, `demo`, `ux`) check
+  their keys once at startup and stop with `E_AI_SETUP_REQUIRED` (exit 64) when a provider
+  rejects one. `JEVITATE_NO_KEY_VERIFY=1` skips the check (#291).
 - Screenshots and videos also mask secrets the app reveals during the run: elements marked as
   secret (`data-jevitate-mask`, `data-secret`, one-time-code, secret/token/api-key test ids and
   labels) and credential-shaped values. Limits in docs/safety.md (#298).
@@ -68,6 +73,15 @@ behaviour changes).
   `x-request-id`, …; `--log-correlation-header`, `--log-id-pattern`), and a `blocked` reason names
   it: `caused by: … on POST /x (409)` (#204).
 - `--log-scope` attributes only matching backend-log lines to the run, for runs sharing one log (#282).
+- A find-out goal's read-only guard judges a form submit by the requests it sends: a lookup form
+  that only reads ("Load" → GETs) is clicked, and a submit that writes is blocked at the network
+  (#253).
+- A goal with no `--success` that asks for a change no longer performs a destructive write
+  ("Remove" → `RemoveMember`) unless `--allow-writes` or `--allow-destructive` is passed: the
+  control is refused and a destructive request an action fires is blocked (#270).
+- A goal asks for a `--paid` control by its action word: a trailing live estimate
+  ("(≈ 4–10 credits)") and confirmation words are ignored (#280).
+- The budget guard reads an estimate range at its high end ("≈ 50–90 credits" counts as 90) (#279).
 
 ### Fixed
 

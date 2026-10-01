@@ -1,7 +1,7 @@
 /** Wiring shared by every explore strategy runner (goal, coverage, adversarial, feature): server-log and declared-invariant result fields, storageState persistence, drafts/filing context. */
 import { chmod, writeFile } from "node:fs/promises";
 import { assertSessionFileOutsideProject } from "./project-dir.js";
-import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker } from "@jevitate/ai-core";
+import type { JudgmentPort, GenerationPort, CredentialKey, UsageTracker, VerifyFetch } from "@jevitate/ai-core";
 import { type BrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type InvariantSpec, type RecordingEmulation } from "@jevitate/recording";
@@ -258,4 +258,6 @@ export interface ExploreCliDeps {
   browserPortFactory?: () => BrowserPort;
   env?: Record<string, string | undefined>;
   localConfig?: Partial<Record<CredentialKey, string>>;
+  /** #291: the startup key check's verifier (tests; default the live HTTPS check). */
+  verifyFetch?: VerifyFetch;
 }

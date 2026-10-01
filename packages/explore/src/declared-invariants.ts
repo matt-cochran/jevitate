@@ -243,11 +243,24 @@ export class InvariantMonitor {
    * re-read, a guard's estimate). `unreadable` is true when the value could not be read (or is not
    * numeric) — the caller decides what that means for its own purpose.
    */
-  async readObservable(page: Page, name: string): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }> {
+  async readObservable(
+    page: Page,
+    name: string,
+    opts: { readonly worstCase?: boolean } = {},
+  ): Promise<{ value: ObservedValue | null; unreadable: boolean; evidence?: string }> {
     this.attach(page);
-    const o = this.#spec.observe?.[name];
-    if (o === undefined) return { value: null, unreadable: true };
-    const read = await this.#read(page, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+    const declared = this.#spec.observe?.[name];
+    if (declared === undefined) return { value: null, unreadable: true };
+    // #279: a worst-case read (a budget guard's estimate) of a numeric `dom` text reads EVERY number
+    // and keeps the largest magnitude — "≈ 50–90 credits" is 90. An explicit `{ index }` is the
+    // operator's own choice and is kept.
+    const worst = opts.worstCase === true && "dom" in declared && (declared.dom.number === true || declared.dom.number === "all");
+    const o: ObservableSpec = worst && "dom" in declared ? { ...declared, dom: { ...declared.dom, number: "all" } } : declared;
+    const raw = await this.#read(page, name, o).catch(() => ({ value: UNKNOWN as EvalValue, evidence: undefined }));
+    const read =
+      worst && isList(raw.value) && raw.value.length > 0 && raw.value.every((v) => typeof v === "number")
+        ? { ...raw, value: (raw.value as number[]).reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a)) }
+        : raw;
     // A list-valued observable (#147/#148) is never a valid scalar here — a caller like #150's
     // `BudgetMonitor` needs a number, and a list is neither readable as one nor a violation to guess at.
     if (read.value === UNKNOWN || isList(read.value)) {

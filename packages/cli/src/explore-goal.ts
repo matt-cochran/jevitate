@@ -11,7 +11,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
-import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
+import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { foldGoalOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
@@ -76,6 +76,8 @@ export interface RunExplorationOptions {
    * by code, never by the model; each value/seed is also a run secret (redacted everywhere).
    */
   readonly secretFields?: readonly SecretField[];
+  /** #281: fields typed with a file's exact text (CLI `--type-fixture`, read by the CLI). */
+  readonly typeFixtures?: readonly TypeFixture[];
   /**
    * Local file the `upload` op attaches (CLI `--fixture`). Validated before any
    * browser opens: a missing file throws `FixtureNotFoundError`.
@@ -486,6 +488,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       bounds: opts.bounds,
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
+      ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       site: origin,
       fixture,
       ...conversationConfig(opts.conversation),

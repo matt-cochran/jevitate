@@ -105,7 +105,8 @@ import {
   type PageStatus,
 } from "./status.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
-import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
+import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
+import { boundTypeFixture, markTypeFixtures, typeFixtureContext, typeFixturePlaceholder, type TypeFixture } from "./type-fixtures.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince, writesStartedSince } from "./stuck-actions.js";
@@ -316,6 +317,18 @@ export interface ExploreConfig {
    * `engine`) and told to the model. Set by the goal mission; never a model decision.
    */
   readonly readOnly?: boolean;
+  /**
+   * #270: a goal with no success check that asks for a change (so not `readOnly`) still never
+   * performs a DESTRUCTIVE write: code refuses a destructive control (no goal-word lift) and aborts a
+   * destructive write request (`DELETE`, `Remove*`/`Delete*`… RPCs) an action fires. Set by the goal
+   * mission unless `--allow-writes` / `--allow-destructive`; ignored when `readOnly` is set.
+   */
+  readonly noDestructiveWrites?: boolean;
+  /**
+   * #281: fields bound to a file's exact text (`--type-fixture`): when the loop chooses `type` on a
+   * bound control, code types the text verbatim (no value generator, no cap). See `type-fixtures.ts`.
+   */
+  readonly typeFixtures?: readonly TypeFixture[];
   /**
    * #202: called as an action (a control op, or a chosen `reload`) is about to be dispatched — at the
    * same point, on the same wall clock (`Date.now`), as the request→step attribution mark
@@ -556,7 +569,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
   const secretContext = secretFieldContext(cfg.secretFields);
   const missionContext =
-    [cfg.missionContext, secretContext, cfg.readOnly === true ? READ_ONLY_NOTE : null]
+    [
+      cfg.missionContext,
+      secretContext,
+      typeFixtureContext(cfg.typeFixtures),
+      cfg.readOnly === true ? READ_ONLY_NOTE : cfg.noDestructiveWrites === true ? NO_DESTRUCTIVE_NOTE : null,
+    ]
       .filter((c): c is string => c !== undefined && c !== null && c !== "")
       .join("; ") || undefined;
   const bounds = resolveBounds(cfg.bounds);
@@ -905,8 +923,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
   const readOnly =
-    cfg.readOnly === true
+    cfg.readOnly === true || cfg.noDestructiveWrites === true
       ? new ReadOnlyGuard(isWrite, {
+          mode: cfg.readOnly === true ? "read-only" : "no-destructive",
           // #194: only writes to the app's own origins are blocked; a third-party beacon passes (listed).
           allowlist: cfg.allowlist,
           firstParty,
@@ -993,8 +1012,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // #158 — from here on, a read-only run's write requests never leave the browser.
     if (readOnly !== null) {
       await readOnly.arm(page);
-      effectLog.markBackground();
-      history.push(READ_ONLY_NOTE);
+      if (readOnly.mode === "read-only") {
+        effectLog.markBackground();
+        history.push(READ_ONLY_NOTE);
+      } else history.push(NO_DESTRUCTIVE_NOTE);
     }
 
     for (;;) {
@@ -1023,9 +1044,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
       }
       // #158 — the action's window closes once the page settled: later writes are the app's own.
-      if (readOnly?.settled() === true) effectLog.markBackground();
+      if (readOnly?.settled() === true && readOnly.mode === "read-only") effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
-      const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
+      const snap = markTypeFixtures(maskSecretFields(perception.snapshot, cfg.secretFields), cfg.typeFixtures);
       {
         const m = track.lastMutation;
         if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
@@ -1405,7 +1426,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // #194: a blocked write off the --allow origins says how to declare or exempt it.
           const hints = [...new Set(blocked.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))];
           const note =
-            `blocked write request(s) ${redactText(what, secrets)}: this find-out goal is read-only — find the answer without changing anything` +
+            `blocked write request(s) ${redactText(what, secrets)}: ${
+              readOnly?.mode === "no-destructive"
+                ? "a destructive write needs --allow-writes on a goal with no success check — report what you found instead"
+                : "this find-out goal is read-only — find the answer without changing anything"
+            }` +
             (hints.length === 0 ? "" : ` (${redactText(hints.join("; "), secrets)})`);
           history.push(note);
           transcript.record({
@@ -2148,6 +2173,34 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         });
         lastActedOp = decision.op;
         if (!r.ok && (await noteFailedAct(control, (r.reason ?? "").split(value).join(placeholder)))) break;
+        continue;
+      }
+
+      // #281: a field bound to a type fixture — code types the file's exact text (line breaks kept,
+      // never capped, never generated). The Recording keeps it so a Journey replays it exactly,
+      // unless it holds a registered run secret (then `{ redacted: true }`, like a bound secret).
+      const fixtureBinding = decision.op === "type" ? boundTypeFixture(control, cfg.typeFixtures) : null;
+      if (fixtureBinding !== null) {
+        const value = fixtureBinding.text;
+        const placeholder = typeFixturePlaceholder(fixtureBinding);
+        const holdsSecret = secrets.some((sec) => sec !== "" && value.includes(sec));
+        const r = await act(cfg.actor, { op: "type", control, value });
+        if (r.ok) {
+          recorder.fill(control.descriptor, holdsSecret ? { redacted: true, length: value.length } : value, at);
+          valueLog.typed(control.name || control.summary, value);
+          save.noteTyped(control.name || control.summary, value);
+          observed.noteOwnInput(value);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
+          tracker.countAction();
+          cleared(control);
+          history.push(`typed ${placeholder} into ${control.name} (type fixture, typed verbatim by code)`);
+        } else {
+          history.push(`type failed: ${redactText((r.reason ?? "?").split(value).join(placeholder), secrets)}`);
+        }
+        record(r.ok, r.ok ? `typed ${placeholder} (type fixture, typed verbatim by code)` : redactText((r.reason ?? "").split(value).join(placeholder), secrets), {
+          value: placeholder,
+        });
+        lastActedOp = decision.op;
         continue;
       }
 

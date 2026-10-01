@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SafetyPolicy, controlRisk, goalAsksFor, validateDenyPatterns } from "./safety.js";
+import { SafetyPolicy, actionName, controlRisk, goalAsksFor, goalAsksForAction, validateDenyPatterns } from "./safety.js";
 
 const btn = (name: string, extra: { testId?: string } = {}) => ({
   name,
@@ -18,6 +18,23 @@ describe("the shared safety policy (#116)", () => {
     expect(new SafetyPolicy(paid, { goal: 'Click "Analyze now" once and wait for the analysis' }).refuses(btn("Analyze now"))).toBeNull();
     expect(new SafetyPolicy({ ...paid, allowDestructive: true }).refuses(btn("Analyze now"))).toBeNull();
     expect(() => validateDenyPatterns(["/(/"], "--paid")).toThrow(/^--paid/);
+  });
+
+  it("#280: a --paid control is matched against the goal by its action word, never its live estimate", () => {
+    const paid = { paid: ["/^(Confirm analysis|Confirm and )/i"] };
+    const name = "Confirm analysis (≈ 4–10 credits)";
+    expect(actionName(name)).toBe("Confirm analysis");
+    expect(actionName("Confirm and draft the page · ≈ 50–90 credits")).toBe("Confirm and draft the page");
+    expect(actionName("Buy [~$3]")).toBe("Buy");
+    expect(actionName("Plan (Pro)")).toBe("Plan (Pro)");
+    expect(new SafetyPolicy(paid).riskOf(btn(name))).toBe("paid");
+    expect(new SafetyPolicy(paid, { goal: "Import this text and analyze it" }).refuses(btn(name))).toBeNull();
+    expect(new SafetyPolicy(paid, { goal: "Draft a landing page about otters" }).refuses(btn("Confirm and draft the page (≈ 50–90 credits)"))).toBeNull();
+    // Not asked for: refused, whatever the estimate.
+    expect(new SafetyPolicy(paid, { goal: "Find out what the import costs" }).refuses(btn(name))).toMatchObject({ risk: "paid" });
+    expect(goalAsksForAction("Confirm the import", "Confirm (≈ 5 credits)")).toBe(false);
+    // A built-in label's length cap ignores the estimate too (#168's cap is for question text).
+    expect(controlRisk("Generate the weekly summary (≈ 40–90 credits)")?.risk).toBe("paid");
   });
 
   it("classifies session-ending, destructive and paid controls by name", () => {
