@@ -69,6 +69,8 @@ export interface RunVerifyFixOptions {
   readonly targets?: Readonly<Record<string, TargetConfig>>;
   /** Fresh-context replays for a non-hang defect signal (#74, CLI `--replays`). Default 3. */
   readonly replays?: number;
+  /** #303 `--action-deltas`: compare the replayed defect step's delta with the recorded one (evidence). */
+  readonly actionDeltas?: boolean;
   /**
    * Invariant files (CLI `--invariants`, #86) to re-check a declared-invariant defect with, instead of
    * the spec persisted with the mission. Validated against the MISSION's allowlist before any replay.
@@ -505,6 +507,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
         ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
         ...(opts.replays === undefined ? {} : { replays: opts.replays }),
+        ...(opts.actionDeltas === true ? { actionDeltas: true, secrets: [...(opts.secrets ?? []), ...authTokenValues] } : {}),
         openSession: replaySession,
       });
     }

@@ -8,6 +8,7 @@ import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
+import { ReplayDeltas, replayDeltaSummary, type ReplayDeltaSummary } from "@jevitate/explore";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { SecretPixelMask, maskingPort } from "./demo-capture.js";
 import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
@@ -97,6 +98,12 @@ export interface RunJourneyProgrammaticallyOptions {
    * on the session before its first navigation whenever it records video or screenshots.
    */
   mask?: SecretPixelMask;
+  /**
+   * #303 `--action-deltas` (opt-in): record what each replayed step changed (redacted, code verdict)
+   * and compare it with the delta the Journey's Recording stored — returned as `actionDeltas`.
+   * Observation only: it never changes the replay. Off: nothing is captured.
+   */
+  actionDeltas?: boolean;
 }
 
 /**
@@ -149,7 +156,7 @@ export async function promoteJourney(dir: string, id: string): Promise<Journey> 
  */
 export async function runJourneyProgrammatically(
   opts: RunJourneyProgrammaticallyOptions,
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[] } & Partial<ScreenshotsResult>> {
+): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary } & Partial<ScreenshotsResult>> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -232,11 +239,13 @@ export async function runJourneyProgrammatically(
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
+      const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       const observer = composeObservers(
+        replayDeltas?.observer(),
         opts.observer,
         shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
       );
-      const interpreter = opts.interpreter ?? (opts.observer === undefined && shots === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer }));
+      const interpreter = opts.interpreter ?? (opts.observer === undefined && shots === undefined && replayDeltas === undefined ? new RecordingInterpreter() : new RecordingInterpreter({ observer }));
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer);
       let result: JourneyRunResult;
       try {
@@ -245,11 +254,12 @@ export async function runJourneyProgrammatically(
         await gate.done();
       }
       const shotFields = shots === undefined ? {} : await shots.finish();
+      const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretParams(replayDeltaSummary(replayDeltas), journey, params) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
-      if (fx === undefined) return { ...result, ...videos, ...shotFields };
+      if (fx === undefined) return { ...result, ...videos, ...shotFields, ...deltaFields };
       await fx.restore();
-      return { ...result, ...videos, ...shotFields, fixtures: fx.record() };
+      return { ...result, ...videos, ...shotFields, ...deltaFields, fixtures: fx.record() };
     } finally {
       await closeSession();
     }

@@ -319,7 +319,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
-| `--action-deltas` | opt-in (#303; --strategy goal or usability): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the no-progress check; adds `delta` to every transcript and Recording step and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
+| `--action-deltas` | opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
 | `--actor <name=storageState>` | multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, from its own storageState); every other actor is an observer in its OWN fresh context that only runs the --invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
@@ -684,6 +684,7 @@ draft each step's objective/expected result (and the goal/success criteria when 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--action-deltas` | opt-in (#303): record what each replayed step changed and draft its expected result from that delta (by code, redacted) — the model is asked only for what the delta cannot say |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--approve` | apply the reviewed draft to the Journey (shows the diff; refused if the Journey changed since the draft) | `false` |  |  |  |
@@ -724,6 +725,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--action-deltas` | opt-in (#303): record each replayed step's delta, and caption each step with what it changed when its Recording was made (an "observed:" line in the subtitles and the guide) |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
@@ -839,6 +841,7 @@ jevitate journey run [options] <id>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--action-deltas` | opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
@@ -1747,6 +1750,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--action-deltas` | opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict) |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-emulation-override` | replay at --viewport/--device even though it differs from the finding's recorded emulation (#149); default: refused (fails closed) |  |  |  |  |
 | `--allow-log-cmd` | re-checking a server-log defect whose --log-source includes cmd:<command> needs this too (operator-declared only) | `false` |  |  |  |

@@ -274,6 +274,8 @@ export interface ActionDeltaRecord {
   url?: { before: string; after: string };
   expected?: { description: string; met: boolean | null };
   partial?: string[];
+  /** Did the step's lasting changes survive a reload (a write step only, #303 persistence check)? */
+  persisted?: "yes" | "no" | "inconclusive";
   overheadMs: number;
 }
 
@@ -675,6 +677,7 @@ const ActionDeltaRecordSchema = z
     url: z.object({ before: z.string(), after: z.string() }).strict().optional(),
     expected: z.object({ description: z.string().max(500), met: z.boolean().nullable() }).strict().optional(),
     partial: z.array(z.string().max(500)).max(20).optional(),
+    persisted: z.enum(["yes", "no", "inconclusive"]).optional(),
     overheadMs: z.number(),
   })
   .strict();

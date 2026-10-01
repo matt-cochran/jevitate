@@ -160,7 +160,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (343 exports)
+# @jevitate/explore (350 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -247,6 +247,7 @@
   PAID: object
   PROMPT_INJECTION_GUARD: const (string)
   PROMPT_PAGE_TEXT_CHARS: const (number)
+  PageDeltas: class
   PageMonitor: class
   PageSignalCollector: class
   READ_ONLY_NOTE: const (string)
@@ -260,6 +261,7 @@
   RENDER_WAIT_MS: const (number)
   REPLY_MAX_CHARS: const (number)
   ReadOnlyGuard: class
+  ReplayDeltas: class
   RequestCapture: class
   RunRecorder: class
   SELECT_OPTION_INSTRUCTIONS: const (string)
@@ -321,6 +323,7 @@
   classifyHang: function
   classifyRequest: function
   clickTimeoutMs: function
+  compareDeltas: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -333,7 +336,9 @@
   defectTitle: function
   degradedEnvironmentOutcome: function
   deltaPromptLine: function
+  deltaQuotableText: function
   deltaRecord: function
+  deltaStatsOf: function
   demoOverlayFor: function
   describeAction: function
   describeAssertionSpec: function
@@ -358,6 +363,7 @@
   evaluateNetworkCheck: function
   exactLiterals: function
   expectedChange: function
+  expectedResultFromDelta: function
   explore: function
   failureLine: function
   fieldKind: function
@@ -442,6 +448,7 @@
   refusalNote: function
   reloadPage: function
   replayAndDetectHang: function
+  replayDeltaSummary: function
   replayTargetWaitMs: function
   replayWouldRepeatWrite: function
   reportAnswer: function

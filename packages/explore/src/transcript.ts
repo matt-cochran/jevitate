@@ -206,6 +206,8 @@ export class TranscriptLog {
   readonly #entries: TranscriptEntry[] = [];
   readonly #secrets: readonly string[];
   readonly #listener: TranscriptListener | undefined;
+  /** #303: deltas attached before their step was recorded (by step number). */
+  readonly #pendingDeltas = new Map<number, ActionDelta>();
 
   constructor(secrets: readonly string[] = [], listener?: TranscriptListener) {
     this.#secrets = secrets;
@@ -240,9 +242,12 @@ export class TranscriptLog {
       ...(step.control?.href === undefined ? {} : { href: step.control.href }),
       ...(step.control?.ariaCurrent === undefined ? {} : { ariaCurrent: step.control.ariaCurrent }),
     };
-    this.#entries.push(entry);
-    this.#listener?.(entry, this.#entries);
-    return entry;
+    const pending = this.#pendingDeltas.get(entry.step);
+    this.#pendingDeltas.delete(entry.step);
+    const kept = pending === undefined ? entry : { ...entry, delta: pending };
+    this.#entries.push(kept);
+    this.#listener?.(kept, this.#entries);
+    return kept;
   }
 
   /**
@@ -251,11 +256,16 @@ export class TranscriptLog {
    * `all` carries it.
    */
   attachDelta(step: number, delta: ActionDelta): void {
-    const i = step - 1;
-    const e = this.#entries[i];
-    if (e === undefined || e.delta !== undefined) return;
     const r = (v: string): string => redactText(v, this.#secrets);
     const clean = JSON.parse(r(JSON.stringify(delta))) as ActionDelta;
+    const i = step - 1;
+    const e = this.#entries[i];
+    // Not recorded yet (a mission that records its step after reading the delta): kept until it is.
+    if (e === undefined) {
+      if (step >= this.nextStep) this.#pendingDeltas.set(step, clean);
+      return;
+    }
+    if (e.delta !== undefined) return;
     this.#entries[i] = { ...e, delta: clean };
   }
 

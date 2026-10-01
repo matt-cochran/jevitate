@@ -290,6 +290,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         ...withStall,
         ...withOverflow,
         ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -304,6 +305,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         seedUrl: url,
         allowlist: item.t.allowlist,
         strategies: CLI_ADVERSARIAL_STRATEGIES,
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         judgment: judge,
         generation: gen,
         usage,

@@ -199,6 +199,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       real: "--real",
       fakeAi: "--fake-ai",
       extension: "--extension",
+      actionDeltas: "--action-deltas",
     },
     omitted: {
       "--dir": OMIT.storeDir,
@@ -229,6 +230,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       invariants: "--invariants",
       fixtures: "--fixtures",
       extension: "--extension",
+      actionDeltas: "--action-deltas",
     },
     omitted: {
       "--fingerprint": "the positional's alias: MCP takes one 'fingerprint'",

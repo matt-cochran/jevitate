@@ -1,3 +1,4 @@
+import { expectedResultFromDelta } from "@jevitate/explore";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -161,14 +162,25 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     const needObjective = (s.recorded.objective ?? "").trim() === "";
     const needExpected = (s.recorded.expectedResult ?? "").trim() === "";
     let objective = s.recorded.objective;
-    if (b !== undefined && (needObjective || needExpected)) {
+    // #303 (`--action-deltas`): the expected result is drafted by code from what the step changed.
+    const observed = run.actionDeltas?.steps.find((x) => x.step === s.index + 1);
+    const fromDelta = needExpected && observed !== undefined ? clean(expectedResultFromDelta(observed.delta)) : undefined;
+    if (b !== undefined && fromDelta !== undefined && !needObjective) {
+      const a = after.get(s.index) ?? null;
+      steps.push({
+        index: s.index,
+        step: described.slice(0, 1000),
+        expectedResult: fromDelta,
+        evidence: { before: { url: b.url, heading: b.heading }, after: a === null ? null : { url: a.url, heading: a.heading } },
+      });
+    } else if (b !== undefined && (needObjective || needExpected)) {
       const a = after.get(s.index) ?? null;
       const input = { journey: context, stepNumber: s.index + 1, totalSteps: flat.length, step: described, before: b, after: a };
       assertNoSecretInPayload(input, secrets); // fail closed: nothing secret reaches a model
       const { output, provenance: p } = await gen.generate("journey.step", input);
       provenance = p;
       const draftObjective = needObjective ? clean(output.objective) : undefined;
-      const draftExpected = needExpected ? clean(output.expectedResult) : undefined;
+      const draftExpected = needExpected ? (fromDelta ?? clean(output.expectedResult)) : undefined;
       objective = draftObjective ?? objective;
       if (draftObjective !== undefined || draftExpected !== undefined) {
         steps.push({

@@ -1,4 +1,5 @@
 /** The coverage/exploratory strategy runner behind `jevitate explore --strategy coverage|exploratory`. */
+import type { ActionDeltaStats } from "@jevitate/explore";
 import { writeFile } from "node:fs/promises";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
@@ -132,6 +133,8 @@ export interface RunCoverageMissionOptions {
   readonly emulation?: EmulationSpec;
   /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
   readonly overflow?: OverflowFlags;
+  /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
+  readonly actionDeltas?: boolean;
 }
 
 /**
@@ -185,6 +188,8 @@ export interface RunCoverageMissionResult {
   /** The writes the frontier's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #303 (`--action-deltas`): verdict counts and the actions that changed nothing. */
+  readonly actionDeltas?: ActionDeltaStats & { readonly noEffect?: readonly string[] };
   /** Which build produced this result (issue #83): `{version, commit, builtAt}`. */
   readonly engine: EngineInfo;
   /**
@@ -297,6 +302,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       seedUrl: opts.url,
       allowlist: opts.allowlist,
       bounds: opts.bounds,
+      ...(opts.actionDeltas === true ? { actionDeltas: true } : {}),
       onTranscriptEntry,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
@@ -402,6 +408,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       transcriptPath: journal.transcriptPath,
       sideEffects: result.sideEffects ?? [],
       ...(result.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: result.sideEffectsTruncated }),
+      ...(result.actionDeltas === undefined ? {} : { actionDeltas: result.actionDeltas }),
       ...(result.budget === undefined ? {} : { budget: result.budget }),
       engine: currentEngineInfo(),
       ...declaredResult(opts.invariants, result.invariantDefects, result.invariants),

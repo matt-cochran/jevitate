@@ -143,7 +143,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "With approve: true, applies the reviewed draft (shows the diff; refused with E_JOURNEY_ANNOTATIONS_STALE if the Journey changed since the draft) — the same proposal/approval semantics as the CLI. Drafting needs real or fakeAi.",
     command: {
       path: "journey annotate",
-      params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), screenshots: { kind: "screenshots", flag: "--screenshots" }, ...ENVIRONMENT, ...EMULATION, ...AI },
+      params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), screenshots: { kind: "screenshots", flag: "--screenshots" }, actionDeltas: b("--action-deltas"), ...ENVIRONMENT, ...EMULATION, ...AI },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
@@ -163,6 +163,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
         screenshots: { kind: "screenshots", flag: "--screenshots" },
+        actionDeltas: b("--action-deltas"),
         ...ENVIRONMENT,
         ...EMULATION,
         ...DEMO_SHOW,

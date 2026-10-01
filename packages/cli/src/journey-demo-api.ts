@@ -1,3 +1,5 @@
+import { expectedResultFromDelta } from "@jevitate/explore";
+import type { ActionDeltaRecord } from "@jevitate/recording";
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -79,6 +81,8 @@ export interface DemoStep {
   /** What the overlay and the subtitle said (redacted). */
   readonly caption: string;
   readonly expectedResult?: string;
+  /** #303 (`--action-deltas`): what the step changed when its Recording was made, one line (redacted). */
+  readonly observed?: string;
   /** The subtitle cue, ms from the start of the video. */
   readonly cue: { readonly startMs: number; readonly endMs: number };
   /** The step's screenshot in the guide's assets folder (a guide was asked for). */
@@ -124,9 +128,15 @@ function vttText(s: string): string {
 export function demoSubtitles(title: string, steps: readonly DemoStep[], draft = false): string {
   const note = title.replace(/\s+/g, " ").replace(/-->/g, "->").trim();
   const mark = draft ? `[${DEMO_DRAFT_MARK}] ` : "";
-  const cues = steps.map((s) => `step-${s.number}\n${vttTime(s.cue.startMs)} --> ${vttTime(s.cue.endMs)}\n${vttText(`${mark}${s.caption}`)}\n`);
+  const cues = steps.map((s) => `step-${s.number}\n${vttTime(s.cue.startMs)} --> ${vttTime(s.cue.endMs)}\n${vttText(`${mark}${s.caption}${s.observed === undefined ? "" : `\n${s.observed}`}`)}\n`);
   const draftNote = draft ? [`NOTE ${DEMO_DRAFT_MARK}: not yet approved (jevitate demo approve)\n`] : [];
   return ["WEBVTT\n", ...draftNote, ...(note === "" ? [] : [`NOTE ${note}\n`]), ...cues].join("\n");
+}
+
+/** #303: a recorded delta as one caption line — what changed, or that nothing did. */
+function deltaCaption(d: ActionDeltaRecord): string {
+  const what = expectedResultFromDelta(d) ?? (d.verdict === "no-change" ? "nothing visible changes" : d.why);
+  return `observed: ${what}`.slice(0, 200);
 }
 
 function oneLine(s: string): string {
@@ -153,6 +163,7 @@ export function demoGuide(journey: Journey, title: string, steps: readonly DemoS
   for (const s of steps) {
     lines.push(`### ${s.number}. ${oneLine(s.caption)}`, "");
     if (s.expectedResult !== undefined) lines.push(`**Expected result:** ${oneLine(s.expectedResult)}`, "");
+    if (s.observed !== undefined) lines.push(`**Observed:** ${oneLine(s.observed)}`, "");
     if (s.screenshot !== undefined) {
       const alt = `Step ${s.number}: ${oneLine(s.caption)}`.replace(/[[\]]/g, "");
       lines.push(`![${alt}](${encodeURI(`${assets}/${basename(s.screenshot)}`)})`, "");
@@ -319,7 +330,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
     };
     const since = (): number => clock.since();
 
-    const steps: Array<{ number: number; caption: string; expectedResult?: string; startMs: number; endMs?: number; screenshot?: string }> = [];
+    const steps: Array<{ number: number; caption: string; expectedResult?: string; observed?: string; startMs: number; endMs?: number; screenshot?: string }> = [];
     const captureErrors: string[] = [];
     const shots = join(work, "shots");
     await mkdir(shots, { recursive: true });
@@ -344,7 +355,10 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
         closeLast();
         const caption = captionOf(s, redact);
         const expected = oneLine(redact(s.recorded.expectedResult ?? ""));
-        steps.push({ number: index + 1, caption, ...(expected === "" ? {} : { expectedResult: expected }), startMs: since() });
+        // #303 (opt-in): the step's recorded delta as a short caption line ("what this step does").
+        const delta = opts.actionDeltas === true ? s.recorded.delta : undefined;
+        const observed = delta === undefined ? "" : oneLine(redact(deltaCaption(delta)));
+        steps.push({ number: index + 1, caption, ...(expected === "" ? {} : { expectedResult: expected }), ...(observed === "" ? {} : { observed }), startMs: since() });
         await overlay.caption(page, { head: `step ${index + 1} of ${flat.length}`, text: caption }, targetOf(s));
         await sleep(pace);
       },
@@ -390,6 +404,7 @@ export async function demoJourney(opts: DemoJourneyOptions): Promise<DemoJourney
       number: s.number,
       caption: s.caption,
       ...(s.expectedResult === undefined ? {} : { expectedResult: s.expectedResult }),
+      ...(s.observed === undefined ? {} : { observed: s.observed }),
       cue: { startMs: Math.round(s.startMs), endMs: Math.round(s.endMs ?? s.startMs + 1) },
       ...(s.screenshot === undefined ? {} : { screenshot: s.screenshot }),
     }));

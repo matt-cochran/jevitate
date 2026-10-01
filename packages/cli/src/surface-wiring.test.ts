@@ -60,6 +60,7 @@ const MASK_INTERNAL = "#250/#251: the pixel mask is built inside the run from th
 const OBSERVER_INTERNAL = "#246/#248: only annotate and demo replay with an observer (evidence, captions); `--screenshots` composes its own inside the run";
 const OBSERVER_NOT_INTERPRETER = "#251: annotate/demo pass their observer (`observer`) so `--screenshots` can compose with it; never a whole interpreter";
 const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PACE_MS); a test seam only";
+const NO_DELTAS_HERE = "#303: --action-deltas is a per-run opt-in on explore items, journey run/annotate/demo and verify-fix; this batch/suite/candidate replay only needs its verdict";
 const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
@@ -90,6 +91,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixture: "offline review: nothing to upload",
   },
   "ledger-cli.ts runLedgerVerify": {
+    actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
@@ -125,6 +127,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    actionDeltas: NO_DELTAS_HERE,
     account: SITE_ACCOUNT,
     interpreter: "#249: a clean-path candidate replay only needs its verdict (the demo/annotate stages observe their own replays)",
     policy: "a clean-path candidate replays with the fail-closed safeRunPolicy() — paid/destructive steps refused as in any run",
@@ -142,6 +145,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     interpreter: ANNOTATE_OBSERVER,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    actionDeltas: NO_DELTAS_HERE,
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
     screenshots: NO_SCREENSHOTS_HERE,
@@ -169,6 +173,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     actors: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runCoverageMission": {
+    actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     nowIso: SEAM,
     invariantAuthTokens: QUEUE_NO_ENV_SECRETS,
@@ -176,6 +181,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     overflow: QUEUE_NARROW,
   },
   "mission-queue-runner.ts runAdversarialCliMission": {
+    actionDeltas: QUEUE_NARROW,
     hostHealth: SEAM,
     secrets: "redaction comes from the target's secret fields",
     filing: QUEUE_NARROW,
@@ -227,6 +233,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
   "check-execute.ts runVerifyFix": {
+    actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",

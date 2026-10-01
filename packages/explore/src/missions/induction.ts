@@ -1,3 +1,4 @@
+import { ActionDeltas, PageDeltas, deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
@@ -190,6 +191,8 @@ export interface InductionRunResult {
   readonly sideEffectsTruncated?: number;
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
+  /** #303 (`actionDeltas`): verdict counts, and the actions that changed nothing (`noEffect`, deduped). */
+  readonly actionDeltas?: ActionDeltaStats & { readonly noEffect?: readonly string[] };
 }
 
 /** Declared invariants (#86) for a frontier mission: the monitor and the defects it found. */
@@ -237,6 +240,12 @@ export interface InductionMissionParams {
   readonly invariants?: InvariantSpec;
   /** Registered secrets: redacted out of invariant values and evidence. */
   readonly secrets?: readonly string[];
+  /**
+   * #303 `--action-deltas` (opt-in): record what each frontier action changed (code verdict) on its
+   * transcript step; actions with no visible effect (`no-change`) are listed as evidence of dead
+   * controls. The frontier itself still expands by state fingerprint (unchanged). Off: no capture.
+   */
+  readonly actionDeltas?: boolean;
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
   readonly invariantAuthTokens?: ReadonlyMap<string, string>;
   /** #245: show the on-page demo overlay (display only; invisible to the run). Default off: nothing injected. */
@@ -393,7 +402,8 @@ export async function runInductionMission(params: InductionMissionParams): Promi
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared.monitor);
   const overlay = demoOverlayFor(params.demoOverlay, params.secrets ?? []);
-  const result = { ...(await runInductionFrontier(params, declared, safety, budget, overlay)), ...safety.result() };
+  const deltaLog: Array<{ delta: ActionDelta; action: string }> | null = params.actionDeltas === true ? [] : null;
+  const result = { ...(await runInductionFrontier(params, declared, safety, budget, overlay, deltaLog)), ...safety.result() };
   await overlay?.finish(`jevitate · coverage — ${result.outcome}`, result.outcome === "exhausted" || result.outcome === "cap" || result.outcome === "budget");
   // #195: the shared end-of-run path — a never.response hit to the LAST action is never lost.
   if (declared !== null) await finishDeclaredRun(declared);
@@ -401,6 +411,12 @@ export async function runInductionMission(params: InductionMissionParams): Promi
     ...result,
     ...(declared === null ? {} : { invariantDefects: declared.log.defects(), invariants: declared.monitor.report() }),
     ...(budget === null ? {} : { budget: budget.trajectory() }),
+    ...(deltaLog === null
+      ? {}
+      : (() => {
+          const noEffect = [...new Set(deltaLog.filter((d) => d.delta.verdict === "no-change").map((d) => d.action))].slice(0, 50);
+          return { actionDeltas: { ...deltaStatsOf(deltaLog.map((d) => d.delta)), ...(noEffect.length === 0 ? {} : { noEffect }) } };
+        })()),
   };
 }
 
@@ -410,7 +426,10 @@ async function runInductionFrontier(
   safety: MissionSafety,
   budget: BudgetMonitor | null,
   overlay: DemoOverlay | null = null,
+  deltaLog: Array<{ delta: ActionDelta; action: string }> | null = null,
 ): Promise<InductionRunResult> {
+  /** #303 (opt-in): the action-delta tracker, following the session's current page. */
+  const pageDeltas = deltaLog === null ? null : new PageDeltas({ secrets: params.secrets ?? [], goal: "map every reachable state" });
   const bounds = resolveBounds(params.bounds);
   const maxDepth = params.maxDepth ?? 10;
   const site = new URL(params.seedUrl).origin;
@@ -762,6 +781,19 @@ async function runInductionFrontier(
             value: item.op === "click" ? null : "",
           }),
         );
+      // #303 (opt-in): the page right before the action.
+      let armed: ActionDeltas | null = null;
+      if (pageDeltas !== null) {
+        const dl = await pageDeltas.on(sessions.page);
+        const route = pathOf(sessions.page.url());
+        await dl.perceived(route).catch(() => null);
+        try {
+          await dl.beforeAction(route, item.op, liveControl);
+          armed = dl;
+        } catch {
+          dl.discard();
+        }
+      }
       let result = await actOnce();
       // #213: a single timeout on a working control (a slow moment on a loaded host) is retried once
       // before it counts as a failed action — one blip must not make the run inconclusive.
@@ -799,6 +831,16 @@ async function runInductionFrontier(
 
       snap = await guard(takeSnapshot());
       observe(snap);
+      // #303 (opt-in): what the action changed — on its transcript step (recorded next).
+      if (armed !== null && deltaLog !== null) {
+        armed.acted({ label: `${item.op} ${liveControl.name}`.trim(), recordIndex: 0, step: transcript.nextStep });
+        const d = await armed.perceived(pathOf(sessions.page.url())).catch(() => null);
+        if (d !== null) {
+          deltaLog.push({ delta: d.delta, action: d.delta.action });
+          transcript.attachDelta(transcript.nextStep, d.delta);
+        }
+        armed = null;
+      }
       const newFingerprint = stateFingerprint(snap);
       // #160: a toggle exercised once in each direction is dropped for the rest of the run instead
       // of oscillating forever (the same fix as the feature mission's frontier, which shares this

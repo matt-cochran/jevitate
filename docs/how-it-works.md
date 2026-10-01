@@ -39,14 +39,13 @@ A model can suggest where to look. It never decides whether the software passed.
 
 ## Action deltas: what each action changed
 
-**Opt-in** (`--action-deltas` on `explore --strategy goal` and `--strategy usability`; MCP
-`actionDeltas`; check-suite item option `actionDeltas`). Off by default: nothing is captured,
-nothing is added to any prompt or result, and the no-progress check works on the page signature
-alone. On, after every action of the run code records **what changed on the page** (#303) as one
-structured, redacted record that code, Jev and the model all read. Replays (`journey run`,
-`journey demo`, `demo`, `verify-fix`) do not record deltas: they replay a Recording's steps and
-judge them by its assertions; a Recording made with `--action-deltas` carries the deltas of the
-run that made it (`delta` on each step, a measurement, never replayed).
+**Opt-in**: `--action-deltas` on `explore` (every strategy but `--feature`), `journey run`,
+`journey annotate`, `journey demo` and `verify-fix`; the MCP tools that mirror them take
+`actionDeltas`, and check-suite items take the `actionDeltas` option. Off by default: nothing is
+captured, nothing is added to any prompt or result, and every mission behaves exactly as before.
+On, after every action code records **what changed on the page** (#303) as one structured,
+redacted record that code, Jev and the model all read. (`demo create`/`demo approve` do not take
+it: they render a Journey's demo, whose steps' Recording deltas `journey demo` can caption.)
 
 - **Capture.** An accessibility snapshot (Playwright `ariaSnapshot`) right before the action and
   at the next settled perception, plus one of the target's own form, dialog or region; the
@@ -84,6 +83,35 @@ run that made it (`delta` on each step, a measurement, never replayed).
   Once per route, after its first action, the volatility baseline waits up to 1 s (never before an
   action). Jev's relevance labels (cached per route, at most 8 calls a run) only for changes code
   could not tie.
+
+Where deltas are used, when on:
+
+- **Goal and usability runs** — the no-progress check, expected-vs-actual, the model's step
+  history and the transcript / Recording / result (above). **Persistence:** a step whose delta is
+  `relevant-change` and whose write went through (2xx, or a form POST answered by a redirect) is
+  re-checked once, at a safe point (no typed text unsent, no write in flight, not a read-only run):
+  the page is reloaded with a GET of the same URL — never a re-post — and code checks whether the
+  step's lasting changes (not its toasts or the target's own state) still show: `persisted: yes`,
+  `no` (after a 2xx write: saved but not stored — listed under the result's
+  `actionDeltas.notPersisted` as evidence, never a defect on its own, so it never duplicates a
+  declared `reloadThen` check or a request-payload invariant, #295), or `inconclusive`. The reload
+  is recorded as a navigation step. **Grounding:** a report may quote what an action announced or
+  lastingly showed (a toast gone before the report), since that text is observed page text
+  (redacted); a form field's own value never grounds anything (#239), and every other grounding rule
+  stands.
+- **Replays** (`journey run|annotate|demo`, `verify-fix`) — each replayed step's delta is recorded
+  and compared, by code, with the delta its Recording stored (verdict, the stored changes, the
+  navigation). `journey run` returns `actionDeltas` (each step's delta, `matchesRecorded`,
+  `differences`, a mismatch count); `verify-fix` attaches the defect step's comparison to each
+  attempt and names a mismatch in its reason — evidence, never the verdict; `journey annotate`
+  drafts a step's expected result from its delta, by code (the model is asked only for what the
+  delta cannot say); `journey demo` adds an "observed" line (the step's recorded delta) to its
+  subtitles and guide.
+- **Adversarial and coverage runs** — each settled action's delta is on its transcript step;
+  a defect carries the delta of the action it was first seen at (`actionDelta`); the result's
+  `actionDeltas` counts verdicts, and coverage lists the actions that changed nothing (`noEffect`,
+  dead controls). Neither mission changes what it plans: a misuse with no visible effect is often
+  the app behaving correctly, and the coverage frontier still expands by state.
 
 ## Who decides what
 

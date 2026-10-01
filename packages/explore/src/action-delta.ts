@@ -106,6 +106,12 @@ export interface ActionDelta {
   readonly overheadMs: number;
   /** Time the advisory Jev relevance call took (ms), when one was made. */
   readonly jevMs?: number;
+  /**
+   * #303 persistence: for an action whose write went through, did its lasting changes survive a
+   * reload (`no` after a 2xx write: saved but not stored — evidence, never a verdict on its own)?
+   */
+  readonly persisted?: "yes" | "no" | "inconclusive";
+  readonly persistedWhy?: string;
 }
 
 /** Bound (ms) on one accessibility snapshot: past it the capture is partial. */
@@ -526,6 +532,11 @@ export interface ActionDeltaStats {
   readonly jevCalls: number;
   /** One-time volatility-baseline waits (ms, all routes): the gap a route's first visit needed. */
   readonly baselineWaitMs: number;
+  /**
+   * Write steps whose lasting changes were gone after a reload (the persistence check: saved but not
+   * stored) — evidence for a defect, never a finding on its own. Absent when none.
+   */
+  readonly notPersisted?: ReadonlyArray<{ readonly step: number; readonly action: string; readonly why: string }>;
 }
 
 export interface ActionDeltasOptions {
@@ -535,6 +546,8 @@ export interface ActionDeltasOptions {
   readonly judge?: JudgmentPort | null;
   readonly volatilityGapMs?: number;
   readonly snapshotTimeoutMs?: number;
+  /** Classifies a request as a write (#110's classifier); default: any method but GET/HEAD/OPTIONS. */
+  readonly isWrite?: (r: { readonly method: string; readonly path: string; readonly contentType: string | null }) => boolean;
   /** Endpoints the run's own earlier actions wrote to — never the page's background polling (#241). */
   readonly ownWrites?: () => ReadonlySet<string>;
   /** A request a target marks as background (`--settle-ignore`): never an action's effect. */
@@ -561,6 +574,8 @@ export class ActionDeltas {
   readonly #counts = { "no-change": 0, "relevant-change": 0, inconclusive: 0 };
   #jevCalls = 0;
   #baselineWaitMs = 0;
+  /** #303: the latest delta's lasting changes, when its action's write went through (else null). */
+  #lastWrite: { candidates: string[] } | null = null;
 
   constructor(page: Page, opts: ActionDeltasOptions) {
     this.#page = page;
@@ -700,6 +715,34 @@ export class ActionDeltas {
   }
 
   /**
+   * #303: did the latest delta's action send a write that went through (2xx, or a form POST answered
+   * by a redirect), with lasting changes a reload could show? Then `persistence()` may check them.
+   */
+  wroteLasting(): boolean {
+    return this.#lastWrite !== null && this.#lastWrite.candidates.length > 0;
+  }
+
+  /**
+   * #303: after the caller reloaded the page (a GET — never a re-post) and it settled: do the latest
+   * write's lasting changes still show? `yes` all of them, `no` none, `inconclusive` some (or no
+   * snapshot). Code only.
+   */
+  async persistence(): Promise<{ persisted: "yes" | "no" | "inconclusive"; why: string }> {
+    const w = this.#lastWrite;
+    this.#lastWrite = null;
+    if (w === null || w.candidates.length === 0) return { persisted: "inconclusive", why: "no lasting change to look for" };
+    const now = await this.#capture();
+    if (!now.ok) return { persisted: "inconclusive", why: now.reason ?? "no snapshot after the reload" };
+    const shown = new Set(now.lines.map((l) => l.content));
+    const kept = w.candidates.filter((c) => shown.has(c));
+    const lost = w.candidates.filter((c) => !shown.has(c));
+    this.#last = this.#last === null ? null : { route: this.#last.route, capture: now };
+    if (lost.length === 0) return { persisted: "yes", why: `after a reload the page still shows ${clip(kept[0] ?? "", 80)}` };
+    if (kept.length === 0) return { persisted: "no", why: `after a reload the page no longer shows ${clip(lost[0] ?? "", 80)} — saved but not stored?` };
+    return { persisted: "inconclusive", why: `after a reload ${kept.length} of ${w.candidates.length} change(s) still show (missing: ${clip(lost[0] ?? "", 80)})` };
+  }
+
+  /**
    * Fields whose value is a secret by binding (`--secret-field`: a TOTP code, a password typed by
    * code): their value is masked in every later capture, whatever their name.
    */
@@ -729,7 +772,8 @@ export class ActionDeltas {
     this.#pending = null;
   }
 
-  #requests(at: number): string[] {
+  #requests(at: number): { lines: string[]; wroteOk: boolean } {
+    let wroteOk = false;
     const monitor = monitorFor(this.#page);
     const background = backgroundEndpoints(monitor, at, this.#o.ownWrites?.() ?? new Set());
     const out: string[] = [];
@@ -746,6 +790,10 @@ export class ActionDeltas {
         path = r.url.split(/[?#]/)[0] ?? r.url;
       }
       const status = !done ? "pending" : r.failed === true && (r.status ?? null) === null ? "failed" : String(r.status ?? "?");
+      const code = done ? (r.status ?? null) : null;
+      const write = this.#o.isWrite?.({ method: r.method, path, contentType: null }) ?? !["GET", "HEAD", "OPTIONS"].includes(r.method.toUpperCase());
+      // A write that went through: 2xx (an XHR / fetch), or a form POST answered by a redirect.
+      if (write && code !== null && (code < 300 || (code < 400 && r.resourceType === "document"))) wroteOk = true;
       const line = this.#redact(`${r.method.toUpperCase()} ${redactUrl(path)} → ${status}`);
       if (seen.has(line)) return;
       seen.add(line);
@@ -753,7 +801,7 @@ export class ActionDeltas {
     };
     for (const r of monitor.completedSince(at)) add(r, true);
     for (const r of monitor.pending()) add(r, false);
-    return out;
+    return { lines: out, wroteOk };
   }
 
   async #compute(p: Pending, after: AriaCapture, route: string): Promise<ActionDelta> {
@@ -789,7 +837,7 @@ export class ActionDeltas {
     const located = kept.map((c) => ({ c, where: localityOf(c, target) }));
     // An announcement the route makes on its own (a ticking live clock) is noise, like a volatile node.
     const announced = (await this.#announcements(p.at)).filter((a) => !noise.announcements.has(digitMask(a)));
-    const requests = this.#requests(p.at);
+    const { lines: requests, wroteOk } = this.#requests(p.at);
     const pathOf = (u: string): string => u.split(/[?#]/)[0] ?? u;
     const navigated = pathOf(p.before.url) !== pathOf(after.url);
     const retitled = p.before.title !== after.title;
@@ -940,6 +988,18 @@ export class ActionDeltas {
     };
     // The last line of defence: no registered or learned secret survives into a delta.
     assertNoSecretInPayload(delta, this.#secrets(), "an action delta");
+    // #303 persistence: what a reload should still show — the lasting (non-announcement) changes the
+    // action made, as their after-lines; only for an action whose write went through.
+    this.#lastWrite =
+      verdict === "relevant-change" && wroteOk
+        ? {
+            candidates: located
+              .filter((x) => x.c.kind !== "removed" && (x.where === "container" || x.where === "page"))
+              .map((x) => x.c.line.content)
+              .filter((c) => c.trim() !== "")
+              .slice(0, 10),
+          }
+        : null;
     return delta;
   }
 
@@ -1086,6 +1146,7 @@ export function deltaRecord(d: ActionDelta): {
   url?: { before: string; after: string };
   expected?: { description: string; met: boolean | null };
   partial?: string[];
+  persisted?: "yes" | "no" | "inconclusive";
   overheadMs: number;
 } {
   return {
@@ -1097,6 +1158,76 @@ export function deltaRecord(d: ActionDelta): {
     ...(d.url === undefined ? {} : { url: { ...d.url } }),
     ...(d.expected === undefined ? {} : { expected: { description: d.expected.description, met: d.expected.met } }),
     ...(d.partial === undefined ? {} : { partial: [...d.partial] }),
+    ...(d.persisted === undefined ? {} : { persisted: d.persisted }),
     overheadMs: d.overheadMs,
   };
+}
+
+/**
+ * #303 grounding: the page text a delta carries that a report may quote — the announcements the
+ * page made (a toast gone before the report) and the text of lasting changes. Redacted already.
+ * Never a form field's value: a field holding the run's own typed input grounds nothing (#239).
+ */
+export function deltaQuotableText(d: ActionDelta): string {
+  const out: string[] = [];
+  const textOf = (line: string): string | null => {
+    const body = line.replace(/^[+~-] /, "");
+    const role = /^[A-Za-z/][\w/-]*/.exec(body)?.[0] ?? "";
+    if (VALUE_ROLES.has(role) || role.startsWith("/")) return null;
+    const after = body.includes(" → ") ? body.slice(body.lastIndexOf(" → ") + 3) : body;
+    const i = after.indexOf(": ");
+    const named = /^[A-Za-z][\w-]* "((?:[^"\\]|\\.)*)"/.exec(after)?.[1];
+    const t = (i >= 0 ? after.slice(i + 2) : (named ?? after)).replace(/^"|"$/g, "").trim();
+    return t === "" ? null : t;
+  };
+  for (const a of d.announcements ?? []) {
+    const i = a.indexOf(": ");
+    const t = (i >= 0 ? a.slice(i + 2) : a).trim();
+    if (t !== "") out.push(t);
+  }
+  for (const c of d.changes) {
+    if (c.kind === "removed" || (c.count ?? 1) > 1) continue;
+    const t = textOf(c.text);
+    if (t !== null) out.push(t);
+  }
+  return [...new Set(out)].join("\n");
+}
+
+/** #303: verdict counts and per-action overhead over a list of deltas (missions that keep their own). */
+export function deltaStatsOf(deltas: readonly ActionDelta[]): ActionDeltaStats {
+  const sorted = deltas.map((d) => d.overheadMs).sort((a, b) => a - b);
+  return {
+    actions: deltas.length,
+    noChange: deltas.filter((d) => d.verdict === "no-change").length,
+    relevantChange: deltas.filter((d) => d.verdict === "relevant-change").length,
+    inconclusive: deltas.filter((d) => d.verdict === "inconclusive").length,
+    overheadMs: {
+      p50: sorted.length === 0 ? 0 : sorted[Math.floor((sorted.length - 1) / 2)]!,
+      max: sorted.length === 0 ? 0 : sorted[sorted.length - 1]!,
+      total: sorted.reduce((a, b) => a + b, 0),
+    },
+    jevCalls: 0,
+    baselineWaitMs: 0,
+  };
+}
+
+/**
+ * #303: a mission's delta tracker that follows the session's CURRENT page (a mission may move to a
+ * fresh page after a reset): a new tracker per page, announcement notes enabled on each.
+ */
+export class PageDeltas {
+  readonly #opts: ActionDeltasOptions;
+  #page: Page | null = null;
+  #deltas: ActionDeltas | null = null;
+  constructor(opts: ActionDeltasOptions) {
+    this.#opts = opts;
+  }
+  async on(page: Page): Promise<ActionDeltas> {
+    if (this.#deltas === null || this.#page !== page) {
+      this.#page = page;
+      this.#deltas = new ActionDeltas(page, this.#opts);
+      await this.#deltas.enable();
+    }
+    return this.#deltas;
+  }
 }

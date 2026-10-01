@@ -110,7 +110,7 @@ import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince, writesStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
-import { ActionDeltas, deltaPromptLine, deltaRecord, type ActionDeltaStats, type DeltaVerdict } from "./action-delta.js";
+import { ActionDeltas, deltaPromptLine, deltaQuotableText, deltaRecord, type ActionDeltaStats, type DeltaVerdict } from "./action-delta.js";
 
 
 /** The judgment API's refusal of an over-long option list (#192). */
@@ -925,8 +925,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           judge: typeof cfg.actionDeltas === "object" && cfg.actionDeltas.jev === true ? cfg.judge : null,
           ...(typeof cfg.actionDeltas === "object" && cfg.actionDeltas.volatilityGapMs !== undefined ? { volatilityGapMs: cfg.actionDeltas.volatilityGapMs } : {}),
           ownWrites: () => turnWrites,
+          isWrite,
           ignoreRequest: urlMatcher(cfg.settle?.ignoreRequests),
         });
+  /** #303: write steps whose changes did not survive a reload (saved but not stored — evidence). */
+  const notPersisted: Array<{ step: number; action: string; why: string }> = [];
   /** #303: the verdict of the last action's delta, until the no-progress check reads it. */
   let deltaVerdict: DeltaVerdict | null = null;
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
@@ -1077,9 +1080,52 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const d = await deltas.perceived(hangRoute(snap.url)).catch(() => null);
         if (d !== null) {
           deltaVerdict = d.delta.verdict;
-          transcript.attachDelta(d.step, d.delta);
-          recorder.attachDelta(d.recordIndex, deltaRecord(d.delta));
-          history.push(deltaPromptLine(d.delta));
+          // #303 persistence: a write that went through and changed the page is re-checked after a
+          // reload (a GET of the same URL — never a re-post), once, at this safe point (nothing typed
+          // and unsent, no write still in flight, not a read-only run).
+          let delta = d.delta;
+          let reloaded = false;
+          if (
+            deltas.wroteLasting() &&
+            cfg.readOnly !== true &&
+            unsent.pending().size === 0 &&
+            sideEffects.inflight().length === 0 &&
+            /^https?:/i.test(page.url())
+          ) {
+            const url = page.url();
+            const ok = await page
+              .goto(url, { waitUntil: "load", timeout: 15_000 })
+              .then(() => true)
+              .catch(() => false);
+            await monitorFor(page).waitSettled({ ceilingMs: 10_000 }).catch(() => undefined);
+            const p = ok ? await deltas.persistence().catch(() => ({ persisted: "inconclusive" as const, why: "the check failed" })) : { persisted: "inconclusive" as const, why: "the reload failed" };
+            delta = { ...delta, persisted: p.persisted, persistedWhy: p.why };
+            if (p.persisted === "no") notPersisted.push({ step: d.step, action: delta.action, why: p.why });
+            reloaded = true;
+            recorder.navigate(url, now());
+            history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
+          }
+          transcript.attachDelta(d.step, delta);
+          recorder.attachDelta(d.recordIndex, deltaRecord(delta));
+          history.push(deltaPromptLine(delta));
+          // #303 grounding: what the action announced or lastingly showed (a toast gone before the
+          // report) is observed page text a report may quote — redacted, never a field's own value.
+          const quotable = deltaQuotableText(delta);
+          if (quotable !== "") observed.add(snap.url, quotable);
+          if (reloaded) {
+            transcript.record({
+              op: "reload",
+              control: null,
+              confidence: null,
+              chosenBy: "strategy",
+              strategy: "persistence-check",
+              actOk: true,
+              reason: `persistence check after ${delta.action}: ${delta.persisted} — ${delta.persistedWhy ?? ""}`,
+              snapshot: snap,
+              timing: perception.timing,
+            });
+            continue;
+          }
         }
       }
 
@@ -2785,7 +2831,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   return {
     sideEffects: fired.sideEffects,
     ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
-    ...(deltas === null ? {} : { actionDeltas: deltas.stats() }),
+    ...(deltas === null ? {} : { actionDeltas: { ...deltas.stats(), ...(notPersisted.length === 0 ? {} : { notPersisted }) } }),
     stop,
     recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
     transcript: transcript.entries(),

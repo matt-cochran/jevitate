@@ -259,7 +259,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (532 exports)
+# @jevitate/explore (542 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -332,6 +332,7 @@
   classifyHang: function
   classifyRequest: function
   clickTimeoutMs: function
+  compareDeltas: function
   CompletedRequest: interface
   Control: interface
   controlFields: function
@@ -386,9 +387,12 @@
   DELTA_PROMPT_CHARS: variable
   DELTA_SNAPSHOT_TIMEOUT_MS: variable
   DeltaChange: interface
+  DeltaComparison: interface
   DeltaLocality: type-alias
   deltaPromptLine: function
+  deltaQuotableText: function
   deltaRecord: function
+  deltaStatsOf: function
   DeltaVerdict: type-alias
   DEMO_HIGHLIGHT_MS: variable
   DEMO_OVERLAY_ATTR: variable
@@ -429,6 +433,7 @@
   exactLiterals: function
   expectedChange: function
   ExpectedChange: interface
+  expectedResultFromDelta: function
   explore: function
   EXPLORE: variable
   ExploreConfig: interface
@@ -597,6 +602,7 @@
   OVERSIZE_CHARS: variable
   p50: function
   PAGE_TEXT_GUIDE: variable
+  PageDeltas: class
   PageFacts: interface
   PageHeadings: interface
   PageMonitor: class
@@ -647,6 +653,10 @@
   RepeatVerdict: type-alias
   replayAndDetectHang: function
   ReplayAttemptEvidence: interface
+  ReplayDeltas: class
+  replayDeltaSummary: function
+  ReplayDeltaSummary: interface
+  ReplayStepDelta: interface
   replayTargetWaitMs: function
   replayWouldRepeatWrite: function
   REPLY_MAX_CHARS: variable

@@ -187,7 +187,12 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   credential-shaped value. Announcements and request paths get the same scrub. Every delta is then
   checked by the fail-closed guard before it is stored (transcript, Recording) or sent (the model's
   step history, Jev's relevance question). The same limit as the pixel mask applies: a secret with
-  no marker, no credential name and no credential shape is not recognised — register it.
+  no marker, no credential name and no credential shape is not recognised — register it. Why the scrub is
+  not done inside the page: the snapshot is Playwright's `ariaSnapshot`, which reads field values
+  from Playwright's own isolated script world, where nothing the page (or jevitate's page scripts)
+  defines can hide them, and changing the live page's values to hide them would change the app
+  under test. So the raw snapshot reaches the jevitate process for the length of one call and is
+  scrubbed there, line by line, before anything else reads it.
 
 **Page text is data, not instructions.** Model prompts carry a prompt-injection guard, and page
 content is passed as untrusted data.

@@ -9,6 +9,8 @@ import { resolveBounds, type Bounds } from "../bounds.js";
 import type { Control, Snapshot } from "../snapshot.js";
 import { perceive } from "../perceive.js";
 import { monitorFor, type PageMonitor } from "../page-monitor.js";
+import { ActionDeltas, PageDeltas, deltaRecord, deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
+import type { ActionDeltaRecord } from "@jevitate/recording";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { hangFingerprint, outOfScopeHangNote, type HangSignal } from "../hang.js";
 import { MissionSessions } from "../mission-session.js";
@@ -156,6 +158,8 @@ export interface AdversarialDefect {
   readonly fingerprint: string;
   /** Every signal fingerprint seen with it (the cascade one broken call fires). */
   readonly related: string[];
+  /** #303 (`actionDeltas`): what the action at its first occurrence changed on the page — evidence. */
+  readonly actionDelta?: ActionDeltaRecord;
   readonly kind: DefectSignal["kind"] | "invariant" | "markup-injection";
   readonly title: string;
   /** Normalized route (path pattern) of the page it was first seen on. */
@@ -260,6 +264,8 @@ export interface IdentityChange {
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
   readonly outcome: MissionOutcome;
+  /** #303 (`actionDeltas`): verdict counts over the settled actions (`noChange`: actions with no visible effect). */
+  readonly actionDeltas?: ActionDeltaStats;
   readonly stop: AdversarialStop;
   /** Distinct defects (deduped by fingerprint), in first-seen order. */
   readonly defects: AdversarialDefect[];
@@ -326,6 +332,12 @@ export interface AdversarialMissionParams {
   readonly now?: () => number;
   /** Registered secret values: redacted out of the transcript and the Recording. */
   readonly secrets?: readonly string[];
+  /**
+   * #303 `--action-deltas` (opt-in): record what each settled action changed on the page (code
+   * verdict), on its transcript step and as evidence on the defects it found. Never changes what the
+   * strategies plan: a misuse with no visible effect is often the app behaving correctly. Off: no capture.
+   */
+  readonly actionDeltas?: boolean;
   /** #245: show the on-page demo overlay (display only; invisible to the run). Default off: nothing injected. */
   readonly demoOverlay?: boolean;
   /** Resolved `authFrom.secret` refs (#135) a declared probe may use: `env:VAR` → its value. */
@@ -493,7 +505,8 @@ function stepAdvisory(signal: Extract<DefectSignal, { kind: "console-error" }>, 
   };
 }
 
-function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): AdversarialDefect {
+function freeze(d: MutableDefect, segments: readonly (Recording | null)[], deltas: ReadonlyMap<number, ActionDelta> = new Map()): AdversarialDefect {
+  const delta = deltas.get(d.firstSeenStep);
   const segment = d.epoch === 0 ? null : (segments[d.epoch] ?? null);
   return {
     fingerprint: d.fingerprint,
@@ -511,6 +524,7 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
     occurrenceSteps: [...d.occurrenceSteps],
     repro: segment === null ? d.repro : { ...d.repro, recording: segment },
     triage: d.triage,
+    ...(delta === undefined ? {} : { actionDelta: deltaRecord(delta) }),
   };
 }
 
@@ -578,6 +592,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
   const probeHost = params.hostProbe ?? hostProbe();
   let crashHost: HostPressure | undefined;
   const secrets = params.secrets ?? [];
+  /** #303 (opt-in): the action deltas, per transcript step (evidence on the defects found there). */
+  const pageDeltas = params.actionDeltas === true ? new PageDeltas({ secrets, goal: "adversarial misuse" }) : null;
+  const stepDeltas = new Map<number, ActionDelta>();
+  /** #303: the tracker holding a before-capture for the action about to fire, else null. */
+  let deltaArmed: ActionDeltas | null = null;
   // One Recording per segment: segment 0 from the seed; a new one after each reset (its findings
   // replay from that segment's start, never through the hang that ended the previous one).
   const segments: RunRecorder[] = [new RunRecorder(site, undefined, secrets, params.onRecording)];
@@ -635,7 +654,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       coverage,
       outcome: finished.ok ? honest : "crashed",
       stop: finished.ok ? stop : "crashed",
-      defects: [...defects.values()].map((d) => freeze(d, later)),
+      defects: [...defects.values()].map((d) => freeze(d, later, stepDeltas)),
       advisories: [...advisories.values()].map(freezeAdvisory),
       hangs: [...hangs.values()],
       recording: finished.ok ? finished.recording : emptyRecording(site, finished.reason),
@@ -647,6 +666,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       ...(declared === null ? {} : { invariants: declared.report() }),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
       ...(identityChanges.length === 0 ? {} : { identityChanges: [...identityChanges] }),
+      ...(pageDeltas === null ? {} : { actionDeltas: deltaStatsOf([...stepDeltas.values()]) }),
       ...safety.result(),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
@@ -1744,6 +1764,19 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           await declared.before(sessions.actor);
           armed = true;
         }
+        // #303 (opt-in): the page right before a settled action (a racing, unsettled one gets none).
+        deltaArmed = null;
+        if (pageDeltas !== null && s.settle && !pendingEarlier) {
+          const dl = await pageDeltas.on(sessions.page);
+          const route = normalizeRoute(redactUrl(sessions.page.url()));
+          await dl.perceived(route).catch(() => null);
+          try {
+            await dl.beforeAction(route, s.op, s.control);
+            deltaArmed = dl;
+          } catch {
+            dl.discard();
+          }
+        }
         const at = now();
         const firedAt = Date.now();
         if (chainStart === null) chainStart = firedAt;
@@ -1751,6 +1784,13 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         safety.mark(transcript.nextStep, s.op, s.control);
         const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
+        if (deltaArmed !== null) {
+          if (result.ok) deltaArmed.acted({ label: `${s.op} ${s.control?.name ?? ""}`.trim(), recordIndex: 0, step: transcript.nextStep, ...(value === undefined ? {} : { value }) });
+          else {
+            deltaArmed.discard();
+            deltaArmed = null;
+          }
+        }
         // #301: an inert canary typed into a field is registered (token → field, page, payload).
         const token = result.ok ? canaryTokenOf(value) : null;
         if (token !== null && value !== undefined && s.control !== null) {
@@ -1811,6 +1851,18 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
           pendingEarlier = pendingEarlier || result.ok;
           continue;
+        }
+        // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
+        // evidence for a defect first seen at this step.
+        if (deltaArmed !== null) {
+          const dl = deltaArmed;
+          deltaArmed = null;
+          await monitorFor(sessions.page).waitSettled({ ceilingMs: 5_000 }).catch(() => undefined);
+          const d = await dl.perceived(normalizeRoute(redactUrl(sessions.page.url()))).catch(() => null);
+          if (d !== null) {
+            stepDeltas.set(step, d.delta);
+            transcript.attachDelta(step, d.delta);
+          }
         }
         // #300: did this action switch the signed-in identity? Then its invariants are not judged,
         // the control is never picked again, and the run goes back to the original identity.

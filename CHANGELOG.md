@@ -20,6 +20,13 @@ behaviour changes).
   change is compared with the delta. Jev labels are advisory, and its ignore rules are accepted only
   for nodes seen changing on their own. Off by default; on, about 50–110 ms per action on a small
   page, 0.35–0.5 s on a 400-row page (#303).
+- `--action-deltas` also on `journey run`, `journey annotate`, `journey demo` and `verify-fix`
+  (MCP `actionDeltas` on `run_journey`, `annotate_journey`, `demo_journey`, `verify_fix`) and on
+  adversarial and coverage runs: replays compare each step's delta with the Recording's (evidence
+  only), annotate drafts expected results from deltas, demo adds an "observed" caption line,
+  adversarial defects carry their action's delta and coverage lists no-effect actions. Goal runs
+  re-check a write's changes after a reload (`persisted: yes | no | inconclusive`; never a re-post),
+  and a report may quote a toast that vanished before it (#303).
 - Adversarial `boundary-submit` checks whether a field's input is rendered as markup. It submits
   inert canaries with a per-submission random token: `<i data-jev-canary="T">jevT</i>` and an
   attribute break, `jevT" data-jev-canary="T`, with no script or event handler. It then inspects the

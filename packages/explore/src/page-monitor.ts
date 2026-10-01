@@ -171,7 +171,7 @@ const INSTRUMENT = `(() => {
       }
       if (el === null || seen.has(el)) continue;
       seen.add(el);
-      const text = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_MAX});
+      const text = (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_MAX});
       if (text === "") continue;
       const role = el.getAttribute("role") || (el.tagName === "DIALOG" ? "dialog" : "live");
       const last = state.transients[state.transients.length - 1];

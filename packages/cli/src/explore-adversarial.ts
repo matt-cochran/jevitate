@@ -129,6 +129,8 @@ export interface RunAdversarialCliMissionOptions {
   readonly saveStorageState?: string;
   /** Registered secret values (`--secret`): kept out of the transcript, Recording and issue drafts. */
   readonly secrets?: readonly string[];
+  /** #303 `--action-deltas` (opt-in): record what each action changed (code verdict) — evidence only. */
+  readonly actionDeltas?: boolean;
   /** Issue filing (off unless enabled + a repo is configured). Default: drafts only. */
   readonly filing?: FilingConfig;
   /** Creates the filer — called only when filing is enabled. */
@@ -294,6 +296,7 @@ export async function runAdversarialCliMission(
       site: origin,
       ...(opts.bounds === undefined ? {} : { bounds: opts.bounds }),
       ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+      ...(opts.actionDeltas === true ? { actionDeltas: true } : {}),
       // A hang is reproduced by replaying its steps in fresh contexts (same auth).
       openFreshSession: freshSessionOpener(portFactory, launch, opts.allowlist),
       ...(opts.hangReplays === undefined ? {} : { hangReplays: opts.hangReplays }),
