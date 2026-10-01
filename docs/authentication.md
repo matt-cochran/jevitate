@@ -111,11 +111,16 @@ wins when both are set.
   key in the TypeSafe slot) is flagged. `ai status` exits 2 when a key is invalid or could not
   be checked. `ai setup` checks a key **before** storing it: a rejected key, or one that could not
   be checked, is not stored. `ai setup` also fails when a key already present is invalid.
+- **Runs check their keys at startup:** a run that uses the live AI (`explore --real`, `check`,
+  `journey run/annotate/demo --real`, `demo`, `ux`, `mission run`…) makes the same check once per
+  process before it opens a browser. A key the provider rejects ends the run at once with
+  `E_AI_SETUP_REQUIRED` (exit 64), naming the key, its provider and a misplaced-key hint, never
+  its value. An unreachable provider does not block the run. `--fake-ai` never makes the check.
 - **Replace or rotate a key:** `jevitate ai setup <feature> --replace` prompts for a new value
   even when one is stored and stores it the same way; `jevitate init --replace-keys` does it for
   every feature. If an env var is set for that key, you get a warning that the env value still wins.
 - **Offline / CI:** pass `--no-verify` to `ai status`, `ai setup` or `init` to skip the live check
-  (presence and source only). Set keys in CI through the environment; nothing prompts without a
+  (presence and source only), and set `JEVITATE_NO_KEY_VERIFY=1` to skip a run's startup check. Set keys in CI through the environment; nothing prompts without a
   terminal.
 
 ## Persistent browser profiles (`jevitate profile`)

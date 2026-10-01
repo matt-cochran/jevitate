@@ -32,6 +32,8 @@ import {
   type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
+import { realVerifyFetch } from "./key-report.js";
+import { preflightRunKeys } from "./run-key-preflight.js";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { UnsafeNameError, assertSafeName } from "@jevitate/domain";
@@ -565,6 +567,11 @@ Outcomes, stop reasons and exit codes:
   Every command's exit codes: docs/outcomes.md "Exit codes".
 `;
 
+/** #291: the startup key check's env (opt-out) and verifier (injectable: tests never touch the network). */
+function keyPreflightOpts(deps: CliDeps): Parameters<typeof preflightRunKeys>[2] {
+  return { env: deps.explore?.env ?? process.env, fetchFn: deps.explore?.verifyFetch ?? deps.ai?.verifyFetch ?? realVerifyFetch };
+}
+
 /** Distinct from MissingCredentialError: "no --real/--fake-ai selected" vs "keys missing." */
 export class GatewaySelectionError extends Error {}
 
@@ -601,6 +608,8 @@ export async function buildExploreGateways(
   if (opts.real) {
     requireKeys("generation", store); // fail-closed
     requireKeys("judgment", store); // fail-closed
+    // #291: a key the provider rejects fails the run at startup (typed setup refusal), once per process.
+    await preflightRunKeys(["generation", "judgment"], store, keyPreflightOpts(deps));
     const gen = new OpenRouterGenerationGateway({
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,
@@ -638,6 +647,7 @@ export async function buildGenerationGateway(
   if (opts.real) {
     const store = envCredentialStore(deps.explore?.env ?? process.env, deps.explore?.localConfig ?? loadLocalCredentials());
     requireKeys("generation", store); // fail-closed
+    await preflightRunKeys(["generation"], store, keyPreflightOpts(deps)); // #291
     const gen = new OpenRouterGenerationGateway({
       store,
       catalog: DEFAULT_EXPLORE_CATALOG,

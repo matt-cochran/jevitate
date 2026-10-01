@@ -17,6 +17,9 @@ behaviour changes).
   `unreachable` or `missing`, plus a flag for a key that looks like another provider's.
   `ai setup` checks a key before storing it; `ai status` exits 2 on a bad key. `--no-verify`
   skips the check (#291).
+- Runs that use the live AI (`explore --real`, `check`, `journey … --real`, `demo`, `ux`) check
+  their keys once at startup and stop with `E_AI_SETUP_REQUIRED` (exit 64) when a provider
+  rejects one. `JEVITATE_NO_KEY_VERIFY=1` skips the check (#291).
 - Screenshots and videos also mask secrets the app reveals during the run: elements marked as
   secret (`data-jevitate-mask`, `data-secret`, one-time-code, secret/token/api-key test ids and
   labels) and credential-shaped values. Limits in docs/safety.md (#298).
