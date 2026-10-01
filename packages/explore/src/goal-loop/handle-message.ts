@@ -23,8 +23,7 @@ import { backgroundEndpoints, requestsStartedSince, writesStartedSince } from ".
 import type { RunContext } from "./context.js";
 import { firstLine, keyOf, noReply, quote } from "./helpers.js";
 import { MAX_REPEAT_TYPE_SIGNALS } from "./limits.js";
-import type { Flow } from "./step.js";
-import { type ActStep } from "./step.js";
+import type { ActStep, Flow } from "./step.js";
 
 export async function handleMessage(ctx: RunContext, step: ActStep, op: Decision["op"], forcedNote: string | null): Promise<Flow> {
   const { cfg } = ctx;

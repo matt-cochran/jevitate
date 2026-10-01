@@ -10,8 +10,7 @@ import { matchOption } from "../fill.js";
 import { CLEARS_FIELD, isPlaceholderOption } from "../select-choice.js";
 import type { RunContext } from "./context.js";
 import { firstLine, keyOf, quote } from "./helpers.js";
-import type { Flow } from "./step.js";
-import { type ActStep } from "./step.js";
+import type { ActStep, Flow } from "./step.js";
 
 export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Decision["op"]): Promise<Flow> {
   const { cfg } = ctx;

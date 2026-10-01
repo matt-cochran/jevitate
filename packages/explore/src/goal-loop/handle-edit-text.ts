@@ -10,8 +10,7 @@ import { planTextEdit, readEditableText } from "../rich-text.js";
 import { boundSecretField } from "../secret-fields.js";
 import type { RunContext } from "./context.js";
 import { firstLine } from "./helpers.js";
-import type { Flow } from "./step.js";
-import { type ActStep } from "./step.js";
+import type { ActStep, Flow } from "./step.js";
 
 export async function handleEditText(ctx: RunContext, step: ActStep): Promise<Flow> {
   const { cfg } = ctx;

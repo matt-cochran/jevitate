@@ -1,7 +1,7 @@
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import { type Recording, type ValueOrVar } from "@jevitate/recording";
+import { type Recording } from "@jevitate/recording";
 import {
   type Bounds,
   type StopReason,
@@ -106,6 +106,7 @@ import { handleCodeTypedField } from "./goal-loop/handle-code-typed.js";
 import { handleEditText } from "./goal-loop/handle-edit-text.js";
 import { handleMessage } from "./goal-loop/handle-message.js";
 import { handleSelectOption } from "./goal-loop/handle-select.js";
+import { handleUpload } from "./goal-loop/handle-upload.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -1354,30 +1355,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
       } else {
-        // upload — act fails closed without a fixture.
-        const r = await act(cfg.actor, { op: "upload", control, fixture: ctx.fixture });
-        if (r.ok && ctx.fixture !== null) {
-          // The recorded path goes through the shared redaction seam: a path that
-          // contains a registered secret is recorded redacted (replay then fails
-          // closed) rather than persisting the secret into the artifact.
-          const recordedFile: ValueOrVar =
-            redactText(ctx.fixture, ctx.secrets) === ctx.fixture
-              ? { redacted: false, value: ctx.fixture }
-              : { redacted: true, length: ctx.fixture.length };
-          ctx.recorder.upload(control.descriptor, recordedFile, at);
-        ctx.noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);
-          ctx.tracker.countAction();
-          ctx.history.push(`uploaded the fixture into ${control.name}`);
-          ctx.fixtureAttached = true;
-          ctx.cleared(control);
-        } else {
-          ctx.history.push(`upload failed: ${ctx.failNote(r.reason, control)}`);
-        }
-        record(r.ok, r.ok ? r.reason : ctx.failNote(r.reason, control));
-        if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
-          ctx.lastActedOp = decision.op;
-          break;
-        }
+        const flow = await handleUpload(ctx, acting);
+        if (flow === "stop") break;
+        if (flow === "continue") continue;
       }
 
       ctx.lastActedOp = decision.op;
