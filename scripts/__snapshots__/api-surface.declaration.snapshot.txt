@@ -159,7 +159,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (94 exports)
+# @jevitate/domain (96 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -226,6 +226,8 @@
   PlannedStep: type-alias
   QuietHours: type-alias
   resolveThrottle: function
+  ResourceGovernanceSummaryRecord: type-alias
+  ResourceGovernanceSummarySchema: variable
   RESULT_GOAL_OUTCOMES: variable
   RESULT_MISSION_OUTCOMES: variable
   RESULT_STRATEGIES: variable
@@ -1004,19 +1006,22 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (89 exports)
+# @jevitate/playwright (138 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
   BrowserCrashedError: class
   BrowserLaunchOptions: interface
+  BrowserMemoryReading: interface
   BrowserNotInstalledError: class
   BrowserOpenTimeoutError: class
   BrowserPool: class
   BrowserPoolOptions: interface
   browserPoolOptionsFromEnv: function
   BrowserPort: interface
+  BrowserProcessReport: interface
   BrowserSession: interface
+  cleanupOrphanBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
   configureSharedBrowserPool: function
@@ -1035,12 +1040,20 @@
   DEFAULT_OPEN_TIMEOUT_MS: variable
   DEFAULT_PAGE_UNRESPONSIVE_MS: variable
   DEFAULT_PRESSURE_THRESHOLDS: variable
+  DEFAULT_SLOT_HEARTBEAT_MS: variable
+  DEFAULT_SLOT_POLL_MS: variable
+  DEFAULT_SLOT_STALE_MS: variable
+  DEFAULT_THROTTLE_THRESHOLDS: variable
   defaultDarwinSignalDeps: variable
   defaultHostSignalDeps: variable
   defaultLinuxSignalDeps: variable
+  defaultMaxBrowsers: function
   defaultMaxContexts: function
+  defaultMemoryCeilingBytes: function
+  defaultSlotDir: function
   defaultWin32SignalDeps: variable
   describeExtensions: function
+  effectiveMaxBrowsers: function
   emulationContextOptions: function
   EmulationSpec: interface
   errnoCode: function
@@ -1054,18 +1067,39 @@
   extensionLaunchArgs: function
   ExtensionLoadError: class
   extensionOrigin: function
+  findOrphanBrowsers: function
+  GovernanceConfig: interface
+  governanceFromEnv: function
+  GovernorTicket: interface
+  HostLoadSample: interface
   HostSignalDeps: interface
+  jevitateBrowsers: function
   knownDeviceNames: function
   LinuxResourceSignals: class
   LinuxSignalDeps: interface
   LivenessPage: interface
+  MachineBrowserSlots: class
+  MachineSlotLease: interface
+  MachineSlotsOptions: interface
+  MarkedBrowser: interface
+  markedBrowsers: function
+  measureOwnBrowserMemory: function
   MemMetric: type-alias
+  MemoryMetric: type-alias
+  MemoryWatchedPage: interface
   OpenOptions: interface
+  OrphanCleanup: interface
+  orphanReason: function
+  OWNER_MARKER_SWITCH: variable
+  OwnerMarker: interface
+  ownerMarkerArg: function
   PageLivenessOptions: interface
   PageLivenessWatchdog: class
   pageLostReason: function
+  pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseMeminfoBytes: function
+  parseOwnerMarker: function
   parsePsiAvg10: function
   parseViewport: function
   parseVmPressureLevel: function
@@ -1077,17 +1111,34 @@
   PooledContext: interface
   PressureThresholds: type-alias
   probeReachable: function
+  processAlive: function
+  ProcessInfo: interface
+  ProcessTable: interface
   ReachabilityDeps: interface
   readUnpackedExtension: function
   readUnpackedExtensions: function
   ResolvedEmulation: interface
   resolveEmulation: function
   resolveLaunchArgs: function
+  ResourceGovernanceSummary: type-alias
+  ResourceGovernor: class
+  ResourceGovernorOptions: interface
+  ResourceLimitBreach: type-alias
+  ResourceLimits: interface
   ResourceSample: interface
+  resourceSettleFactor: function
   ResourceSignalError: class
   ResourceSignals: interface
   sameExtensionBuild: function
   sharedBrowserPool: function
+  sharedResourceGovernor: function
+  SlotHolder: interface
+  SlotState: interface
+  systemProcessTable: function
+  throttleDecision: function
+  ThrottleDecision: interface
+  ThrottleLevel: type-alias
+  ThrottleThresholds: interface
   UnknownDeviceError: class
   UnpackedExtension: interface
   ViewportSize: interface

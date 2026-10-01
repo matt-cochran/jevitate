@@ -101,7 +101,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (53 exports)
+# @jevitate/domain (54 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
@@ -120,6 +120,7 @@
   RESULT_GOAL_OUTCOMES: array
   RESULT_MISSION_OUTCOMES: array
   RESULT_STRATEGIES: array
+  ResourceGovernanceSummarySchema: object
   ResultDefectSchema: object
   ResultEngineSchema: object
   ResultHangSchema: object
@@ -635,7 +636,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (61 exports)
+# @jevitate/playwright (87 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -649,18 +650,26 @@
   DEFAULT_OPEN_TIMEOUT_MS: const (number)
   DEFAULT_PAGE_UNRESPONSIVE_MS: const (number)
   DEFAULT_PRESSURE_THRESHOLDS: object
+  DEFAULT_SLOT_HEARTBEAT_MS: const (number)
+  DEFAULT_SLOT_POLL_MS: const (number)
+  DEFAULT_SLOT_STALE_MS: const (number)
+  DEFAULT_THROTTLE_THRESHOLDS: object
   DarwinResourceSignals: class
   EXTENSION_ID: object
   ExtensionDirError: class
   ExtensionLoadError: class
   LinuxResourceSignals: class
+  MachineBrowserSlots: class
+  OWNER_MARKER_SWITCH: const (string)
   PageLivenessWatchdog: class
   PlaywrightBrowserPort: class
+  ResourceGovernor: class
   ResourceSignalError: class
   UnknownDeviceError: class
   Win32ResourceSignals: class
   admissionViolation: function
   browserPoolOptionsFromEnv: function
+  cleanupOrphanBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
   configureSharedBrowserPool: function
@@ -670,9 +679,13 @@
   defaultDarwinSignalDeps: object
   defaultHostSignalDeps: object
   defaultLinuxSignalDeps: object
+  defaultMaxBrowsers: function
   defaultMaxContexts: function
+  defaultMemoryCeilingBytes: function
+  defaultSlotDir: function
   defaultWin32SignalDeps: object
   describeExtensions: function
+  effectiveMaxBrowsers: function
   emulationContextOptions: function
   errnoCode: function
   explainLaunchFailure: function
@@ -681,21 +694,35 @@
   extensionIdentity: function
   extensionLaunchArgs: function
   extensionOrigin: function
+  findOrphanBrowsers: function
+  governanceFromEnv: function
+  jevitateBrowsers: function
   knownDeviceNames: function
+  markedBrowsers: function
+  measureOwnBrowserMemory: function
+  orphanReason: function
+  ownerMarkerArg: function
   pageLostReason: function
+  pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseMeminfoBytes: function
+  parseOwnerMarker: function
   parsePsiAvg10: function
   parseViewport: function
   parseVmPressureLevel: function
   parseVmStatAvailableBytes: function
   probeReachable: function
+  processAlive: function
   readUnpackedExtension: function
   readUnpackedExtensions: function
   resolveEmulation: function
   resolveLaunchArgs: function
+  resourceSettleFactor: function
   sameExtensionBuild: function
   sharedBrowserPool: function
+  sharedResourceGovernor: function
+  systemProcessTable: function
+  throttleDecision: function
   withOpenDeadline: function
 
 # @jevitate/recorder (24 exports)

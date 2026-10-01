@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import type { AdmissionRecord } from "./browser-pool.js";
 import type { ViewportSize } from "./emulation.js";
 import type { UnpackedExtension } from "./extensions.js";
+import type { ResourceLimits } from "./resource-governor.js";
 
 export interface BrowserSession {
   readonly page: Page;
@@ -64,6 +65,11 @@ export interface BrowserLaunchOptions {
    * (`channel: "chromium"`, new headless) because the headless shell cannot load extensions.
    */
   extensions?: readonly UnpackedExtension[];
+  /**
+   * #205: this run's resource limits (`--max-browsers`, `--max-browser-memory`) — override the
+   * resource governor's defaults (see `ResourceGovernor`). Absent: the defaults/environment apply.
+   */
+  resources?: ResourceLimits;
 }
 
 /**

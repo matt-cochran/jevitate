@@ -14,6 +14,7 @@ import {
 import { contentHash } from "@jevitate/domain";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
+import { resourceSettleFactor } from "@jevitate/playwright";
 
 /**
  * perceive: the ONE "look at a rendered page" step every mission loop uses (goal/usability
@@ -116,8 +117,11 @@ function documentPending(pending: readonly { readonly resourceType: string }[]):
 }
 
 export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<Perception> {
-  const ceiling = opts.renderWaitMs ?? RENDER_WAIT_MS;
-  const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
+  // #205: while the host is throttled (loaded/low on memory) the DEFAULT settle windows are longer
+  // (`resourceSettleFactor`, 2x) — a starved renderer is slow, not hung; explicit values are kept.
+  const settleFactor = resourceSettleFactor();
+  const ceiling = opts.renderWaitMs ?? RENDER_WAIT_MS * settleFactor;
+  const quietMs = opts.quietMs ?? SETTLE_QUIET_MS * settleFactor;
   if (!Number.isFinite(ceiling) || ceiling < 0) {
     throw new Error(`perceive: renderWaitMs must be a non-negative number, got ${String(ceiling)}`);
   }

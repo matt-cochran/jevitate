@@ -10,3 +10,6 @@ export * from "./win32-resource-signals.js";
 export * from "./page-liveness.js";
 export * from "./reachability.js";
 export * from "./extensions.js";
+export * from "./browser-processes.js";
+export * from "./machine-slots.js";
+export * from "./resource-governor.js";

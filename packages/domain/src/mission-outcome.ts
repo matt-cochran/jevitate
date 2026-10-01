@@ -144,6 +144,12 @@ export type MissionFailureKind =
   | "stalled"
   /** Most steps (or the finding that ended the run) ran on a starved host: it proved nothing (#203). */
   | "degraded-environment"
+  /**
+   * #205: the run's browsers went over the memory ceiling (`--max-browser-memory`) and the resource
+   * governor ended the session — the message names the measured value and the ceiling. `inconclusive`,
+   * never a crash and never a finding about the app.
+   */
+  | "resource-limit"
   /** Goal (#209): the model said `done`, but an independent success check did not hold. Outcome `failed`. */
   | "success-check-failed"
   /** Goal (#209): the only failing checks were vacuous (#202) — satisfied before any action. Outcome `inconclusive`. */

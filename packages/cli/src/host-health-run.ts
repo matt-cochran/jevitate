@@ -1,5 +1,9 @@
 import { HostHealthSampler, degradedEnvironmentOutcome } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary, MissionFailure } from "@jevitate/domain";
+import { sharedResourceGovernor, type ResourceGovernor } from "@jevitate/playwright";
+
+/** When each run's sampler started (#205: the window the governor's summary covers). */
+const runStarts = new WeakMap<HostHealthSampler, number>();
 
 /**
  * One host-health sampler per mission run (#203), shared by every strategy's runner: started (with
@@ -9,6 +13,7 @@ import type { EnvironmentDegraded, HostHealthSummary, MissionFailure } from "@je
  */
 export async function startHostHealth(injected?: HostHealthSampler): Promise<HostHealthSampler> {
   const health = (injected ?? new HostHealthSampler()).start();
+  runStarts.set(health, Date.now());
   await health.sample();
   return health;
 }
@@ -29,9 +34,11 @@ export async function finishHostHealth<O extends string>(
   health: HostHealthSampler,
   outcome: O,
   opts: Parameters<typeof degradedEnvironmentOutcome>[2] = {},
+  governor: ResourceGovernor = sharedResourceGovernor(),
 ): Promise<HostHealthVerdict<O>> {
   await health.sample();
-  const hostHealth = health.summary();
+  // #205: what resource governance did during this run (cap, slot, throttling, memory) rides along.
+  const hostHealth: HostHealthSummary = { ...health.summary(), resources: governor.snapshot(runStarts.get(health) ?? 0) };
   const verdict = degradedEnvironmentOutcome(outcome, hostHealth, opts);
   return {
     outcome: verdict.outcome,

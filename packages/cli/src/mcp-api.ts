@@ -64,6 +64,14 @@ import type { McpCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS, cliToolInputSchema, runCliTool } from "./mcp-cli-tools.js";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { loadTargetsFile } from "./target-config.js";
+import { resourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
+
+/** #205: a native tool's `maxBrowsers` / `maxBrowserMemory` (MiB) arguments, typed like the CLI flags. */
+function governanceArgs(args: Record<string, unknown>): GovernanceFlags {
+  const maxBrowsers = optInt(args, "maxBrowsers", 1);
+  const maxBrowserMemory = optInt(args, "maxBrowserMemory", 1);
+  return { ...(maxBrowsers === undefined ? {} : { maxBrowsers }), ...(maxBrowserMemory === undefined ? {} : { maxBrowserMemory }) };
+}
 
 /**
  * The MCP stdio server behind `jevitate mcp`. It exposes ONLY the tools in
@@ -527,8 +535,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const viewport = optViewport(args);
     const device = optString(args, "device");
     const extension = optExtensions(args, pathRoots);
+    const governance = governanceArgs(args);
     try {
-      const browser = browserRunFromFlags({ browserArg: [], ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
+      const browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       const screenshots = parseScreenshotsArg(shots);
       const emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }) });
       return {
@@ -564,6 +573,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       if (body === undefined) throw err;
       return errorResult(body);
     }
+    // #205: the same pre-run checks as `jevitate verify-fix` (orphan sweep, starved-host refusal).
+    const starved = await resourcePreflight({});
+    if (starved !== null) return errorResult({ error: "refused", code: starved.error?.code, message: starved.error?.message });
     const ref = await resolveResultId(args.id, "verify_fix");
     if ("response" in ref) {
       // A mission still queued/running has nothing to verify yet: never a pass.
@@ -620,11 +632,12 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const slowMo = optInt(args, "slowMo", 0);
     const recordVideo = optRecordVideo(args, pathRoots);
     const extension = optExtensions(args, pathRoots);
+    const governance = governanceArgs(args);
     let browser: BrowserRunOptions | undefined;
     let screenshots: ScreenshotsSpec | undefined;
     let emulation: EmulationSpec | undefined;
     try {
-      browser = browserRunFromFlags({ browserArg: [], ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
+      browser = browserRunFromFlags({ browserArg: [], ...governance, ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       screenshots = parseScreenshotsArg(optScreenshots(args, pathRoots));
       const viewport = optViewport(args);
       const device = optString(args, "device");
@@ -690,7 +703,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
         "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); " +
-        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
+        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
         properties: {
@@ -708,6 +721,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           invariants: { type: "array", items: { type: "string" } },
           fixtures: { type: "string" },
           extension: { type: "array", items: { type: "string" } },
+          maxBrowsers: { type: "integer", minimum: 1 },
+          maxBrowserMemory: { type: "integer", minimum: 1 },
         },
         required: ["id", "fingerprint"],
       },
@@ -733,7 +748,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -753,6 +768,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           real: { type: "boolean" },
           fakeAi: { type: "boolean" },
           extension: { type: "array", items: { type: "string" } },
+          maxBrowsers: { type: "integer", minimum: 1 },
+          maxBrowserMemory: { type: "integer", minimum: 1 },
         },
         required: ["id"],
       },
@@ -771,6 +788,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
           throw err;
         }
+        // #205: the same pre-run checks as `jevitate journey run` (orphan sweep, starved-host refusal).
+        const starved = await resourcePreflight({});
+        if (starved !== null) return errorResult({ error: "refused", code: starved.error?.code, message: starved.error?.message });
         try {
           const result = await runJourney(args.id, resolved.params, resolved.storageState, resolved.options);
           // #163: a self-healing run's model usage lands on its result, as on the CLI.

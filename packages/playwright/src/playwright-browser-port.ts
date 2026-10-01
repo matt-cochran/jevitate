@@ -6,6 +6,8 @@ import { createResourceSignals } from "./select-resource-signals.js";
 import { emulationContextOptions, resolveEmulation } from "./emulation.js";
 import { probeReachable } from "./reachability.js";
 import { ExtensionLoadError, extensionLaunchArgs, extensionOrigin, type UnpackedExtension } from "./extensions.js";
+import { ownerMarkerArg } from "./browser-processes.js";
+import { sharedResourceGovernor, type GovernorTicket, type ResourceGovernor, type ResourceLimits } from "./resource-governor.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,6 +169,17 @@ export interface PlaywrightBrowserPortDeps {
   readonly openTimeoutMs?: number;
   /** #213: testing seam for the sessions' pre-flight reachability probe (default `probeReachable`). */
   readonly probe?: (url: string) => Promise<string | null>;
+  /** #205: the resource governor every session is admitted by (default: the process-wide `sharedResourceGovernor()`). */
+  readonly governor?: ResourceGovernor;
+}
+
+/**
+ * #205: the owner marker (`--jevitate-owner=<pid>@<start>`) is appended to every REAL launch, so the
+ * browser's memory can be attributed to this process and an orphan left by a killed jevitate can be
+ * found and closed (browser-processes.ts). Not part of a launch configuration's identity (`launchKey`).
+ */
+function marked<T extends { args?: string[] | readonly string[] }>(options: T | undefined): T {
+  return { ...(options as T), args: [...(options?.args ?? []), ownerMarkerArg()] };
 }
 
 /**
@@ -184,12 +197,14 @@ export class PlaywrightBrowserPort implements BrowserPort {
   readonly #liveness: { readonly unresponsiveMs?: number } | false;
   readonly #openTimeoutMs: number;
   readonly #probe: (url: string) => Promise<string | null>;
+  readonly #governor: ResourceGovernor | undefined;
 
   constructor(deps: PlaywrightBrowserPortDeps = {}) {
+    this.#governor = deps.governor;
     this.#liveness = deps.liveness ?? {};
     this.#openTimeoutMs = deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
-    this.#launch = deps.launch ?? ((options) => chromium.launch(options));
-    this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, options));
+    this.#launch = deps.launch ?? ((options) => chromium.launch(marked(options)));
+    this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, marked(options)));
     this.#platform = deps.platform ?? process.platform;
     this.#pool = deps.pool;
     this.#probe = deps.probe ?? ((url) => probeReachable(url));
@@ -199,6 +214,21 @@ export class PlaywrightBrowserPort implements BrowserPort {
     // TODO(M3): enforce allowedOrigins via route interception; currently unenforced.
     // Refused BEFORE any browser opens: an unregistered --device name, or --viewport + --device together.
     const emulation = resolveEmulation({ viewport: opts.viewport, device: opts.device });
+    // #205: admitted by the resource governor (machine-wide browser cap, throttling) before anything
+    // launches; the session's page is then watched against the memory ceiling until it closes.
+    const governor = this.#governor ?? sharedResourceGovernor();
+    const ticket = await governor.enter(opts.resources);
+    let session: BrowserSession;
+    try {
+      session = await this.#openAdmitted(opts, emulation);
+    } catch (err) {
+      ticket.release();
+      throw err;
+    }
+    return governed(session, governor, ticket, opts.resources);
+  }
+
+  async #openAdmitted(opts: OpenOptions, emulation: ReturnType<typeof resolveEmulation>): Promise<BrowserSession> {
     if (opts.persistentProfile !== undefined) return this.#openPersistent(opts, opts.persistentProfile, emulation);
     // #256: Playwright loads extensions only in a persistent context — a throwaway profile per session.
     if (opts.extensions !== undefined && opts.extensions.length > 0) {
@@ -361,6 +391,23 @@ async function videoPathOf(page: Page): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/** #205: the session with its memory watch and governor ticket released when it closes (exactly once). */
+function governed(session: BrowserSession, governor: ResourceGovernor, ticket: GovernorTicket, limits: ResourceLimits | undefined): BrowserSession {
+  const unwatch = governor.watchMemory(session.page, limits);
+  return {
+    ...session,
+    // The session's own close keeps its semantics (idempotent, a crash surfaced); unwatch/release are idempotent.
+    async close() {
+      unwatch();
+      try {
+        await session.close();
+      } finally {
+        ticket.release();
+      }
+    },
+  };
 }
 
 function pooledSession(

@@ -157,6 +157,72 @@ a starved host is better fixed by running fewer missions at once than by a longe
 whose server stops answering navigation is not this case: that ends `inconclusive` with
 `failure.kind: "target-unresponsive"` ([outcomes](./outcomes.md#an-app-that-stops-answering-target-unresponsive)).
 
+## Shared machines: resource governance
+
+jevitate often runs next to builds, test suites, dev servers and other agents. A browser run that
+competes with them for memory and CPU times out (and reads as the app hanging), or gets something
+else killed. One governor per jevitate process applies four rules (#205); what each did is
+recorded in every mission result (every explore strategy) under `hostHealth.resources`.
+
+**Machine-wide browser cap.** At most `--max-browsers` jevitate processes have a browser open at
+once, across every jevitate on the machine: other terminals, agents, CI jobs and other projects'
+checks. A process takes one slot while it has any browser session open. A second context the same
+run opens, such as an observer actor or a hang replay, shares the slot, so a run never waits on
+itself. The default is `JEVITATE_MAX_BROWSERS`, else a quarter of the cores, at least 2 and at most
+6, and no more than one per 2 GiB of RAM (4 on a 16-core, 24 GiB machine). Slots are files under
+`~/.jevitate/run/browser-slots/`, created exclusively. A slot is stale when its holder on this host
+is no longer running, or when it has sent no heartbeat (the file's mtime, refreshed every 20 s)
+for 3 minutes. A stale slot is reclaimed by the next run that needs it. A run that waits longer
+than the admission timeout (`JEVITATE_ADMISSION_TIMEOUT_MS`, default 5 min) fails with a message
+naming the processes that hold the slots. Within one process, the browser pool's own context cap
+(`JEVITATE_BROWSER_MAX_CONTEXTS`) still applies.
+
+**Memory ceiling.** The memory of the browsers a run launched (browser, renderers and helper
+processes, summed as Linux PSS, or RSS on macOS) is sampled every 2 s. Past the ceiling, the
+session's page is closed with a reason, and the run ends `inconclusive` (exit 2) with
+`failure.kind: "resource-limit"`. The message names the measured value and the ceiling:
+`resource limit: this run's browser processes used 837 MiB (pss of 6 processes), over the 768 MiB
+memory ceiling …`. It is never `crashed`, never a defect or hang, and never attributed to the app. Other
+browser commands (`journey run`, `verify-fix`, regression replay) stop at the step that was running
+when the page closed; the reason is printed on stderr as a process warning.
+The ceiling is `--max-browser-memory <MiB>`, else `JEVITATE_MAX_BROWSER_MEMORY_MB` (`off` disables
+it), else 4 GiB or half the RAM, whichever is less. A process that runs several sessions at once is
+measured as a whole; when it goes over, the session whose page holds the most JS heap is ended.
+Windows has no supported process reader, so there the ceiling is not enforced and
+`hostHealth.resources.memoryMeasurement` is `unavailable`.
+
+**Adaptive throttling.** The host is judged when a session starts and on every sample:
+
+| level | when | effect |
+| --- | --- | --- |
+| `normal` | otherwise | none |
+| `throttled` | load above 2 per core, under 1.5 GiB available, or memory pressure (PSI full avg10) above 5% | a new run may take only half the machine cap (at least 1); default settle windows (quiet window, render ceiling) are doubled |
+| `starved` | load of 4 per core or more, or under 512 MiB available | a NEW run refuses to start with `E_HOST_STARVED` (exit 2); a run already going keeps going, throttled |
+
+`--ignore-host-load` starts a run on a starved host anyway. The run is throttled and its result
+records it. `hostHealth.resources.throttle` gives the most severe level seen and why, and
+`throttleChanges` lists each level change with its time. This complements starved-host
+attribution ([outcomes](./outcomes.md#a-starved-host-hosthealth-environmentdegraded)): throttling
+avoids the timeouts, and attribution explains the ones that still happen.
+
+**Orphan cleanup.** Every Chromium that jevitate launches carries a marker switch,
+`--jevitate-owner=<pid>@<start>`, that names the jevitate process that launched it and that
+process's start time. A browser left behind by a killed jevitate (`kill -9`, a crashed CI job) is
+an orphan: its owner pid is not running, or the pid now belongs to another process. Before every
+browser-driving command, once per process, jevitate closes such orphans (SIGTERM, then SIGKILL
+after 2 s) and clears stale slots. Only marked processes are candidates; nothing jevitate did not
+launch is ever signalled. `jevitate doctor` shows the host's level, the machine slots and their
+holders, and the jevitate browsers and orphans. `jevitate doctor --cleanup` closes the orphans and
+clears the stale slots on demand. On a normal exit, including SIGTERM and SIGINT, browsers are
+closed and slots released as before.
+
+`JEVITATE_RESOURCE_GOVERNANCE=off` turns off the automatic parts: the default cap and ceiling,
+throttling, the starved-host refusal and the startup sweep. An explicit `--max-browsers` or
+`--max-browser-memory` still applies. jevitate's own test suite sets it. Every variable is checked
+when the CLI starts; a value that is not valid is refused with `E_CLI_ENV` (exit 64). The MCP tools
+that launch a browser take `maxBrowsers` and `maxBrowserMemory`. `--ignore-host-load` is the
+operator's call and is not an MCP argument.
+
 ## Where jevitate keeps things
 
 `jevitate init` creates the app repo's own `.jevitate/` at the git root. Commands find it by
@@ -169,6 +235,7 @@ walking up from the working directory.
 | `baselines/`: `baseline tag` snapshots | `inbox/`, `missions/` (the queue), `trust/`, `sources/` (clones) |
 | `environments.json`: named environments for `--env` ([journeys](./journeys.md#environments---env)) | per-environment sessions and secret fields, in `targets.json` by origin |
 | `logs/<date>/`: run output (not committed) | `journeys/` and `logs/` when you are not in a repo |
+| | `run/browser-slots/`: the machine-wide browser slots ([resource governance](#shared-machines-resource-governance)) |
 
 `.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`
 and unapproved Journey annotation drafts (`journeys/.drafts/`) out of git, along with any secret or machine-local file that might be copied there: credentials,

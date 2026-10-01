@@ -102,10 +102,11 @@ export const OMIT = {
   filingRepo: "where findings are filed (a GitHub repo, under the operator's identity) is the operator's filing config (~/.jevitate/filing.json)",
   watch: "a watch loop never returns: MCP drains once (call again to drain more)",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
+  hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
 const HOOK_FLAGS = { "--before": OMIT.hooks, "--after": OMIT.hooks, "--allow-shell-hooks": OMIT.hooks, "--hook-timeout-ms": OMIT.hooks } as const;
-const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin } as const;
+const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin, "--ignore-host-load": OMIT.hostLoad } as const;
 const JSON_FLAG = { "--json": OMIT.json } as const;
 
 // ── Param helpers ─────────────────────────────────────────────────────────────────────────────
@@ -119,7 +120,13 @@ const session = (flag: string): CliParam => ({ kind: "session", flag });
 const pos = (kind: CliParamKind = "string", extra: Partial<CliParam> = {}): CliParam => ({ kind, positional: true, required: true, ...extra });
 const EMULATION = { viewport: { kind: "viewport", flag: "--viewport" } as CliParam, device: s("--device") };
 /** #256: unpacked browser extensions to load — confined like every path argument (a directory with manifest.json). */
-const EXTENSION = { extension: { kind: "path[]", flag: "--extension" } as CliParam };
+const EXTENSION = {
+  extension: { kind: "path[]", flag: "--extension" } as CliParam,
+  // #205: every browser-launching command also takes the run's resource limits (machine-wide browser
+  // cap, browser memory ceiling in MiB) — spread with EXTENSION, which every such command already has.
+  maxBrowsers: n("--max-browsers"),
+  maxBrowserMemory: n("--max-browser-memory"),
+};
 const DEMO_SHOW = { headed: b("--headed"), slowMo: n("--slow-mo") };
 const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };

@@ -53,7 +53,8 @@ import { type RunResolvedJourney } from "./source-run-api.js";
 import { FsTrustStore, FsAckStore, DEFAULT_LOCK_PATH, type GitExec, type GhPort } from "@jevitate/sources";
 import type { BrowserLaunchOptions, BrowserPort, BrowserSession } from "@jevitate/playwright";
 import { parseViewport, resolveEmulation, type EmulationSpec } from "@jevitate/playwright";
-import { nonNegativeIntArg } from "./cli-args.js";
+import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
+import { resourceLimitsFromFlags, withResourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
 import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
@@ -250,8 +251,8 @@ export async function makeRealBrowserActor(
   };
 }
 
-/** Raw commander values of the shared `--browser-*` launch flags. */
-export interface BrowserLaunchFlags {
+/** Raw commander values of the shared `--browser-*` launch flags (and #205's resource-governance flags). */
+export interface BrowserLaunchFlags extends GovernanceFlags {
   browserExecutable?: string;
   browserChannel?: string;
   browserArg: string[];
@@ -284,7 +285,11 @@ export function extensionArg(value: string, prev: readonly UnpackedExtension[] |
  * EXTENDS the Linux defaults (`--no-sandbox`, `--disable-dev-shm-usage`).
  */
 export function withBrowserLaunchFlags(cmd: Command): Command {
-  return cmd
+  // #205: resource governance — the run's limits, and the pre-run checks (orphan sweep, starved-host refusal).
+  return withResourcePreflight(cmd)
+    .option("--max-browsers <n>", "machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)", positiveIntArg)
+    .option("--max-browser-memory <MiB>", "memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)", positiveIntArg)
+    .option("--ignore-host-load", "start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it")
     .option("--browser-executable <path>", "launch this Chromium binary instead of Playwright's pinned one")
     .option("--browser-channel <name>", "Playwright browser channel to launch, e.g. chrome | msedge")
     .option(
@@ -309,6 +314,8 @@ export function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOpti
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
     ...(o.extension !== undefined && o.extension.length > 0 ? { extensions: [...o.extension] } : {}),
   };
+  const resources = resourceLimitsFromFlags(o);
+  if (resources !== undefined) launch.resources = resources;
   return Object.keys(launch).length > 0 ? launch : undefined;
 }
 
