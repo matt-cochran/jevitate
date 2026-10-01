@@ -24,7 +24,6 @@ import type { HostHealthSampler } from "../host-health.js";
 import type { VerifySession } from "../verify-fix.js";
 import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "../mission-failure.js";
 import { summarizeTimings, type TimingSummary } from "../timing.js";
-import { reachFrontierState } from "../coverage/reach.js";
 import { StalledError } from "../stall-watchdog.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import {
@@ -45,6 +44,7 @@ import { judgeState } from "./induction-frontier/judge.js";
 import { handleHangOrDeparture } from "./induction-frontier/hang-departure.js";
 import { settleTransition } from "./induction-frontier/settle.js";
 import { actOnItem } from "./induction-frontier/act.js";
+import { reachItem } from "./induction-frontier/reach.js";
 
 /**
  * Proof-by-induction (state-coverage) mission — spec §3.3.
@@ -343,44 +343,9 @@ async function runInductionFrontier(
       if (depth >= ctx.maxDepth) continue; // bounded exploration depth
 
       if (item.fromFingerprint !== ctx.currentFingerprint) {
-        ctx.watchdog.during(ctx.departed ? "returning to the seed after a departure" : "resetting to a queued state");
-        const reached = await ctx.guard(
-          reachFrontierState({
-            actor: ctx.sessions.actor,
-            seedUrl: params.seedUrl,
-            ...(params.restartAtStart === undefined
-              ? {}
-              : {
-                  reachSeed: async (): Promise<boolean> => {
-                    ctx.restartSpend += params.restartCost ?? 0;
-                    return params.restartAtStart!(ctx.sessions.actor);
-                  },
-                }),
-            item,
-            snapshotNow: ctx.takeSnapshot,
-            homeUrl: params.seedUrl,
-            currentUrl: () => ctx.sessions.page.url(),
-            ...(params.reachTimeoutMs === undefined ? {} : { timeoutMs: params.reachTimeoutMs }),
-          }),
-        );
-        if (!reached.ok) {
-          if (reached.reason === "stale") {
-            // Stale — dropped, never guessed at; so is every other item replaying the same path (#114).
-            ctx.frontier.dropState(item.fromFingerprint);
-            ctx.currentFingerprint = "";
-            continue;
-          }
-          // The seed is gone (a lost session) or stopped answering: no queued item is reachable —
-          // a typed stop, never an idle grind through every queued item's reset (#114).
-          return ctx.ended("scope-unreachable", {
-            kind: "target-unreachable",
-            message: `could not return to the seed${ctx.departed ? " after a departure" : ""} (${reached.detail ?? reached.reason})`,
-          });
-        }
-        ctx.snap = reached.snapshot;
-        ctx.observe(ctx.snap);
-        ctx.currentFingerprint = item.fromFingerprint;
-        ctx.departed = false;
+        const reached = await reachItem(ctx, item);
+        if (reached === "continue") continue;
+        if (reached !== "next") return reached;
       }
 
       const acted = await actOnItem(ctx, item);
