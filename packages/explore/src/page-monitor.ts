@@ -282,6 +282,9 @@ function requestContentTypeOf(r: Request): string | undefined {
   }
 }
 
+/** How long (ms) finished requests are remembered past a perception — `BACKGROUND_WINDOW_MS`'s look-back. */
+const RECENT_REQUESTS_MS = 60_000;
+
 export class PageMonitor {
   readonly #page: Page;
   readonly #inflight = new Map<Request, InflightRequest>();
@@ -508,12 +511,18 @@ export class PageMonitor {
     return { start, actionAt: this.#actionAt !== null && this.#actionAt >= start ? this.#actionAt : null, lastDocId: this.#lastDocId };
   }
 
-  /** Closes the window at `at` (the perception just read the page) and forgets older requests. */
+  /**
+   * Closes the window at `at` (the perception just read the page) and forgets requests that ended
+   * more than `RECENT_REQUESTS_MS` before it. The window's own readers ask `completedSince(start)`;
+   * the recent history is what tells the page's background polling from an action's work (#241:
+   * `backgroundEndpoints` looks back that far) — forgotten at every perception, a poll that ran
+   * between two quick decisions was taken for the action's effect.
+   */
   closeWindow(at: number, docId: string | null): void {
     this.#windowStart = at;
     this.#actionAt = null;
     if (docId !== null) this.#lastDocId = docId;
-    const keepFrom = at;
+    const keepFrom = at - RECENT_REQUESTS_MS;
     for (let i = this.#completed.length - 1; i >= 0; i--) {
       const r = this.#completed[i];
       if (r !== undefined && r.endedAt < keepFrom) this.#completed.splice(i, 1);

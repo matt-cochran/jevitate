@@ -39,7 +39,7 @@ const HTML = `<!doctype html><html><body>
 </body></html>`;
 
 /** How long the SECOND chat turn's LLM call takes (ms) — well past the idle patience below. */
-const SLOW_TURN_MS = 6_000;
+const SLOW_TURN_MS = 9_000;
 let chats = 0;
 let server: Server;
 let origin: string;
@@ -84,8 +84,8 @@ async function run(): Promise<ExploreRun> {
         allowlist: [origin],
         startUrl: `${origin}/chat`,
         bounds: { maxDecisions: 4 },
-        // Idle patience well below the slow turn; the ceiling above it.
-        replyWaitMs: 2_500,
+        // Idle patience (after the send's ~3s not-sent check) well below the slow turn; the ceiling above it.
+        replyWaitMs: 4_000,
         replyCeilingMs: 20_000,
       });
     },
