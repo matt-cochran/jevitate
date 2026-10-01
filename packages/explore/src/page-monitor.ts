@@ -289,7 +289,11 @@ export class PageMonitor {
       const navAt = this.#documentNavStartedAt;
       if (navAt === null) return;
       for (const [r, info] of this.#inflight) {
-        if (info.startedAt < navAt) this.#inflight.delete(r);
+        if (info.startedAt >= navAt) continue;
+        // #289: a request the old document already got its RESPONSE for (a save whose handler then
+        // navigated away on the response) ended with that status — kept as completed, never lost.
+        if (this.#statuses.has(r)) end(r, false);
+        else this.#inflight.delete(r);
       }
       this.#touch();
     });

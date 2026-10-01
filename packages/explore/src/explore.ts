@@ -40,7 +40,7 @@ import {
   secretPlaceholder,
 } from "./secret-fields.js";
 import { act, parseInterceptor } from "./act.js";
-import { SideEffectGuard, SideEffectLog, awaitWrites, type SideEffect } from "./side-effects.js";
+import { SideEffectGuard, SideEffectLog, awaitWrites, type LastClick, type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { coveredByInterceptors } from "./occlusion.js";
@@ -382,6 +382,22 @@ async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: bool
 }
 
 /**
+ * #289: the last click fired at least one write the server accepted (a response below 400), none was
+ * rejected or is still unanswered, and the page is now on a different route than the click was made
+ * on — a save that returned to where it came from (the project hub after "Save changes"), which is
+ * progress, never a stalled-state hang.
+ */
+function savedAndLeft(
+  m: { readonly label: string; readonly clickFromRoute?: string | null },
+  routeNow: string,
+  lastClick: LastClick | null,
+): boolean {
+  if (!m.label.startsWith("click ") || (m.clickFromRoute ?? null) === null || m.clickFromRoute === routeNow) return false;
+  const writes = lastClick?.writes ?? [];
+  return writes.length > 0 && writes.every((w) => w.status !== null && w.status < 400);
+}
+
+/**
  * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
  * state is exactly their target state, never a stall.
  */
@@ -682,6 +698,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       sawNewState: boolean;
       /** A LINK click: the route it was clicked on (null for any other action) — #153. */
       linkFromRoute?: string | null;
+      /** #289: ANY click — the route it was clicked on (null for any other action). */
+      clickFromRoute?: string | null;
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
@@ -762,11 +780,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     at: number,
     input?: { readonly field: string; readonly value: string },
     linkFromRoute: string | null = null,
+    clickFromRoute: string | null = null,
   ): void => {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
-    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
+    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute, clickFromRoute };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
   };
@@ -1022,6 +1041,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // A link that navigated to ANOTHER route already visited is ordinary navigation, not an
           // in-place action that silently undid itself (#153): the stall rule is for in-place actions.
           !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&
+          // #289: a click whose write went through and that then took the page to another route
+          // (Save → back to the hub) did what it was for — a save-and-return, not an action that undid itself.
+          !savedAndLeft(m, hangRoute(snap.url), sideEffects.lastClick()) &&
           !EXPECTED_RETURN.test(m.label) &&
           !ignoreNoProgress(m.label) &&
           !ignoreNoProgress(hangRoute(snap.url))
@@ -2129,7 +2151,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let message: string | undefined;
         if (r.ok) {
           recorder.click(control.descriptor, at);
-          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null);
+          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null, hangRoute(snap.url));
           tracker.countAction();
           if (isSubmitControl(control)) unsent.submitted();
           // What was typed has now been submitted (a form's button): an add-another flow's next
