@@ -26,10 +26,6 @@ import {
   type SecretField,
   boundSecretField,
   maskSecretFields,
-  secretFieldNeedsValue,
-  secretFieldValue,
-  secretFieldsToFill,
-  secretPlaceholder,
 } from "./secret-fields.js";
 import { act, parseInterceptor } from "./act.js";
 import { awaitWrites, type SideEffect } from "./side-effects.js";
@@ -73,14 +69,14 @@ import {
 } from "./status.js";
 import { type SafetyConfig } from "./safety.js";
 import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE } from "./read-only.js";
-import { boundTypeFixture, markTypeFixtures, typeFixturePlaceholder, type TypeFixture } from "./type-fixtures.js";
+import { markTypeFixtures, type TypeFixture } from "./type-fixtures.js";
 import { buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import { backgroundEndpoints, requestsStartedSince, writesStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
 import { deltaPromptLine, deltaQuotableText, deltaRecord, type ActionDeltaStats } from "./action-delta.js";
 import * as limits from "./goal-loop/limits.js";
 import { createRunContext } from "./goal-loop/context.js";
-import { newStep } from "./goal-loop/step.js";
+import { newStep, type ActStep } from "./goal-loop/step.js";
 import { handleReport } from "./goal-loop/handle-report.js";
 import {
   EXPECTED_RETURN,
@@ -105,7 +101,6 @@ import {
   searchLike,
   stateBesides,
   stillShowsWork,
-  submitsAForm,
   waitOutJob,
   withCause,
 } from "./goal-loop/helpers.js";
@@ -115,6 +110,7 @@ import { handleWaitOrScroll } from "./goal-loop/handle-idle.js";
 import { handleReload } from "./goal-loop/handle-reload.js";
 import { beginAction } from "./goal-loop/act-gate.js";
 import { refuseAction } from "./goal-loop/act-gate.js";
+import { handleCodeTypedField } from "./goal-loop/handle-code-typed.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -1093,92 +1089,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (refused === "continue") continue;
       const at = await beginAction(ctx, step, control);
       if (at === "stop") break;
+      const acting: ActStep = { ...step, control, at };
 
-      // An EMPTY bound secret field (#111) is typed by code on its own — before a submit of its form,
-      // or once a validation message names it: the model cannot see the value and was seen never
-      // choosing `type` on it (a signup stuck on "Password: Please fill out this field"). Same
-      // guarantees as the chosen-`type` path below: placeholder only, Recording `{ redacted: true }`.
-      {
-        const submitting = decision.op === "click" && submitsAForm(control) ? control : null;
-        const due = secretFieldsToFill(snap.controls, cfg.secretFields, {
-          submitting,
-          status: ctx.status,
-          exclude: decision.op === "type" ? control : null,
-        });
-        for (const { control: field, field: binding, why } of due) {
-          if (!ctx.tracker.mayAct() || !(await secretFieldNeedsValue(ctx.page, field))) continue;
-          const t = ctx.now();
-          const value = secretFieldValue(binding, t);
-          const placeholder = secretPlaceholder(binding);
-          const r = await act(cfg.actor, { op: "type", control: field, value });
-          const cause = why === "submit" ? `before submitting with ${control.name || control.summary}` : "a validation message names it";
-          if (r.ok) {
-            ctx.recorder.fill(field.descriptor, { redacted: true, length: value.length }, t);
-            ctx.noteMutation(`type ${field.name}`, field.descriptor, snap.signature, t);
-            ctx.tracker.countAction();
-            ctx.history.push(`typed ${placeholder} into the empty ${field.name} (bound secret, typed by code — ${cause})`);
-          } else {
-            ctx.history.push(`type into ${field.name} failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
-          }
-          record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code — ${cause})` : (r.reason ?? "").split(value).join(placeholder), {
-            op: "type",
-            control: field,
-            strategy: "secret-field",
-            value: placeholder,
-          });
-        }
-      }
-
-      // A bound secret field (#72): code types the real value (a TOTP code is computed now); the model,
-      // history and transcript see only the placeholder, the Recording `{ redacted: true }`.
-      const bound = decision.op === "type" ? boundSecretField(control, cfg.secretFields) : null;
-      if (bound !== null) {
-        const value = secretFieldValue(bound, at);
-        const placeholder = secretPlaceholder(bound);
-        const r = await act(cfg.actor, { op: "type", control, value });
-        if (r.ok) {
-          ctx.recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
-          ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
-          ctx.tracker.countAction();
-          ctx.history.push(`typed ${placeholder} into ${control.name} (bound secret, typed by code)`);
-        } else {
-          ctx.history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
-        }
-        record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder), {
-          value: placeholder,
-        });
-        ctx.lastActedOp = decision.op;
-        if (!r.ok && (await ctx.noteFailedAct(control, (r.reason ?? "").split(value).join(placeholder)))) break;
-        continue;
-      }
-
-      // #281: a field bound to a type fixture — code types the file's exact text (line breaks kept,
-      // never capped, never generated). The Recording keeps it so a Journey replays it exactly,
-      // unless it holds a registered run secret (then `{ redacted: true }`, like a bound secret).
-      const fixtureBinding = decision.op === "type" ? boundTypeFixture(control, cfg.typeFixtures) : null;
-      if (fixtureBinding !== null) {
-        const value = fixtureBinding.text;
-        const placeholder = typeFixturePlaceholder(fixtureBinding);
-        const holdsSecret = ctx.secrets.some((sec) => sec !== "" && value.includes(sec));
-        const r = await act(cfg.actor, { op: "type", control, value });
-        if (r.ok) {
-          ctx.recorder.fill(control.descriptor, holdsSecret ? { redacted: true, length: value.length } : value, at);
-          ctx.valueLog.typed(control.name || control.summary, value);
-          ctx.save.noteTyped(control.name || control.summary, value);
-          ctx.observed.noteOwnInput(value);
-          ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
-          ctx.tracker.countAction();
-          ctx.cleared(control);
-          ctx.history.push(`typed ${placeholder} into ${control.name} (type fixture, typed verbatim by code)`);
-        } else {
-          ctx.history.push(`type failed: ${redactText((r.reason ?? "?").split(value).join(placeholder), ctx.secrets)}`);
-        }
-        record(r.ok, r.ok ? `typed ${placeholder} (type fixture, typed verbatim by code)` : redactText((r.reason ?? "").split(value).join(placeholder), ctx.secrets), {
-          value: placeholder,
-        });
-        ctx.lastActedOp = decision.op;
-        continue;
-      }
+      const typed = await handleCodeTypedField(ctx, acting);
+      if (typed === "stop") break;
+      if (typed === "continue") continue;
 
       // An edit INSIDE rich text (#148): the generator proposes an anchored edit, code validates it
       // (see ./rich-text.ts) and the shared page function performs it — never a whole retype.

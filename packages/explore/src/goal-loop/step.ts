@@ -52,6 +52,9 @@ export interface StepInput {
 /** A decided step: its input plus the per-step helpers (see the module doc). */
 export type Step = ReturnType<typeof newStep>;
 
+/** A step whose decision is a target op that passed the action gate: its control and when it acts. */
+export type ActStep = Step & { readonly control: Control; readonly at: number };
+
 export function newStep(ctx: RunContext, input: StepInput) {
   const { cfg } = ctx;
   const { snap, perception, decision } = input;
