@@ -3,6 +3,7 @@ import type { Control } from "./snapshot.js";
 import { monitorFor } from "./page-monitor.js";
 import { visibleBusyIndicator } from "./hang.js";
 import { redactPageText } from "./redact.js";
+import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
 
 /**
  * Conversational pages (chat composers, assistants, interview flows): the independent-code side of
@@ -328,6 +329,9 @@ export async function waitForReply(
   const monitor = monitorFor(page);
   const started = Date.now();
   const remaining = (): number => ceilingMs - (Date.now() - started);
+  // #241: endpoints the page was already requesting before the send (a balance poll) are background
+  // traffic — their requests never count as the reply being worked on.
+  const background = backgroundEndpoints(monitor, started - SEND_REQUEST_SLACK_MS);
   let lastActivity = started;
   /** The new text as last read, and since when it has held still (a streaming reply keeps growing). */
   let latest = "";
@@ -353,7 +357,7 @@ export async function waitForReply(
       (pendingStatusShown(opts.baseline, text) ? "pending status" : null);
     // The send's own work still in flight (the LLM call, a job it started) — not an unrelated
     // long-poll the page had open before the message was sent.
-    const inFlight = monitor.pending().some((r) => r.startedAt >= started - SEND_REQUEST_SLACK_MS);
+    const inFlight = monitor.pending().some((r) => r.startedAt >= started - SEND_REQUEST_SLACK_MS && !background.has(endpointKey(r)));
     if (busy !== null || inFlight) lastActivity = Date.now();
     if (isReply(latest) && busy === null) {
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.

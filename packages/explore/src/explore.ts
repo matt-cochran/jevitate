@@ -1638,11 +1638,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             awaitingReply = false;
             busyWaitedMs = 0;
           }
+          // #241: no reply and nothing of the send's in flight (no request, no busy sign) — this wait
+          // was quiet, not patience: repeated, it ends the run instead of listening on.
+          const idle = !reply.received && reply.endedBy === "idle";
           note = reply.received
             ? `waited ${((now() - t0) / 1000).toFixed(1)}s → reply: ${quote(reply.text, 300)}`
-            : `waited ${((now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
-          changed = true;
-          quietWaits = 0;
+            : idle
+              ? `waited ${((now() - t0) / 1000).toFixed(1)}s (no reply, and the page shows no sign of working on one)`
+              : `waited ${((now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
+          changed = !idle;
+          quietWaits = idle ? quietWaits + 1 : 0;
           record(true, note, reply.received ? { reply } : {});
         } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && (await readInProgressStatus(page)) !== null) {
           // The page shows an in-progress status (#92: "Simulating…", aria-busy, a job "is running")
@@ -2006,12 +2011,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (op === "send") {
           const baseline = await readPageText(page, secrets);
           const before = new Set(keys.keys());
+          const sendBackground = backgroundEndpoints(monitorFor(page), at);
           const r = await act(cfg.actor, { op: "send", control, value: message, candidates: snap.controls });
           if (!r.ok) {
             history.push(`send failed: ${r.reason ?? "?"}`);
             record(false, forcedNote === null ? r.reason : `${forcedNote}; ${r.reason ?? ""}`, { op, message });
             lastActedOp = op;
             if (await noteFailedAct(control, r.reason)) break;
+            continue;
+          }
+          // #241: a send that started no request and changed nothing on the page was not sent (Enter
+          // in a field whose real submit is a separate control): a failed send, never a pending reply.
+          const checkedFrom = now();
+          await monitorFor(page).waitSettled({ ceilingMs: 3_000 }).catch(() => undefined);
+          if (
+            requestsStartedSince(monitorFor(page), at, sendBackground).length === 0 &&
+            newPageText(baseline, await readPageText(page, secrets), "").trim() === ""
+          ) {
+            const reason = `message was not sent: ${r.submittedVia?.kind === "click" ? `clicking ${quote(r.submittedVia.control.name, 40)}` : "Enter"} in ${quote(control.name || control.summary, 60)} started no request and changed nothing on the page`;
+            history.push(`${reason} — look for a send / continue control that submits it (it may need something else first)`);
+            record(false, reason, { op, message });
+            lastActedOp = op;
+            if (await noteFailedAct(control, reason)) break;
             continue;
           }
           recorder.fill(control.descriptor, message, at);
@@ -2023,7 +2044,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           unsent.submitted();
           conversation.sent.push(message);
           preSend ??= baseline;
-          const reply = await waitForReply(page, { secrets, baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
+          // The reply wait counts from the send: the check above already waited part of it.
+          const checkedMs = now() - checkedFrom;
+          const listened = await waitForReply(page, {
+            secrets,
+            baseline,
+            sent: message,
+            timeoutMs: Math.max(1, replyWaitMs - checkedMs),
+            ceilingMs: Math.max(1, replyCeilingMs - checkedMs),
+          });
+          const reply: ReplyResult = { ...listened, waitedMs: listened.waitedMs + checkedMs };
           if (reply.received) {
             conversation.latestReply = reply.text;
             replies.add(snap.url, reply.text);

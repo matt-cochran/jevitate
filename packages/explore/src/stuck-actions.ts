@@ -136,7 +136,7 @@ export interface RequestLog {
 /** How far back a request counts as the page's own background traffic (a poll it already ran). */
 export const BACKGROUND_WINDOW_MS = 60_000;
 
-function endpointKey(r: { readonly url: string; readonly method: string }): string {
+export function endpointKey(r: { readonly url: string; readonly method: string }): string {
   try {
     const u = new URL(r.url);
     return `${r.method.toUpperCase()} ${u.origin}${u.pathname}`;
