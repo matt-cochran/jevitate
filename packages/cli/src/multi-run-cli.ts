@@ -33,6 +33,10 @@ export function forwardedArgv(cmd: Command, omit: ReadonlySet<string> = new Set(
       if (value === false) argv.push(opt.long);
     } else if (opt.isBoolean()) {
       if (value === true) argv.push(opt.long);
+    } else if (opt.optional && value === true) {
+      // #290: an optional-value option given bare (`--screenshots`, `--record-video`) stores `true`;
+      // forward it bare so each run resolves its own default (next to its result), never `"true"`.
+      argv.push(opt.long);
     } else if (Array.isArray(value)) {
       for (const v of value) argv.push(opt.long, String(v));
     } else if (value !== undefined) {
