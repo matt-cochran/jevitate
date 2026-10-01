@@ -73,7 +73,9 @@ them no meaning across strategies. For example:
 
 - goal runs have `checks`, `answer`, `runOutcome`, `stop` and `finalUrl`;
 - coverage runs have `coverage`, and feature runs have their own `coverage`;
-- adversarial runs have `advisories`, `scope` and `coverage`;
+- adversarial runs have `advisories`, `scope` and `coverage` (an advisory is a console error
+  correlated with a 4xx (`status`), or one raised inside a third-party iframe (`thirdPartyFrame`,
+  the frame's origin; `frameUrl`): reported, never a defect);
 - usability runs have `report`, `reportPath` and `screenshots`.
 
 `outcome` is one of these fields. For a goal run it is the goal outcome (the same as `goalOutcome`), and for a frontier run it

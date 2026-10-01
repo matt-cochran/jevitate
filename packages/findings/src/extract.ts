@@ -296,7 +296,7 @@ function hangObservation(h: Json, ctx: Ctx): FindingObservation | null {
   });
 }
 
-/** A 4xx-correlated console error (#88): reported, never a defect. */
+/** A 4xx-correlated (#88) or third-party-frame (#297) console error: reported, never a defect. */
 function advisoryObservation(a: Json, ctx: Ctx): FindingObservation | null {
   const fingerprint = str(a.fingerprint);
   if (fingerprint === undefined) return null;
@@ -306,7 +306,7 @@ function advisoryObservation(a: Json, ctx: Ctx): FindingObservation | null {
   return observation(
     {
       category: "advisory",
-      signal: `console-error${status === undefined ? "" : `@${status}`}`,
+      signal: `console-error${str(a.thirdPartyFrame) !== undefined ? "@third-party" : status === undefined ? "" : `@${status}`}`,
       fingerprint,
       ...(route === undefined ? {} : { route }),
     },

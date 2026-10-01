@@ -14,6 +14,8 @@ behaviour changes).
   (#274, #284).
 - `requestMade` matches a request once it is sent, and a write still in flight (a unary RPC held
   open for minutes) counts as pending work for `wait` and `blocked` (#283).
+- A console error raised inside a cross-origin third-party iframe (a vendor's own CSP noise) is an
+  advisory with its frame origin, not an app defect; every console signal records its `frameUrl` (#297).
 
 ## [0.2.0] – 2026-09-29
 

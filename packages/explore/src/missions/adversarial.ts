@@ -167,10 +167,14 @@ export interface AdvisorySignal {
   readonly route: string;
   /** The (redacted) page URL it was first seen on. */
   readonly url: string;
-  /** The correlated response's status (always 4xx — the only case reported as advisory). */
-  readonly status: number;
+  /** The correlated response's status (a 4xx); unset for a third-party frame's error (#297). */
+  readonly status?: number;
   /** The raw console-error detail. */
   readonly detail: string;
+  /** #297: the (redacted) URL of the frame that logged it, when known. */
+  readonly frameUrl?: string;
+  /** #297: the third-party frame's origin — the vendor's own error, never the app's defect. */
+  readonly thirdPartyFrame?: string;
   readonly firstSeenStep: number;
   readonly occurrences: number;
   readonly occurrenceSteps: number[];
@@ -383,14 +387,16 @@ interface MutableDefect extends Omit<StepFinding, "related"> {
   readonly triage: Triage;
 }
 
-/** An advisory (4xx-correlated console-error) signal as seen on ONE step, before it is deduped. */
+/** An advisory (4xx-correlated or third-party-frame console-error) signal as seen on ONE step, before it is deduped. */
 interface StepAdvisory {
   readonly fingerprint: string;
   readonly title: string;
   readonly route: string;
   readonly url: string;
-  readonly status: number;
+  readonly status?: number;
   readonly detail: string;
+  readonly frameUrl?: string;
+  readonly thirdPartyFrame?: string;
 }
 
 interface MutableAdvisory extends StepAdvisory {
@@ -405,27 +411,27 @@ function freezeAdvisory(a: MutableAdvisory): AdvisorySignal {
     title: a.title,
     route: a.route,
     url: a.url,
-    status: a.status,
+    ...(a.status === undefined ? {} : { status: a.status }),
     detail: a.detail,
+    ...(a.frameUrl === undefined ? {} : { frameUrl: a.frameUrl }),
+    ...(a.thirdPartyFrame === undefined ? {} : { thirdPartyFrame: a.thirdPartyFrame }),
     firstSeenStep: a.firstSeenStep,
     occurrences: a.occurrenceSteps.length,
     occurrenceSteps: [...a.occurrenceSteps],
   };
 }
 
-/** Builds a step advisory from a console-error signal already confirmed advisory (4xx-correlated). */
-function stepAdvisory(
-  signal: Extract<DefectSignal, { kind: "console-error" }> & { correlatedStatus: number },
-  route: string,
-  url: string,
-): StepAdvisory {
+/** Builds a step advisory from a console-error signal already confirmed advisory (`isAdvisoryConsoleError`). */
+function stepAdvisory(signal: Extract<DefectSignal, { kind: "console-error" }>, route: string, url: string): StepAdvisory {
   return {
     fingerprint: signalFingerprint(signal),
-    title: advisoryTitle(signal, signal.correlatedStatus),
+    title: advisoryTitle(signal),
     route,
     url,
-    status: signal.correlatedStatus,
+    ...(signal.thirdPartyFrame === undefined && signal.correlatedStatus !== undefined ? { status: signal.correlatedStatus } : {}),
     detail: signal.detail,
+    ...(signal.frameUrl === undefined ? {} : { frameUrl: signal.frameUrl }),
+    ...(signal.thirdPartyFrame === undefined ? {} : { thirdPartyFrame: signal.thirdPartyFrame }),
   };
 }
 
