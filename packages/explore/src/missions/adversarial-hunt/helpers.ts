@@ -19,6 +19,9 @@ import { WRITE_METHODS } from "../../side-effects.js";
 import type { Control } from "../../snapshot.js";
 import type { AdversarialDefect, AdvisorySignal, DefectRepro, MarkupInjection } from "../adversarial.js";
 
+/** The hunt's default time budget (ms); `adversarial.ts` exports it as `DEFAULT_ADVERSARIAL_TIME_BUDGET_MS`. */
+export const DEFAULT_TIME_BUDGET_MS = 10 * 60_000;
+
 export const MAX_LISTED_DEPARTURES = 50;
 
 export const FORM_STRATEGY: ReadonlySet<MisuseStrategy> = new Set(FORM_MISUSE_STRATEGIES);
