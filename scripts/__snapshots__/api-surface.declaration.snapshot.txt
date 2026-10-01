@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (132 exports)
+# @jevitate/ai-core (146 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -17,11 +17,17 @@
   ChatReplyOutput: variable
   ChoiceAnswer: interface
   ChoiceQuestion: interface
+  collectKeys: function
+  CollectKeysOptions: interface
   collectMissingKeys: function
   ConfiguredModelPrices: interface
   CredentialKey: type-alias
   CredentialLeakError: class
+  credentialProvenance: function
+  CredentialProvenance: interface
+  CredentialSource: type-alias
   CredentialStore: interface
+  describeVerdict: function
   envAliasesFor: function
   envCredentialStore: function
   failureClass: function
@@ -63,6 +69,12 @@
   JourneyStepOutput: variable
   JudgmentPort: interface
   JudgmentState: interface
+  KEY_PROVIDERS: variable
+  KEY_VERIFY_TIMEOUT_MS: variable
+  KEY_VERIFY_URLS: variable
+  keyPrompt: function
+  KeyVerdict: type-alias
+  looksLikeOtherKey: function
   MAX_CHOICE_OPTIONS: variable
   MissingCredentialError: class
   ModelConstraints: type-alias
@@ -132,6 +144,8 @@
   UxSpecificsInput: variable
   UxSpecificsItem: variable
   UxSpecificsOutput: variable
+  VerifyFetch: type-alias
+  verifyKey: function
   withPreflight: function
 
 # @jevitate/application (5 exports)
@@ -241,7 +255,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (481 exports)
+# @jevitate/explore (486 exports)
   act: function
   ActArgs: interface
   ActResult: interface
@@ -293,6 +307,7 @@
   CandidateAction: type-alias
   candidateId: function
   CapabilityScope: interface
+  capFormText: function
   capMessage: function
   CapturedRequest: interface
   chatReply: function
@@ -455,6 +470,8 @@
   Http5xxOracle: class
   Http5xxSignal: type-alias
   http5xxSignalOf: function
+  identityKind: function
+  IdentityKind: type-alias
   InductionMissionParams: interface
   InductionRunResult: interface
   InflightRequest: interface
@@ -516,6 +533,7 @@
   monitorFor: function
   NavigationTiming: interface
   NeverResponseHit: interface
+  newIdentityToken: function
   NO_ANSWER_REASON: variable
   NoActionContext: interface
   noActionShortfall: function
@@ -700,6 +718,7 @@
   Triage: type-alias
   tryTriage: function
   UnauthorizedExploreTargetError: class
+  uniqueIdentity: function
   unreadablePageTiming: function
   UPLOAD_OP_GUIDE: variable
   urlMatcher: function
