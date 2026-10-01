@@ -49,6 +49,8 @@ import {
   NO_ANSWER_REASON,
   ObservedPages,
   answerNotFoundReason,
+  goalAsksToWrite,
+  UNSAVED_WRITE_REASON,
   controlFields,
   goalAsksForReply,
   reportAnswer,
@@ -572,6 +574,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   let lastReportNotFound = false;
   /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
   let lastAbsenceUncovered: string | null = null;
+  /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
+  let settledClick: ReturnType<SideEffectGuard["lastClick"]> = null;
+  let wroteOk = false;
+  /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
+  const writeGoal = goalAsksToWrite(cfg.goal);
   // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.
   const vetoes = new VetoedAnswers();
   const replies = new ObservedPages(secrets);
@@ -838,6 +845,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
       sideEffects.settle();
+      // #239: a click whose writes all succeeded saved what the run had typed — from here those values
+      // are the app's, and the run has written (a write goal's report may settle it).
+      {
+        const lc = sideEffects.lastClick();
+        if (lc !== null && lc !== settledClick) {
+          settledClick = lc;
+          if (lc.writes.length > 0 && lc.writes.every((w) => w.status !== null && w.status >= 200 && w.status < 300)) {
+            observed.confirmOwnInputs();
+            wroteOk = true;
+          }
+        }
+      }
       // #158 — the action's window closes once the page settled: later writes are the app's own.
       if (readOnly?.settled() === true) effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
@@ -1503,8 +1522,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 judge: cfg.judge,
                 vetoes,
                 // #238: "none exists" is an answer only on observed pages that cover the app enough.
-                ...(replyPages === null ? { topNav: observed.topNavigation() } : {}),
-              }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
+                ...(replyPages === null ? { topNav: observed.topNavigation(), ownInputs: observed.ownInputs() } : {}),
+              })
+                // #239: a write goal's report settles nothing before a write of the run succeeded.
+                .then((v): AnswerVerdict =>
+                  v.accept && writeGoal && !wroteOk && v.answer.absent !== true ? { accept: false, reason: UNSAVED_WRITE_REASON, answer: v.answer } : v,
+                )
+                .catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
           const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
           record(true, `report accepted: answer grounded on ${on} (${verdict.answer.evidence.length} claim(s))`, {
@@ -2093,7 +2117,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
             valueLog.typed(control.name || control.summary, text);
-            if (!isBound(control) && !isCredentialField(control) && !sendable(control)) save.noteTyped(control.name || control.summary, text);
+            if (!isBound(control) && !isCredentialField(control) && !sendable(control)) {
+              save.noteTyped(control.name || control.summary, text);
+              // #239: until a write after it succeeds, the field shows what the run entered — not grounds.
+              observed.noteOwnInput(text);
+            }
           } else recorder.select(control.descriptor, text, at);
           noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
           tracker.countAction();

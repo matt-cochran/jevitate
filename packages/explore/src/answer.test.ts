@@ -17,6 +17,7 @@ import {
   REJECTED_AGAIN_REASON,
   absenceCoverage,
   goalAdmitsAbsence,
+  goalAsksToWrite,
 } from "./answer.js";
 
 const pages = [
@@ -496,5 +497,29 @@ describe("#238 — absence answers: which goals admit them, and the coverage flo
     o.add("http://app.test/home", "Home", [], { navLinks: ["http://app.test/settings", "/billing#x", "https://other.test/x", "mailto:a@b.c"] });
     o.add("http://app.test/settings", "Settings", [], { navLinks: ["http://app.test/settings/team"] });
     expect(o.topNavigation()).toEqual(["/settings", "/billing"]);
+  });
+});
+
+describe("#239 — the run's own typed, unsaved values are not grounds", () => {
+  const form = { url: "http://app.test/decisions/new", text: "Start a bet", fields: [{ label: "The bet", value: "Annual plan launch at 20% off" }] };
+  const answer = { answer: "Annual plan launch at 20% off", claims: [{ claim: "The bet is an annual plan launch at 20% off", quote: "The bet: Annual plan launch at 20% off" }] };
+
+  it("a control-value the run typed (not yet saved) is rejected; a pre-existing / saved value still grounds", () => {
+    const o = new ObservedPages();
+    o.noteOwnInput("  Annual plan launch   at 20% off ");
+    const v = groundAnswer(answer, [form], { ownInputs: o.ownInputs() });
+    expect(!v.accept && v.reason).toMatch(/the run's own typed input in "The bet", never saved/);
+    o.confirmOwnInputs();
+    expect(groundAnswer(answer, [form], { ownInputs: o.ownInputs() }).accept).toBe(true);
+    expect(groundAnswer(answer, [form]).accept).toBe(true);
+  });
+
+  it("goalAsksToWrite: an imperative write, not a mention of one", () => {
+    for (const g of ["Record a real decision you're about to make.", "Open settings and invite a teammate", "Please save the draft", "Go to Team. Add Bob."]) {
+      expect(goalAsksToWrite(g), g).toBe(true);
+    }
+    for (const g of ["Find out how to add a teammate", "Report the saved decision", "Which records are listed?", "Log in and report your plan"]) {
+      expect(goalAsksToWrite(g), g).toBe(false);
+    }
   });
 });
