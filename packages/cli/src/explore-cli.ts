@@ -400,13 +400,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
     .option("--personas <file>", "personas JSON: {\"<name>\": \"<storageState>\"} or {\"personas\": [{\"name\", \"storageState\"}]}")
     .option(
       "--check-overflow",
-      "check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
+      "check the horizontal-overflow (#149) and vertical-clipping (#302: text cut off by a fixed-height box or above the page top) hard signals even at a desktop (>=1024px) viewport — --strategy coverage/exploratory " +
         "(a defect), adversarial (a defect) or usability (a signal finding). " +
         "On by default whenever --viewport/--device emulates a viewport narrower than 1024px",
     )
     .option(
       "--ignore-overflow <selector>",
-      "a CSS selector (repeatable) whose overflow is intentional — excluded from the horizontal-overflow signal, like --ignore-no-progress",
+      "a CSS selector (repeatable) whose overflow or clipping is intentional — excluded from the horizontal-overflow and vertical-clipping signals, like --ignore-no-progress",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )

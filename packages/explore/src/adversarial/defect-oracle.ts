@@ -59,7 +59,9 @@ export type DefectSignal =
    * folded into that step's hard signals the same way. `route`/`descriptor` are already the
    * finding's own (redacted, route-templated) values; `signalKey` keys on them directly.
    */
-  | { kind: "horizontal-overflow"; detail: string; overflowPx: number; route: string; url: string; descriptor: string };
+  | { kind: "horizontal-overflow"; detail: string; overflowPx: number; route: string; url: string; descriptor: string }
+  /** Vertical clipping (#302): text cut off by a fixed-height box or above the page top — `overflow.ts`'s `detectClipping`. */
+  | { kind: "vertical-clipping"; detail: string; clippedPx: number; cause: "overflow-hidden" | "above-page-top"; route: string; url: string; descriptor: string };
 
 /**
  * Chromium emits a browser-generated console "error" for EVERY failed resource

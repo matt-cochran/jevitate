@@ -177,6 +177,7 @@ export function defectSignalText(d: Record<string, unknown>, secrets: readonly s
   else if (kind === "page-error") text = `uncaught page error: ${str(own?.detail) ?? str(d.title) ?? ""}`;
   else if (kind === "failed-request") text = `request failed (${pathOf(str(own?.url) ?? "")})`;
   else if (kind === "horizontal-overflow") text = `horizontal overflow${typeof own?.overflowPx === "number" ? ` (${own.overflowPx}px)` : ""}`;
+  else if (kind === "vertical-clipping") text = `text cut off${typeof own?.clippedPx === "number" ? ` (${own.clippedPx}px)` : ""}`;
   else if (kind === "server-log") text = `server log error: ${str(d.title) ?? ""}`;
   else if (kind === "hang") text = `the page hung: ${str(d.title) ?? ""}`;
   else text = str(d.title) ?? kind;

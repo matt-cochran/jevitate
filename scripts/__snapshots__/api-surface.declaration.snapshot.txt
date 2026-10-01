@@ -255,7 +255,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (494 exports)
+# @jevitate/explore (499 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -319,6 +319,9 @@
   classifyHang: function
   classifyRequest: function
   clickTimeoutMs: function
+  ClippingCause: type-alias
+  ClippingFinding: interface
+  clippingSummary: function
   CompletedRequest: interface
   Control: interface
   controlFields: function
@@ -381,6 +384,8 @@
   describeStatus: function
   describeUnreachable: function
   DESTRUCTIVE: variable
+  detectClipping: function
+  DetectClippingOptions: interface
   detectForms: function
   detectOverflow: function
   DetectOverflowOptions: interface
