@@ -122,14 +122,17 @@ export function buildCrashReport(
   } = {},
 ): CrashReport {
   const navigationTimeout = isNavigationTimeout(failure);
+  // #296: a page the liveness watchdog closed had stopped answering — the page's main thread (or a
+  // starved host), never an engine bug, even though the rejected read surfaced in jevitate's stack.
+  const unresponsive = signals.unresponsive !== undefined;
   const evidence: CrashEvidence = {
     ...(failure.stack === undefined ? {} : { stack: failure.stack }),
     pageCrashed: signals.pageCrashed,
     browserDisconnected: signals.browserDisconnected,
     rendererOom: looksLikeRendererOom(signals.pageCrashed, heapSamples),
     heapSamples: [...heapSamples],
-    hang: opts.hang ?? navigationTimeout,
-    ...(opts.hangKind === undefined ? {} : { hangKind: opts.hangKind }),
+    hang: opts.hang ?? (navigationTimeout || unresponsive),
+    ...(opts.hangKind === undefined ? (unresponsive ? { hangKind: "main-thread-unresponsive" } : {}) : { hangKind: opts.hangKind }),
     ...(navigationTimeout ? { navigationTimeout: true } : {}),
     ...(opts.host?.overThreshold ? { hostUnderPressure: opts.host.overThreshold } : {}),
   };

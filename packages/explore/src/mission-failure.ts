@@ -170,8 +170,11 @@ export function describeFailure(e: unknown, signals: CrashSignals): MissionFailu
   const stack = e instanceof Error && e.stack !== undefined ? e.stack : undefined;
   // #220: the liveness watchdog closed a page that stopped answering — the run ended rather than
   // idle (a `stalled` stop), and the reason says why, not the generic "page closed" it surfaced as.
+  // #296: no stack — the operation that surfaced it (a snapshot read, an evaluate) was only waiting
+  // on the frozen page and was rejected when the watchdog closed it: nothing in jevitate failed, so
+  // there is nothing to attribute to jevitate (its stack frame would read as an engine bug).
   if (signals.unresponsive !== undefined && !signals.pageCrashed && !signals.browserDisconnected) {
-    return { kind: "stalled", message: `${signals.unresponsive} (${message})`, ...(stack === undefined ? {} : { stack }) };
+    return { kind: "stalled", message: `${signals.unresponsive} (${message.split("\n")[0] ?? message})` };
   }
   // #226: a navigation the app never answered (its server froze or went away mid-run) — the app
   // stopped responding, not the engine: a typed `target-unresponsive` ending with a plain reason, no
@@ -210,6 +213,15 @@ export function targetUnresponsiveMessage(e: unknown): string | null {
     path = undefined;
   }
   return `the app stopped responding to navigation${path === undefined ? "" : ` to ${path}`} (${describeUnreachable(first)})`;
+}
+
+/**
+ * #296: true for a failure that means the PAGE stopped answering — its renderer froze (or the host
+ * starved it) and the liveness watchdog closed it so the run could end (`describeFailure`'s `stalled`).
+ * The run is `inconclusive` with that typed reason, never `crashed`: no engine code failed.
+ */
+export function isPageUnresponsive(failure: MissionFailure | undefined): boolean {
+  return failure?.kind === "stalled";
 }
 
 /** True for a failure that means the app stopped answering (#226): the run is `inconclusive`, never `crashed`. */

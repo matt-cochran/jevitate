@@ -38,7 +38,7 @@ import { isAuthorizedExploreTarget } from "../authorized-targets.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
 import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
@@ -1028,7 +1028,8 @@ async function runInductionFrontier(
     // (inconclusive) with the typed `target-unresponsive` reason, never `crashed`.
     const failure = describeFailure(e, crashWatch.signals());
     return {
-      outcome: isTargetUnresponsive(failure) ? "scope-unreachable" : "crashed",
+      // #296: a page whose renderer stopped answering (closed by the liveness watchdog) is `stalled`.
+      outcome: isTargetUnresponsive(failure) ? "scope-unreachable" : isPageUnresponsive(failure) ? "stalled" : "crashed",
       failure,
       coverage: report(false),
       recordings: [...statePaths.values()],

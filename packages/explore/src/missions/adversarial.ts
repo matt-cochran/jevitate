@@ -26,7 +26,7 @@ import {
   type TranscriptJudgment,
   type TranscriptListener,
 } from "../transcript.js";
-import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage, assertSeedReachable } from "../mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget, tryTriage, type Triage, assertSeedReachable } from "../mission-failure.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
@@ -196,7 +196,9 @@ export type AdversarialStop =
    */
   | "targets-refused"
   /** #226: the app stopped answering navigation mid-run (e.g. its server froze): `inconclusive`, `failure.kind: "target-unresponsive"`. */
-  | "target-unresponsive";
+  | "target-unresponsive"
+  /** #296: the page's renderer stopped answering and was closed by the liveness watchdog: `inconclusive`, `failure.kind: "stalled"`. */
+  | "stalled";
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
@@ -1661,6 +1663,9 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     // #226: the app stopped answering (a frozen backend) — the run proves nothing past that point,
     // but nothing in the engine broke: `inconclusive` with the typed reason, never `crashed`.
     if (isTargetUnresponsive(failure)) return finish("inconclusive", "target-unresponsive", failure);
+    // #296: the page's renderer stopped answering and the liveness watchdog closed it — the run ends
+    // `inconclusive` with that typed reason, never `crashed` with an issue attributed to jevitate.
+    if (isPageUnresponsive(failure)) return finish("inconclusive", "stalled", failure);
     crashHost = await probeHost();
     return finish("crashed", "crashed", failure);
   } finally {

@@ -88,7 +88,7 @@ import { redactText, redactUrl } from "./redact.js";
 import { demoOverlayFor } from "./demo-overlay.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
+import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
 import {
   EMPTY_STATUS,
   describeStatus,
@@ -2216,7 +2216,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       failure = describeFailure(e, crashWatch.signals());
       // #226: the app stopped answering navigation (a frozen backend) — nothing in the engine broke:
       // `inconclusive` with the typed `target-unresponsive` reason, never `crashed`.
-      stop = isTargetUnresponsive(failure) ? "inconclusive" : "crashed";
+      // #296: likewise a page whose renderer stopped answering (closed by the liveness watchdog).
+      stop = isTargetUnresponsive(failure) || isPageUnresponsive(failure) ? "inconclusive" : "crashed";
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.

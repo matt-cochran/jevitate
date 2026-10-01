@@ -34,7 +34,7 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
 import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
+import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "../transcript.js";
 import { seedRedirectReason } from "../seed-redirect.js";
@@ -734,7 +734,8 @@ async function runFeatureFrontier(
     const failure = describeFailure(e, crashWatch.signals());
     // #226: the app stopped answering navigation (a frozen backend): the run stopped short of its
     // target — the same `inconclusive` ending as losing the seed, with the typed reason, never `crashed`.
-    return endRun(isTargetUnresponsive(failure) ? "scope-unreachable" : "crashed", failure);
+    // #296: a page whose renderer stopped answering (closed by the liveness watchdog) is `stalled`.
+    return endRun(isTargetUnresponsive(failure) ? "scope-unreachable" : isPageUnresponsive(failure) ? "stalled" : "crashed", failure);
   } finally {
     watchdog.stop();
     await sessions.closeOwned();
