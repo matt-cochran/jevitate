@@ -1636,7 +1636,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // #237: giving up before trying anything proves nothing about the app. Refused (and the model
         // told to explore) while the page offers controls; a model that insists ends `inconclusive`.
         const untried = modelControls.filter((c) => c.enabled);
-        if (actionAttempts === 0 && untried.length > 0) {
+        // A find-out goal that already made a grounded report attempt here searched the page (#207).
+        if (actionAttempts === 0 && untried.length > 0 && reportRejections === 0) {
           earlyBlocked += 1;
           if (earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
             const nav = [...untried.filter((c) => (c.landmark ?? null) !== null), ...untried.filter((c) => (c.landmark ?? null) === null)];
