@@ -103,6 +103,7 @@ import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
+import { FailedActionStreak, openOverlayName } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
 
 
@@ -623,6 +624,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * set above — so a re-decide never re-chooses the same refused control.
    */
   const refusedKeys = new Set<string>();
+  /**
+   * #272 / #294: real actions that failed, in a row — a covered / unreachable target is withheld
+   * after its second failure, and `MAX_FAILED_ACTIONS` failures in a row end the run, whatever the
+   * page signature did meanwhile (a failed click that scrolls the page can flicker it).
+   */
+  const failedActs = new FailedActionStreak();
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -663,6 +670,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** A control acted on successfully is no longer the blocker. */
   const cleared = (c: Control): void => {
     if (blockers.target?.key === keyOf(c)) blockers.target = null;
+  };
+  /**
+   * #272 / #294: a REAL action on `c` failed (act ran, `ok: false`). Tells the model when the target
+   * is withheld; returns true when the run must stop (`stop` / `incomplete` are set) — too many
+   * failed actions in a row, naming the overlay that covers the page when there is one.
+   */
+  const noteFailedAct = async (c: Control, reason: string | undefined): Promise<boolean> => {
+    const v = failedActs.fail(keyOf(c), quote(c.name || c.summary, 80), reason ?? "?");
+    if (v.note !== null) history.push(v.note);
+    if (!v.stop) return false;
+    const n = failedActs.consecutive;
+    const last = quote(failedActs.lastReason() ?? "?", 200);
+    const covered = failedActs.dominantCause() === "covered";
+    const overlay = covered ? await page.evaluate(openOverlayName).catch(() => null) : null;
+    if (overlay !== null) {
+      incomplete = `blocked by an overlay: ${n} actions in a row failed because ${overlay} covers the page — it was never dismissed (last: ${last})`;
+      stop = "blocked";
+    } else {
+      incomplete = `stuck: ${n} actions in a row failed${covered ? " (their targets were covered)" : ""} (last: ${last})`;
+      stop = "no-progress";
+    }
+    return true;
   };
   const replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
   const replyCeilingMs = Math.max(replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
@@ -766,6 +795,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
+    failedActs.succeeded();
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
@@ -1104,11 +1134,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // #168 — a control the safety policy already refused this run is withheld from now on (never
       // re-offered, so the model cannot re-choose it and burn another action on the same refusal).
       if (refusedKeys.size > 0) modelControls = modelControls.filter((c) => !refusedKeys.has(keyOf(c)));
+      // #272 / #294 — a target whose action failed twice as covered / unreachable is withheld until
+      // an action succeeds (the model was told why).
+      {
+        const withheld = failedActs.withheld();
+        if (withheld.size > 0) modelControls = modelControls.filter((c) => !withheld.has(keyOf(c)));
+      }
 
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
       const path = safePath(snap.url);
       if (lastPath !== null && path !== lastPath) {
+        failedActs.succeeded();
         unsent.submitted();
         valueLog.submitted();
         save.reset();
@@ -1686,6 +1723,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
           track.lastRecordedTarget = null;
           tracker.countAction();
+          failedActs.succeeded();
           // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
           valueLog.reloaded();
           save.reset();
@@ -1816,6 +1854,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           value: placeholder,
         });
         lastActedOp = decision.op;
+        if (!r.ok && (await noteFailedAct(control, (r.reason ?? "").split(value).join(placeholder)))) break;
         continue;
       }
 
@@ -1846,6 +1885,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             history.push(`edit failed: ${failNote(r.reason, control)}`);
           }
           record(r.ok, r.ok ? what : failNote(r.reason, control), planned.edit.value === undefined ? {} : { value: planned.edit.value });
+          if (!r.ok && (await noteFailedAct(control, r.reason))) {
+            lastActedOp = decision.op;
+            break;
+          }
         }
         lastActedOp = decision.op;
         continue;
@@ -1934,6 +1977,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             history.push(`send failed: ${r.reason ?? "?"}`);
             record(false, forcedNote === null ? r.reason : `${forcedNote}; ${r.reason ?? ""}`, { op, message });
             lastActedOp = op;
+            if (await noteFailedAct(control, r.reason)) break;
             continue;
           }
           recorder.fill(control.descriptor, message, at);
@@ -1976,6 +2020,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         record(r.ok, r.reason, { message });
         lastActedOp = op;
+        if (!r.ok && (await noteFailedAct(control, r.reason))) break;
         continue;
       }
 
@@ -2029,6 +2074,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: option });
         lastActedOp = op;
+        if (!r.ok && (await noteFailedAct(control, r.reason))) break;
         continue;
       }
 
@@ -2095,6 +2141,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           history.push(`${decision.op} failed: ${failNote(r.reason, control)}`);
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: text });
+        if (!r.ok && (await noteFailedAct(control, r.reason))) {
+          lastActedOp = decision.op;
+          break;
+        }
       } else if (decision.op === "click") {
         // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
         // latest reply is a conversation turn: its reply is awaited like a `send`'s.
@@ -2184,6 +2234,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           ...(message === undefined ? {} : { message }),
           ...(reply === undefined ? {} : { reply }),
         });
+        if (!r.ok && (await noteFailedAct(control, r.reason))) {
+          lastActedOp = decision.op;
+          break;
+        }
       } else {
         // upload — act fails closed without a fixture.
         const r = await act(cfg.actor, { op: "upload", control, fixture });
@@ -2205,6 +2259,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           history.push(`upload failed: ${failNote(r.reason, control)}`);
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
+        if (!r.ok && (await noteFailedAct(control, r.reason))) {
+          lastActedOp = decision.op;
+          break;
+        }
       }
 
       lastActedOp = decision.op;

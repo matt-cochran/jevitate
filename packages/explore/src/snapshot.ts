@@ -217,6 +217,13 @@ interface ControlFacts {
   readonly richText: boolean;
   /** See `Control.clippedOffscreen` (#75, #161). */
   readonly clippedOffscreen: boolean;
+  /**
+   * #272: a modal is open (`dialog:modal`, a visible `[aria-modal=true]`, or an open `<dialog>`
+   * drawn as a fixed overlay over much of the viewport) and this control is outside it — a user
+   * cannot reach it until the modal is dismissed, wherever it sits (even below the fold, where the
+   * centre-point occlusion probe cannot see the overlay).
+   */
+  readonly outsideModal: boolean;
 }
 
 /**
@@ -247,6 +254,22 @@ function readControlFacts(node: Node): ControlFacts {
   // it). A `visible` control per the check above (non-zero box, not display:none) can still be
   // clipped to near-nothing or pulled off-screen by a large negative offset.
   const clippedOffscreen = (rect.width <= 1 && rect.height <= 1) || rect.left <= -1_000 || rect.top <= -1_000;
+  // #272: the open modal(s) — a control outside every one is behind it, however far down it sits.
+  const modals = Array.from(document.querySelectorAll('dialog[open], [aria-modal="true"]')).filter((m) => {
+    const ms = window.getComputedStyle(m as HTMLElement);
+    const mr = (m as HTMLElement).getBoundingClientRect();
+    if (ms.display === "none" || ms.visibility === "hidden" || mr.width <= 0 || mr.height <= 0) return false;
+    if (m.tagName.toLowerCase() !== "dialog") return true;
+    let modal = false;
+    try {
+      modal = m.matches(":modal");
+    } catch {
+      modal = false;
+    }
+    // A non-modal `<dialog open>` blocks the page only when it is drawn as an overlay (fixed, large).
+    return modal || (ms.position === "fixed" && mr.width * mr.height >= 0.25 * window.innerWidth * window.innerHeight);
+  });
+  const outsideModal = modals.length > 0 && !modals.some((m) => m === el || m.contains(el));
 
   const roleAttr = norm(el.getAttribute("role")).split(" ")[0] ?? "";
   const roleByTag: Record<string, string> = {
@@ -425,6 +448,7 @@ function readControlFacts(node: Node): ControlFacts {
     landmark,
     richText,
     clippedOffscreen,
+    outsideModal,
   };
 }
 
@@ -559,6 +583,8 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
       const raw = await handle.evaluate(readControlFacts);
       // Hidden file inputs are the sole exception (see the module doc).
       if (!raw.visible && raw.inputType !== "file") continue;
+      // #272: behind an open modal — never offered (a click there is intercepted by the modal).
+      if (raw.outsideModal) continue;
       // Occlusion — the ONE shared predicate (./occlusion.ts), also used by act()'s gate: a control
       // a user cannot click (covered by an overlay, or by an ancestor at its own centre) is not
       // offered. Off-screen controls stay eligible (scroll ops reach them).
