@@ -4,7 +4,7 @@ import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -505,6 +505,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...mission.recording,
       ...(missionFixture === undefined ? {} : { fixture: recordingFixture(missionFixture.record) }),
       ...(resolvedEmulation === undefined ? {} : { emulation: recordingEmulation(resolvedEmulation) }),
+      ...extensionsStamp(opts.browser), // #256
     };
     // Never blocks the mission itself: the drain wait happens AFTER `runGoalBasedMission` returned.
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(mission.transcript);

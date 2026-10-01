@@ -18,7 +18,7 @@ import {
 } from "./mission-fixtures.js";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
 import { dirname as dirnameOf, join as joinPath, resolve as resolveFile } from "node:path";
-import { listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { assertSameExtensionBuild, listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import {
@@ -374,6 +374,12 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   };
   const recording = finding.recording ?? mission.recording;
   if (recording === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  // #256: replay only under the extension build the finding was recorded with (none ⇔ none).
+  try {
+    assertSameExtensionBuild(recording.extensions, opts.browser, `finding ${finding.fingerprint}`);
+  } catch (e) {
+    throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
+  }
   // #149: replay under the finding's OWN recorded emulation by default — a 375px defect reproduces
   // at 375px, not the caller's desktop default. An explicit --viewport/--device that DIFFERS from
   // it fails closed (never silently "verifies fixed" at the wrong device) unless overridden.

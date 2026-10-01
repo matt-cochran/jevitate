@@ -183,6 +183,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--changed-routes <globs>` | only run Journeys and goals touching these route globs (comma list, repeatable), e.g. '/settings/**' | `[]` |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--json` | emit the JSON envelope (default: a one-line summary per item, then the envelope path) |  |  |  |  |
 | `--json-out <path>` | JSON envelope path (default <out>/check.json) |  |  |  |  |
@@ -227,6 +228,7 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
@@ -264,6 +266,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | the named environment to demo on (.jevitate/environments.json); required, and never one flagged production: true |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
@@ -335,6 +338,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--deny <pattern>` | a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default | `[]` |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--evidence-video` | per defect: replay its minimal repro with captions + the failing step marked, record a masked clip and before/at screenshots (defects[].evidence; linked from drafts) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--feature <name>` | run the capability-scoped feature-testing mission (instead of --goal/--success) |  |  |  |  |
 | `--file-issues` | file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only |  |  |  |  |
@@ -414,6 +418,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--goal <text>` | natural-language goal |  |  |  |  |
 | `--id <id>` | journey id (used for the <id>.json filename in the store) |  |  |  |  |
@@ -689,6 +694,7 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | draft with the deterministic fake generator (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
@@ -727,6 +733,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--guide <file>` | write a Markdown guide here (.md), screenshots in <name>.assets/ beside it |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
@@ -841,6 +848,7 @@ jevitate journey run [options] <id>
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways for self-heal (pipeline smoke only) | `false` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display — else use --record-video |  |  |  |  |
@@ -925,6 +933,7 @@ re-check every ledger entry (or the named ones) with verify-fix, from the ledger
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--dir <path>` | regressions directory; the ledger is its ledger/ subdirectory (default: the repo's .jevitate/regressions) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--json` | emit a JSON envelope (default: a human summary) |  |  |  |  |
 | `--replays <n>` | fresh-context replays per entry that confirm a fix (default 3) |  |  |  |  |
 | `--storage-state <file>` | the session to replay an authenticated target with (entries never store one) |  |  |  |  |
@@ -963,6 +972,7 @@ jevitate load run [options] <journeyId>
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--iterations <n>` | iterations per actor | `1` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
@@ -1092,6 +1102,7 @@ run queued missions (queue_exploration) through their strategy's runner; get_mis
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--dir <path>` | mission queue directory (default: ~/.jevitate/missions/queue) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
 | `--interval <ms>` | --watch poll interval in ms (default 5000) | `5000` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1254,6 +1265,7 @@ record a demonstrated flow into a Recording (authoring plane)
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json); its chrome-extension://<id> origin is allowed | `[]` |  |  |  |
 | `--headless` | run headless (default: headed — a record session is a live demonstration) | `false` |  |  |  |
 | `--intent <text>` | your framing of the journey (carried to Recording.intent) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
@@ -1375,6 +1387,7 @@ jevitate regression capture [options]
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fingerprint <fp>` | pin the required failure — a structural step signature (alone, restricts --from to failing at exactly that step), or (with --result, #119/#129) a defect/invariant fingerprint from the mission's own findings; with --result alone, cross-checks the derived oracle |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--force` | overwrite an existing regression id's committed files (default: refused, #213) | `false` |  |  |  |
@@ -1413,6 +1426,7 @@ jevitate regression run [options] <id>
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
 | `--dir <path>` | regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions) |  |  |  |  |
 | `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
@@ -1622,6 +1636,7 @@ run a Journey from a trusted remote source through the run-gate
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
@@ -1740,6 +1755,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fingerprint <fp>` | the defect/hang fingerprint to verify |  |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
 | `--hang-replay-writes` | let a hang's replay re-send a paid/destructive write the run sent (default: the verdict is inconclusive, never replayed) |  |  |  |  |

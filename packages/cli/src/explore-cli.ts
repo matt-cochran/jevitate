@@ -88,7 +88,7 @@ import {
   GatewaySelectionError,
   buildExploreGateways,
 } from "./cli-shared.js";
-import { multiWindowWarning } from "./browser-run-options.js";
+import { allowWithExtensions, assertExtensionTargetLoaded, multiWindowWarning } from "./browser-run-options.js";
 
 /**
  * Registers `jevitate explore` (every strategy: goal, coverage, exploratory, adversarial, usability, feature, multi-run).
@@ -547,6 +547,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       let browser: ReturnType<typeof browserRunFromFlags>;
       try {
         browser = browserRunFromFlags(o, deps.explore?.env ?? process.env);
+        // #256: a chrome-extension:// --url must be a loaded extension's; loaded extensions' origins are allowed.
+        assertExtensionTargetLoaded(o.url, browser);
+        o.allow = allowWithExtensions(o.url, o.allow, browser);
       } catch (err) {
         emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
         return;

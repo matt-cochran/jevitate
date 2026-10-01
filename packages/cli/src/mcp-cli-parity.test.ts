@@ -198,6 +198,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       selfHeal: "--self-heal",
       real: "--real",
       fakeAi: "--fake-ai",
+      extension: "--extension",
     },
     omitted: {
       "--dir": OMIT.storeDir,
@@ -227,6 +228,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       allowEmulationOverride: "--allow-emulation-override",
       invariants: "--invariants",
       fixtures: "--fixtures",
+      extension: "--extension",
     },
     omitted: {
       "--fingerprint": "the positional's alias: MCP takes one 'fingerprint'",

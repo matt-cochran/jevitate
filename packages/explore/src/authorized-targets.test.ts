@@ -4,6 +4,7 @@ import {
   isAuthorizedExploreTarget,
   UnauthorizedExploreTargetError,
   normalizeAllowlist,
+  thirdPartyOrigin,
 } from "./index.js";
 
 const ALLOW = ["http://127.0.0.1:3000", "https://staging.example.com"];
@@ -63,5 +64,28 @@ describe("authorized-targets guard (guardrail #1: authoring/test plane only)", (
   it("isAuthorizedExploreTarget is the non-throwing companion", () => {
     expect(isAuthorizedExploreTarget("http://127.0.0.1:3000/x", ALLOW)).toBe(true);
     expect(isAuthorizedExploreTarget("http://other.test/x", ALLOW)).toBe(false);
+  });
+});
+
+describe("#256: chrome-extension:// origins", () => {
+  const ID = "kppeopockgllidioapmbgnipplfeaffl";
+  const OTHER = "abcdefghijklmnopabcdefghijklmnop";
+  const EXT = `chrome-extension://${ID}`;
+
+  it("authorizes exactly the allowlisted extension id", () => {
+    expect(assertAuthorizedExploreTarget(`${EXT}/sidepanel.html`, [EXT])).toBe(EXT);
+    expect(isAuthorizedExploreTarget(`${EXT}/popup.html?x=1`, ["http://127.0.0.1:3000", EXT])).toBe(true);
+    expect(isAuthorizedExploreTarget(`chrome-extension://${OTHER}/sidepanel.html`, [EXT])).toBe(false);
+    expect(isAuthorizedExploreTarget(`${EXT}/sidepanel.html`, ["http://127.0.0.1:3000"])).toBe(false);
+  });
+
+  it("an allowlist entry may be the bare origin or a page of it; a malformed id never authorizes", () => {
+    expect(normalizeAllowlist([`${EXT}/sidepanel.html`, EXT])).toEqual([EXT]);
+    expect(normalizeAllowlist(["chrome-extension://not-an-id", "chrome-extension://ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP"])).toEqual([]);
+    expect(isAuthorizedExploreTarget("chrome-extension://not-an-id/x.html", ["chrome-extension://not-an-id"])).toBe(false);
+  });
+
+  it("an extension origin is never a third-party origin", () => {
+    expect(thirdPartyOrigin(`${EXT}/x.js`, ["http://127.0.0.1:3000"])).toBeNull();
   });
 });

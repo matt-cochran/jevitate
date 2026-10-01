@@ -282,7 +282,20 @@ export interface Recording {
    * SAME device by default — a 375px defect never "verifies fixed" at a desktop width.
    */
   emulation?: RecordingEmulation;
+  /**
+   * #256: the unpacked browser extensions the run loaded (`--extension`), additive: absent means
+   * none. Each one's id, manifest name and version — never its local path — so verify-fix / a
+   * replay refuses a different build instead of reaching a verdict against it.
+   */
+  extensions?: RecordingExtension[];
   pages: PageSegment[];
+}
+
+export interface RecordingExtension {
+  /** The Chromium extension id (the `chrome-extension://<id>` host). */
+  id: string;
+  name: string;
+  version: string;
 }
 
 export interface RecordingFixture {
@@ -673,6 +686,9 @@ export const RecordingSchema: ZodType<Recording> = z.object({
       hasTouch: z.boolean().optional(),
     })
     .strict()
+    .optional(),
+  extensions: z
+    .array(z.object({ id: z.string().regex(/^[a-p]{32}$/), name: z.string(), version: z.string() }).strict())
     .optional(),
   pages: z.array(PageSegmentSchema),
 });

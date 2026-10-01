@@ -6,7 +6,8 @@
  *
  *  - an empty allowlist authorizes NOTHING (not everything),
  *  - a URL that does not parse is refused (not "probably fine"),
- *  - a `javascript:` / `data:` / `file:` scheme is refused,
+ *  - a `javascript:` / `data:` / `file:` scheme is refused (`chrome-extension://<id>` is an
+ *    origin like any other, #256 — authorized only when that exact id is on the allowlist),
  *  - the check is by ORIGIN (scheme + host + port), so a path or query can
  *    never smuggle a call onto an unauthorized host.
  *
@@ -33,13 +34,23 @@ export class UnauthorizedExploreTargetError extends Error {
   }
 }
 
-/** The safe origin of a URL, or `null` when it has none we will act on. */
+/**
+ * The safe origin of a URL, or `null` when it has none we will act on: an http(s) origin, or (#256)
+ * a `chrome-extension://<id>` origin whose host is a well-formed Chromium extension id (32 letters
+ * a–p). WHATWG `URL` gives a non-special scheme the opaque origin `"null"`, so the extension origin
+ * is built here — it is still matched EXACTLY against the allowlist, so only the ids a run loaded
+ * (and allowlisted) are ever authorized.
+ */
 function originOf(raw: string): string | null {
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
     return null;
+  }
+  if (u.protocol === "chrome-extension:") {
+    if (!/^[a-p]{32}$/.test(u.host) || u.username !== "" || u.password !== "") return null;
+    return `chrome-extension://${u.host}`;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   return u.origin;
@@ -110,7 +121,7 @@ function siteOf(host: string): string {
  */
 export function thirdPartyOrigin(url: string, allowlist: readonly string[]): string | null {
   const origin = originOf(url);
-  if (origin === null) return null;
+  if (origin === null || origin.startsWith("chrome-extension:")) return null;
   const allowed = normalizeAllowlist(allowlist);
   if (allowed.length === 0 || allowed.includes(origin)) return null;
   const host = new URL(origin).hostname;

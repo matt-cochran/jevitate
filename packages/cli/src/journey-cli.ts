@@ -7,6 +7,7 @@ import { makeExploreSelfHealer } from "./self-heal-adapter.js";
 import { ok, fail } from "./envelope.js";
 import { SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { runJourneyProgrammatically, promoteJourney, UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js";
+import { ExtensionMismatchError } from "./browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
@@ -279,6 +280,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
         } else if (err instanceof JourneyRequiresAuthError) {
           emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", String(err.message)));
+        } else if (err instanceof ExtensionMismatchError) {
+          emitJson(program, fail(err.code, err.message));
         } else if (err instanceof FixtureSetupError) {
           // Never run on unknown state: inconclusive, a configuration error (exit 2).
           emitJson(

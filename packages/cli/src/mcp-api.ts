@@ -51,14 +51,14 @@ import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { JourneyRequiresAuthError, UnknownJourneyError, runJourneyProgrammatically } from "./journey-api.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
-import { type BrowserRunOptions } from "./browser-run-options.js";
+import { ExtensionMismatchError, type BrowserRunOptions } from "./browser-run-options.js";
 import { browserRunFromFlags, emulationFromFlags } from "./cli-shared.js";
 import { environmentFromFlags, isEnvironmentError, type ResolvedJourneyEnvironment } from "./environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "./mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
-import { McpArgError, argErrorBody, optBool, optEnum, optInt, optPath, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
+import { McpArgError, argErrorBody, optBool, optEnum, optInt, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optStringMap, optViewport } from "./mcp-args.js";
 import { defaultMcpPathRoots } from "./mcp-paths.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS, cliToolInputSchema, runCliTool } from "./mcp-cli-tools.js";
@@ -526,8 +526,9 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const shots = optScreenshots(args, pathRoots);
     const viewport = optViewport(args);
     const device = optString(args, "device");
+    const extension = optExtensions(args, pathRoots);
     try {
-      const browser = browserRunFromFlags({ browserArg: [], ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
+      const browser = browserRunFromFlags({ browserArg: [], ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       const screenshots = parseScreenshotsArg(shots);
       const emulation = emulationFromFlags({ ...(viewport === undefined ? {} : { viewport }), ...(device === undefined ? {} : { device }) });
       return {
@@ -618,11 +619,12 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     const headed = optBool(args, "headed");
     const slowMo = optInt(args, "slowMo", 0);
     const recordVideo = optRecordVideo(args, pathRoots);
+    const extension = optExtensions(args, pathRoots);
     let browser: BrowserRunOptions | undefined;
     let screenshots: ScreenshotsSpec | undefined;
     let emulation: EmulationSpec | undefined;
     try {
-      browser = browserRunFromFlags({ browserArg: [], ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
+      browser = browserRunFromFlags({ browserArg: [], ...(extension === undefined ? {} : { extension }), ...(headed === undefined ? {} : { headed }), ...(slowMo === undefined ? {} : { slowMo }), ...(recordVideo === undefined ? {} : { recordVideo }) });
       screenshots = parseScreenshotsArg(optScreenshots(args, pathRoots));
       const viewport = optViewport(args);
       const device = optString(args, "device");
@@ -688,7 +690,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "Replay a finding's reproduction (by mission result id — or a finished queue_exploration missionId — + fingerprint) N times in fresh browsers (default 3) — `jevitate verify-fix`. status: fixed (signal absent on every replay) | still-reproduces | intermittent (fired on some but not all replays — never a pass) | inconclusive (replay could not reach the step — never a pass). " +
         "#255 (same as the CLI flags): 'replays' (>= 1); 'recordVideo' (true or a directory: the before/after evidence pair — `evidence.before` is the run's own clip, `evidence.after` a captioned replay — plus videoPaths); 'screenshots'; 'headed'/'slowMo'; " +
         "'storageState' (a path inside the project or ~/.jevitate, never a repo's .jevitate/; overrides the mission's session); 'viewport' {width,height} or 'device' (refused when it differs from the finding's recorded emulation unless 'allowEmulationOverride'); " +
-        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
+        "'invariants' (invariant file paths re-checking a declared-invariant defect); 'fixtures' (a fixtures file overriding the mission's saved one); 'extension' (#256: unpacked extension directories — refused unless the same build the finding was recorded with). Operator-only settings (shell hooks, cmd: log sources, re-sending paid/destructive hang writes) come from targets.json, never an argument.",
       inputSchema: {
         type: "object",
         properties: {
@@ -705,6 +707,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           allowEmulationOverride: { type: "boolean" },
           invariants: { type: "array", items: { type: "string" } },
           fixtures: { type: "string" },
+          extension: { type: "array", items: { type: "string" } },
         },
         required: ["id", "fingerprint"],
       },
@@ -730,7 +733,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'fixtures' (a fixtures JSON path: setup before, restore after; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals). A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -749,6 +752,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           selfHeal: { type: "string", enum: ["fail-closed", "hybrid", "full"] },
           real: { type: "boolean" },
           fakeAi: { type: "boolean" },
+          extension: { type: "array", items: { type: "string" } },
         },
         required: ["id"],
       },
@@ -778,6 +782,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           }
           if (err instanceof UnknownJourneyError) return errorResult({ error: "not_found", id: args.id, message: err.message });
           if (err instanceof JourneyRequiresAuthError) return errorResult({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });
+          if (err instanceof ExtensionMismatchError) return errorResult({ error: "invalid_args", code: err.code, message: err.message });
           if (err instanceof ParamValidationError) return errorResult({ error: "invalid_args", code: "E_INVALID_PARAMS", message: err.message });
           if (isEnvironmentError(err) || err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
             return errorResult({ error: "invalid_args", code: err.code, message: err.message });

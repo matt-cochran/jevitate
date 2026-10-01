@@ -181,6 +181,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   browserExecutable: "a check launches every item's browser the same way: pass --browser-executable to `jevitate check`",
   browserChannel: "a check launches every item's browser the same way: pass --browser-channel to `jevitate check`",
   browserArg: "a check launches every item's browser the same way: pass --browser-arg to `jevitate check`",
+  extension: "#256: a check launches every item's browser the same way: pass --extension to `jevitate check` (a suite item with its own `allow` lists the chrome-extension://<id> origin itself)",
   real: "one model gateway per check: the suite's `ai` or `jevitate check --real`",
   fakeAi: "one model gateway per check: the suite's `ai` or `jevitate check --fake-ai`",
   out: "one output directory per check (`jevitate check --out`); item results go to <out>/results",

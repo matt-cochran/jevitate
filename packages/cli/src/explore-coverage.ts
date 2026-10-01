@@ -4,7 +4,7 @@ import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -317,7 +317,7 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     // #149: every repro Recording (per-state, and each defect's own) is stamped with the emulation
     // it was found under, so `verify-fix` replays it under the SAME device by default.
     const emu = recordingEmulation(resolvedEmulation);
-    const withEmu = (r: Recording): Recording => (emu === undefined ? r : { ...r, emulation: emu });
+    const withEmu = (r: Recording): Recording => ({ ...(emu === undefined ? r : { ...r, emulation: emu }), ...extensionsStamp(opts.browser) }); // + #256
     const stampedDefects = result.coverage.defects.map((d) => ({ ...d, recording: withEmu(d.recording) }));
     const stampedCoverage = { ...result.coverage, defects: stampedDefects };
     const serverLogRun = serverLog === undefined ? undefined : await serverLog.finish(result.transcript);

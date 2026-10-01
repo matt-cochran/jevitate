@@ -629,7 +629,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (49 exports)
+# @jevitate/playwright (61 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -644,6 +644,9 @@
   DEFAULT_PAGE_UNRESPONSIVE_MS: const (number)
   DEFAULT_PRESSURE_THRESHOLDS: object
   DarwinResourceSignals: class
+  EXTENSION_ID: object
+  ExtensionDirError: class
+  ExtensionLoadError: class
   LinuxResourceSignals: class
   PageLivenessWatchdog: class
   PlaywrightBrowserPort: class
@@ -663,9 +666,15 @@
   defaultLinuxSignalDeps: object
   defaultMaxContexts: function
   defaultWin32SignalDeps: object
+  describeExtensions: function
   emulationContextOptions: function
   errnoCode: function
   explainLaunchFailure: function
+  extensionIdForKey: function
+  extensionIdForPath: function
+  extensionIdentity: function
+  extensionLaunchArgs: function
+  extensionOrigin: function
   knownDeviceNames: function
   pageLostReason: function
   pageUnresponsiveMsFromEnv: function
@@ -675,8 +684,11 @@
   parseVmPressureLevel: function
   parseVmStatAvailableBytes: function
   probeReachable: function
+  readUnpackedExtension: function
+  readUnpackedExtensions: function
   resolveEmulation: function
   resolveLaunchArgs: function
+  sameExtensionBuild: function
   sharedBrowserPool: function
   withOpenDeadline: function
 

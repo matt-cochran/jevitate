@@ -3,7 +3,7 @@ import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, demoOverlayOf, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { closeOnce, demoOverlayOf, extensionsStamp, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -348,8 +348,10 @@ export async function runAdversarialCliMission(
       ...videos,
       ...shotFields,
       // #149: stamped with the emulation the mission ran under, so verify-fix replays under it by default.
-      recording:
-        resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) },
+      recording: {
+        ...(resolvedEmulation === undefined ? outcome.recording : { ...outcome.recording, emulation: recordingEmulation(resolvedEmulation) }),
+        ...extensionsStamp(opts.browser), // #256
+      },
       outcome: missionOutcome,
       transcript,
       recordingPath: journal.recordingPath,
