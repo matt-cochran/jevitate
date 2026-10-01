@@ -49,6 +49,8 @@ import {
   NO_ANSWER_REASON,
   ObservedPages,
   answerNotFoundReason,
+  goalAsksToWrite,
+  UNSAVED_WRITE_REASON,
   controlFields,
   goalAsksForReply,
   reportAnswer,
@@ -243,6 +245,19 @@ export interface ExploreConfig {
    * "goal verified": the mission's final, independent verdict decides.
    */
   readonly successCheckPending?: () => string | null;
+  /**
+   * #235: every success check is judged only AFTER the run (a `reloadThen`): the in-run `successCheck`
+   * evaluates nothing, so it holds vacuously. It still grounds the model's own `done` (provisionally,
+   * see `successCheckPending`), but never turns a `blocked`, a sign-in or the decision's "already met"
+   * signal into "goal already met" — the run did not show anything held.
+   */
+  readonly successCheckDeferred?: boolean;
+  /**
+   * #286: the goal asks the run to report what it found (`goalAsksForReport`) while `--success` checks
+   * judge the rest: a `done` is no ending — the run ends with a grounded `report` — and neither a
+   * `blocked` nor the "already met" signal is turned into "goal already met" (that has no answer).
+   */
+  readonly requireAnswer?: boolean;
   /**
    * #225: a `done` rejected by `successCheck` ends the run at once when the job is nonetheless judged
    * done on the page (the advisory goal judgment / code-observed save grounding, as without a check) —
@@ -575,6 +590,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const blockedReported = new Set<string>();
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   let lastReportNotFound = false;
+  /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
+  let lastAbsenceUncovered: string | null = null;
+  /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
+  let settledClick: ReturnType<SideEffectGuard["lastClick"]> = null;
+  let wroteOk = false;
+  /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
+  const writeGoal = goalAsksToWrite(cfg.goal);
   // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.
   const vetoes = new VetoedAnswers();
   const replies = new ObservedPages(secrets);
@@ -628,6 +650,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * set above — so a re-decide never re-chooses the same refused control.
    */
   const refusedKeys = new Set<string>();
+  /** #235: the latest safety refusal's reason (named when the model then gives up), else null. */
+  let lastRefusal: string | null = null;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -852,6 +876,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
       sideEffects.settle();
+      // #239: a click whose writes all succeeded saved what the run had typed — from here those values
+      // are the app's, and the run has written (a write goal's report may settle it).
+      {
+        const lc = sideEffects.lastClick();
+        if (lc !== null && lc !== settledClick) {
+          settledClick = lc;
+          if (lc.writes.length > 0 && lc.writes.every((w) => w.status !== null && w.status >= 200 && w.status < 300)) {
+            observed.confirmOwnInputs();
+            wroteOk = true;
+          }
+        }
+      }
       // #158 — the action's window closes once the page settled: later writes are the app's own.
       if (readOnly?.settled() === true) effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
@@ -1170,6 +1206,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         controlNames: snap.controls.filter((c) => isActionOrChromeName(c, chrome)).map((c) => c.name),
         // #229: the content links' text, in page order (a list's entries: "the first item").
         contentLinks: snap.controls.filter((c) => !isActionOrChromeName(c, chrome)).map((c) => c.name),
+        // #238: where the page's navigation leads — the first page's is the absence-answer coverage floor.
+        navLinks: snap.controls
+          .filter((c) => c.role === "link" && (c.landmark === "navigation" || c.landmark === "banner"))
+          .flatMap((c) => (typeof c.href === "string" && c.href !== "" ? [c.href] : [])),
         ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
       });
       noteReplyText(snap.url, visibleText);
@@ -1400,6 +1440,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           (decision.goalMet !== null && decision.goalMet >= GOAL_CHECK_TRIGGER)) &&
         decision.op !== "done" &&
         decision.op !== "report" &&
+        // #235: an in-run check over nothing (every check is judged after the run) shows nothing held.
+        cfg.successCheckDeferred !== true &&
+        // #286: a goal that asks for a report is never "already met" without its answer.
+        cfg.requireAnswer !== true &&
         // #207: a find-out goal is verified by a grounded answer; its `blocked` (after a report
         // attempt on this state found none) never becomes an answerless "goal already met".
         !(findOut && decision.op === "blocked") &&
@@ -1429,6 +1473,20 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
       }
 
+      // #286: the goal asks for a report — `done` is no ending; the answer is (grounded by `report`).
+      if (decision.op === "done" && cfg.requireAnswer === true) {
+        doneRejections += 1;
+        const why = "the goal asks you to report what you found: end with `report` (a grounded answer), not `done`";
+        history.push(`done rejected: ${why}`);
+        record(false, `done rejected (${doneRejections}/${MAX_DONE_REJECTIONS}): ${why}`);
+        if (doneRejections >= MAX_DONE_REJECTIONS) {
+          incomplete = `the model proposed done ${doneRejections} times, but ${why}`;
+          endedOnRejectedDone = true;
+          stop = "done";
+          break;
+        }
+        continue;
+      }
       // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
       if (decision.op === "done") {
         const { verdict, judgments } = await groundGoal();
@@ -1512,7 +1570,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 secrets,
                 judge: cfg.judge,
                 vetoes,
-              }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
+                // #238: "none exists" is an answer only on observed pages that cover the app enough.
+                ...(replyPages === null ? { topNav: observed.topNavigation(), ownInputs: observed.ownInputs() } : {}),
+              })
+                // #239: a write goal's report settles nothing before a write of the run succeeded.
+                .then((v): AnswerVerdict =>
+                  v.accept && writeGoal && !wroteOk && v.answer.absent !== true ? { accept: false, reason: UNSAVED_WRITE_REASON, answer: v.answer } : v,
+                )
+                .catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
           const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
           record(true, `report accepted: answer grounded on ${on} (${verdict.answer.evidence.length} claim(s))`, {
@@ -1526,6 +1591,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         reportRejections += 1;
         // #223: an answer that is on the page but does not answer the question is no answer either.
         lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
+        lastAbsenceUncovered = verdict.absenceUncovered === true ? verdict.reason : null;
         history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
         record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
           answer: verdict.answer,
@@ -1574,7 +1640,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           continue;
         }
         record(true, "model blocked");
-        incomplete = "the model reported the goal cannot be advanced from this page";
+        // #235: a control the goal needed may have been refused — the reason says so, actionably.
+        incomplete = `the model reported the goal cannot be advanced from this page${lastRefusal === null ? "" : ` (${lastRefusal})`}`;
         stop = "blocked";
         break;
       }
@@ -1774,6 +1841,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const unsafe = safety.refuses(control);
         if (unsafe !== null) {
           refusedKeys.add(keyOf(control));
+          lastRefusal = unsafe.reason;
           history.push(unsafe.reason);
           record(false, unsafe.reason, { origin: "engine" });
           lastActedOp = decision.op;
@@ -2085,8 +2153,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // when it is unavailable the step fails (recorded, visible to the model) and the run goes on.
         let text: string | null;
         let rejected: string | undefined;
+        let source: "goal" | "model" | undefined;
         try {
-          ({ text, rejected } = await fillHelper.valueFor({
+          ({ text, rejected, source } = await fillHelper.valueFor({
             fieldLabel: control.name || control.summary,
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
@@ -2122,7 +2191,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         // Free-text form values are bounded too (dogfood: 2–3k-char markdown essays in "Rationale").
-        if (decision.op === "type" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
+        // #281: a value the goal states verbatim is typed as stated (its line breaks kept), never capped.
+        if (decision.op === "type" && source !== "goal" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
           text = capFormText(text, FORM_TEXT_MAX_CHARS, control.tag === "textarea");
         }
         const r = await act(cfg.actor, { op: decision.op, control, value: text });
@@ -2132,7 +2202,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
             valueLog.typed(control.name || control.summary, text);
-            if (!isBound(control) && !isCredentialField(control) && !sendable(control)) save.noteTyped(control.name || control.summary, text);
+            if (!isBound(control) && !isCredentialField(control) && !sendable(control)) {
+              save.noteTyped(control.name || control.summary, text);
+              // #239: until a write after it succeeds, the field shows what the run entered — not grounds.
+              observed.noteOwnInput(text);
+            }
           } else recorder.select(control.descriptor, text, at);
           noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
           tracker.countAction();
@@ -2284,6 +2358,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   if (stop === "no-progress" && cfg.hostHealth !== undefined) {
     const judged = await cfg.hostHealth.judge();
     if (judged.starved !== null) degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
+  }
+
+  // #238 — the latest report's answer was "none exists", but the run never covered enough of the app
+  // to establish it: it proved nothing either way — `inconclusive` (insufficient coverage), never a defect.
+  if (lastAbsenceUncovered !== null && answer === undefined && (stop === "no-progress" || stop === "blocked" || stop === "exhausted") && failure === undefined) {
+    failure = { kind: "insufficient-coverage", message: lastAbsenceUncovered };
+    incomplete = lastAbsenceUncovered;
+    stop = "inconclusive";
+    lastReportNotFound = false;
   }
 
   // #207 — a run whose latest report found no answer, and that then stopped for want of progress or

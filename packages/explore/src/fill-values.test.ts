@@ -224,3 +224,28 @@ describe("fill — never the field's own label; `exactly:` literals typed verbat
     expect(FORM_VALUE_INSTRUCTIONS).toMatch(/NEVER the field's own label/);
   });
 });
+
+describe("fill — a passage the goal quotes is typed verbatim, line breaks and all (#281)", () => {
+  const PASSAGE = "Hi team,\n\nClick here to learn more about reminders and how they can help you stay on track.";
+  const GOAL = `Create a reminder note. Import this text exactly as written: "${PASSAGE}" and save it.`;
+
+  it("the pre-pass types the quoted passage into a textarea without the model", async () => {
+    const { gen, inputs } = valueGen("Discover more about how reminders can assist you.");
+    const r = await new FillHelper(gen).valueFor({ fieldLabel: "Reminder text", goal: GOAL, visibleContext: "", field: TEXTAREA });
+    expect(r).toEqual({ text: PASSAGE, source: "goal" });
+    expect(inputs).toHaveLength(0);
+  });
+
+  it("never for a single-line input, a short quoted name, or a goal quoting two passages", async () => {
+    const { gen, inputs } = valueGen("Dana Ruiz");
+    await new FillHelper(gen).valueFor({ fieldLabel: "Title", goal: GOAL, visibleContext: "", field: TEXT });
+    await new FillHelper(gen).valueFor({ fieldLabel: "Notes", goal: 'Add a bet called "Raise Pro to $149" and save it.', visibleContext: "", field: TEXTAREA });
+    await new FillHelper(gen).valueFor({
+      fieldLabel: "Notes",
+      goal: 'Type "the first long passage of six words here" then type "a second long passage of six words"',
+      visibleContext: "",
+      field: TEXTAREA,
+    });
+    expect(inputs).toHaveLength(3);
+  });
+});

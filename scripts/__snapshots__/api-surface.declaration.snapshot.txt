@@ -255,7 +255,9 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (486 exports)
+# @jevitate/explore (494 exports)
+  absenceCoverage: function
+  AbsenceCoverage: interface
   act: function
   ActArgs: interface
   ActResult: interface
@@ -432,9 +434,12 @@
   GOAL_IS_SIGN_IN_QUESTION: variable
   GOAL_MET_INSTRUCTIONS: variable
   GOAL_MET_QUESTION: variable
+  goalAdmitsAbsence: function
   goalAsksFor: function
   goalAsksForChange: function
   goalAsksForReply: function
+  goalAsksForReport: function
+  goalAsksToWrite: function
   GoalBasedMissionConfig: interface
   GoalBasedOutcome: type-alias
   GoalBasedResult: interface
@@ -594,6 +599,7 @@
   redactText: other
   redactUrl: other
   refusalNote: function
+  REJECTED_AGAIN_REASON: variable
   RELOAD_TIMEOUT_MS: variable
   reloadPage: function
   RENDER_BASELINE_RENDERS: variable
@@ -717,9 +723,11 @@
   TranscriptStep: interface
   Triage: type-alias
   tryTriage: function
+  typedPassages: function
   UnauthorizedExploreTargetError: class
   uniqueIdentity: function
   unreadablePageTiming: function
+  UNSAVED_WRITE_REASON: variable
   UPLOAD_OP_GUIDE: variable
   urlMatcher: function
   vacuousCheckMessage: function

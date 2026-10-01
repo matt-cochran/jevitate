@@ -49,6 +49,15 @@ behaviour changes).
   open for minutes) counts as pending work for `wait` and `blocked` (#283).
 - A console error raised inside a cross-origin third-party iframe (a vendor's own CSP noise) is an
   advisory with its frame origin, not an app defect; every console signal records its `frameUrl` (#297).
+### Fixed
+
+- Find-out reports: numbered-list markers (`1.`, `2)`, `**3.**`) no longer count as stated figures, and an inflected claim word ("not subscribed") is said by its quote ("No subscription") (#236).
+- Find-out reports: a list answer may quote its entries one per line when each line is on one observed page, in order; a stitched quote that is not gets a repairable reason, and an identical resubmission is named as a repeat (#234).
+- Find-out reports: "none exists" is a first-class answer for a goal that asks whether something exists — accepted as `not present (pages seen: …)` (`answer.absent`, `answer.searched`) once the run has seen half its top-level navigation (≥ 2 pages), else the run is `inconclusive` (insufficient coverage), never a defect (#238).
+- Find-out reports never ground on the run's own typed-but-unsaved form values, and a goal that asks to record / save / create / invite something is not settled by a report before a write of the run succeeded (2xx) — "record a decision" was accepted with nothing saved (#239).
+- Goal runs: "Send invite" (and the other "Send <thing>" paid controls) is the goal-asked exemption when the goal orders the thing itself ("Invite a teammate"); a run whose only `--success` checks are `reloadThen` no longer turns a `blocked` into "goal already met" over an in-run check that evaluated nothing, and a model that gives up after a safety refusal names it in the reason (#235).
+- Goal runs: a goal that asks to report what it found ("Finish by reporting the price shown") is not met by its `--success` checks alone — the checks holding never stop it, `done` is answered with "end with `report`", and without a grounded answer it does not succeed (a `report` pseudo-check fails); a check held by an unrelated page's load-time request ended such a run `succeeded` with no price (#286).
+- Goal runs: a passage the goal quotes as text to type (after "type / enter / paste / write / import / insert / post / reply / add / use / with", or `text:` / `content:` / `body:`) — several lines, or 6+ words — is typed verbatim into a textarea / rich-text field by code, line breaks kept and never capped; the model paraphrased it and lost its paragraphs (#281).
 
 ## [0.2.0] – 2026-09-29
 

@@ -48,7 +48,14 @@ describe("the shared safety policy (#116)", () => {
     expect(goalAsksFor("Pressure-test the bet by simulating how customers respond", "simulation")).toBe(true);
     expect(goalAsksFor("Delete the draft note", "Delete")).toBe(true);
     expect(goalAsksFor("Sign out and back in", "Sign out")).toBe(true);
-    expect(goalAsksFor("Invite Dana", "Send invite")).toBe(false);
+    // #235: a goal that orders the thing itself ("Invite …") asks for "Send invite"; a mention does not.
+    expect(goalAsksFor("Invite Dana", "Send invite")).toBe(true);
+    expect(goalAsksFor("Invite a teammate to your workspace. Use the email jevitate-teammate@example.com.", "Send invite")).toBe(true);
+    expect(goalAsksFor("Open Team, then invite a teammate", "Send invite")).toBe(true);
+    expect(goalAsksFor("Report the invite's status", "Send invite")).toBe(false);
+    expect(goalAsksFor("Go to Invitations and count them", "Send invitations")).toBe(false);
+    expect(goalAsksFor("Find the email address on the profile", "Send email")).toBe(false);
+    expect(new SafetyPolicy({}, { goal: "Invite a teammate to your workspace." }).refuses(btn("Send invite"))).toBeNull();
     const p = new SafetyPolicy({}, { goal: "Delete the draft note you created" });
     expect(p.refuses(btn("Delete"))).toBeNull();
     expect(p.refuses(btn("Sign out"))).not.toBeNull();

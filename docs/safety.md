@@ -27,7 +27,8 @@ security bug, and how to report one.
 
 - Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Generate, Send
   invite) controls are refused by default. `--deny <pattern>` adds your own, and
-  `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for.
+  `--allow-destructive` lifts the default. A goal run may still click the one its goal asks for
+  ("Delete the draft" → Delete; "Invite a teammate" → Send invite).
   The paid classifier reads only short, verb-led button and link labels: a chat question card or
   a radio/checkbox answer that merely contains "pay", "trial" or "upgrade" is not refused unless
   its label names a charge. A refused control is not offered to the model again in that run.

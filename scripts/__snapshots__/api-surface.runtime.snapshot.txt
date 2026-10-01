@@ -156,7 +156,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (311 exports)
+# @jevitate/explore (318 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -238,6 +238,7 @@
   PageSignalCollector: class
   READ_ONLY_NOTE: const (string)
   REDACTION_MASK: const (string)
+  REJECTED_AGAIN_REASON: const (string)
   RELOAD_TIMEOUT_MS: const (number)
   RENDER_BASELINE_RENDERS: const (number)
   RENDER_SLOWDOWN_FACTOR: const (number)
@@ -268,6 +269,7 @@
   TargetUnresponsiveError: class
   TotpSeedError: class
   TranscriptLog: class
+  UNSAVED_WRITE_REASON: const (string)
   UPLOAD_OP_GUIDE: const (string)
   UnauthorizedExploreTargetError: class
   ValueCapturingGenerationPort: class
@@ -275,6 +277,7 @@
   WAIT_OP_MS: const (number)
   WITHHELD_ANSWER_NOTE: const (string)
   WRITE_METHODS: object
+  absenceCoverage: function
   act: function
   advisoryTitle: function
   affordedOp: function
@@ -334,9 +337,12 @@
   failureLine: function
   fieldKind: function
   finishDeclaredRun: function
+  goalAdmitsAbsence: function
   goalAsksFor: function
   goalAsksForChange: function
   goalAsksForReply: function
+  goalAsksForReport: function
+  goalAsksToWrite: function
   goalListsSeveral: function
   groundAnswer: function
   groupStepSignals: function
@@ -456,6 +462,7 @@
   toPath: function
   totp: function
   tryTriage: function
+  typedPassages: function
   uniqueIdentity: function
   unreadablePageTiming: function
   urlMatcher: function

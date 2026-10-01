@@ -103,7 +103,10 @@ export const GOAL_ANSWER_INSTRUCTIONS =
   "shows ONE item, its main heading IS that item's title / name: \"the title of this item\" is " +
   "answered by that heading, quoted verbatim. A list's heading names the list, not an item: \"the " +
   "first item\" is the list's first entry. `hint`, when present, is page data about the current " +
-  "page's heading / title. When the pages do not answer the goal, return `answer: null` and no claims.";
+  "page's heading / title. For a list (sections, options, items), give one claim per entry, each " +
+  "quoting that entry. When the pages do not answer the goal, return `answer: null` and no claims — " +
+  "also when the goal asks WHETHER something exists and no page shows it (code then reports it as not " +
+  "present, from the pages seen): never claim an absence with a quote that does not show it.";
 
 /** The answer to a find-out / understand goal, from the observed page text (`report`). */
 export const GoalAnswerInput = z.object({
@@ -117,7 +120,7 @@ export const GoalAnswerInput = z.object({
    * `null` answer while the page has one (a "title of this item" goal the model did not map to the h1).
    */
   hint: z.string().max(500).optional(),
-  instructions: z.string().max(1000).default(GOAL_ANSWER_INSTRUCTIONS),
+  instructions: z.string().max(1500).default(GOAL_ANSWER_INSTRUCTIONS),
 }).strict();
 export const GoalAnswerOutput = z.object({
   answer: z.string().nullable(),
@@ -284,7 +287,7 @@ export const JourneyGoalOutput = z.object({
 export const GEN_TASKS = {
   "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "5" },
   "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "2" },
-  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "4", temperature: 0 },
+  "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "5", temperature: 0 },
   "text.edit": { input: TextEditInput, output: TextEditOutput, promptVersion: "1", temperature: 0 },
   "triage.narrative": { input: TriageInput, output: TriageOutput, promptVersion: "1" },
   "ux.recommendation": { input: UxRecommendationInput, output: UxRecommendationOutput, promptVersion: "1" },
