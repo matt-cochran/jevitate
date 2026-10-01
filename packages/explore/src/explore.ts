@@ -6,9 +6,6 @@ import {
   type Bounds,
   type StopReason,
 } from "./bounds.js";
-import {
-  isAuthorizedExploreTarget,
-} from "./authorized-targets.js";
 import type { Snapshot } from "./snapshot.js";
 import { perceive } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
@@ -93,6 +90,7 @@ import { handleFill } from "./goal-loop/handle-fill.js";
 import { perceiveStep } from "./goal-loop/observe.js";
 import { captureDelta } from "./goal-loop/observe.js";
 import { checkHang } from "./goal-loop/hang-check.js";
+import { checkSettled } from "./goal-loop/settled-checks.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -469,73 +467,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (hung === "stop") break;
       if (hung === "continue") continue;
 
-      // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
-      if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
-        ctx.stop = "blocked";
-        break;
-      }
-
-      // Additive observation hook (usability analysis). Advisory: awaited but its
-      // result never gates the loop, bounds, or stop decision.
-      await cfg.onSnapshot?.(snap);
-
-      // #150 — mission spend budget, post-settle: UNLIKE onSnapshot above, this hook's result DOES
-      // gate the loop. A crossed budget stops the run cleanly, before its next decision.
-      if (cfg.onSettled !== undefined) {
-        const budget = await cfg.onSettled(snap);
-        if (budget.stop) {
-          ctx.transcript.record({
-            op: null,
-            control: null,
-            confidence: null,
-            chosenBy: "strategy",
-            strategy: "budget",
-            actOk: false,
-            reason: budget.reason,
-            snapshot: snap,
-            timing: perception.timing,
-          });
-          ctx.incomplete = budget.reason;
-          ctx.stop = "budget";
-          break;
-        }
-      }
-
-      // #174 — the success condition is already met (independent code): stop now, never act past it.
-      if (cfg.successMetNow !== undefined) {
-        const met = await cfg.successMetNow().catch(() => null);
-        if (met !== null) {
-          ctx.transcript.record({
-            op: "done",
-            control: null,
-            confidence: null,
-            chosenBy: "strategy",
-            strategy: "success-held",
-            actOk: true,
-            reason: `goal already met — stopped before the next action: ${met}`,
-            snapshot: snap,
-            timing: perception.timing,
-          });
-          ctx.outcome = { status: "completed", verifiedBy: "success-condition" };
-          ctx.stop = "done";
-          break;
-        }
-      }
-
-      if (!perception.rendered) {
-        ctx.transcript.record({
-          op: "wait",
-          control: null,
-          confidence: null,
-          chosenBy: "strategy",
-          actOk: false,
-          reason: `${perception.reason} (fail-closed)`,
-          snapshot: snap,
-          timing: perception.timing,
-        });
-        ctx.stop = "blocked";
-        break;
-      }
+      const settled = await checkSettled(ctx, seen);
+      if (settled === "stop") break;
 
       // Status text (#79): alerts / invalid fields are not controls, so the model would never see
       // them. What newly appeared after the last step goes into its history; what shows now goes
