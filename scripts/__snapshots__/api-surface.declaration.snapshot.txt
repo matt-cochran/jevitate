@@ -255,7 +255,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (494 exports)
+# @jevitate/explore (495 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -475,6 +475,7 @@
   Http5xxOracle: class
   Http5xxSignal: type-alias
   http5xxSignalOf: function
+  IdentityChange: interface
   identityKind: function
   IdentityKind: type-alias
   InductionMissionParams: interface

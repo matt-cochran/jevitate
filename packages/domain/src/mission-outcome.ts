@@ -149,7 +149,12 @@ export type MissionFailureKind =
   /** Goal (#209): the only failing checks were vacuous (#202) — satisfied before any action. Outcome `inconclusive`. */
   | "vacuous-check"
   /** Usability (#209): the job under review was never completed — the review proves nothing about the rest. */
-  | "job-incomplete";
+  | "job-incomplete"
+  /**
+   * Adversarial (#300): an action switched the signed-in identity and the run could not return to the
+   * original one — every later check would judge another user's session, so it proves nothing past it.
+   */
+  | "identity-changed";
 
 export interface MissionFailure {
   readonly kind: MissionFailureKind;

@@ -363,6 +363,19 @@ export class InvariantMonitor {
     this.#network.set(name, { value: this.#clip(v), evidence });
   }
 
+  /**
+   * #300 — forgets everything observed for the action(s) in progress: the armed `before` snapshot,
+   * the `never.response` hits queued since the last check, and the latest `network` observable
+   * values. Called when an action switched the signed-in identity: what was observed then belongs to
+   * ANOTHER identity, so no invariant may judge it (neither now nor at the end-of-run flush).
+   */
+  discardPending(): void {
+    this.#before = null;
+    this.#responseHits.clear();
+    this.#network.clear();
+    this.#networkLists.clear();
+  }
+
   /** Snapshots the observables an action's invariants compare against (call right before acting). */
   async before(actor: Actor): Promise<void> {
     const page = pageOf(actor);

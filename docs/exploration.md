@@ -27,6 +27,33 @@ It also acts once on every other control on the target. Password fields, file in
 log-out controls and visually hidden skip links are never targets, and a toggle pair
 (Collapse/Expand, Show/Hide) is exercised once in each direction, not over and over.
 
+**Identity changes (#300).** The run takes a baseline of who it is signed in as right after the
+start page loads, from the session's auth cookies and auth-named `localStorage`/`sessionStorage`
+entries. It keeps hashes only and never stores a raw value. A JWT is compared by its subject claims
+(`sub`, user id, email, tenant/org), so a refreshed token for the same user is not a change. After
+each settled action it checks that baseline again. The identity changed when:
+
+- an auth entry appeared or disappeared;
+- a token's subject claims differ;
+- an opaque auth value was re-issued by an auth-shaped request (login, sign-in, session, verify,
+  token, `demo`).
+
+An example is a "Continue as demo" shortcut on a login page. When the identity changes, that step's
+invariants (`userInvariant` and the declared spec) are **not judged**: they were written for the
+original identity. What the step observed (its `before` snapshot, queued `never.response` hits) is
+dropped. The control is never picked again. The run then goes back to the start URL in a fresh
+session from the original storage state and checks that it is the original identity again. With
+no fresh session, only a signed-out original identity can be restored, by clearing the session's
+cookies and auth-named storage in place. Each
+switch is listed in the result as `identityChanges: [{step, action, url, route, reason,
+restored}]`, with auth entries named, never their values. When the original identity can't be
+restored, the run stops `inconclusive` with `stop: "identity-changed"` and
+`failure.kind: "identity-changed"`. That happens when a signed-in original identity has no fresh
+session to return to, or the fresh session is someone else. A defect found before the stop still wins. Hard signals (5xx, console
+errors) from the switched step are still reported, since they are the app's errors whoever is
+signed in. Limit: a same-named opaque session value swapped without any auth-shaped request is not
+detected; `--deny '<the control>'` covers that case.
+
 A submit counts as submitted only once a request (a write or a navigation) actually left
 the page. A submit the browser's own validation blocked (`required`, `type=email`,
 `minlength`) is recorded as "blocked by validation" with the browser's message, and a run

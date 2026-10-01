@@ -76,6 +76,7 @@ import {
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
+import { AuthRequestLog, clearAuthState, identityChange, readIdentity, type IdentityFingerprint } from "../adversarial/identity.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -200,7 +201,35 @@ export type AdversarialStop =
    */
   | "targets-refused"
   /** #226: the app stopped answering navigation mid-run (e.g. its server froze): `inconclusive`, `failure.kind: "target-unresponsive"`. */
-  | "target-unresponsive";
+  | "target-unresponsive"
+  /**
+   * #300: an action switched the signed-in identity and the original one could not be restored (no
+   * fresh session from the original storage state, or it no longer signs in as the same identity):
+   * `inconclusive`, `failure.kind: "identity-changed"` — a defect found before still wins.
+   */
+  | "identity-changed";
+
+/**
+ * #300 — one time an action switched the signed-in identity (a "Continue as demo" shortcut on a
+ * login page, a "switch user" control). The step's invariants were NOT judged (they were declared
+ * for the original identity), the control is never picked again, and the run went back to the start
+ * URL in a fresh session from the original storage state. Names auth state by name only — never a
+ * cookie or token value.
+ */
+export interface IdentityChange {
+  /** The transcript step whose action switched the identity. */
+  readonly step: number;
+  /** What was acted on (control name or op). */
+  readonly action: string;
+  /** The (redacted) URL the action landed on. */
+  readonly url: string;
+  /** Normalized route of that URL. */
+  readonly route: string;
+  /** What changed (auth entries by name: appeared, removed, re-issued, another subject). */
+  readonly reason: string;
+  /** Whether the original identity was restored (false ⇒ the run stopped: `stop: "identity-changed"`). */
+  readonly restored: boolean;
+}
 
 /** The typed result of an adversarial run — returned for every ending, including engine failure. */
 export interface AdversarialOutcome {
@@ -234,6 +263,8 @@ export interface AdversarialOutcome {
   readonly sideEffectsTruncated?: number;
   /** Declared mission spend budgets (#150): the observed trajectory, present when any were declared. */
   readonly budget?: BudgetTrajectory[];
+  /** #300: every action that switched the signed-in identity (present when one did). */
+  readonly identityChanges?: IdentityChange[];
 }
 
 export interface AdversarialMissionParams {
@@ -497,6 +528,9 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           ...(params.invariantAuthTokens === undefined ? {} : { authTokens: params.invariantAuthTokens }),
         });
   declared?.attach(params.page);
+  /** #300: when the run's pages last fired an auth-shaped request (time only). */
+  const authRequests = new AuthRequestLog();
+  authRequests.attach(params.page);
   // #150 — the SAME invariants monitor reads a budget's declared observables (one probe schedule).
   const budgetDecls = params.invariants?.budget ?? [];
   const budget = declared === null || budgetDecls.length === 0 ? null : new BudgetMonitor(budgetDecls, declared);
@@ -506,6 +540,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     collector = new PageSignalCollector(page, Date.now, params.allowlist);
     crashWatch = new CrashWatch(page);
     declared?.attach(page);
+    authRequests.attach(page);
     armed = false;
   });
   const heap = new HeapLog();
@@ -536,6 +571,10 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     ...(params.hangs === undefined ? {} : { hangConfig: params.hangs }),
     ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
   };
+
+  /** #300: the identity the run started as (hashes only), read once the seed page settled. */
+  let baseline: IdentityFingerprint | null = null;
+  const identityChanges: IdentityChange[] = [];
 
   const finish = (
     outcome: AdversarialOutcome["outcome"],
@@ -575,6 +614,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       scope: { routeGlobs, outOfScopeSteps, departures: departures.slice(0, MAX_LISTED_DEPARTURES), resets: sessions.resets },
       ...(declared === null ? {} : { invariants: declared.report() }),
       ...(budget === null ? {} : { budget: budget.trajectory() }),
+      ...(identityChanges.length === 0 ? {} : { identityChanges: [...identityChanges] }),
       ...safety.result(),
       ...(outcome === "crashed" && finalFailure !== undefined
         ? {
@@ -710,6 +750,37 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     return restartAtSeed();
   };
 
+  /**
+   * #300 — after an action switched the signed-in identity: a FRESH session from the original storage
+   * state (the only way back to the identity the run was given), at the start URL in a new Recording
+   * segment, whose identity must match the baseline again. When no fresh session can be opened, or
+   * the restored one is not the original identity, the run cannot go on (`identity-changed`).
+   */
+  const restoreIdentity = async (): Promise<
+    { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop; why: string }
+  > => {
+    const unrestorable = (detail: string): { ok: false; stop: AdversarialStop; why: string } => ({
+      ok: false,
+      stop: "identity-changed",
+      why: `the signed-in identity changed and the original one could not be restored (${detail})`,
+    });
+    if (!(await sessions.fresh())) {
+      // No fresh session: only a SIGNED-OUT original identity can be restored in place, by clearing
+      // the session's auth state (cookies and auth-named storage) on the current page.
+      if (baseline === null || baseline.entries.size > 0) {
+        return unrestorable("no fresh session can be opened from the original storage state");
+      }
+      await clearAuthState(sessions.page);
+    }
+    const back = await restartAtSeed();
+    if (!back.ok) {
+      return back.stop === "scope-unreachable" ? unrestorable("the start URL no longer stays in scope") : { ok: false, stop: back.stop, why: `reset after the identity change ended: ${back.stop}` };
+    }
+    const still = baseline === null ? null : identityChange(baseline, await readIdentity(sessions.page), { authRequest: false });
+    if (still !== null) return unrestorable(`the fresh session is not the original identity: ${still}`);
+    return back;
+  };
+
   /** The run's verdict: every finding kind folded by severity (a confirmed hang dominates). */
   const verdict = (): MissionOutcome =>
     combineOutcomes([
@@ -773,9 +844,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * `action`; with no action only its `never`s apply). Returns the transcript reason and the step's
    * findings, or null when nothing broke.
    */
-  const adjudicate = async (action: InvariantAction | null = null): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
-    const invariantResult = params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
-    const declaredResult = declared === null ? null : await declared.after(sessions.actor, armed ? action : null);
+  const adjudicate = async (
+    action: InvariantAction | null = null,
+    opts: { readonly identitySwitched?: boolean } = {},
+  ): Promise<{ reason: string; findings: StepFinding[]; advisories: StepAdvisory[] } | null> => {
+    // #300: after an identity switch no invariant is judged — they were declared for the original
+    // identity — and what the monitor observed for this action is dropped. Hard signals still count.
+    const skip = opts.identitySwitched === true;
+    if (skip) declared?.discardPending();
+    const invariantResult: { ok: boolean; reason?: string } =
+      !skip && params.userInvariant ? await params.userInvariant(sessions.page) : { ok: true };
+    const declaredResult = declared === null || skip ? null : await declared.after(sessions.actor, armed ? action : null);
     armed = false;
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
@@ -1051,6 +1130,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       });
       return finish("inconclusive", "scope-unreachable", { kind: "target-unreachable", message });
     }
+    // #300: who the run is signed in as (or that it is signed out), before any action.
+    baseline = await readIdentity(sessions.page);
     let snap = seed.snapshot;
     // A perception's timing is reported ONCE — on the first step decided on it — so a run whose
     // strategies found nothing to do on a page does not count that page's load several times.
@@ -1125,12 +1206,17 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
      * denied submit is attempted (and its refusal recorded) once, not every turn.
      */
     const refusedIds = new Set<string>();
+    /** #300: controls whose action switched the signed-in identity — never acted on again. */
+    const identitySwitchers = new Set<string>();
     /**
      * A click-afforded control the safety policy refuses (#116: `--deny`, paid, destructive) is never
      * offered as a target (#193) — withheld at planning, its refusal recorded once, like the
      * frontier missions do (#186).
      */
     const refuses = (c: Control): boolean => {
+      // #300: a control that switched the signed-in identity is never offered again (silently: its
+      // switch is already in the transcript and in `identityChanges`).
+      if (identitySwitchers.has(controlIdentity(c))) return true;
       if (affordedOp(c) !== "click") return false;
       const withheld = safety.withholds("click", c, (reason) =>
         transcript.record({
@@ -1164,6 +1250,10 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     /** How many episodes each strategy has run (rotates its form, field and value). */
     const rounds = new Map<MisuseStrategy, number>();
     let stop: AdversarialStop | null = null;
+    /** Why the run stopped, when that stop is itself the failure (#300 `identity-changed`). */
+    let stopFailure: MissionFailure | undefined;
+    /** Wall-clock time the first action since the last adjudication fired (#300: auth requests since then). */
+    let chainStart: number | null = null;
 
     /**
      * SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
@@ -1329,6 +1419,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       // A snapshot armed by an episode that ended without an adjudication (budget, disabled target)
       // is stale: the next action gets a fresh one, so no effect is attributed to the wrong action.
       armed = false;
+      chainStart = null;
 
       // A perception's timing is reported once — on the first step decided on it.
       let stepSnap = snap;
@@ -1464,6 +1555,23 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           break;
         }
         if (s.op === "click" && s.control !== null) disabledNow.delete(controlIdentity(s.control));
+        // #300: a control that switched the signed-in identity is never acted on again (a strategy
+        // that re-plans it from the live snapshot gets a no-op, counted against no budget).
+        if (s.control !== null && identitySwitchers.has(controlIdentity(s.control))) {
+          transcript.record({
+            op: null,
+            control: s.control,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: ran,
+            actOk: false,
+            reason: joinReasons([s.note, "this control switched the signed-in identity earlier in the run — not acted on again"]),
+            snapshot: stepSnap,
+            ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          });
+          stepTiming = undefined;
+          break;
+        }
         // The shared safety policy (#116): a paid / session-ending / destructive / --deny'd control is
         // never clicked — a no-op like a disabled target, counted against no budget.
         const unsafe = safety.gate(s.op, s.control);
@@ -1528,6 +1636,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         }
         const at = now();
         const firedAt = Date.now();
+        if (chainStart === null) chainStart = firedAt;
         const firedStep = transcript.nextStep;
         safety.mark(transcript.nextStep, s.op, s.control);
         const { result, value } = await execute(s, stepSnap.controls);
@@ -1586,6 +1695,60 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
           pendingEarlier = pendingEarlier || result.ok;
           continue;
+        }
+        // #300: did this action switch the signed-in identity? Then its invariants are not judged,
+        // the control is never picked again, and the run goes back to the original identity.
+        const since = chainStart ?? firedAt;
+        chainStart = null;
+        const switched =
+          baseline === null
+            ? null
+            : identityChange(baseline, await readIdentity(sessions.page), { authRequest: authRequests.since(since) });
+        if (switched !== null) {
+          const switchVerdict = await adjudicate(null, { identitySwitched: true });
+          const landed = redactUrl(sessions.page.url());
+          const actionName = s.control?.name ?? s.op;
+          transcript.record({
+            ...entry,
+            reason:
+              joinReasons([
+                reason,
+                `identity changed (${switched}): invariants not judged; "${actionName}" is not picked again`,
+                switchVerdict?.reason,
+              ]) ?? "identity changed",
+          });
+          if (switchVerdict !== null) {
+            await fold(step, switchVerdict.findings);
+            foldAdvisories(step, switchVerdict.advisories);
+          }
+          if (s.control !== null) {
+            refusedIds.add(controlIdentity(s.control));
+            identitySwitchers.add(controlIdentity(s.control));
+          }
+          last = null;
+          const back = await restoreIdentity();
+          identityChanges.push({ step, action: actionName, url: landed, route: normalizeRoute(landed), reason: switched, restored: back.ok });
+          transcript.record({
+            op: null,
+            control: null,
+            confidence: null,
+            chosenBy: "strategy",
+            strategy: "identity-reset",
+            actOk: back.ok,
+            reason: back.ok
+              ? "restored the original identity: reset to the start URL in a fresh session from the original storage state"
+              : back.why,
+            snapshot: back.ok ? back.snapshot : snap,
+            ...(back.ok ? { timing: back.timing } : {}),
+          });
+          if (!back.ok) {
+            stop = back.stop;
+            if (back.stop === "identity-changed") stopFailure = { kind: "identity-changed", message: back.why };
+            break;
+          }
+          snap = back.snapshot;
+          snapTiming = undefined;
+          break;
         }
         const verdict = await adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
         const soft = verdict === null ? await softJudgment(stepSnap) : {};
@@ -1661,6 +1824,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       const late = await declared.flushResponses().catch(() => null);
       if (late !== null && late.violations.length > 0) await fold(Math.max(1, transcript.nextStep - 1), late.violations.map(declaredFinding));
     }
+    if (stop === "identity-changed") return finish(budgetVerdict(), stop, defects.size > 0 ? undefined : stopFailure);
     return finish(stop === "budget" ? budgetVerdict() : verdict(), stop);
   } catch (e) {
     const failure = describeFailure(e, crashWatch.signals());

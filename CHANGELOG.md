@@ -23,6 +23,11 @@ behaviour changes).
 
 ### Fixed
 
+- Adversarial runs notice when an action switches the signed-in identity (a "Continue as demo"
+  shortcut on a login page). The step's invariants are not judged against the new identity, the
+  control is not clicked again, and the run returns to the original identity in a fresh session.
+  Each switch is listed in `identityChanges`. A run that can't return stops `inconclusive` with
+  `stop: "identity-changed"` (#300).
 - Key entry is masked with `•`, and its instructions stay on screen (#269).
 - A multi-run (`--persona`/`--repeat`) forwards a bare `--screenshots`/`--record-video` to each
   run instead of writing to `./true` (#290).

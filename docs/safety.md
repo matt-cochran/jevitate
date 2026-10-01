@@ -76,6 +76,11 @@ security bug, and how to report one.
   `--settle-ignore` are listed but never make a control unclickable a second time.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
+- **Identity changes (#300).** An adversarial action that switches the signed-in identity (a "Sign
+  in as demo" shortcut) is detected from hashed auth state, never raw cookie or token values. That
+  step's invariants are not judged against the new identity, the control is never clicked again,
+  and the run returns to the original identity in a fresh session (or stops `inconclusive`,
+  `identity-changed`).
 
 **Runs change the app's state — reset it between runs.** The guardrails above keep a run from
 clicking what it must not; they do not undo what it legitimately did. An adversarial run submits
