@@ -76,7 +76,11 @@ them no meaning across strategies. For example:
 - adversarial runs have `advisories`, `scope` and `coverage` (an advisory is a console error
   correlated with a 4xx (`status`), or one raised inside a third-party iframe (`thirdPartyFrame`,
   the frame's origin; `frameUrl`): reported, never a defect);
-- usability runs have `report`, `reportPath` and `screenshots`.
+- usability runs have `report`, `reportPath` and `screenshots`. Since 0.3.0 the report also
+  carries the claim ledger (`report.claims`), and each finding carries its verified claim
+  (`claim`), its two-question grade (`grade`) and, on a live run, a cropped screenshot with the
+  cited control boxed (`screenshot`, under `usability-<stamp>.findings/`). See
+  [UX findings](./ux-findings.md).
 
 `outcome` is one of these fields. For a goal run it is the goal outcome (the same as `goalOutcome`), and for a frontier run it
 is the stop reason. It is not the portable verdict: use `missionOutcome` or `exitCode` for that.

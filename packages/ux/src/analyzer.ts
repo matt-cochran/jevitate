@@ -414,7 +414,7 @@ export class UxAnalyzer {
       const quality = grades.get(d.key);
       return { draft: d, finding: makeFinding({ ...d.input, ...(quality ? { quality } : {}) }, request.rubric, { screenId: d.screenId, refs: d.refs }) };
     });
-    const findings = [...groupFindingsByControl(built), ...dedupeObjective(a11yFindings, request.rubric)];
+    const findings = [...groupFindingsByControl(built), ...dedupeObjectiveFindings(a11yFindings, request.rubric)];
     const coverage: Coverage = { totalItems, evaluated, skipped, budgetTruncated, notApplicable };
     return { kind: "analyzed", findings, coverage, suppressed, rawOccurrences };
   }
@@ -581,7 +581,7 @@ function groupFindingsByControl(items: readonly { draft: Draft; finding: UxFindi
 }
 
 /** Objective (deterministic) findings: dedupe identical item × route × controls; confidence stays computed. */
-function dedupeObjective(
+export function dedupeObjectiveFindings(
   items: readonly { finding: UxFinding; refs: ReadonlySet<string> }[],
   rubric: ReadonlyMap<string, RubricEntry>,
 ): UxFinding[] {

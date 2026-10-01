@@ -64,6 +64,9 @@ export const SUITE_EXPLORE_OPTIONS = {
   show: { shape: "string", appliesTo: ["usability"] },
   minConfidence: { shape: "ratio", appliesTo: ["usability"] },
   maxFindingsPerPage: { shape: "integer", appliesTo: ["usability"], range: [1, 1000] },
+  product: { shape: "path", appliesTo: ["usability"] },
+  polish: { shape: "boolean", appliesTo: ["usability"] },
+  probeGuards: { shape: "boolean", appliesTo: ["usability"] },
   // containment
   scope: { shape: "string", appliesTo: ["coverage", "exploratory"], oneOf: ["app"] },
   // secrets and sessions

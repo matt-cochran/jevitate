@@ -156,9 +156,12 @@ describe("runUxReview (offline)", () => {
       nowIso: () => "2026-09-21T00:00:00Z",
       missionTranscript: [],
     });
-    expect(report.evidenceCaveats).toHaveLength(1);
-    expect(report.evidenceCaveats![0]).not.toMatch(/blocked\/disabled-target evidence not available/);
+    // #198: plus what the claim pipeline could not check offline (guard probes) and without product facts.
+    expect(report.evidenceCaveats).toHaveLength(3);
+    expect(report.evidenceCaveats!.join("\n")).not.toMatch(/blocked\/disabled-target evidence not available/);
     expect(report.evidenceCaveats![0]).toMatch(/no usability evidence sidecar.*hung request, stuck job, duplicate write\/create, failed submit/);
+    expect(report.evidenceCaveats![1]).toMatch(/no guard probes/);
+    expect(report.evidenceCaveats![2]).toMatch(/no product facts/);
   });
 
   it("(#134) with an evidence sidecar there is no evidence caveat, and its screens and run signals are analyzed", async () => {
@@ -196,15 +199,27 @@ describe("runUxReview (offline)", () => {
       nowIso: () => "2026-09-21T00:00:01Z",
       evidenceFile: { version: 1, appContext: APP, job: APP.job, screens: [screen], signals, outcome: { status: "incomplete", reason: "payment failed" } },
     });
-    expect(report.evidenceCaveats).toBeUndefined();
+    // No evidence-sidecar caveat; #198: this (pre-#198) sidecar has no guard probes, and no product facts were given.
+    expect(report.evidenceCaveats?.map((c) => c.slice(0, 20))).toEqual(["no guard probes (wri", "no product facts (.j"]);
     expect(report.findings.map((f) => f.rubricItemId)).toContain("signal-failed-submit");
     expect(report.coverage.skipped.every((s) => !/visibleText/.test(s.reason))).toBe(true);
   });
 
   it("FAILS FAST: an analysis failure throws UxAnalysisFailedError — never a fabricated clean report", async () => {
     const throwingJudge: JudgmentPort = { async systemOne() { throw new Error("gateway down"); } };
+    // #198: the judge is asked to categorize observed friction (here: the job was not completed).
     await expect(
-      runUxReview({ recording: recording(), appContext: APP, judge: throwingJudge, gen: new FakeGenerationGateway(), outDir: "/unused", env: {}, configPath: "/nonexistent/config.json" }),
+      runUxReview({
+        recording: recording(),
+        appContext: APP,
+        judge: throwingJudge,
+        gen: new FakeGenerationGateway(),
+        outDir: "/unused",
+        env: {},
+        configPath: "/nonexistent/config.json",
+        missionTranscript: [{ step: 1, op: "click", target: 'button "Checkout"', actOk: true, url: "https://shop.test/cart" }] as never,
+        missionOutcome: { status: "incomplete", reason: "never paid" },
+      }),
     ).rejects.toBeInstanceOf(UxAnalysisFailedError);
   });
 });

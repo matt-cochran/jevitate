@@ -5,7 +5,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import type { Recording } from "@jevitate/recording";
-import { UxAnalyzer, a11yChecks, buildReport, calibrationCaveat, detectFriction, detectRepeatedReplies, detectSignals, evidenceFromFile, groundFindings, loadV1Rubric, parseUxEvidenceFile, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, type AppContext, type JourneyOutcome, type SignalOptions, type UxEvidenceFile, type UxEvidence, type UxReport } from "@jevitate/ux";
+import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectRepeatedReplies, detectSignals, evidenceFromFile, groundFindings, loadV1Rubric, parseUxEvidenceFile, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, type AppContext, type GuardProbe, type JourneyOutcome, type SignalOptions, type SignalStep, type UxEvidenceFile, type UxEvidence, type UxReport } from "@jevitate/ux";
+import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import { writeUsageSidecar } from "./mission-journal.js";
 import { DEFAULT_JUDGMENT_BUDGET, type MissionTranscriptEntryLike, captureFromTranscript, recordingToEvidence } from "./ux-evidence.js";
@@ -71,6 +72,10 @@ export interface RunUxReviewOptions {
   readonly evidenceUnavailable?: string;
   /** Tuning of the run-signal oracles (#96/#131). */
   readonly signals?: SignalOptions;
+  /** #198 `--product <file>`: product facts (default `.jevitate/product.json` in the project). */
+  readonly product?: string;
+  /** #198 `--polish`: polish each verified finding's recommendation with one generation call (opt-in). */
+  readonly polish?: boolean;
 }
 
 export interface RunUxReviewResult {
@@ -82,6 +87,9 @@ export interface RunUxReviewResult {
 
 const NO_EVIDENCE_CAVEAT =
   "no usability evidence sidecar (<stamp>.evidence.json, written next to the Recording by live usability runs, #134): this pass sees only the Recording's touched controls and urls — rubric items needing visible text or a11y facts are Skipped, and the run signals that need the live capture (hung request, stuck job, duplicate write/create, failed submit, inert control, internal id, url mismatch) could not be checked; with a transcript, journey friction and repeated replies still are.";
+
+const NO_PROBES_CAVEAT =
+  "no guard probes (written by live usability runs into the evidence sidecar, #198): destructive controls could not be checked for a confirmation step offline — such claims are reported as unverifiable coverage, never as findings.";
 
 const NO_TRANSCRIPT_CAVEAT =
   "blocked/disabled-target evidence not available: this offline pass has no mission transcript, so a dead end like a button that never enables cannot be seen (pass --result <mission-result.json>, as written by `jevitate explore`, to include it — the same evidence a live usability run sees).";
@@ -102,40 +110,58 @@ export async function runUxReview(opts: RunUxReviewOptions): Promise<RunUxReview
   );
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
-  const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
+  // #198: product facts are validated before any model call (a bad file is a usage error).
+  const product = await loadProductFacts(opts.product);
   // #134: a live usability run's evidence sidecar gives offline review the SAME screens and run
   // signals the live analysis had; otherwise the Recording (+ transcript) is all there is.
   let screens: UxEvidence[];
   let appContext = opts.appContext;
   let signalFindings: ReturnType<typeof detectSignals> = [];
   let friction: ReturnType<typeof detectFriction> = [];
+  let steps: readonly SignalStep[] = [];
+  let probes: readonly GuardProbe[] | undefined;
   const evidenceCaveats: string[] = [];
   if (opts.evidenceFile !== undefined) {
     ({ screens, appContext } = evidenceFromFile(opts.evidenceFile, opts.appContext));
     signalFindings = detectSignals(opts.evidenceFile.signals, opts.signals);
     friction = detectFriction(opts.evidenceFile.signals, opts.evidenceFile.outcome ?? opts.missionOutcome);
+    steps = opts.evidenceFile.signals.steps;
+    probes = opts.evidenceFile.probes;
+    if (probes === undefined) evidenceCaveats.push(NO_PROBES_CAVEAT);
   } else {
     screens = recordingToEvidence(opts.recording, opts.appContext, opts.appContext.job, opts.missionTranscript);
     if (opts.missionTranscript !== undefined) {
       const partial = captureFromTranscript(opts.missionTranscript);
       signalFindings = detectRepeatedReplies(partial, opts.signals);
       friction = detectFriction(partial, opts.missionOutcome);
+      steps = partial.steps;
     } else {
       evidenceCaveats.push(opts.missionTranscriptUnavailable ?? NO_TRANSCRIPT_CAVEAT);
     }
     evidenceCaveats.push(opts.evidenceUnavailable === undefined ? NO_EVIDENCE_CAVEAT : `${opts.evidenceUnavailable} — ${NO_EVIDENCE_CAVEAT}`);
+    evidenceCaveats.push(NO_PROBES_CAVEAT);
   }
-  const outcome = await analyzer.analyze({
-    screens,
-    rubric: loadV1Rubric(),
-    appContext,
-    secrets: opts.secrets,
-    judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
-  });
+  if (product.facts === undefined) evidenceCaveats.push(NO_PRODUCT_FACTS_CAVEAT);
+  // #198: the same claim pipeline as the live run (claims.ts), over the same evidence.
+  const outcome = await analyzeClaims(
+    {
+      screens,
+      rubric: loadV1Rubric(),
+      appContext,
+      ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
+      judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
+      friction,
+      steps,
+      signalFindings,
+      ...(probes === undefined ? {} : { probes }),
+      ...(product.facts === undefined ? {} : { facts: product.facts }),
+    },
+    { judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks, ...(opts.polish === true ? { polish: true } : {}) },
+  );
   if (outcome.kind === "failed") {
     throw new UxAnalysisFailedError(outcome.reason, outcome.screenId, outcome.rubricItemId);
   }
-  const calibrationCaveats = [calibrationCaveat(opts.appContext.appClass)];
+  const calibrationCaveats = [calibrationCaveat(opts.appContext.appClass), claimsCaveat()];
   const report = buildReport(groundFindings(withSignalFindings(outcome, signalFindings), friction), {
     minConfidence,
     quality,

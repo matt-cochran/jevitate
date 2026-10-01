@@ -71,7 +71,7 @@ import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { runUsabilityMission, UsabilityInvariantsUnsupportedError } from "./ux-api.js";
 import { UxConfigError } from "./ux-config.js";
-import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError } from "@jevitate/ux";
+import { MinConfidenceError, QualityPolicyError, MaxFindingsPerRouteError, ProductFactsError } from "@jevitate/ux";
 import { type EmulationSpec } from "@jevitate/playwright";
 import {
   type CliDeps,
@@ -131,6 +131,15 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "--max-findings-per-page <n>",
       "(--strategy usability) cap on UX findings per route/page, highest-confidence first; the rest are counted in report.suppressed as per-page-cap, never dropped silently; default JEVITATE_UX_MAX_FINDINGS_PER_PAGE, then ~/.jevitate/config.json ux.maxFindingsPerPage, then 5",
     )
+    .option(
+      "--product <file>",
+      "(--strategy usability) product facts JSON (plans/prices, key journeys, each page's intended next step) the review checks screens against in code; default .jevitate/product.json in the project when present (docs/ux-findings.md)",
+    )
+    .option(
+      "--probe-guards",
+      "(--strategy usability) opt in to clicking each destructive control once to check for a confirmation step — fail-safe: every write and destructive-looking request is aborted, and a page with an open WebSocket/EventSource or a service worker is not probed; without it those claims are reported unverifiable (docs/ux-findings.md)",
+    )
+    .option("--polish", "(--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates)")
     .option(
       "--success <spec>",
       [
@@ -486,6 +495,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         minConfidence?: string;
         maxFindingsPerPage?: string;
         show?: string;
+        product?: string;
+        polish?: boolean;
+        probeGuards?: boolean;
         success: string[];
         successWhen?: string;
         allowVacuousChecks?: boolean;
@@ -709,6 +721,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       // silently ignoring a file the user expected to be uploaded.
       if (o.fixture !== undefined && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
         emitExplore(fail("E_EXPLORE_ARGS", "--fixture is supported only with --strategy goal or usability"));
+        return;
+      }
+      // #198: product facts and polish shape the UX review's findings only.
+      if ((o.product !== undefined || o.polish === true || o.probeGuards === true) && (o.feature !== undefined || strategy !== "usability")) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--product, --polish and --probe-guards are supported only with --strategy usability"));
         return;
       }
       // #225: success checks judge a goal / a usability job — every other strategy (and --feature) would
@@ -1087,6 +1104,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.minConfidence !== undefined ? { minConfidence: o.minConfidence } : {}),
             ...(o.show !== undefined ? { show: o.show } : {}),
             ...(o.maxFindingsPerPage !== undefined ? { maxFindingsPerRoute: o.maxFindingsPerPage } : {}),
+            ...(o.product !== undefined ? { product: o.product } : {}),
+            ...(o.polish === true ? { polish: true } : {}),
+            ...(o.probeGuards === true ? { probeGuards: true } : {}),
             bounds: Object.keys(uxBounds).length > 0 ? uxBounds : undefined,
             conversation,
             secrets: o.secret.length > 0 ? o.secret : undefined,
@@ -1121,6 +1141,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             emitExplore(fail("E_UX_ARGS", err.message));
           } else if (err instanceof UsabilityInvariantsUnsupportedError) {
             emitExplore(fail("E_EXPLORE_ARGS", err.message));
+          } else if (err instanceof ProductFactsError) {
+            emitExplore(fail(err.code, err.message));
           } else {
             emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
           }

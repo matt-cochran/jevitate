@@ -193,7 +193,10 @@ function uxLines(result: Record<string, unknown>): string[] {
   const TOP = 3;
   for (const f of findings.slice(0, TOP)) {
     const obs = str(f.observation) ?? "";
-    lines.push(`${tag("")}- [${str(f.severity) ?? "?"}] ${str(f.rubricItemId) ?? "?"} ${str(f.route) ?? ""}: ${obs.length > 100 ? `${obs.slice(0, 99)}…` : obs}`);
+    // #198: a verified claim names its claim type (and its boxed screenshot) instead of the rubric id.
+    const claim = isRecord(f.claim) ? str(f.claim.type) : undefined;
+    const shot = isRecord(f.screenshot) ? str(f.screenshot.path) : undefined;
+    lines.push(`${tag("")}- [${str(f.severity) ?? "?"}] ${claim ?? str(f.rubricItemId) ?? "?"} ${str(f.route) ?? ""}: ${obs.length > 100 ? `${obs.slice(0, 99)}…` : obs}${shot === undefined ? "" : ` (screenshot: ${shot})`}`);
   }
   if (findings.length > TOP) lines.push(`${tag("")}  … and ${findings.length - TOP} more in the report`);
   return lines;
