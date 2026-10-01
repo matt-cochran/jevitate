@@ -80,8 +80,23 @@ const FLOW =
  * whose method starts with a destructive verb (`RemoveMember`, `DeleteProject`, `RevokeKey`), or a
  * REST path segment that is one (`/members/42/remove`, `/keys/revoke-all`).
  */
-const DESTRUCTIVE_RPC = /^(?:Delete|Remove|Revoke|Destroy|Erase|Purge|Wipe|Drop|Terminate|Deactivate|Unsubscribe|Withdraw|Evict|Kick|Ban|Unlink|Detach|Disconnect)(?=[A-Z0-9_]|$)/;
-const DESTRUCTIVE_SEGMENT = /^(?:delete|remove|revoke|destroy|erase|purge|wipe|drop|terminate|deactivate|unsubscribe|withdraw|evict|kick|ban|unlink|detach|disconnect)(?:[-_.]|$)/i;
+const DESTRUCTIVE_VERBS = "delete|remove|revoke|destroy|erase|purge|wipe|drop|terminate|deactivate|unsubscribe|withdraw|evict|kick|ban|unlink|detach|disconnect";
+const DESTRUCTIVE_RPC = new RegExp(`^(?:${DESTRUCTIVE_VERBS.replace(/(^|\|)(\w)/g, (_m, sep: string, c: string) => sep + c.toUpperCase())})(?=[A-Z0-9_]|$)`);
+const DESTRUCTIVE_SEGMENT = new RegExp(`^(?:${DESTRUCTIVE_VERBS})(?:[-_.]|$)`, "i");
+/**
+ * #198: the FAIL-SAFE reading for a probe that clicks destructive controls on purpose — the same verbs
+ * plus the softer ones a probe must not let through either (archive, trash, discard, cancel), matched
+ * as a word anywhere in the path, query or body.
+ */
+const DESTRUCTIVE_WORD = new RegExp(
+  `\\b(?:${`${DESTRUCTIVE_VERBS}|archive|trash|discard|cancel`
+    .split("|")
+    // A whole word with its inflections ("deleted", "removing", "dropped") — never a longer word
+    // that merely starts with one ("banner", "dropdown", "kickoff").
+    .map((v) => (v.endsWith("e") ? `${v.slice(0, -1)}(?:e|es|ed|ing)` : `${v}(?:s|es|\\w?ed|\\w?ing|all)?`))
+    .join("|")})\\b`,
+  "i",
+);
 
 /** Is this (write) request destructive? Code only, from the method and path. */
 export function isDestructiveRequest(method: string, path: string): boolean {
@@ -89,6 +104,37 @@ export function isDestructiveRequest(method: string, path: string): boolean {
   const rpc = rpcMethodOf(path);
   if (rpc !== null) return DESTRUCTIVE_RPC.test(rpc.method);
   return path.split("/").some((seg) => DESTRUCTIVE_SEGMENT.test(seg));
+}
+
+/**
+ * #198 × #270 — ONE destructive-request classifier, two strengths. `isDestructiveRequest` is the
+ * precise reading the find-out guard holds writes by; this is the fail-safe one the UX guard probe
+ * aborts by, whatever the method: everything `isDestructiveRequest` holds, plus any request whose
+ * URL (path and query, decoded, camelCase split — `/rpc/DeleteUser`, `/delete?id=1`,
+ * `?action=remove`) or body names a destructive verb.
+ */
+export function looksDestructiveRequest(method: string, url: string, body: string | null = null): boolean {
+  let text = url;
+  let path = url;
+  try {
+    const u = new URL(url);
+    text = `${u.pathname} ${u.search}`;
+    path = u.pathname;
+  } catch {
+    text = url;
+    path = url.split(/[?#]/)[0] ?? url;
+  }
+  if (isDestructiveRequest(method, path)) return true;
+  const words = (v: string): string => {
+    let d = v;
+    try {
+      d = decodeURIComponent(v.replace(/\+/g, " "));
+    } catch {
+      d = v;
+    }
+    return d.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[^A-Za-z0-9]+/g, " ");
+  };
+  return DESTRUCTIVE_WORD.test(words(text)) || (body !== null && DESTRUCTIVE_WORD.test(words(body.slice(0, 4_096))));
 }
 
 /** What the guard holds back: every write (`read-only`, #158) or only a destructive one (#270). */

@@ -156,7 +156,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (337 exports)
+# @jevitate/explore (338 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -390,6 +390,7 @@
   judgeAnswerFits: function
   judgeGoalCompletion: function
   judgeGoalMet: function
+  looksDestructiveRequest: function
   markTypeFixtures: function
   markupCanary: function
   maskSecretFields: function

@@ -25,13 +25,12 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Locator, Page, Route } from "playwright";
-import { SafetyPolicy, assertAuthorizedExploreTarget, controlRisk, endpointOf, redactText, redactUrl, type SafetyConfig } from "@jevitate/explore";
+import { SafetyPolicy, assertAuthorizedExploreTarget, controlRisk, endpointOf, looksDestructiveRequest, redactText, redactUrl, type SafetyConfig } from "@jevitate/explore";
 import { descriptorToLocator } from "@jevitate/recorder";
 import { controlKey, redactEvidence, routeOf, type Control, type FindingScreenshot, type GuardKind, type GuardProbe, type UxEvidence, type UxFinding } from "@jevitate/ux";
 import { MaskUnavailableError, SecretPixelMask, captureStepScreenshot } from "./demo-capture.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-const DESTRUCTIVE_WORD = /\b(?:delete|remove|destroy|erase|purge|wipe|revoke|archive|deactivate|terminate|unsubscribe|drop|trash|discard|cancel)\w*/i;
 const OPEN_DIALOGS = 'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]';
 const PROBE_TIMEOUT_MS = 8_000;
 /** At most this many controls are probed per run; the rest are recorded as not probed (unverifiable). */
@@ -40,28 +39,9 @@ const SETTLE_MS = 1_500;
 /** Why nothing was clicked without the opt-in. */
 export const PROBE_OPT_IN_REASON = "not probed: clicking destructive controls is opt-in (--probe-guards)";
 
-/**
- * Does a request look destructive, whatever its method? Its URL (path AND query, decoded, camelCase
- * split — `/rpc/DeleteUser`, `/delete?id=1`, `?action=remove`) or its body names a destructive verb.
- */
-export function looksDestructive(url: string, body: string | null = null): boolean {
-  let text = url;
-  try {
-    const u = new URL(url);
-    text = `${u.pathname} ${u.search}`;
-  } catch {
-    text = url;
-  }
-  const words = (v: string): string => {
-    let d = v;
-    try {
-      d = decodeURIComponent(v.replace(/\+/g, " "));
-    } catch {
-      d = v;
-    }
-    return d.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[^A-Za-z0-9]+/g, " ");
-  };
-  return DESTRUCTIVE_WORD.test(words(text)) || (body !== null && DESTRUCTIVE_WORD.test(words(body.slice(0, 4_096))));
+/** The fail-safe destructive-request classifier, shared with the find-out guard (#270): one vocabulary. */
+export function looksDestructive(url: string, body: string | null = null, method = "GET"): boolean {
+  return looksDestructiveRequest(method, url, body);
 }
 
 export interface ProbeTarget {
@@ -137,7 +117,7 @@ function writeBlocker(secrets: readonly string[], seq: { n: number }, allowDocum
       body = null;
     }
     const own = allowDocument?.() !== undefined && req.isNavigationRequest() && req.url() === allowDocument();
-    if (own || (SAFE_METHODS.has(method) && !looksDestructive(req.url(), body))) {
+    if (own || (SAFE_METHODS.has(method) && !looksDestructive(req.url(), body, method))) {
       await route.continue().catch(() => undefined);
       return;
     }
