@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.3.0] – unreleased
+
+### Goal missions
+
+- Controls behind an open modal, or that no scroll can bring into view (a closed off-screen panel), are not offered; a target failing twice as covered/unreachable is withheld, and five failed actions in a row end the run naming the overlay (#272, #294).
+- `select` never re-chooses the selected option or a placeholder; dash spellings map to the page's option (#273).
+- Retyping a field that changed nothing but its own value is no progress: a search box is submitted with Enter, other fields end the run as stuck (#242).
+- A `send` that started no request and changed nothing is a failed send; background polling no longer keeps a reply wait alive (#241).
+- A model `blocked` before any action is refused; insisting ends `inconclusive` (insufficient-coverage), not `defects-found` (#237).
+- `<details>` summaries are controls, and goal-named controls survive the candidate cap (#287).
+- Refusals and scrolls the app answered never produce an app `ui-no-progress` hang (#276).
+
 ## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one
