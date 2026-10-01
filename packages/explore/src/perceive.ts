@@ -72,6 +72,13 @@ interface PerceptionBase {
   readonly timing: PageTiming;
   /** A hang detected while perceiving (owner ruling 7), or null. */
   readonly hang: HangSignal | null;
+  /**
+   * #288: what the page did while a busy indicator outlasted the ceiling (present only then) — the
+   * app's requests that completed during the wait (a job-status poll) and whether the indicator's
+   * own description changed (live progress text). Evidence a caller weighs to tell an app visibly
+   * working on a long job from a frozen one; perception itself still reports the hang.
+   */
+  readonly busyWait?: { readonly requestsCompleted: number; readonly indicatorChanged: boolean };
 }
 
 export type Perception =
@@ -220,9 +227,11 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
 
   // 3. A settled page that still shows a busy indicator: give it the rest of the ceiling to finish.
   let stuckBusy: string | null = null;
+  let busyWait: { requestsCompleted: number; indicatorChanged: boolean } | undefined;
   if (settle.settled) {
     const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
     if (busy !== null) {
+      const busySince = Date.now();
       const remaining = Math.max(1, ceiling - (Date.now() - started));
       const gone = await page
         .waitForFunction(`!(${visibleBusyIndicator.toString()})()`, undefined, { timeout: remaining, polling: "raf" })
@@ -231,7 +240,14 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
           () => false,
         );
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
-      if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) stuckBusy = busy;
+      if (!gone && !ignoreNoProgress(busy) && !ignoreNoProgress(hangRoute(page.url()))) {
+        stuckBusy = busy;
+        const now = await page.evaluate(visibleBusyIndicator).catch(() => null);
+        busyWait = {
+          requestsCompleted: monitor.completedSince(busySince).filter((r) => r.resourceType !== "document").length,
+          indicatorChanged: now !== null && now !== busy,
+        };
+      }
     }
   }
 
@@ -271,13 +287,15 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
           ...(stuckBusy === null ? {} : { element: stuckBusy }),
         };
 
-  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing, hang };
+  const waited = busyWait === undefined ? {} : { busyWait };
+  if (snap.controls.length > 0) return { rendered: true, snapshot: snap, settle, timing, hang, ...waited };
   return {
     rendered: false,
     snapshot: snap,
     settle,
     timing,
     hang,
+    ...waited,
     reason: settle.settled
       ? "page settled with no interactive controls"
       : `page rendered no interactive controls within ${ceiling}ms`,

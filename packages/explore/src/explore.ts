@@ -15,10 +15,10 @@ import {
   isAuthorizedExploreTarget,
 } from "./authorized-targets.js";
 import type { Snapshot } from "./snapshot.js";
-import { perceive } from "./perceive.js";
+import { perceive, type Perception } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
-import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
+import { hangRoute, probeResponsive, visibleBusyIndicator, type HangSignal } from "./hang.js";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler, HostJudgment } from "./host-health.js";
 import { HANG_PROBE_MS } from "./perceive.js";
@@ -93,6 +93,8 @@ import {
   EMPTY_STATUS,
   describeStatus,
   isEmptyStatus,
+  MAX_DOCUMENTED_WAIT_MS,
+  readDocumentedWait,
   readInProgressStatus,
   readPageStatus,
   readWorkingStatus,
@@ -364,7 +366,11 @@ const JOB_WAIT_SLICE_MS = 60_000;
  * Waits, with backoff, while the page shows an in-progress status (#92): until it clears (the job
  * finished — then the page is given a moment to settle), the page navigates, or `budgetMs` passes.
  */
-async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: boolean; waitedMs: number }> {
+async function waitOutJob(
+  page: Page,
+  budgetMs: number,
+  stillWorking: (page: Page) => Promise<boolean> = async (p) => (await readInProgressStatus(p)) !== null,
+): Promise<{ cleared: boolean; waitedMs: number }> {
   const started = Date.now();
   const url = safeUrl(page);
   let delay = 1_000;
@@ -373,12 +379,44 @@ async function waitOutJob(page: Page, budgetMs: number): Promise<{ cleared: bool
     if (left <= 0) return { cleared: false, waitedMs: Date.now() - started };
     await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
     delay = Math.min(delay * 2, 15_000);
-    if (safeUrl(page) !== url || (await readInProgressStatus(page)) === null) {
+    if (safeUrl(page) !== url || !(await stillWorking(page))) {
       const rest = budgetMs - (Date.now() - started);
       if (rest > 0) await monitorFor(page).waitSettled({ ceilingMs: Math.min(rest, 5_000) }).catch(() => undefined);
       return { cleared: true, waitedMs: Date.now() - started };
     }
   }
+}
+
+/**
+ * #288/#258 — the page still shows the work a hang was deferred for: an in-progress status, a busy
+ * indicator, or copy that documents the wait.
+ */
+async function stillShowsWork(page: Page): Promise<boolean> {
+  if ((await readInProgressStatus(page)) !== null) return true;
+  if ((await page.evaluate(visibleBusyIndicator).catch(() => null)) !== null) return true;
+  return (await readDocumentedWait(page)) !== null;
+}
+
+/** How long a documented wait (#258) is believed: twice what the page states plus a grace, capped. */
+function documentedWaitBudgetMs(statedMs: number): number {
+  return Math.min(MAX_DOCUMENTED_WAIT_MS, statedMs * 2 + 30_000);
+}
+
+/**
+ * #288 — a busy indicator that outlasted the ceiling while the app VISIBLY kept working: the page
+ * shows an in-progress status ("Drafting…") AND, during the wait, the app's requests kept completing
+ * (a job-status poll) or the indicator's own progress text changed. A spinner frozen over a silent
+ * page shows neither, and stays a hang. Returns a description, or null.
+ */
+async function liveBusyWork(page: Page, busyWait: Perception["busyWait"]): Promise<string | null> {
+  if (busyWait === undefined || (busyWait.requestsCompleted === 0 && !busyWait.indicatorChanged)) return null;
+  const status = await readInProgressStatus(page);
+  if (status === null) return null;
+  const evidence = [
+    ...(busyWait.requestsCompleted > 0 ? [`${busyWait.requestsCompleted} app request(s) completed during the wait`] : []),
+    ...(busyWait.indicatorChanged ? ["its progress indicator changed"] : []),
+  ];
+  return `${status} while the app kept working (${evidence.join(", ")})`;
 }
 
 /**
@@ -773,6 +811,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
   let hangWorkWaitedMs = 0;
+  /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
+  let documentedBudgetMs = 0;
   const noteMutation = (
     label: string,
     descriptor: unknown,
@@ -851,6 +891,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // Shared perception: never decide on an unrendered page (bounded render wait) and never
       // offer an occluded control (see `perceive`).
+      const perceiveStartedAt = Date.now();
       const perception = await perceive(page, perceiveOpts);
       timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
@@ -879,14 +920,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
       // determinate progress bar) is WORKING. Code waits it out, bounded by the job-wait budget;
       // past the budget the hang stands. A main thread that does not answer is never "working".
-      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < jobWaitMs) {
-        const working = await readWorkingStatus(page);
+      // #258: a wait the page DOCUMENTS ("this usually takes less than a minute") is working too, and
+      // its stated duration can raise the budget (twice the stated time plus a grace, capped). #288: so
+      // is a busy indicator that outlasted the ceiling while the app visibly kept working (an
+      // in-progress status, with its requests completing or its progress text changing meanwhile).
+      const documented =
+        perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" ? await readDocumentedWait(page) : null;
+      if (documented !== null) documentedBudgetMs = Math.max(documentedBudgetMs, documentedWaitBudgetMs(documented.ms));
+      const workBudgetMs = Math.max(jobWaitMs, documentedBudgetMs);
+      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < workBudgetMs) {
+        const working =
+          (await readWorkingStatus(page)) ??
+          (documented === null ? null : `a documented wait ("${documented.text}")`) ??
+          (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(page, perception.busyWait) : null);
         if (working !== null) {
-          const w = await waitOutJob(page, Math.min(jobWaitMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS));
-          // The perception's own wait counts too: the budget bounds the whole time spent believing it.
-          hangWorkWaitedMs += w.waitedMs + perception.settle.waitedMs;
+          const w = await waitOutJob(page, Math.min(workBudgetMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
+          // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
+          // budget bounds the whole time spent believing it.
+          hangWorkWaitedMs += Date.now() - perceiveStartedAt;
           const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
-            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(workBudgetMs / 1000)}s job-wait budget used`
           })`;
           history.push(note);
           transcript.record({
@@ -924,7 +977,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         const heapNow = await sampleHeap(page, 1_000);
-        const withHost: HangSignal = { ...perception.hang, host: judged.host };
+        // #288: a hang that stands after the page was believed to be working says how long, and how to
+        // allow a longer job — the operator's knob, never a silent longer wait.
+        const stood: HangSignal =
+          hangWorkWaitedMs > 0
+            ? {
+                ...perception.hang,
+                detail: `${perception.hang.detail} (still so after ${Math.round(hangWorkWaitedMs / 1000)}s of the page showing work — past the ${Math.round(workBudgetMs / 1000)}s job-wait budget; raise --job-wait-ms for longer jobs)`,
+              }
+            : perception.hang;
+        const withHost: HangSignal = { ...stood, host: judged.host };
         hang = {
           signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
           recordingStepIndex: Math.max(0, recorder.stepCount - 1),
