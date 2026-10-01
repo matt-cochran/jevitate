@@ -1,7 +1,6 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import type { Page } from "playwright";
 import { writeClassifier, type Recording, type ValueOrVar } from "@jevitate/recording";
 import {
   BoundsTracker,
@@ -15,10 +14,10 @@ import {
   isAuthorizedExploreTarget,
 } from "./authorized-targets.js";
 import type { Snapshot } from "./snapshot.js";
-import { perceive, type Perception } from "./perceive.js";
+import { perceive } from "./perceive.js";
 import { monitorFor } from "./page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "./timing.js";
-import { hangRoute, probeResponsive, visibleBusyIndicator, type HangSignal } from "./hang.js";
+import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler, HostJudgment } from "./host-health.js";
 import { HANG_PROBE_MS } from "./perceive.js";
@@ -41,7 +40,7 @@ import {
   secretPlaceholder,
 } from "./secret-fields.js";
 import { act, parseInterceptor } from "./act.js";
-import { SideEffectGuard, SideEffectLog, awaitWrites, type LastClick, type SideEffect } from "./side-effects.js";
+import { SideEffectGuard, SideEffectLog, awaitWrites, type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import { coveredByInterceptors } from "./occlusion.js";
@@ -96,7 +95,6 @@ import {
   EMPTY_STATUS,
   describeStatus,
   isEmptyStatus,
-  MAX_DOCUMENTED_WAIT_MS,
   readDocumentedWait,
   readInProgressStatus,
   readPageStatus,
@@ -112,62 +110,80 @@ import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash
 import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince, writesStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
 import { ActionDeltas, deltaPromptLine, deltaQuotableText, deltaRecord, type ActionDeltaStats, type DeltaVerdict } from "./action-delta.js";
+import * as limits from "./goal-loop/limits.js";
+import {
+  EXPECTED_RETURN,
+  FirstNavigationFailedSentinel,
+  JOB_WAIT_SLICE_MS,
+  MAX_EARLY_BLOCKED_REFUSALS,
+  MAX_TYPE_NO_EFFECT,
+  TOGGLE_ROLES,
+  TOO_MANY_CHOICES,
+  TOO_MANY_CHOICES_RETRY,
+  buttonLike,
+  documentedWaitBudgetMs,
+  fieldValuesOf,
+  firstLine,
+  incompleteReason,
+  isActionOrChromeName as actionOrChromeName,
+  keyOf,
+  liveBusyWork,
+  noReply,
+  quote,
+  safePath,
+  safeUrl,
+  savedAndLeft,
+  searchLike,
+  stateBesides,
+  stillShowsWork,
+  submitsAForm,
+  waitOutJob,
+  withCause,
+} from "./goal-loop/helpers.js";
 
-
-/** The judgment API's refusal of an over-long option list (#192). */
-const TOO_MANY_CHOICES = /too many choices/i;
-/** The option budget a refused decision is retried with when the refusal names no limit (#192). */
-const TOO_MANY_CHOICES_RETRY = 120;
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
 
+// The public limits are defined in ./goal-loop/limits.ts (the loop's step modules read them there)
+// and re-declared here under the same names, so the package's export surface is unchanged (#232).
 /** Default cap (chars) on a generated chat message. */
-export const REPLY_MAX_CHARS = 300;
+export const REPLY_MAX_CHARS = limits.REPLY_MAX_CHARS;
 /** Default bound (ms) a `wait` decision waits for the page to change. */
-export const WAIT_OP_MS = 3_000;
+export const WAIT_OP_MS = limits.WAIT_OP_MS;
 /** Consecutive `wait`/`scroll` steps that change nothing before the run stops as no-progress. */
-export const MAX_IDLE_STEPS = 6;
+export const MAX_IDLE_STEPS = limits.MAX_IDLE_STEPS;
 /** Cap (chars) on a generated free-text form value. */
-export const FORM_TEXT_MAX_CHARS = 600;
+export const FORM_TEXT_MAX_CHARS = limits.FORM_TEXT_MAX_CHARS;
 /** Rejected `done` proposals before the run stops incomplete. */
-export const MAX_DONE_REJECTIONS = 3;
+export const MAX_DONE_REJECTIONS = limits.MAX_DONE_REJECTIONS;
 /** Rejected (ungrounded) `report` answers before the run stops incomplete (#101). */
-export const MAX_REPORT_REJECTIONS = 3;
+export const MAX_REPORT_REJECTIONS = limits.MAX_REPORT_REJECTIONS;
 /** Repeated-type (typed, never sent, typed again) signals before the run stops as no-progress. */
-export const MAX_REPEAT_TYPE_SIGNALS = 3;
+export const MAX_REPEAT_TYPE_SIGNALS = limits.MAX_REPEAT_TYPE_SIGNALS;
 /**
  * Consecutive `wait`s that changed nothing while NOTHING was pending (no request in flight, no busy
  * indicator, no awaited reply) before the run stops as stuck, naming what the page shows (#79).
  */
-export const MAX_QUIET_WAITS = 3;
+export const MAX_QUIET_WAITS = limits.MAX_QUIET_WAITS;
 /**
  * Consecutive scrolls that MOVED the page (with no new page state) that count as progress (#172):
  * scrolling to read a long page is progress until the end is reached; past this bound (e.g. a
  * scroll up/down loop) a moved scroll counts as an unchanged step again.
  */
-export const MAX_MOVING_SCROLLS = 12;
-/**
- * #242: consecutive `type`s into one (non-message) field that changed nothing but its own value —
- * no request, no other change on the page — before the run stops as stuck.
- */
-const MAX_TYPE_NO_EFFECT = 3;
-/** #242: a search-like field (searches on Enter): its type is submitted once retyping fired nothing. */
-const SEARCH_LIKE = /\bsearch\b|⌘\s?k|ctrl\s?\+\s?k|\bfind\b|\bfilter\b/i;
-const searchLike = (c: Control): boolean => c.role === "searchbox" || c.inputType === "search" || SEARCH_LIKE.test(c.name);
-/** #242: the page's state with one field's own value left out (its typed text is not progress). */
-const stateBesides = (snap: Snapshot, key: string): string =>
-  JSON.stringify([snap.url, snap.controls.map((c) => (keyOf(c) === key ? `${c.role} ${c.name}` : c.summary))]);
-
-/**
- * #237: a model `blocked` before the run tried any action is refused (and the model told to explore)
- * this many times; a model that still gives up ends the run `inconclusive` (insufficient-coverage).
- */
-const MAX_EARLY_BLOCKED_REFUSALS = 2;
-
+export const MAX_MOVING_SCROLLS = limits.MAX_MOVING_SCROLLS;
 /** The one "last chance" turn the model gets before a no-progress stop (#172). */
-export const LAST_CHANCE_NOTE =
-  "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
+export const LAST_CHANCE_NOTE = limits.LAST_CHANCE_NOTE;
 
+/**
+ * #223: a control whose name is an action or a label, not page content: every non-link control
+ * (buttons, submit/reset inputs, form fields — named by their labels) and a chrome link (in a
+ * nav / header / footer landmark, or repeated across pages). A link in the page's content — a list,
+ * a table, a card — is content: its text may be the answer ("the title of the first item").
+ * (Implemented in ./goal-loop/helpers.ts, #232.)
+ */
+export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean {
+  return actionOrChromeName(c, chrome);
+}
 
 
 /**
@@ -430,153 +446,6 @@ export interface ExploreRun {
   /** #303: the run's action deltas — verdict counts and the per-action overhead (absent when off). */
   readonly actionDeltas?: ActionDeltaStats;
 }
-
-/** The longest single slice (ms) of one job wait: the model re-perceives the page between slices. */
-const JOB_WAIT_SLICE_MS = 60_000;
-
-/**
- * Waits, with backoff, while the page shows an in-progress status (#92): until it clears (the job
- * finished — then the page is given a moment to settle), the page navigates, or `budgetMs` passes.
- */
-async function waitOutJob(
-  page: Page,
-  budgetMs: number,
-  stillWorking: (page: Page) => Promise<boolean> = async (p) => (await readInProgressStatus(p)) !== null,
-): Promise<{ cleared: boolean; waitedMs: number }> {
-  const started = Date.now();
-  const url = safeUrl(page);
-  let delay = 1_000;
-  for (;;) {
-    const left = budgetMs - (Date.now() - started);
-    if (left <= 0) return { cleared: false, waitedMs: Date.now() - started };
-    await page.waitForTimeout(Math.max(1, Math.min(delay, left))).catch(() => undefined);
-    delay = Math.min(delay * 2, 15_000);
-    if (safeUrl(page) !== url || !(await stillWorking(page))) {
-      const rest = budgetMs - (Date.now() - started);
-      if (rest > 0) await monitorFor(page).waitSettled({ ceilingMs: Math.min(rest, 5_000) }).catch(() => undefined);
-      return { cleared: true, waitedMs: Date.now() - started };
-    }
-  }
-}
-
-/**
- * #288/#258 — the page still shows the work a hang was deferred for: an in-progress status, a busy
- * indicator, or copy that documents the wait.
- */
-async function stillShowsWork(page: Page): Promise<boolean> {
-  if ((await readInProgressStatus(page)) !== null) return true;
-  if ((await page.evaluate(visibleBusyIndicator).catch(() => null)) !== null) return true;
-  return (await readDocumentedWait(page)) !== null;
-}
-
-/** How long a documented wait (#258) is believed: twice what the page states plus a grace, capped. */
-function documentedWaitBudgetMs(statedMs: number): number {
-  return Math.min(MAX_DOCUMENTED_WAIT_MS, statedMs * 2 + 30_000);
-}
-
-/**
- * #288 — a busy indicator that outlasted the ceiling while the app VISIBLY kept working: the page
- * shows an in-progress status ("Drafting…") AND, during the wait, the app's requests kept completing
- * (a job-status poll) or the indicator's own progress text changed. A spinner frozen over a silent
- * page shows neither, and stays a hang. Returns a description, or null.
- */
-async function liveBusyWork(page: Page, busyWait: Perception["busyWait"]): Promise<string | null> {
-  if (busyWait === undefined || (busyWait.requestsCompleted === 0 && !busyWait.indicatorChanged)) return null;
-  const status = await readInProgressStatus(page);
-  if (status === null) return null;
-  const evidence = [
-    ...(busyWait.requestsCompleted > 0 ? [`${busyWait.requestsCompleted} app request(s) completed during the wait`] : []),
-    ...(busyWait.indicatorChanged ? ["its progress indicator changed"] : []),
-  ];
-  return `${status} while the app kept working (${evidence.join(", ")})`;
-}
-
-/**
- * #289: the last click fired at least one write the server accepted (a response below 400), none was
- * rejected or is still unanswered, and the page is now on a different route than the click was made
- * on — a save that returned to where it came from (the project hub after "Save changes"), which is
- * progress, never a stalled-state hang.
- */
-function savedAndLeft(
-  m: { readonly label: string; readonly clickFromRoute?: string | null },
-  routeNow: string,
-  lastClick: LastClick | null,
-): boolean {
-  if (!m.label.startsWith("click ") || (m.clickFromRoute ?? null) === null || m.clickFromRoute === routeNow) return false;
-  const writes = lastClick?.writes ?? [];
-  return writes.length > 0 && writes.every((w) => w.status !== null && w.status < 400);
-}
-
-/**
- * Actions whose own name says "go back" (Back, Cancel, Close, Undo, …): returning to an earlier
- * state is exactly their target state, never a stall.
- */
-const EXPECTED_RETURN = /\b(?:back|cancel|close|dismiss|undo|previous|prev|reset|discard|clear|exit|reload)\b/i;
-
-/** Roles whose click changes an input's value (so a later repeat of a write sends something new). */
-const TOGGLE_ROLES: ReadonlySet<string> = new Set(["checkbox", "radio", "switch", "option", "menuitemcheckbox", "menuitemradio"]);
-
-/** A button whose name reads as a form's submit (#111: a SPA's "Sign up" / "Create account" / "Save"). */
-const SUBMIT_LIKE_NAME = /^\s*(?:sign ?up|register|create(?: account)?|continue|log ?in|sign ?in|save|next|submit|confirm|finish)\b/i;
-
-/** A click that submits a form: a real submit control, a Send-like button, or a submit-named button. */
-const submitsAForm = (c: Control): boolean =>
-  c.submits === true || isSubmitControl(c) || ((c.role === "button" || c.tag === "button") && SUBMIT_LIKE_NAME.test(c.name));
-
-/** A click that may submit what was typed (#123: typed values count as used after it). */
-/**
- * #225: the page's form fields and their current values, for the goal judgment — a field's value is
- * never in the page's `innerText`, yet it is where a form displays what was saved. Only a non-secret
- * value (`Control.value` is never read from a password / one-time-code field) and never a bound secret
- * field or a message composer (the run's own words, #200).
- */
-function fieldValuesOf(controls: readonly Control[], isBound: (c: Control) => boolean): Array<{ label: string; value: string }> {
-  return controls
-    .filter((c) => typeof c.value === "string" && c.value.trim() !== "" && !isBound(c) && !isCredentialField(c) && !sendable(c))
-    .map((c) => ({ label: c.name || c.summary, value: c.value as string }));
-}
-
-const buttonLike = (c: Control): boolean =>
-  c.role === "button" || c.tag === "button" || (c.tag === "input" && (c.inputType === "submit" || c.inputType === "button"));
-
-/** A control's identity across snapshots (indexes are per-snapshot only). */
-const keyOf = (c: Control): string => JSON.stringify(c.descriptor);
-
-/** History text for a reply wait that ended without a reply — and why it stopped waiting (#93). */
-function noReply(r: ReplyResult): string {
-  const s = Math.round(r.waitedMs / 1000);
-  if (r.endedBy === "ceiling") return `no reply within ${s}s (the page was still working when the wait's ceiling passed)`;
-  if (r.endedBy === "idle") return `no reply within ${s}s (the page showed no sign of working on one)`;
-  return `no reply within ${s}s`;
-}
-
-/** A short quote for history lines. */
-function quote(s: string, n = 160): string {
-  const flat = s.replace(/\s+/g, " ").trim();
-  return `"${flat.length > n ? `${flat.slice(0, n)}…` : flat}"`;
-}
-
-/**
- * #223: a control whose name is an action or a label, not page content: every non-link control
- * (buttons, submit/reset inputs, form fields — named by their labels) and a chrome link (in a
- * nav / header / footer landmark, or repeated across pages). A link in the page's content — a list,
- * a table, a card — is content: its text may be the answer ("the title of the first item").
- */
-export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean {
-  if (c.role !== "link") return true;
-  return (c.landmark ?? null) !== null || chrome.isChrome(c);
-}
-
-function firstLine(e: unknown): string {
-  return e instanceof Error ? e.message.split("\n")[0] ?? e.message : String(e);
-}
-
-/**
- * Unwinds out of the loop after the FIRST navigation failed unreachable (#128) — `stop`/`failure`
- * are already set at the point it's thrown; the outer catch recognises it and does nothing more
- * (never reclassifies it as a generic `crashed` engine failure).
- */
-class FirstNavigationFailedSentinel extends Error {}
 
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   // #1 — authorize the start target before ANY snapshot/decision/action.
@@ -2935,66 +2804,4 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   };
 }
 
-/** Why a run that did not complete ended — always a stated reason, never a silent stop. */
-function incompleteReason(
-  stop: StopReason,
-  specific: string | null,
-  failure: MissionFailure | undefined,
-  hang: ExploreRun["hang"],
-  tracker: BoundsTracker,
-): string {
-  if (specific !== null && stop !== "crashed") return specific;
-  switch (stop) {
-    case "exhausted":
-      return `budget exhausted (${tracker.decisions} decisions, ${tracker.actions} actions) before the goal was met`;
-    case "no-progress":
-      return "no progress: the last actions left the page unchanged";
-    case "blocked":
-      return "blocked before the goal was met";
-    case "hang":
-      return hang === undefined ? "the app hung" : `the app hung (${hang.signal.kind}): ${hang.signal.detail}`;
-    case "inconclusive":
-    case "crashed":
-      return failure === undefined ? `run ${stop}` : `run ${stop}: ${failure.message}`;
-    case "done":
-      return "done was proposed but could not be verified";
-    case "budget":
-      return "a declared mission spend budget was crossed";
-    default: {
-      const exhaustive: never = stop;
-      return String(exhaustive);
-    }
-  }
-}
-
-/**
- * The run's reason with the concrete cause it ran into (#84): a blocked / stuck / exhausted run names
- * what stopped it (a fail-closed field, a disabled target, an invalid field, an alert). A crash,
- * hang or inconclusive run keeps its own evidence; a reason already naming the cause is kept as is.
- */
-function withCause(reason: string, stop: StopReason, cause: string | null): string {
-  if (cause === null || reason.includes(cause)) return reason;
-  if (stop !== "blocked" && stop !== "no-progress" && stop !== "exhausted") return reason;
-  if (reason === "blocked before the goal was met") return `blocked: ${cause}`;
-  return `${reason} — last blocker: ${cause}`;
-}
-
-/** The path part of a URL (navigation detection); the raw string when it does not parse. */
-function safePath(url: string): string {
-  try {
-    const u = new URL(url);
-    return `${u.origin}${u.pathname}`;
-  } catch {
-    return url;
-  }
-}
-
-/** `page.url()` survives a closed page, but guard it: winding down must never throw. */
-function safeUrl(page: { url(): string }): string {
-  try {
-    return page.url();
-  } catch {
-    return "about:blank";
-  }
-}
 
