@@ -1,7 +1,8 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
-import { writeClassifier, type Recording, type ValueOrVar } from "@jevitate/recording";
+import type { Page } from "playwright";
+import { writeClassifier, type Recording, type ValueOrVar, type WriteClassifier } from "@jevitate/recording";
 import {
   BoundsTracker,
   NoProgressDetector,
@@ -87,7 +88,7 @@ import { describeTextEdit } from "@jevitate/interpreter";
 import { resolveMissionFixture } from "./fixture.js";
 import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
-import { demoOverlayFor } from "./demo-overlay.js";
+import { demoOverlayFor, type DemoOverlay } from "./demo-overlay.js";
 import { TranscriptLog, type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
 import { CrashWatch, assertTargetAnswering, describeFailure, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
@@ -447,231 +448,186 @@ export interface ExploreRun {
   readonly actionDeltas?: ActionDeltaStats;
 }
 
-export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
-  // #1 — authorize the start target before ANY snapshot/decision/action.
-  const startOrigin = assertAuthorizedExploreTarget(cfg.startUrl, cfg.allowlist);
-  // Mission fixture: validated before any navigation/decision (fail fast).
-  const fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture);
-
-  // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
-  const secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
-  const secretContext = secretFieldContext(cfg.secretFields);
-  const missionContext =
-    [
-      cfg.missionContext,
-      secretContext,
-      typeFixtureContext(cfg.typeFixtures),
-      cfg.readOnly === true ? READ_ONLY_NOTE : cfg.noDestructiveWrites === true ? NO_DESTRUCTIVE_NOTE : null,
-    ]
-      .filter((c): c is string => c !== undefined && c !== null && c !== "")
-      .join("; ") || undefined;
-  const bounds = resolveBounds(cfg.bounds);
-  const tracker = new BoundsTracker(bounds);
-  const noProgress = new NoProgressDetector(3);
-  const fillHelper = new FillHelper(cfg.gen, cfg.identityToken === undefined ? {} : { identityToken: cfg.identityToken });
-  const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets, cfg.onRecording);
-  const page = cfg.actor.ability(BrowseTheWebToken).session.page;
-  const crashWatch = new CrashWatch(page);
-  const heap = new HeapLog();
-  const probeHost = cfg.hostProbe ?? hostProbe();
+/** The goal loop's run state (#232): every closure variable of `explore()`, one field each, names unchanged. */
+interface RunContext {
+  readonly startOrigin: string;
+  readonly fixture: string | null;
+  readonly secrets: string[];
+  readonly secretContext: string | null;
+  readonly missionContext: string | undefined;
+  readonly bounds: Bounds;
+  readonly tracker: BoundsTracker;
+  readonly noProgress: NoProgressDetector;
+  readonly fillHelper: FillHelper;
+  readonly recorder: RunRecorder;
+  readonly page: Page;
+  readonly crashWatch: CrashWatch;
+  readonly heap: HeapLog;
+  readonly probeHost: HostProbe;
   /** #203: the fresh host sample around a finding, and whether the run's sampler calls it starved. */
-  const judgeHost = async (): Promise<HostJudgment> =>
-    cfg.hostHealth === undefined ? { host: await probeHost(), starved: null } : cfg.hostHealth.judge();
+  readonly judgeHost: () => Promise<HostJudgment>;
   /** #203: a finding the starved host explains ends the run `inconclusive`, never as a hang. */
-  const degradedStop = (finding: "hang" | "no-progress", detail: string, starved: string): void => {
-    cfg.hostHealth?.markDegraded({ finding, detail, step: Math.max(0, transcript.entries().length - 1) }, starved);
-    failure = {
-      kind: "degraded-environment",
-      message: `environment-degraded ${finding} (${detail}) while the host was starved: ${starved} — not an app finding`,
-    };
-    stop = "inconclusive";
-  };
+  readonly degradedStop: (finding: "hang" | "no-progress", detail: string, starved: string) => void;
   /**
    * #230: before a hang/no-progress is a finding (or blamed on a starved host), did the app itself
    * stop answering? Throws `TargetUnresponsiveError` (→ `inconclusive` / `target-unresponsive`).
    */
-  const livenessOf = () => ({
-    pageUrl: page.url(),
-    authorized: (u: string) => isAuthorizedExploreTarget(u, cfg.allowlist),
-  });
-  const now = (): number => Date.now();
-
-  const transcript = new TranscriptLog(secrets, cfg.onTranscriptEntry);
-  const history: string[] = [];
+  readonly livenessOf: () => { pageUrl: string; authorized: (u: string) => boolean; };
+  readonly now: () => number;
+  readonly transcript: TranscriptLog;
+  readonly history: string[];
   /** #245: the demo overlay (null unless `demoOverlay`) — display only, never an input to the loop. */
-  const overlay = demoOverlayFor(cfg.demoOverlay, secrets);
-  const overlayWhy = `goal: ${cfg.goal}`;
-
-  let stop: StopReason = "exhausted";
-  let failure: MissionFailure | undefined;
-  let lastActedOp: string | null = null;
+  readonly overlay: DemoOverlay | null;
+  readonly overlayWhy: string;
+  stop: StopReason;
+  failure: MissionFailure | undefined;
+  lastActedOp: string | null;
   /** #172: did the last scroll move the page, and how many moved scrolls in a row on one state. */
-  let lastScrollMoved = false;
-  let movingScrolls = 0;
-  let movingScrollsSignature: string | null = null;
+  lastScrollMoved: boolean;
+  movingScrolls: number;
+  movingScrollsSignature: string | null;
   /** #172: the no-progress last-chance turn was given (it is given once per run). */
-  let lastChanceGiven = false;
+  lastChanceGiven: boolean;
   /** #172: this decision is the last-chance turn. */
-  let lastChanceTurn = false;
-  let fixtureAttached = false;
-  let hang: ExploreRun["hang"];
-  let outcome: RunOutcome | null = null;
+  lastChanceTurn: boolean;
+  fixtureAttached: boolean;
+  hang: ExploreRun["hang"];
+  outcome: RunOutcome | null;
   /** Why the run ended incomplete, when a specific detector ended it. */
-  let incomplete: string | null = null;
+  incomplete: string | null;
   /** #209: stopped because every `done` the model proposed was rejected. */
-  let endedOnRejectedDone = false;
-  const unsent = new UnsubmittedTypeTracker();
-  const conversation: { latestReply: string | null; sent: string[] } = { latestReply: null, sent: [] };
+  endedOnRejectedDone: boolean;
+  readonly unsent: UnsubmittedTypeTracker;
+  readonly conversation: { latestReply: string | null; sent: string[] };
   /** Consecutive message generations made while the conversation was stuck (#122). */
-  let stuckTurns = 0;
+  stuckTurns: number;
   /** The current stuck episode was already told to the decision (#122). */
-  let stuckNoted = false;
+  stuckNoted: boolean;
   /**
    * After a user turn went out (#122): when the conversation is now stuck on content-free / repeated
    * turns, the NEXT decision is told so once per episode — answer concretely, or take the page's
    * call to action toward the goal.
    */
-  const noteStuckConversation = (controls: readonly Control[]): void => {
-    if (!repetitiveTurns(conversation.sent)) {
-      stuckNoted = false;
-      return;
-    }
-    if (stuckNoted) return;
-    stuckNoted = true;
-    const cta = goalCallToAction(controls, cfg.goal);
-    history.push(
-      `the conversation is stuck: your last ${STUCK_TURNS} messages acknowledged or repeated without answering — ` +
-        `answer the assistant's question with a concrete fact or choice${cta === null ? "" : `, or take the page's call to action ${quote(cta.name, 80)}`}`,
-    );
-  };
+  readonly noteStuckConversation: (controls: readonly Control[]) => void;
   /** The values this run typed into each form field, and which were submitted (#123). */
-  const valueLog = new FieldValueLog();
+  readonly valueLog: FieldValueLog;
   /** Controls present just before a message was sent — the next snapshot's new ones were offered with the reply. */
-  let offerBaseline: Set<string> | null = null;
-  let offeredKeys = new Set<string>();
-  let doneRejections = 0;
-  let reportRejections = 0;
+  offerBaseline: Set<string> | null;
+  offeredKeys: Set<string>;
+  doneRejections: number;
+  reportRejections: number;
   /** The visible text of every page state observed — what a reported answer is grounded against (#101). */
-  const observed = new ObservedPages(secrets);
+  readonly observed: ObservedPages;
   /**
    * #200 — a goal about a conversational reply (`goalAsksForReply`, code-side) is reported from, and
    * grounded on, ONLY text that appeared after the run's first send: each observed state's text minus
    * the pre-send snapshot and the run's own messages, plus every reply the reply wait read. A chat
    * panel's intro / placeholder copy, on screen before the conversation, is never a reply.
    */
-  const replyGoal = goalAsksForReply(cfg.goal);
+  readonly replyGoal: boolean;
   /**
    * #207 — a find-out goal (read-only, #158; not a reply goal, #200) is answered from page text: its
    * decisions carry the page's visible text, and a model `blocked` on a page state is first turned
    * into one grounded report attempt there (the answer may be plain text no control carries).
    */
-  const findOut = cfg.readOnly === true && !replyGoal;
+  readonly findOut: boolean;
   /** #207: page states whose `blocked` was already turned into a report attempt (once per state). */
-  const blockedReported = new Set<string>();
+  readonly blockedReported: Set<string>;
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
-  let lastReportNotFound = false;
+  lastReportNotFound: boolean;
   /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
-  let lastAbsenceUncovered: string | null = null;
+  lastAbsenceUncovered: string | null;
   /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
-  let settledClick: ReturnType<SideEffectGuard["lastClick"]> = null;
-  let wroteOk = false;
+  settledClick: ReturnType<SideEffectGuard["lastClick"]>;
+  wroteOk: boolean;
   /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
-  const writeGoal = goalAsksToWrite(cfg.goal);
-  // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.
-  const vetoes = new VetoedAnswers();
-  const replies = new ObservedPages(secrets);
+  readonly writeGoal: boolean;
+  readonly vetoes: VetoedAnswers;
+  readonly replies: ObservedPages;
   /** The page text just before the run's first message was sent (null until one is sent). */
-  let preSend: string | null = null;
-  const noteReplyText = (url: string, pageText: string): void => {
-    if (preSend !== null) replies.add(url, withoutAuthored(newPageText(preSend, pageText, ""), conversation.sent));
-  };
+  preSend: string | null;
+  readonly noteReplyText: (url: string, pageText: string) => void;
   /** The grounded answer a `report` ended the run with. */
-  let answer: RunAnswer | undefined;
+  answer: RunAnswer | undefined;
   /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
-  const goalChecked = new Set<string>();
+  readonly goalChecked: Set<string>;
   /** The run's own sign-in steps and the sign-in completion code observes on each state (#188). */
-  const auth = new AuthProgress();
+  readonly auth: AuthProgress;
   /** #225: the run's own typed-and-submitted form values, for the code-observed save signal. */
-  const save = new SaveProgress();
-  const isBound = (c: Control): boolean => boundSecretField(c, cfg.secretFields) !== null;
-  let idleSteps = 0;
-  let idleSince: number | null = null;
+  readonly save: SaveProgress;
+  readonly isBound: (c: Control) => boolean;
+  idleSteps: number;
+  idleSince: number | null;
   /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
-  let busyWaitedMs = 0;
+  busyWaitedMs: number;
   /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
-  let awaitingReply = false;
+  awaitingReply: boolean;
   /** The page text before the last message, and the message — to keep listening for its reply. */
-  let lastTurn: { baseline: string; sent: string; sentAt: number; background: ReadonlySet<string> } | null = null;
+  lastTurn: { baseline: string; sent: string; sentAt: number; background: ReadonlySet<string> } | null;
   /**
    * #241 × #283: endpoints the run's own conversation turns wrote to (the chat's POST). Never the
    * page's background polling: the next turn's write to the same endpoint is that turn's own work.
    */
-  const turnWrites = new Set<string>();
-  let lastPath: string | null = null;
-  // #188 — an add-another flow (the goal lists several items) comes back to a state it already went
-  // through (the second item's one-time dialog, identical to the first's). The model is reminded of
-  // what it did next from there, once per return — it read the history as those steps being done.
-  const listsSeveral = goalListsSeveral(cfg.goal);
-  const nextFrom = new Map<string, string[]>();
-  let prevSignature: string | null = null;
+  readonly turnWrites: Set<string>;
+  lastPath: string | null;
+  readonly listsSeveral: boolean;
+  readonly nextFrom: Map<string, string[]>;
+  prevSignature: string | null;
   /** The page's status text (alerts, invalid fields) at the latest perception (#79). */
-  let status: PageStatus = EMPTY_STATUS;
+  status: PageStatus;
   /** The step whose effect the next status read reports ("after <step>: alert …"). */
-  let statusAfter: string | null = null;
+  statusAfter: string | null;
   /** Consecutive `wait`s that changed nothing while nothing was pending. */
-  let quietWaits = 0;
+  quietWaits: number;
   /**
    * CSS selectors (parsed from a Playwright "intercepts pointer events" failure, #90) for elements
    * proven to cover a real click. Every control they still cover is withheld from the model until the
    * page state changes — a click failure otherwise burns the whole run re-choosing the same or a
    * sibling target under the same backdrop.
    */
-  let blockedInterceptors: readonly string[] = [];
+  blockedInterceptors: readonly string[];
   /** The page signature blocked interceptors were recorded against — cleared once it changes. */
-  let blockedSinceSignature: string | null = null;
+  blockedSinceSignature: string | null;
   /**
    * Controls the shared safety policy (#116) has refused this run (#168): once refused, a control is
    * withheld from the model's candidates for the rest of the run — same as the interceptor-blocked
    * set above — so a re-decide never re-chooses the same refused control.
    */
-  const refusedKeys = new Set<string>();
+  readonly refusedKeys: Set<string>;
   /** #235: the latest safety refusal's reason (named when the model then gives up), else null. */
-  let lastRefusal: string | null = null;
+  lastRefusal: string | null;
   /**
    * #272 / #294: real actions that failed, in a row — a covered / unreachable target is withheld
    * after its second failure, and `MAX_FAILED_ACTIONS` failures in a row end the run, whatever the
    * page signature did meanwhile (a failed click that scrolls the page can flicker it).
    */
-  const failedActs = new FailedActionStreak();
+  readonly failedActs: FailedActionStreak;
   /**
    * #242: the last plain `type` into a form field, judged at the next perception — did anything
    * besides that field's own value change (a request, another control)? — and how many such types in
    * a row into the same field changed nothing else.
    */
-  let typeProbe: { key: string; label: string; at: number; background: Set<string>; state: string } | null = null;
-  let typeNoEffect: { key: string; count: number } | null = null;
+  typeProbe: { key: string; label: string; at: number; background: Set<string>; state: string } | null;
+  typeNoEffect: { key: string; count: number } | null;
   /**
    * #242 × #241: a type credited ONLY with requests to endpoints the page had not been seen requesting
    * yet (a background poll's FIRST tick can land in any action's window). Held, not trusted: once the
    * next type into the same field finds those endpoints are the page's background traffic, the
    * credited type was no effect either and the streak resumes instead of restarting.
    */
-  let typeCredit: { key: string; count: number; endpoints: readonly string[] } | null = null;
+  typeCredit: { key: string; count: number; endpoints: readonly string[] } | null;
   /** #237: actions the run attempted (any target op or reload, landed or not), and early `blocked`s refused. */
-  let actionAttempts = 0;
-  let earlyBlocked = 0;
+  actionAttempts: number;
+  earlyBlocked: number;
   /**
    * #276: steps since the last executed page-changing action that were jevitate's own refusals, or
    * scrolls that moved the page (the app answered them). A stall over such steps is the run's (nothing it tried reached the app), never an app
    * `ui-no-progress` hang.
    */
-  let refusedSinceMutation = 0;
-  let scrollsSinceMutation = 0;
+  refusedSinceMutation: number;
+  scrollsSinceMutation: number;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
-  const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
-    failClosed: null,
-    target: null,
-  };
+  readonly blockers: { failClosed: string | null; target: { key: string; text: string } | null };
   /**
    * The most concrete cause known now, in #84's priority order; null when there is none. An invalid
    * field is named ONLY when the last action taken was a click that sent no request at all (#130a) —
@@ -680,64 +636,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * unrelated field's stale `:invalid` state elsewhere on the page never gets blamed for that. An
    * error toast/alert is preferred over a field either way.
    */
-  const blockingCause = (): string | null => {
-    if (blockers.failClosed !== null) return blockers.failClosed;
-    if (blockers.target !== null) return blockers.target.text;
-    const alert = status.alerts[0];
-    if (alert !== undefined) return `the page shows alert ${quote(alert)}`;
-    const field = status.invalid[0];
-    const lastClick = sideEffects.lastClick();
-    const blockedBySubmit = lastActedOp === "click" && lastClick !== null && !lastClick.requestSent;
-    if (field !== undefined && blockedBySubmit) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
-    return null;
-  };
+  readonly blockingCause: () => string | null;
   /**
    * A failed act's reason as the model sees it: a disabled / hidden target is named (its accessible
    * name often says why — "Analyze — enter a URL first"), and remembered as a blocker (#79, #84).
    */
-  const failNote = (reason: string | undefined, c: Control): string => {
-    const r = reason ?? "?";
-    if (r !== "target not enabled" && r !== "target not visible") return r;
-    const name = quote(c.name || c.summary, 120);
-    blockers.target = { key: keyOf(c), text: `${r === "target not enabled" ? "target disabled" : "target not visible"} — ${name}` };
-    return r === "target not enabled"
-      ? `${r}: ${name} is disabled — its label may say what it needs first`
-      : `${r}: ${name}`;
-  };
+  readonly failNote: (reason: string | undefined, c: Control) => string;
   /** A control acted on successfully is no longer the blocker. */
-  const cleared = (c: Control): void => {
-    if (blockers.target?.key === keyOf(c)) blockers.target = null;
-  };
+  readonly cleared: (c: Control) => void;
   /**
    * #272 / #294: a REAL action on `c` failed (act ran, `ok: false`). Tells the model when the target
    * is withheld; returns true when the run must stop (`stop` / `incomplete` are set) — too many
    * failed actions in a row, naming the overlay that covers the page when there is one.
    */
-  const noteFailedAct = async (c: Control, reason: string | undefined): Promise<boolean> => {
-    const v = failedActs.fail(keyOf(c), quote(c.name || c.summary, 80), reason ?? "?");
-    if (v.note !== null) history.push(v.note);
-    if (!v.stop) return false;
-    const n = failedActs.consecutive;
-    const last = quote(failedActs.lastReason() ?? "?", 200);
-    const covered = failedActs.dominantCause() === "covered";
-    const overlay = covered ? await page.evaluate(openOverlayName).catch(() => null) : null;
-    if (overlay !== null) {
-      incomplete = `blocked by an overlay: ${n} actions in a row failed because ${overlay} covers the page — it was never dismissed (last: ${last})`;
-      stop = "blocked";
-    } else {
-      incomplete = `stuck: ${n} actions in a row failed${covered ? " (their targets were covered)" : ""} (last: ${last})`;
-      stop = "no-progress";
-    }
-    return true;
-  };
-  const replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
-  const replyCeilingMs = Math.max(replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
-  const replyMaxChars = cfg.replyMaxChars ?? REPLY_MAX_CHARS;
-  const waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;
+  readonly noteFailedAct: (c: Control, reason: string | undefined) => Promise<boolean>;
+  readonly replyWaitMs: number;
+  readonly replyCeilingMs: number;
+  readonly replyMaxChars: number;
+  readonly waitOpMs: number;
   /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
-  const seen = new Set<string>();
+  readonly seen: Set<string>;
   /** The last executed page-changing action: when, from which state, and its Recording index. */
-  const track: {
+  readonly track: {
     lastMutation: {
       at: number;
       before: string;
@@ -753,14 +673,358 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;
-  } = { lastMutation: null, lastRecordedTarget: null };
+  };
+  readonly goalText: string;
+  readonly perceiveOpts: { timingConfig?: TimingConfig | undefined; hangConfig?: HangConfig | undefined; settleConfig?: SettleConfig | undefined; requestBoundMs?: number | undefined; hangProbeMs?: number | undefined; renderWaitMs?: number | undefined; maxCandidates: number; mentioned: (name: string) => boolean; secrets: string[]; };
+  readonly ignoreNoProgress: (text: string) => boolean;
+  readonly stallMs: number;
+  /** Every perception's full timing (with request samples), once each — the run summary's input. */
+  readonly timings: PageTiming[];
+  readonly isWrite: WriteClassifier;
+  /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */
+  readonly safety: SafetyPolicy;
+  /** The writes the run's actions fire (#116: the result's `sideEffects`). */
+  /**
+   * #194 — which origins are the app's: the allowlist's sites, plus every origin the page sends API
+   * credentials to (observed on every request below). A write elsewhere is `thirdParty`.
+   */
+  readonly firstParty: FirstPartyOrigins;
+  readonly onRequestSeen: (r: { url(): string; headers(): Record<string, string>; }) => void;
+  /**
+   * The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. A
+   * third-party beacon or a `--settle-ignore`d request is never a control's side effect (#274/#284).
+   */
+  readonly sideEffects: SideEffectGuard;
+  /** The writes earlier clicks fired that are still in flight, named (#283). */
+  readonly inflightWrites: () => string;
+  readonly documentStatus: Map<string, number>;
+  /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
+  readonly chrome: ChromeTracker;
+  readonly docKey: (u: string) => string;
+  readonly onDocumentResponse: (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown; }; }) => void;
+  readonly effectLog: SideEffectLog;
+  /** #303: what each action changed on the page (null when turned off). */
+  readonly deltas: ActionDeltas | null;
+  /** #303: write steps whose changes did not survive a reload (saved but not stored — evidence). */
+  readonly notPersisted: Array<{ step: number; action: string; why: string }>;
+  /** #303: the verdict of the last action's delta, until the no-progress check reads it. */
+  deltaVerdict: DeltaVerdict | null;
+  /** A find-out goal's read-only guard (#158), or null when the run may write. */
+  readonly readOnly: ReadOnlyGuard | null;
+  readonly jobWaitMs: number;
+  /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
+  jobWaitedMs: number;
+  /**
+   * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
+   * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
+   */
+  hangWorkWaitedMs: number;
+  /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
+  documentedBudgetMs: number;
+  readonly noteMutation: (label: string, descriptor: unknown, before: string, at: number, input?: { readonly field: string; readonly value: string; }, linkFromRoute?: string | null, clickFromRoute?: string | null) => void;
+  firstNavNetError: string | null;
+  readonly onFirstNavRequestFailed: (req: { failure(): { errorText: string; } | null; }) => void;
+  firstNavFailed: boolean;
+}
+
+export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
+  const ctx = {} as { -readonly [K in keyof RunContext]: RunContext[K] };
+  // #1 — authorize the start target before ANY snapshot/decision/action.
+  ctx.startOrigin = assertAuthorizedExploreTarget(cfg.startUrl, cfg.allowlist);
+  // Mission fixture: validated before any navigation/decision (fail fast).
+  ctx.fixture = cfg.fixture === undefined ? null : await resolveMissionFixture(cfg.fixture);
+
+  // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
+  ctx.secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
+  ctx.secretContext = secretFieldContext(cfg.secretFields);
+  ctx.missionContext = [
+      cfg.missionContext,
+      ctx.secretContext,
+      typeFixtureContext(cfg.typeFixtures),
+      cfg.readOnly === true ? READ_ONLY_NOTE : cfg.noDestructiveWrites === true ? NO_DESTRUCTIVE_NOTE : null,
+    ]
+      .filter((c): c is string => c !== undefined && c !== null && c !== "")
+      .join("; ") || undefined;
+  ctx.bounds = resolveBounds(cfg.bounds);
+  ctx.tracker = new BoundsTracker(ctx.bounds);
+  ctx.noProgress = new NoProgressDetector(3);
+  ctx.fillHelper = new FillHelper(cfg.gen, cfg.identityToken === undefined ? {} : { identityToken: cfg.identityToken });
+  ctx.recorder = new RunRecorder(cfg.site ?? ctx.startOrigin, undefined, ctx.secrets, cfg.onRecording);
+  ctx.page = cfg.actor.ability(BrowseTheWebToken).session.page;
+  ctx.crashWatch = new CrashWatch(ctx.page);
+  ctx.heap = new HeapLog();
+  ctx.probeHost = cfg.hostProbe ?? hostProbe();
+  /** #203: the fresh host sample around a finding, and whether the run's sampler calls it starved. */
+  ctx.judgeHost = async (): Promise<HostJudgment> =>
+    cfg.hostHealth === undefined ? { host: await ctx.probeHost(), starved: null } : cfg.hostHealth.judge();
+  /** #203: a finding the starved host explains ends the run `inconclusive`, never as a hang. */
+  ctx.degradedStop = (finding: "hang" | "no-progress", detail: string, starved: string): void => {
+    cfg.hostHealth?.markDegraded({ finding, detail, step: Math.max(0, ctx.transcript.entries().length - 1) }, starved);
+    ctx.failure = {
+      kind: "degraded-environment",
+      message: `environment-degraded ${finding} (${detail}) while the host was starved: ${starved} — not an app finding`,
+    };
+    ctx.stop = "inconclusive";
+  };
+  /**
+   * #230: before a hang/no-progress is a finding (or blamed on a starved host), did the app itself
+   * stop answering? Throws `TargetUnresponsiveError` (→ `inconclusive` / `target-unresponsive`).
+   */
+  ctx.livenessOf = () => ({
+    pageUrl: ctx.page.url(),
+    authorized: (u: string) => isAuthorizedExploreTarget(u, cfg.allowlist),
+  });
+  ctx.now = (): number => Date.now();
+
+  ctx.transcript = new TranscriptLog(ctx.secrets, cfg.onTranscriptEntry);
+  ctx.history = [];
+  /** #245: the demo overlay (null unless `demoOverlay`) — display only, never an input to the loop. */
+  ctx.overlay = demoOverlayFor(cfg.demoOverlay, ctx.secrets);
+  ctx.overlayWhy = `goal: ${cfg.goal}`;
+
+  ctx.stop = "exhausted";
+  ctx.failure = undefined;
+  ctx.lastActedOp = null;
+  /** #172: did the last scroll move the page, and how many moved scrolls in a row on one state. */
+  ctx.lastScrollMoved = false;
+  ctx.movingScrolls = 0;
+  ctx.movingScrollsSignature = null;
+  /** #172: the no-progress last-chance turn was given (it is given once per run). */
+  ctx.lastChanceGiven = false;
+  /** #172: this decision is the last-chance turn. */
+  ctx.lastChanceTurn = false;
+  ctx.fixtureAttached = false;
+  ctx.hang = undefined;
+  ctx.outcome = null;
+  /** Why the run ended incomplete, when a specific detector ended it. */
+  ctx.incomplete = null;
+  /** #209: stopped because every `done` the model proposed was rejected. */
+  ctx.endedOnRejectedDone = false;
+  ctx.unsent = new UnsubmittedTypeTracker();
+  ctx.conversation = { latestReply: null, sent: [] };
+  /** Consecutive message generations made while the conversation was stuck (#122). */
+  ctx.stuckTurns = 0;
+  /** The current stuck episode was already told to the decision (#122). */
+  ctx.stuckNoted = false;
+  /**
+   * After a user turn went out (#122): when the conversation is now stuck on content-free / repeated
+   * turns, the NEXT decision is told so once per episode — answer concretely, or take the page's
+   * call to action toward the goal.
+   */
+  ctx.noteStuckConversation = (controls: readonly Control[]): void => {
+    if (!repetitiveTurns(ctx.conversation.sent)) {
+      ctx.stuckNoted = false;
+      return;
+    }
+    if (ctx.stuckNoted) return;
+    ctx.stuckNoted = true;
+    const cta = goalCallToAction(controls, cfg.goal);
+    ctx.history.push(
+      `the conversation is stuck: your last ${STUCK_TURNS} messages acknowledged or repeated without answering — ` +
+        `answer the assistant's question with a concrete fact or choice${cta === null ? "" : `, or take the page's call to action ${quote(cta.name, 80)}`}`,
+    );
+  };
+  /** The values this run typed into each form field, and which were submitted (#123). */
+  ctx.valueLog = new FieldValueLog();
+  /** Controls present just before a message was sent — the next snapshot's new ones were offered with the reply. */
+  ctx.offerBaseline = null;
+  ctx.offeredKeys = new Set<string>();
+  ctx.doneRejections = 0;
+  ctx.reportRejections = 0;
+  /** The visible text of every page state observed — what a reported answer is grounded against (#101). */
+  ctx.observed = new ObservedPages(ctx.secrets);
+  /**
+   * #200 — a goal about a conversational reply (`goalAsksForReply`, code-side) is reported from, and
+   * grounded on, ONLY text that appeared after the run's first send: each observed state's text minus
+   * the pre-send snapshot and the run's own messages, plus every reply the reply wait read. A chat
+   * panel's intro / placeholder copy, on screen before the conversation, is never a reply.
+   */
+  ctx.replyGoal = goalAsksForReply(cfg.goal);
+  /**
+   * #207 — a find-out goal (read-only, #158; not a reply goal, #200) is answered from page text: its
+   * decisions carry the page's visible text, and a model `blocked` on a page state is first turned
+   * into one grounded report attempt there (the answer may be plain text no control carries).
+   */
+  ctx.findOut = cfg.readOnly === true && !ctx.replyGoal;
+  /** #207: page states whose `blocked` was already turned into a report attempt (once per state). */
+  ctx.blockedReported = new Set<string>();
+  /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
+  ctx.lastReportNotFound = false;
+  /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
+  ctx.lastAbsenceUncovered = null;
+  /** #239: the last click whose window was settled, and whether any click's writes all succeeded (2xx). */
+  ctx.settledClick = null;
+  ctx.wroteOk = false;
+  /** #239: a write goal ("record a decision…") is not settled by a report before the run saved anything. */
+  ctx.writeGoal = goalAsksToWrite(cfg.goal);
+  // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.
+  ctx.vetoes = new VetoedAnswers();
+  ctx.replies = new ObservedPages(ctx.secrets);
+  /** The page text just before the run's first message was sent (null until one is sent). */
+  ctx.preSend = null;
+  ctx.noteReplyText = (url: string, pageText: string): void => {
+    if (ctx.preSend !== null) ctx.replies.add(url, withoutAuthored(newPageText(ctx.preSend, pageText, ""), ctx.conversation.sent));
+  };
+  /** The grounded answer a `report` ended the run with. */
+  ctx.answer = undefined;
+  /** Page states already goal-checked on the decision's "already met" signal (once each, #91). */
+  ctx.goalChecked = new Set<string>();
+  /** The run's own sign-in steps and the sign-in completion code observes on each state (#188). */
+  ctx.auth = new AuthProgress();
+  /** #225: the run's own typed-and-submitted form values, for the code-observed save signal. */
+  ctx.save = new SaveProgress();
+  ctx.isBound = (c: Control): boolean => boundSecretField(c, cfg.secretFields) !== null;
+  ctx.idleSteps = 0;
+  ctx.idleSince = null;
+  /** How long consecutive `wait`s have waited on a still-busy app (bounded by `replyWaitMs`). */
+  ctx.busyWaitedMs = 0;
+  /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
+  ctx.awaitingReply = false;
+  /** The page text before the last message, and the message — to keep listening for its reply. */
+  ctx.lastTurn = null;
+  /**
+   * #241 × #283: endpoints the run's own conversation turns wrote to (the chat's POST). Never the
+   * page's background polling: the next turn's write to the same endpoint is that turn's own work.
+   */
+  ctx.turnWrites = new Set<string>();
+  ctx.lastPath = null;
+  // #188 — an add-another flow (the goal lists several items) comes back to a state it already went
+  // through (the second item's one-time dialog, identical to the first's). The model is reminded of
+  // what it did next from there, once per return — it read the history as those steps being done.
+  ctx.listsSeveral = goalListsSeveral(cfg.goal);
+  ctx.nextFrom = new Map<string, string[]>();
+  ctx.prevSignature = null;
+  /** The page's status text (alerts, invalid fields) at the latest perception (#79). */
+  ctx.status = EMPTY_STATUS;
+  /** The step whose effect the next status read reports ("after <step>: alert …"). */
+  ctx.statusAfter = null;
+  /** Consecutive `wait`s that changed nothing while nothing was pending. */
+  ctx.quietWaits = 0;
+  /**
+   * CSS selectors (parsed from a Playwright "intercepts pointer events" failure, #90) for elements
+   * proven to cover a real click. Every control they still cover is withheld from the model until the
+   * page state changes — a click failure otherwise burns the whole run re-choosing the same or a
+   * sibling target under the same backdrop.
+   */
+  ctx.blockedInterceptors = [];
+  /** The page signature blocked interceptors were recorded against — cleared once it changes. */
+  ctx.blockedSinceSignature = null;
+  /**
+   * Controls the shared safety policy (#116) has refused this run (#168): once refused, a control is
+   * withheld from the model's candidates for the rest of the run — same as the interceptor-blocked
+   * set above — so a re-decide never re-chooses the same refused control.
+   */
+  ctx.refusedKeys = new Set<string>();
+  /** #235: the latest safety refusal's reason (named when the model then gives up), else null. */
+  ctx.lastRefusal = null;
+  /**
+   * #272 / #294: real actions that failed, in a row — a covered / unreachable target is withheld
+   * after its second failure, and `MAX_FAILED_ACTIONS` failures in a row end the run, whatever the
+   * page signature did meanwhile (a failed click that scrolls the page can flicker it).
+   */
+  ctx.failedActs = new FailedActionStreak();
+  /**
+   * #242: the last plain `type` into a form field, judged at the next perception — did anything
+   * besides that field's own value change (a request, another control)? — and how many such types in
+   * a row into the same field changed nothing else.
+   */
+  ctx.typeProbe = null;
+  ctx.typeNoEffect = null;
+  /**
+   * #242 × #241: a type credited ONLY with requests to endpoints the page had not been seen requesting
+   * yet (a background poll's FIRST tick can land in any action's window). Held, not trusted: once the
+   * next type into the same field finds those endpoints are the page's background traffic, the
+   * credited type was no effect either and the streak resumes instead of restarting.
+   */
+  ctx.typeCredit = null;
+  /** #237: actions the run attempted (any target op or reload, landed or not), and early `blocked`s refused. */
+  ctx.actionAttempts = 0;
+  ctx.earlyBlocked = 0;
+  /**
+   * #276: steps since the last executed page-changing action that were jevitate's own refusals, or
+   * scrolls that moved the page (the app answered them). A stall over such steps is the run's (nothing it tried reached the app), never an app
+   * `ui-no-progress` hang.
+   */
+  ctx.refusedSinceMutation = 0;
+  ctx.scrollsSinceMutation = 0;
+  /** The concrete causes the run ran into, for a precise stop reason (#84). */
+  ctx.blockers = {
+    failClosed: null,
+    target: null,
+  };
+  /**
+   * The most concrete cause known now, in #84's priority order; null when there is none. An invalid
+   * field is named ONLY when the last action taken was a click that sent no request at all (#130a) —
+   * the shape of a form submit the browser's own validation silently blocked. A click that DID send a
+   * request (even to the wrong endpoint — a `--success` typo, say) clears the field as the blocker: an
+   * unrelated field's stale `:invalid` state elsewhere on the page never gets blamed for that. An
+   * error toast/alert is preferred over a field either way.
+   */
+  ctx.blockingCause = (): string | null => {
+    if (ctx.blockers.failClosed !== null) return ctx.blockers.failClosed;
+    if (ctx.blockers.target !== null) return ctx.blockers.target.text;
+    const alert = ctx.status.alerts[0];
+    if (alert !== undefined) return `the page shows alert ${quote(alert)}`;
+    const field = ctx.status.invalid[0];
+    const lastClick = ctx.sideEffects.lastClick();
+    const blockedBySubmit = ctx.lastActedOp === "click" && lastClick !== null && !lastClick.requestSent;
+    if (field !== undefined && blockedBySubmit) return `field ${quote(field.name, 80)} is invalid — ${quote(field.message)}`;
+    return null;
+  };
+  /**
+   * A failed act's reason as the model sees it: a disabled / hidden target is named (its accessible
+   * name often says why — "Analyze — enter a URL first"), and remembered as a blocker (#79, #84).
+   */
+  ctx.failNote = (reason: string | undefined, c: Control): string => {
+    const r = reason ?? "?";
+    if (r !== "target not enabled" && r !== "target not visible") return r;
+    const name = quote(c.name || c.summary, 120);
+    ctx.blockers.target = { key: keyOf(c), text: `${r === "target not enabled" ? "target disabled" : "target not visible"} — ${name}` };
+    return r === "target not enabled"
+      ? `${r}: ${name} is disabled — its label may say what it needs first`
+      : `${r}: ${name}`;
+  };
+  /** A control acted on successfully is no longer the blocker. */
+  ctx.cleared = (c: Control): void => {
+    if (ctx.blockers.target?.key === keyOf(c)) ctx.blockers.target = null;
+  };
+  /**
+   * #272 / #294: a REAL action on `c` failed (act ran, `ok: false`). Tells the model when the target
+   * is withheld; returns true when the run must stop (`stop` / `incomplete` are set) — too many
+   * failed actions in a row, naming the overlay that covers the page when there is one.
+   */
+  ctx.noteFailedAct = async (c: Control, reason: string | undefined): Promise<boolean> => {
+    const v = ctx.failedActs.fail(keyOf(c), quote(c.name || c.summary, 80), reason ?? "?");
+    if (v.note !== null) ctx.history.push(v.note);
+    if (!v.stop) return false;
+    const n = ctx.failedActs.consecutive;
+    const last = quote(ctx.failedActs.lastReason() ?? "?", 200);
+    const covered = ctx.failedActs.dominantCause() === "covered";
+    const overlay = covered ? await ctx.page.evaluate(openOverlayName).catch(() => null) : null;
+    if (overlay !== null) {
+      ctx.incomplete = `blocked by an overlay: ${n} actions in a row failed because ${overlay} covers the page — it was never dismissed (last: ${last})`;
+      ctx.stop = "blocked";
+    } else {
+      ctx.incomplete = `stuck: ${n} actions in a row failed${covered ? " (their targets were covered)" : ""} (last: ${last})`;
+      ctx.stop = "no-progress";
+    }
+    return true;
+  };
+  ctx.replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
+  ctx.replyCeilingMs = Math.max(ctx.replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
+  ctx.replyMaxChars = cfg.replyMaxChars ?? REPLY_MAX_CHARS;
+  ctx.waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;
+  /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
+  ctx.seen = new Set<string>();
+  /** The last executed page-changing action: when, from which state, and its Recording index. */
+  ctx.track = { lastMutation: null, lastRecordedTarget: null };
   // #192: an option the goal names (a country, a currency) is perceived even deep in a long list.
-  const goalText = cfg.goal.toLowerCase();
-  const perceiveOpts = {
-    maxCandidates: bounds.maxCandidates,
-    mentioned: (name: string) => name.trim().length >= 2 && goalText.includes(name.trim().toLowerCase()),
+  ctx.goalText = cfg.goal.toLowerCase();
+  ctx.perceiveOpts = {
+    maxCandidates: ctx.bounds.maxCandidates,
+    mentioned: (name: string) => name.trim().length >= 2 && ctx.goalText.includes(name.trim().toLowerCase()),
     // #219: page content is redacted of every registered secret as it is perceived.
-    secrets,
+    secrets: ctx.secrets,
     ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
     ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
     ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),
@@ -768,93 +1032,91 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
     ...(cfg.timingConfig === undefined ? {} : { timingConfig: cfg.timingConfig }),
   };
-  const ignoreNoProgress = textMatcher(cfg.hangs?.ignoreNoProgress);
-  const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
+  ctx.ignoreNoProgress = textMatcher(cfg.hangs?.ignoreNoProgress);
+  ctx.stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
-  const timings: PageTiming[] = [];
+  ctx.timings = [];
   // A write is classified by the shared classifier (#110): a gRPC-web/Connect read is never guarded.
-  const isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
+  ctx.isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
   /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */
-  const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
+  ctx.safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
   /** The writes the run's actions fire (#116: the result's `sideEffects`). */
   /**
    * #194 — which origins are the app's: the allowlist's sites, plus every origin the page sends API
    * credentials to (observed on every request below). A write elsewhere is `thirdParty`.
    */
-  const firstParty = new FirstPartyOrigins(cfg.allowlist);
-  const onRequestSeen = (r: { url(): string; headers(): Record<string, string> }): void => {
-    firstParty.observe(r.url(), r.headers());
+  ctx.firstParty = new FirstPartyOrigins(cfg.allowlist);
+  ctx.onRequestSeen = (r: { url(): string; headers(): Record<string, string> }): void => {
+    ctx.firstParty.observe(r.url(), r.headers());
   };
-  page.on("request", onRequestSeen);
+  ctx.page.on("request", ctx.onRequestSeen);
   /**
    * The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. A
    * third-party beacon or a `--settle-ignore`d request is never a control's side effect (#274/#284).
    */
-  const sideEffects = new SideEffectGuard(monitorFor(page), {
-    isWrite,
+  ctx.sideEffects = new SideEffectGuard(monitorFor(ctx.page), {
+    isWrite: ctx.isWrite,
     allowlist: cfg.allowlist,
-    firstParty,
+    firstParty: ctx.firstParty,
     ignoreRequests: urlMatcher(cfg.settle?.ignoreRequests),
   });
   /** The writes earlier clicks fired that are still in flight, named (#283). */
-  const inflightWrites = (): string =>
-    [...new Set(sideEffects.inflight().map((w) => `${w.method} ${w.path}`))].join(", ");
+  ctx.inflightWrites = (): string =>
+    [...new Set(ctx.sideEffects.inflight().map((w) => `${w.method} ${w.path}`))].join(", ");
   // #223: the main document's HTTP status per URL — an answer on a 404 / error page is no answer.
-  const documentStatus = new Map<string, number>();
+  ctx.documentStatus = new Map<string, number>();
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */
-  const chrome = new ChromeTracker();
-  const docKey = (u: string): string => u.split("#")[0] ?? u;
-  const onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
+  ctx.chrome = new ChromeTracker();
+  ctx.docKey = (u: string): string => u.split("#")[0] ?? u;
+  ctx.onDocumentResponse = (r: { url(): string; status(): number; request(): { isNavigationRequest(): boolean; frame(): unknown } }): void => {
     try {
-      if (!r.request().isNavigationRequest() || r.request().frame() !== page.mainFrame()) return;
-      if (documentStatus.size >= 500) documentStatus.clear();
-      documentStatus.set(docKey(r.url()), r.status());
+      if (!r.request().isNavigationRequest() || r.request().frame() !== ctx.page.mainFrame()) return;
+      if (ctx.documentStatus.size >= 500) ctx.documentStatus.clear();
+      ctx.documentStatus.set(ctx.docKey(r.url()), r.status());
     } catch {
       // a response whose frame is gone: nothing to record
     }
   };
-  page.on("response", onDocumentResponse);
+  ctx.page.on("response", ctx.onDocumentResponse);
   // #194: a write to a third-party origin is listed with its full URL and `thirdParty: true`.
-  const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
+  ctx.effectLog = new SideEffectLog({ isWrite: ctx.isWrite, now: ctx.now, allowlist: cfg.allowlist, firstParty: ctx.firstParty });
   /** #303: what each action changed on the page (null when turned off). */
-  const deltas =
-    cfg.actionDeltas === undefined || cfg.actionDeltas === false
+  ctx.deltas = cfg.actionDeltas === undefined || cfg.actionDeltas === false
       ? null
-      : new ActionDeltas(page, {
-          secrets,
+      : new ActionDeltas(ctx.page, {
+          secrets: ctx.secrets,
           goal: cfg.goal,
           judge: typeof cfg.actionDeltas === "object" && cfg.actionDeltas.jev === true ? cfg.judge : null,
           ...(typeof cfg.actionDeltas === "object" && cfg.actionDeltas.volatilityGapMs !== undefined ? { volatilityGapMs: cfg.actionDeltas.volatilityGapMs } : {}),
-          ownWrites: () => turnWrites,
-          isWrite,
+          ownWrites: () => ctx.turnWrites,
+          isWrite: ctx.isWrite,
           ignoreRequest: urlMatcher(cfg.settle?.ignoreRequests),
         });
   /** #303: write steps whose changes did not survive a reload (saved but not stored — evidence). */
-  const notPersisted: Array<{ step: number; action: string; why: string }> = [];
+  ctx.notPersisted = [];
   /** #303: the verdict of the last action's delta, until the no-progress check reads it. */
-  let deltaVerdict: DeltaVerdict | null = null;
+  ctx.deltaVerdict = null;
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
-  const readOnly =
-    cfg.readOnly === true || cfg.noDestructiveWrites === true
-      ? new ReadOnlyGuard(isWrite, {
+  ctx.readOnly = cfg.readOnly === true || cfg.noDestructiveWrites === true
+      ? new ReadOnlyGuard(ctx.isWrite, {
           mode: cfg.readOnly === true ? "read-only" : "no-destructive",
           // #194: only writes to the app's own origins are blocked; a third-party beacon passes (listed).
           allowlist: cfg.allowlist,
-          firstParty,
+          firstParty: ctx.firstParty,
           ...(cfg.safety?.allowWriteRequests === undefined ? {} : { allowWrites: cfg.safety.allowWriteRequests }),
         })
       : null;
-  const jobWaitMs = cfg.jobWaitMs ?? replyCeilingMs;
+  ctx.jobWaitMs = cfg.jobWaitMs ?? ctx.replyCeilingMs;
   /** How long `wait`s have waited on the in-progress status the page shows (bounded by `jobWaitMs`). */
-  let jobWaitedMs = 0;
+  ctx.jobWaitedMs = 0;
   /**
    * How long a hang signal has been deferred because the page is visibly WORKING (#153): never reset,
    * so a page that keeps "working" is still reported as a hang once the job-wait budget is spent.
    */
-  let hangWorkWaitedMs = 0;
+  ctx.hangWorkWaitedMs = 0;
   /** #258: the longest wait the page has documented this run (its budget, ms); 0 when none. */
-  let documentedBudgetMs = 0;
-  const noteMutation = (
+  ctx.documentedBudgetMs = 0;
+  ctx.noteMutation = (
     label: string,
     descriptor: unknown,
     before: string,
@@ -865,36 +1127,36 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   ): void => {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
-    if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
-    deltas?.acted({ label, recordIndex: recorder.stepCount - 1, step: transcript.nextStep, ...(input === undefined ? {} : { value: input.value }) });
-    failedActs.succeeded();
+    if (!label.startsWith("click ")) ctx.sideEffects.inputChanged(input?.field, input?.value);
+    ctx.deltas?.acted({ label, recordIndex: ctx.recorder.stepCount - 1, step: ctx.transcript.nextStep, ...(input === undefined ? {} : { value: input.value }) });
+    ctx.failedActs.succeeded();
     if (!label.startsWith("type ")) {
-      typeNoEffect = null;
-      typeCredit = null;
+      ctx.typeNoEffect = null;
+      ctx.typeCredit = null;
     }
-    track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute, clickFromRoute };
-    refusedSinceMutation = 0;
-    scrollsSinceMutation = 0;
-    track.lastRecordedTarget = JSON.stringify(descriptor);
-    statusAfter = label;
+    ctx.track.lastMutation = { at, before, seenBefore: new Set(ctx.seen), label, recordIndex: ctx.recorder.stepCount - 1, sawNewState: false, linkFromRoute, clickFromRoute };
+    ctx.refusedSinceMutation = 0;
+    ctx.scrollsSinceMutation = 0;
+    ctx.track.lastRecordedTarget = JSON.stringify(descriptor);
+    ctx.statusAfter = label;
   };
 
   // #128: real network evidence for the FIRST navigation, preferred over whatever `page.goto`
   // itself reports — a refused connection can still surface as a bare navigation timeout.
-  let firstNavNetError: string | null = null;
-  const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
+  ctx.firstNavNetError = null;
+  ctx.onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
     const text = req.failure()?.errorText;
-    if (text !== undefined) firstNavNetError = text;
+    if (text !== undefined) ctx.firstNavNetError = text;
   };
-  let firstNavFailed = false;
+  ctx.firstNavFailed = false;
 
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
-    await monitorFor(page).instrument();
-    await deltas?.enable();
-    effectLog.attach(monitorFor(page));
+    await monitorFor(ctx.page).instrument();
+    await ctx.deltas?.enable();
+    ctx.effectLog.attach(monitorFor(ctx.page));
     // Initial navigation (authorized above).
-    page.on("requestfailed", onFirstNavRequestFailed);
+    ctx.page.on("requestfailed", ctx.onFirstNavRequestFailed);
     try {
       // #293: an anchored run starts on the live page its Journey prefix left — never a fresh load.
       if (cfg.startInPlace !== true) {
@@ -903,14 +1165,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
     } catch (e) {
       const message = firstLine(e);
-      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
+      if (!isUnreachableTarget(message) && !isUnreachableTarget(ctx.firstNavNetError ?? "")) throw e;
       // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
       // a configuration problem (a bad URL, the target not running). `inconclusive`, not `crashed`;
       // no crash report is built for it, so no issue is ever drafted from it.
-      firstNavFailed = true;
-      stop = "inconclusive";
-      const cause = describeUnreachable(message, firstNavNetError);
-      failure = { kind: "target-unreachable", message: `target unreachable (${cause})` };
+      ctx.firstNavFailed = true;
+      ctx.stop = "inconclusive";
+      const cause = describeUnreachable(message, ctx.firstNavNetError);
+      ctx.failure = { kind: "target-unreachable", message: `target unreachable (${cause})` };
       // #213: a bare load TIMEOUT (no network error) on a starved host is the host, not the target —
       // unless a fresh request for the page gets no response at all either (#230: the app is down).
       if (cause === "timed out before any response" && cfg.hostHealth !== undefined) {
@@ -918,112 +1180,112 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (judged.starved !== null && (await targetStoppedAnswering({ pageUrl: cfg.startUrl }).catch(() => null)) === null) {
           const detail = `the start page did not load in time (${cause})`;
           cfg.hostHealth.markDegraded({ finding: "page-load-timeout", detail, step: 0 }, judged.starved);
-          failure = {
+          ctx.failure = {
             kind: "degraded-environment",
             message: `environment-degraded page load (${detail}) while the host was starved: ${judged.starved} — not an app or access finding`,
           };
         }
       }
     } finally {
-      page.off("requestfailed", onFirstNavRequestFailed);
+      ctx.page.off("requestfailed", ctx.onFirstNavRequestFailed);
     }
-    if (firstNavFailed) throw new FirstNavigationFailedSentinel();
-    recorder.navigate(cfg.startUrl, now());
+    if (ctx.firstNavFailed) throw new FirstNavigationFailedSentinel();
+    ctx.recorder.navigate(cfg.startUrl, ctx.now());
     // #158 — from here on, a read-only run's write requests never leave the browser.
-    if (readOnly !== null) {
-      await readOnly.arm(page);
-      if (readOnly.mode === "read-only") {
-        effectLog.markBackground();
-        history.push(READ_ONLY_NOTE);
-      } else history.push(NO_DESTRUCTIVE_NOTE);
+    if (ctx.readOnly !== null) {
+      await ctx.readOnly.arm(ctx.page);
+      if (ctx.readOnly.mode === "read-only") {
+        ctx.effectLog.markBackground();
+        ctx.history.push(READ_ONLY_NOTE);
+      } else ctx.history.push(NO_DESTRUCTIVE_NOTE);
     }
 
     for (;;) {
-      if (!tracker.mayDecide()) {
-        stop = "exhausted";
+      if (!ctx.tracker.mayDecide()) {
+        ctx.stop = "exhausted";
         break;
       }
 
       // Shared perception: never decide on an unrendered page (bounded render wait) and never
       // offer an occluded control (see `perceive`).
       const perceiveStartedAt = Date.now();
-      const perception = await perceive(page, perceiveOpts);
-      timings.push(perception.timing);
+      const perception = await perceive(ctx.page, ctx.perceiveOpts);
+      ctx.timings.push(perception.timing);
       // The last click's window closes here: what it wrote is now known (#92).
-      sideEffects.settle();
+      ctx.sideEffects.settle();
       // #239: a click whose writes all succeeded saved what the run had typed — from here those values
       // are the app's, and the run has written (a write goal's report may settle it).
       {
-        const lc = sideEffects.lastClick();
-        if (lc !== null && lc !== settledClick) {
-          settledClick = lc;
+        const lc = ctx.sideEffects.lastClick();
+        if (lc !== null && lc !== ctx.settledClick) {
+          ctx.settledClick = lc;
           if (lc.writes.length > 0 && lc.writes.every((w) => w.status !== null && w.status >= 200 && w.status < 300)) {
-            observed.confirmOwnInputs();
-            wroteOk = true;
+            ctx.observed.confirmOwnInputs();
+            ctx.wroteOk = true;
           }
         }
       }
       // #158 — the action's window closes once the page settled: later writes are the app's own.
-      if (readOnly?.settled() === true && readOnly.mode === "read-only") effectLog.markBackground();
+      if (ctx.readOnly?.settled() === true && ctx.readOnly.mode === "read-only") ctx.effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
       const snap = markTypeFixtures(maskSecretFields(perception.snapshot, cfg.secretFields), cfg.typeFixtures);
       {
-        const m = track.lastMutation;
+        const m = ctx.track.lastMutation;
         if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
       }
-      await heap.sample(page, transcript.nextStep);
+      await ctx.heap.sample(ctx.page, ctx.transcript.nextStep);
       // Re-observe the PREVIOUS action's effect: patch its postcondition + open
       // the next page segment if the URL changed (record-before-reobserve).
-      const target = track.lastRecordedTarget;
-      recorder.observed(
+      const target = ctx.track.lastRecordedTarget;
+      ctx.recorder.observed(
         snap.url,
-        now(),
+        ctx.now(),
         perception.timing,
         target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
       );
-      track.lastRecordedTarget = null;
+      ctx.track.lastRecordedTarget = null;
       // #303: what the previous action changed (code's verdict), attached to its transcript step and
       // Recording step, and told to the model; this capture is also the next action's baseline.
-      if (deltas !== null) {
+      if (ctx.deltas !== null) {
         // A bound secret field's value (a TOTP code, a password code types) is masked in every capture.
-        for (const c of perception.snapshot.controls) if (isBound(c)) deltas.secretField(c.name);
-        const d = await deltas.perceived(hangRoute(snap.url)).catch(() => null);
+        for (const c of perception.snapshot.controls) if (ctx.isBound(c)) ctx.deltas.secretField(c.name);
+        const d = await ctx.deltas.perceived(hangRoute(snap.url)).catch(() => null);
         if (d !== null) {
-          deltaVerdict = d.delta.verdict;
+          ctx.deltaVerdict = d.delta.verdict;
           // #303 persistence: a write that went through and changed the page is re-checked after a
           // reload (a GET of the same URL — never a re-post), once, at this safe point (nothing typed
           // and unsent, no write still in flight, not a read-only run).
           let delta = d.delta;
           let reloaded = false;
           if (
-            deltas.wroteLasting() &&
+            ctx.deltas.wroteLasting() &&
             cfg.readOnly !== true &&
-            unsent.pending().size === 0 &&
-            sideEffects.inflight().length === 0 &&
-            /^https?:/i.test(page.url())
+            ctx.unsent.pending().size === 0 &&
+            ctx.sideEffects.inflight().length === 0 &&
+            /^https?:/i.test(ctx.page.url())
           ) {
-            const url = page.url();
-            const ok = await page
+            const url = ctx.page.url();
+            const ok = await ctx.page
               .goto(url, { waitUntil: "load", timeout: 15_000 })
               .then(() => true)
               .catch(() => false);
-            await monitorFor(page).waitSettled({ ceilingMs: 10_000 }).catch(() => undefined);
-            const p = ok ? await deltas.persistence().catch(() => ({ persisted: "inconclusive" as const, why: "the check failed" })) : { persisted: "inconclusive" as const, why: "the reload failed" };
+            await monitorFor(ctx.page).waitSettled({ ceilingMs: 10_000 }).catch(() => undefined);
+            const p = ok ? await ctx.deltas.persistence().catch(() => ({ persisted: "inconclusive" as const, why: "the check failed" })) : { persisted: "inconclusive" as const, why: "the reload failed" };
             delta = { ...delta, persisted: p.persisted, persistedWhy: p.why };
-            if (p.persisted === "no") notPersisted.push({ step: d.step, action: delta.action, why: p.why });
+            if (p.persisted === "no") ctx.notPersisted.push({ step: d.step, action: delta.action, why: p.why });
             reloaded = true;
-            recorder.navigate(url, now());
-            history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
+            ctx.recorder.navigate(url, ctx.now());
+            ctx.history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
           }
-          transcript.attachDelta(d.step, delta);
-          recorder.attachDelta(d.recordIndex, deltaRecord(delta));
-          history.push(deltaPromptLine(delta));
+          ctx.transcript.attachDelta(d.step, delta);
+          ctx.recorder.attachDelta(d.recordIndex, deltaRecord(delta));
+          ctx.history.push(deltaPromptLine(delta));
           // #303 grounding: what the action announced or lastingly showed (a toast gone before the
           // report) is observed page text a report may quote — redacted, never a field's own value.
           const quotable = deltaQuotableText(delta);
-          if (quotable !== "") observed.add(snap.url, quotable);
+          if (quotable !== "") ctx.observed.add(snap.url, quotable);
           if (reloaded) {
-            transcript.record({
+            ctx.transcript.record({
               op: "reload",
               control: null,
               confidence: null,
@@ -1048,24 +1310,24 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // is a busy indicator that outlasted the ceiling while the app visibly kept working (an
       // in-progress status, with its requests completing or its progress text changing meanwhile).
       const documented =
-        perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" ? await readDocumentedWait(page) : null;
-      if (documented !== null) documentedBudgetMs = Math.max(documentedBudgetMs, documentedWaitBudgetMs(documented.ms));
-      const workBudgetMs = Math.max(jobWaitMs, documentedBudgetMs);
-      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && hangWorkWaitedMs < workBudgetMs) {
+        perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" ? await readDocumentedWait(ctx.page) : null;
+      if (documented !== null) ctx.documentedBudgetMs = Math.max(ctx.documentedBudgetMs, documentedWaitBudgetMs(documented.ms));
+      const workBudgetMs = Math.max(ctx.jobWaitMs, ctx.documentedBudgetMs);
+      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && ctx.hangWorkWaitedMs < workBudgetMs) {
         const working =
-          (await readWorkingStatus(page)) ??
+          (await readWorkingStatus(ctx.page)) ??
           (documented === null ? null : `a documented wait ("${documented.text}")`) ??
-          (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(page, perception.busyWait) : null);
+          (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(ctx.page, perception.busyWait) : null);
         if (working !== null) {
-          const w = await waitOutJob(page, Math.min(workBudgetMs - hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
+          const w = await waitOutJob(ctx.page, Math.min(workBudgetMs - ctx.hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
           // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
           // budget bounds the whole time spent believing it.
-          hangWorkWaitedMs += Date.now() - perceiveStartedAt;
+          ctx.hangWorkWaitedMs += Date.now() - perceiveStartedAt;
           const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
-            w.cleared ? "the status cleared" : `still in progress; ${Math.round(hangWorkWaitedMs / 1000)}s of the ${Math.round(workBudgetMs / 1000)}s job-wait budget used`
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(ctx.hangWorkWaitedMs / 1000)}s of the ${Math.round(workBudgetMs / 1000)}s job-wait budget used`
           })`;
-          history.push(note);
-          transcript.record({
+          ctx.history.push(note);
+          ctx.transcript.record({
             op: "wait",
             control: null,
             confidence: null,
@@ -1082,7 +1344,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
       // A hang is its own first-class stop (owner ruling 7) — detected by perception's rule.
       if (perception.hang !== null) {
-        transcript.record({
+        ctx.transcript.record({
           op: null,
           control: null,
           confidence: null,
@@ -1093,34 +1355,34 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           snapshot: snap,
           timing: perception.timing,
         });
-        await assertTargetAnswering(livenessOf());
-        const judged = await judgeHost();
+        await assertTargetAnswering(ctx.livenessOf());
+        const judged = await ctx.judgeHost();
         if (judged.starved !== null) {
-          degradedStop(perception.hang.kind === "ui-no-progress" ? "no-progress" : "hang", `${perception.hang.kind}: ${perception.hang.detail}`, judged.starved);
+          ctx.degradedStop(perception.hang.kind === "ui-no-progress" ? "no-progress" : "hang", `${perception.hang.kind}: ${perception.hang.detail}`, judged.starved);
           break;
         }
-        const heapNow = await sampleHeap(page, 1_000);
+        const heapNow = await sampleHeap(ctx.page, 1_000);
         // #288: a hang that stands after the page was believed to be working says how long, and how to
         // allow a longer job — the operator's knob, never a silent longer wait.
         const stood: HangSignal =
-          hangWorkWaitedMs > 0
+          ctx.hangWorkWaitedMs > 0
             ? {
                 ...perception.hang,
-                detail: `${perception.hang.detail} (still so after ${Math.round(hangWorkWaitedMs / 1000)}s of the page showing work — past the ${Math.round(workBudgetMs / 1000)}s job-wait budget; raise --job-wait-ms for longer jobs)`,
+                detail: `${perception.hang.detail} (still so after ${Math.round(ctx.hangWorkWaitedMs / 1000)}s of the page showing work — past the ${Math.round(workBudgetMs / 1000)}s job-wait budget; raise --job-wait-ms for longer jobs)`,
               }
             : perception.hang;
         const withHost: HangSignal = { ...stood, host: judged.host };
-        hang = {
+        ctx.hang = {
           signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
-          recordingStepIndex: Math.max(0, recorder.stepCount - 1),
+          recordingStepIndex: Math.max(0, ctx.recorder.stepCount - 1),
         };
-        stop = "hang";
+        ctx.stop = "hang";
         break;
       }
 
       // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
       if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
-        stop = "blocked";
+        ctx.stop = "blocked";
         break;
       }
 
@@ -1133,7 +1395,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (cfg.onSettled !== undefined) {
         const budget = await cfg.onSettled(snap);
         if (budget.stop) {
-          transcript.record({
+          ctx.transcript.record({
             op: null,
             control: null,
             confidence: null,
@@ -1144,8 +1406,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             snapshot: snap,
             timing: perception.timing,
           });
-          incomplete = budget.reason;
-          stop = "budget";
+          ctx.incomplete = budget.reason;
+          ctx.stop = "budget";
           break;
         }
       }
@@ -1154,7 +1416,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (cfg.successMetNow !== undefined) {
         const met = await cfg.successMetNow().catch(() => null);
         if (met !== null) {
-          transcript.record({
+          ctx.transcript.record({
             op: "done",
             control: null,
             confidence: null,
@@ -1165,14 +1427,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             snapshot: snap,
             timing: perception.timing,
           });
-          outcome = { status: "completed", verifiedBy: "success-condition" };
-          stop = "done";
+          ctx.outcome = { status: "completed", verifiedBy: "success-condition" };
+          ctx.stop = "done";
           break;
         }
       }
 
       if (!perception.rendered) {
-        transcript.record({
+        ctx.transcript.record({
           op: "wait",
           control: null,
           confidence: null,
@@ -1182,7 +1444,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           snapshot: snap,
           timing: perception.timing,
         });
-        stop = "blocked";
+        ctx.stop = "blocked";
         break;
       }
 
@@ -1190,30 +1452,30 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // them. What newly appeared after the last step goes into its history; what shows now goes
       // into its prompt.
       {
-        const before = status;
-        status = await readPageStatus(page);
-        const appeared = statusDelta(before, status);
-        if (transcript.nextStep > 0 && !isEmptyStatus(appeared)) {
-          history.push(`after ${statusAfter ?? "the last step"}: ${describeStatus(appeared)}`);
+        const before = ctx.status;
+        ctx.status = await readPageStatus(ctx.page);
+        const appeared = statusDelta(before, ctx.status);
+        if (ctx.transcript.nextStep > 0 && !isEmptyStatus(appeared)) {
+          ctx.history.push(`after ${ctx.statusAfter ?? "the last step"}: ${describeStatus(appeared)}`);
         }
-        statusAfter = null;
+        ctx.statusAfter = null;
       }
 
       // #172 — a scroll that MOVED the page is progress (the model is reading a long page), even
       // though the control set — the signature — is the same; bounded, so a scroll loop still stops.
-      const scrolledMoved = (lastActedOp === "scroll_down" || lastActedOp === "scroll_up") && lastScrollMoved;
-      if (!scrolledMoved || snap.signature !== movingScrollsSignature) movingScrolls = 0;
-      movingScrollsSignature = snap.signature;
-      if (scrolledMoved) movingScrolls += 1;
-      const scrollProgress = scrolledMoved && movingScrolls <= MAX_MOVING_SCROLLS;
-      if (scrollProgress) noProgress.progress(snap.signature);
-      lastChanceTurn = false;
+      const scrolledMoved = (ctx.lastActedOp === "scroll_down" || ctx.lastActedOp === "scroll_up") && ctx.lastScrollMoved;
+      if (!scrolledMoved || snap.signature !== ctx.movingScrollsSignature) ctx.movingScrolls = 0;
+      ctx.movingScrollsSignature = snap.signature;
+      if (scrolledMoved) ctx.movingScrolls += 1;
+      const scrollProgress = scrolledMoved && ctx.movingScrolls <= MAX_MOVING_SCROLLS;
+      if (scrollProgress) ctx.noProgress.progress(snap.signature);
+      ctx.lastChanceTurn = false;
       // #2 — no-progress: the last executed op left the page unchanged N times.
       // #303: the last action's delta decides when there is one — only `no-change` counts toward the
       // streak, `inconclusive` holds it; without one the page signature decides, as before.
-      const verdictNow = deltaVerdict;
-      deltaVerdict = null;
-      if (lastActedOp !== null && !scrollProgress && noProgress.noteDelta(lastActedOp, snap.signature, verdictNow)) {
+      const verdictNow = ctx.deltaVerdict;
+      ctx.deltaVerdict = null;
+      if (ctx.lastActedOp !== null && !scrollProgress && ctx.noProgress.noteDelta(ctx.lastActedOp, snap.signature, verdictNow)) {
         // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
         // sent it BACK to a state it had already been in (it changed, then reverted — an action
         // that silently undid itself, like an import that never starts), and it stays there for
@@ -1221,12 +1483,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // did nothing (same state before and after) stays plain no-progress.
         // The action's target state must NEVER have appeared (no new state since the action), and
         // the target must not have declared this route/action as expected to return (per-target ignore).
-        const m = track.lastMutation;
+        const m = ctx.track.lastMutation;
         if (
           m !== null &&
           // #276: the steps since were refusals / moved scrolls — the app answered: plain no-progress.
-          refusedSinceMutation === 0 &&
-          scrollsSinceMutation === 0 &&
+          ctx.refusedSinceMutation === 0 &&
+          ctx.scrollsSinceMutation === 0 &&
           !m.sawNewState &&
           snap.signature !== m.before &&
           m.seenBefore.has(snap.signature) &&
@@ -1235,21 +1497,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&
           // #289: a click whose write went through and that then took the page to another route
           // (Save → back to the hub) did what it was for — a save-and-return, not an action that undid itself.
-          !savedAndLeft(m, hangRoute(snap.url), sideEffects.lastClick()) &&
+          !savedAndLeft(m, hangRoute(snap.url), ctx.sideEffects.lastClick()) &&
           !EXPECTED_RETURN.test(m.label) &&
-          !ignoreNoProgress(m.label) &&
-          !ignoreNoProgress(hangRoute(snap.url))
+          !ctx.ignoreNoProgress(m.label) &&
+          !ctx.ignoreNoProgress(hangRoute(snap.url))
         ) {
-          const waited = now() - m.at;
-          if (waited < stallMs) await page.waitForTimeout(stallMs - waited);
-          const again = await perceive(page, perceiveOpts);
-          timings.push(again.timing);
+          const waited = ctx.now() - m.at;
+          if (waited < ctx.stallMs) await ctx.page.waitForTimeout(ctx.stallMs - waited);
+          const again = await perceive(ctx.page, ctx.perceiveOpts);
+          ctx.timings.push(again.timing);
           const stuck =
             again.hang ??
-            (again.snapshot.signature === snap.signature && (await probeResponsive(page, cfg.hangProbeMs ?? HANG_PROBE_MS))
+            (again.snapshot.signature === snap.signature && (await probeResponsive(ctx.page, cfg.hangProbeMs ?? HANG_PROBE_MS))
               ? ({
                   kind: "ui-no-progress",
-                  detail: `after "${m.label}" the page returned to an earlier state and made no progress for ${Math.round((now() - m.at) / 1000)}s`,
+                  detail: `after "${m.label}" the page returned to an earlier state and made no progress for ${Math.round((ctx.now() - m.at) / 1000)}s`,
                   route: hangRoute(snap.url),
                   url: redactUrl(snap.url),
                   pending: [],
@@ -1257,7 +1519,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 } satisfies HangSignal)
               : null);
           if (stuck !== null) {
-            transcript.record({
+            ctx.transcript.record({
               op: null,
               control: null,
               confidence: null,
@@ -1268,161 +1530,161 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               snapshot: again.snapshot,
               timing: again.timing,
             });
-            await assertTargetAnswering(livenessOf());
-            const judged = await judgeHost();
+            await assertTargetAnswering(ctx.livenessOf());
+            const judged = await ctx.judgeHost();
             if (judged.starved !== null) {
-              degradedStop(stuck.kind === "ui-no-progress" ? "no-progress" : "hang", `${stuck.kind}: ${stuck.detail}`, judged.starved);
+              ctx.degradedStop(stuck.kind === "ui-no-progress" ? "no-progress" : "hang", `${stuck.kind}: ${stuck.detail}`, judged.starved);
               break;
             }
-            const heapNow = await sampleHeap(page, 1_000);
+            const heapNow = await sampleHeap(ctx.page, 1_000);
             const withHost: HangSignal = { ...stuck, host: judged.host };
-            hang = {
+            ctx.hang = {
               signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
-              recordingStepIndex: stuck.kind === "ui-no-progress" ? m.recordIndex : Math.max(0, recorder.stepCount - 1),
+              recordingStepIndex: stuck.kind === "ui-no-progress" ? m.recordIndex : Math.max(0, ctx.recorder.stepCount - 1),
             };
-            stop = "hang";
+            ctx.stop = "hang";
             break;
           }
         }
-        if (!lastChanceGiven) {
+        if (!ctx.lastChanceGiven) {
           // #172 — one last-chance turn before the stop: the model has seen the page; it acts,
           // reports, or says done/blocked. For a find-out goal an idle choice becomes a report.
-          lastChanceGiven = true;
-          lastChanceTurn = true;
-          history.push(LAST_CHANCE_NOTE);
+          ctx.lastChanceGiven = true;
+          ctx.lastChanceTurn = true;
+          ctx.history.push(LAST_CHANCE_NOTE);
         } else {
-          stop = "no-progress";
+          ctx.stop = "no-progress";
           break;
         }
       }
       // Progress was made: a later stuck episode gets its own last chance.
-      if (noProgress.streak === 0) lastChanceGiven = false;
-      seen.add(snap.signature);
+      if (ctx.noProgress.streak === 0) ctx.lastChanceGiven = false;
+      ctx.seen.add(snap.signature);
 
       // #90 — an interceptor proven by a real click failure stays blocked only while the page it was
       // proven on is still up; a re-render/navigation may have removed or moved it.
-      if (blockedSinceSignature !== null && snap.signature !== blockedSinceSignature) {
-        blockedInterceptors = [];
-        blockedSinceSignature = null;
+      if (ctx.blockedSinceSignature !== null && snap.signature !== ctx.blockedSinceSignature) {
+        ctx.blockedInterceptors = [];
+        ctx.blockedSinceSignature = null;
       }
       let modelControls = snap.controls;
-      if (blockedInterceptors.length > 0) {
+      if (ctx.blockedInterceptors.length > 0) {
         const covered = new Set<number>();
         for (const c of snap.controls) {
-          const loc = descriptorToLocator(page, c.descriptor);
-          const hit = await loc.evaluate(coveredByInterceptors, blockedInterceptors).catch(() => false);
+          const loc = descriptorToLocator(ctx.page, c.descriptor);
+          const hit = await loc.evaluate(coveredByInterceptors, ctx.blockedInterceptors).catch(() => false);
           if (hit) covered.add(c.index);
         }
         if (covered.size > 0) modelControls = snap.controls.filter((c) => !covered.has(c.index));
       }
       // #168 — a control the safety policy already refused this run is withheld from now on (never
       // re-offered, so the model cannot re-choose it and burn another action on the same refusal).
-      if (refusedKeys.size > 0) modelControls = modelControls.filter((c) => !refusedKeys.has(keyOf(c)));
+      if (ctx.refusedKeys.size > 0) modelControls = modelControls.filter((c) => !ctx.refusedKeys.has(keyOf(c)));
       // #272 / #294 — a target whose action failed twice as covered / unreachable is withheld until
       // an action succeeds (the model was told why).
       {
-        const withheld = failedActs.withheld();
+        const withheld = ctx.failedActs.withheld();
         if (withheld.size > 0) modelControls = modelControls.filter((c) => !withheld.has(keyOf(c)));
       }
 
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
       const path = safePath(snap.url);
-      if (lastPath !== null && path !== lastPath) {
-        failedActs.succeeded();
-        unsent.submitted();
-        valueLog.submitted();
-        save.reset();
+      if (ctx.lastPath !== null && path !== ctx.lastPath) {
+        ctx.failedActs.succeeded();
+        ctx.unsent.submitted();
+        ctx.valueLog.submitted();
+        ctx.save.reset();
       }
-      lastPath = path;
-      if (listsSeveral && prevSignature !== null && prevSignature !== snap.signature) {
-        const next = nextFrom.get(snap.signature);
+      ctx.lastPath = path;
+      if (ctx.listsSeveral && ctx.prevSignature !== null && ctx.prevSignature !== snap.signature) {
+        const next = ctx.nextFrom.get(snap.signature);
         if (next !== undefined) {
-          history.push(
+          ctx.history.push(
             `this page is in the same state as earlier, where you went on with: ${next.join(", ")} — the goal lists several items: if one is still to do, the same steps apply to it`,
           );
         }
       }
-      prevSignature = snap.signature;
+      ctx.prevSignature = snap.signature;
       const keys = new Map<string, Control>(snap.controls.map((c) => [keyOf(c), c]));
       // #242: what the last plain `type` did besides setting its own field's value.
-      if (typeProbe !== null) {
-        const p = typeProbe;
-        typeProbe = null;
-        const sent = requestsStartedSince(monitorFor(page), p.at, p.background);
+      if (ctx.typeProbe !== null) {
+        const p = ctx.typeProbe;
+        ctx.typeProbe = null;
+        const sent = requestsStartedSince(monitorFor(ctx.page), p.at, p.background);
         const stateSame = stateBesides(snap, p.key) === p.state;
         if (sent.length === 0 && stateSame) {
           // A held credit whose endpoints turned out to be background polling: that type changed
           // nothing either — the streak goes on (it and this one), never restarts.
-          const credit = typeCredit?.key === p.key && typeCredit.endpoints.every((e) => p.background.has(e)) ? typeCredit : null;
-          typeCredit = null;
-          const count: number = credit !== null ? credit.count + 2 : typeNoEffect?.key === p.key ? typeNoEffect.count + 1 : 1;
-          typeNoEffect = { key: p.key, count };
-          history.push(
+          const credit = ctx.typeCredit?.key === p.key && ctx.typeCredit.endpoints.every((e) => p.background.has(e)) ? ctx.typeCredit : null;
+          ctx.typeCredit = null;
+          const count: number = credit !== null ? credit.count + 2 : ctx.typeNoEffect?.key === p.key ? ctx.typeNoEffect.count + 1 : 1;
+          ctx.typeNoEffect = { key: p.key, count };
+          ctx.history.push(
             `typing into ${p.label} changed nothing but its own value (no request, nothing else on the page changed) — ` +
               "submit it (its form's button, or Enter) or do something else; typing it again will not help",
           );
         } else {
           // Only requests, nothing else on the page: held until the next type tells polling apart.
-          typeCredit = stateSame ? { key: p.key, count: typeNoEffect?.key === p.key ? typeNoEffect.count : 0, endpoints: sent } : null;
-          typeNoEffect = null;
+          ctx.typeCredit = stateSame ? { key: p.key, count: ctx.typeNoEffect?.key === p.key ? ctx.typeNoEffect.count : 0, endpoints: sent } : null;
+          ctx.typeNoEffect = null;
         }
       }
-      unsent.retain(new Set(keys.keys()));
-      if (offerBaseline !== null) {
-        const before = offerBaseline;
-        offeredKeys = new Set([...keys.keys()].filter((k) => !before.has(k)));
-        offerBaseline = null;
+      ctx.unsent.retain(new Set(keys.keys()));
+      if (ctx.offerBaseline !== null) {
+        const before = ctx.offerBaseline;
+        ctx.offeredKeys = new Set([...keys.keys()].filter((k) => !before.has(k)));
+        ctx.offerBaseline = null;
       }
-      const offered = new Set(snap.controls.filter((c) => offeredKeys.has(keyOf(c))).map((c) => c.index));
-      const unsubmitted = new Set(snap.controls.filter((c) => unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
+      const offered = new Set(snap.controls.filter((c) => ctx.offeredKeys.has(keyOf(c))).map((c) => c.index));
+      const unsubmitted = new Set(snap.controls.filter((c) => ctx.unsent.wouldRepeat(keyOf(c))).map((c) => c.index));
 
       // #207: a form field's current value is page content too (grounded as such, never as page text).
-      const visibleText = await readPageText(page, secrets);
+      const visibleText = await readPageText(ctx.page, ctx.secrets);
       // #223: a rich-text (contenteditable) control's text is its value too, groundable like an input's.
       const richFields: { label: string; value: string }[] = [];
       for (const c of snap.controls.filter((x) => x.richText === true).slice(0, 5)) {
-        const t = (await readEditableText(page, c))?.trim() ?? "";
-        if (t !== "") richFields.push({ label: c.name.trim() || c.role || c.tag, value: redactText(t, secrets) });
+        const t = (await readEditableText(ctx.page, c))?.trim() ?? "";
+        if (t !== "") richFields.push({ label: c.name.trim() || c.role || c.tag, value: redactText(t, ctx.secrets) });
       }
       try {
-        chrome.observe(new URL(snap.url).pathname, snap.controls);
+        ctx.chrome.observe(new URL(snap.url).pathname, snap.controls);
       } catch {
         // an unparsable URL: no chrome evidence from it
       }
-      observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
-        ...(await readPageHeadings(page, secrets)),
+      ctx.observed.add(snap.url, visibleText, [...controlFields(snap.controls), ...richFields], {
+        ...(await readPageHeadings(ctx.page, ctx.secrets)),
         // #223: the action / label names (a quote made only of them is a label, not an answer) and
         // the document's status (an answer on a 404 page is no answer). A link that is page content
         // (in the main content, a list, a table, a card) is NOT one: its text may be the answer.
-        controlNames: snap.controls.filter((c) => isActionOrChromeName(c, chrome)).map((c) => c.name),
+        controlNames: snap.controls.filter((c) => isActionOrChromeName(c, ctx.chrome)).map((c) => c.name),
         // #229: the content links' text, in page order (a list's entries: "the first item").
-        contentLinks: snap.controls.filter((c) => !isActionOrChromeName(c, chrome)).map((c) => c.name),
+        contentLinks: snap.controls.filter((c) => !isActionOrChromeName(c, ctx.chrome)).map((c) => c.name),
         // #238: where the page's navigation leads — the first page's is the absence-answer coverage floor.
         navLinks: snap.controls
           .filter((c) => c.role === "link" && (c.landmark === "navigation" || c.landmark === "banner"))
           .flatMap((c) => (typeof c.href === "string" && c.href !== "" ? [c.href] : [])),
-        ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
+        ...(ctx.documentStatus.has(ctx.docKey(ctx.page.url())) ? { status: ctx.documentStatus.get(ctx.docKey(ctx.page.url()))! } : {}),
       });
-      noteReplyText(snap.url, visibleText);
+      ctx.noteReplyText(snap.url, visibleText);
 
       // #158 — the write requests the read-only guard aborted since the last decision: recorded
       // (jevitate's own refusal) and told to the model.
       {
-        const blocked = readOnly?.drain() ?? [];
+        const blocked = ctx.readOnly?.drain() ?? [];
         if (blocked.length > 0) {
           const what = [...new Set(blocked.map((b) => `${b.method} ${b.path}`))].join(", ");
           // #194: a blocked write off the --allow origins says how to declare or exempt it.
           const hints = [...new Set(blocked.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))];
           const note =
-            `blocked write request(s) ${redactText(what, secrets)}: ${
-              readOnly?.mode === "no-destructive"
+            `blocked write request(s) ${redactText(what, ctx.secrets)}: ${
+              ctx.readOnly?.mode === "no-destructive"
                 ? "a destructive write needs --allow-writes on a goal with no success check — report what you found instead"
                 : "this find-out goal is read-only — find the answer without changing anything"
             }` +
-            (hints.length === 0 ? "" : ` (${redactText(hints.join("; "), secrets)})`);
-          history.push(note);
-          transcript.record({
+            (hints.length === 0 ? "" : ` (${redactText(hints.join("; "), ctx.secrets)})`);
+          ctx.history.push(note);
+          ctx.transcript.record({
             op: null,
             control: null,
             confidence: null,
@@ -1445,21 +1707,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           decide(cfg.judge, {
             goal: cfg.goal,
             snapshot: modelControls === snap.controls ? snap : { ...snap, controls: modelControls },
-            history,
-            missionContext,
-            secrets,
+            history: ctx.history,
+            missionContext: ctx.missionContext,
+            secrets: ctx.secrets,
             // One fixture ⇒ one upload: once attached, upload actions leave the candidate set (the
             // model had kept re-choosing it after a successful attach instead of proceeding).
-            uploadAvailable: fixture !== null && !fixtureAttached,
+            uploadAvailable: ctx.fixture !== null && !ctx.fixtureAttached,
             offered,
             unsubmitted,
-            ...(conversation.latestReply === null && conversation.sent.length === 0
+            ...(ctx.conversation.latestReply === null && ctx.conversation.sent.length === 0
               ? {}
-              : { conversation: { latestReply: conversation.latestReply, sentMessages: conversation.sent } }),
-            ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
+              : { conversation: { latestReply: ctx.conversation.latestReply, sentMessages: ctx.conversation.sent } }),
+            ...(isEmptyStatus(ctx.status) ? {} : { pageStatus: describeStatus(ctx.status) }),
             ...(maxChoices === undefined ? {} : { maxChoices }),
-            ...(findOut ? { pageText: visibleText } : {}),
-            ...(deltas === null ? {} : { actionDeltas: true }),
+            ...(ctx.findOut ? { pageText: visibleText } : {}),
+            ...(ctx.deltas === null ? {} : { actionDeltas: true }),
           });
         decision = await decideWith().catch(async (e: unknown) => {
           const refusal = firstLine(e);
@@ -1467,42 +1729,42 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // The refusal names the limit it enforces ("at most N choices"): retry within it.
           const stated = Number(/at most (\d+)/i.exec(refusal)?.[1]);
           const budget = Number.isInteger(stated) && stated > 0 ? stated : TOO_MANY_CHOICES_RETRY;
-          history.push(`the decision had too many choices for the model: retried with the ${budget} most relevant`);
+          ctx.history.push(`the decision had too many choices for the model: retried with the ${budget} most relevant`);
           return decideWith(budget);
         });
       } catch (e) {
         // The decision IS the goal loop's engine: without it the run can prove nothing more, so it
         // ends `inconclusive` (typed) with everything recorded so far — never a throw, never clean.
-        failure = { kind: "exception", message: `model decision unavailable: ${firstLine(e)}` };
-        transcript.record({
+        ctx.failure = { kind: "exception", message: `model decision unavailable: ${firstLine(e)}` };
+        ctx.transcript.record({
           op: null,
           control: null,
           confidence: null,
           chosenBy: "model",
           actOk: false,
-          reason: failure.message,
+          reason: ctx.failure.message,
           snapshot: snap,
           timing: perception.timing,
         });
-        stop = "inconclusive";
+        ctx.stop = "inconclusive";
         break;
       }
-      tracker.countDecision();
+      ctx.tracker.countDecision();
       if (
-        lastChanceTurn &&
+        ctx.lastChanceTurn &&
         cfg.readOnly === true &&
         (decision.op === "scroll_down" || decision.op === "scroll_up" || decision.op === "wait" || decision.op === "blocked")
       ) {
         // #172 — a find-out goal that has seen the whole page and still only idles (or gives up)
         // ends with a report ATTEMPT, grounded by code like any report, never a bare `blocked`.
-        history.push(`last chance: "${decision.op}" became a report attempt — the answer must be on the pages already seen`);
+        ctx.history.push(`last chance: "${decision.op}" became a report attempt — the answer must be on the pages already seen`);
         decision = { ...decision, op: "report", control: null, targetMissing: false };
       }
-      if (findOut && decision.op === "blocked" && !blockedReported.has(snap.signature)) {
+      if (ctx.findOut && decision.op === "blocked" && !ctx.blockedReported.has(snap.signature)) {
         // #207 — a find-out goal's `blocked` is never a bare give-up while the page may show the
         // answer as plain text: one report ATTEMPT on this page state first, grounded by code.
-        blockedReported.add(snap.signature);
-        history.push(`"blocked" became a report attempt — a find-out goal is answered from the pages already seen`);
+        ctx.blockedReported.add(snap.signature);
+        ctx.history.push(`"blocked" became a report attempt — a find-out goal is answered from the pages already seen`);
         decision = { ...decision, op: "report", control: null, targetMissing: false };
       }
 
@@ -1524,19 +1786,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       ): void => {
         const op = extra.op ?? decision.op;
         const target = extra.control === undefined ? decision.control : extra.control;
-        if (!actOk && extra.origin === "engine") refusedSinceMutation += 1;
-        if (op === "type" || op === "send") auth.noteTyped(target, snap.url, actOk, target !== null && isBound(target));
+        if (!actOk && extra.origin === "engine") ctx.refusedSinceMutation += 1;
+        if (op === "type" || op === "send") ctx.auth.noteTyped(target, snap.url, actOk, target !== null && ctx.isBound(target));
         // #225: typed credentials make the pending submit a sign-in, never a save.
-        if ((op === "type" || op === "send") && actOk && target !== null && (isBound(target) || isCredentialField(target))) save.noteCredential();
+        if ((op === "type" || op === "send") && actOk && target !== null && (ctx.isBound(target) || isCredentialField(target))) ctx.save.noteCredential();
         if (actOk && target !== null && (op === "click" || op === "type" || op === "select")) {
-          const steps = nextFrom.get(snap.signature) ?? [];
+          const steps = ctx.nextFrom.get(snap.signature) ?? [];
           // The first visit's steps only: a return must not overwrite what the state led to.
-          if (!nextFrom.has(snap.signature) || steps.length < 4) {
+          if (!ctx.nextFrom.has(snap.signature) || steps.length < 4) {
             if (!steps.includes(`${op} ${quote(target.name || target.summary, 60)}`)) steps.push(`${op} ${quote(target.name || target.summary, 60)}`);
-            nextFrom.set(snap.signature, steps);
+            ctx.nextFrom.set(snap.signature, steps);
           }
         }
-        transcript.record({
+        ctx.transcript.record({
           op: extra.op ?? decision.op,
           control: extra.control === undefined ? decision.control : extra.control,
           ...(extra.strategy === undefined ? {} : { strategy: extra.strategy }),
@@ -1560,7 +1822,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // page (the run's own messages removed) and its status text, which must clear the threshold.
       // A run that typed sign-in credentials also carries what code observed about the sign-in
       // (#188): shown to the judgment as a trusted fact, and weighed by `groundDone`.
-      const signIn = auth.signal(snap, isBound);
+      const signIn = ctx.auth.signal(snap, ctx.isBound);
       /**
        * #209: what an accepted verdict may claim. The in-run success condition is only a proposal's
        * grounding — when part of it is still pending (a `reloadThen` check judged after the run, a
@@ -1577,7 +1839,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         verdict: ReturnType<typeof groundDone>;
         judgments: Record<string, { value: boolean; probability: number }> | undefined;
       }> => {
-        const unsubmittedLabels = [...unsent.pending().values()].map((p) => p.label);
+        const unsubmittedLabels = [...ctx.unsent.pending().values()].map((p) => p.label);
         let successCheck: boolean | undefined;
         let goalMet: number | null | undefined;
         let goalIsSignIn: number | null = null;
@@ -1590,21 +1852,21 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               () => false,
             );
           } else {
-            const fullText = await readPageText(page, secrets);
-            const pageText = withoutAuthored(fullText, conversation.sent);
+            const fullText = await readPageText(ctx.page, ctx.secrets);
+            const pageText = withoutAuthored(fullText, ctx.conversation.sent);
             // #225: the run's own save, as code observed it — its writes, the page's notice, and whether
             // the page still displays what it saved (a field's value is never in the page text).
-            saved = save.signal(snap, status, sideEffects.lastClick(), fullText);
+            saved = ctx.save.signal(snap, ctx.status, ctx.sideEffects.lastClick(), fullText);
             const judged = await judgeGoalCompletion(cfg.judge, {
               goal: cfg.goal,
               url: snap.url,
               pageText,
-              history,
-              secrets,
-              ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
+              history: ctx.history,
+              secrets: ctx.secrets,
+              ...(isEmptyStatus(ctx.status) ? {} : { pageStatus: describeStatus(ctx.status) }),
               ...(signIn === null ? {} : { signInFacts: signIn.facts }),
               ...(saved === null ? {} : { saveFacts: saved.facts }),
-              fieldValues: fieldValuesOf(snap.controls, isBound),
+              fieldValues: fieldValuesOf(snap.controls, ctx.isBound),
             }).catch(() => ({ goalMet: null, goalIsSignIn: null, goalIsSave: null }));
             goalMet = judged.goalMet;
             goalIsSignIn = judged.goalIsSignIn;
@@ -1644,10 +1906,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         cfg.requireAnswer !== true &&
         // #207: a find-out goal is verified by a grounded answer; its `blocked` (after a report
         // attempt on this state found none) never becomes an answerless "goal already met".
-        !(findOut && decision.op === "blocked") &&
-        !goalChecked.has(snap.signature)
+        !(ctx.findOut && decision.op === "blocked") &&
+        !ctx.goalChecked.has(snap.signature)
       ) {
-        goalChecked.add(snap.signature);
+        ctx.goalChecked.add(snap.signature);
         const { verdict, judgments } = await groundGoal();
         if (verdict.accept) {
           record(
@@ -1665,22 +1927,22 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
               },
             },
           );
-          outcome = verdict.outcome;
-          stop = "done";
+          ctx.outcome = verdict.outcome;
+          ctx.stop = "done";
           break;
         }
       }
 
       // #286: the goal asks for a report — `done` is no ending; the answer is (grounded by `report`).
       if (decision.op === "done" && cfg.requireAnswer === true) {
-        doneRejections += 1;
+        ctx.doneRejections += 1;
         const why = "the goal asks you to report what you found: end with `report` (a grounded answer), not `done`";
-        history.push(`done rejected: ${why}`);
-        record(false, `done rejected (${doneRejections}/${MAX_DONE_REJECTIONS}): ${why}`);
-        if (doneRejections >= MAX_DONE_REJECTIONS) {
-          incomplete = `the model proposed done ${doneRejections} times, but ${why}`;
-          endedOnRejectedDone = true;
-          stop = "done";
+        ctx.history.push(`done rejected: ${why}`);
+        record(false, `done rejected (${ctx.doneRejections}/${MAX_DONE_REJECTIONS}): ${why}`);
+        if (ctx.doneRejections >= MAX_DONE_REJECTIONS) {
+          ctx.incomplete = `the model proposed done ${ctx.doneRejections} times, but ${why}`;
+          ctx.endedOnRejectedDone = true;
+          ctx.stop = "done";
           break;
         }
         continue;
@@ -1692,38 +1954,38 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           record(true, `done accepted${pendingNote(verdict.outcome) === null ? "" : " provisionally"}: ${acceptedBy(verdict.outcome)}`, {
             ...(judgments === undefined ? {} : { judgments }),
           });
-          outcome = verdict.outcome;
-          stop = "done";
+          ctx.outcome = verdict.outcome;
+          ctx.stop = "done";
           break;
         }
         // #225: the model's `done` failed the independent success check, but the job itself is judged
         // done on this page (the advisory judgment / code-observed save, never the verdict): stop here
         // rather than spend the rest of the budget — the check's failure is the finding, and the
         // mission names it (`failed`, success-check-failed).
-        if (cfg.stopWhenJudgedDone === true && cfg.successCheck !== undefined && unsent.pending().size === 0) {
+        if (cfg.stopWhenJudgedDone === true && cfg.successCheck !== undefined && ctx.unsent.pending().size === 0) {
           const advisory = await groundGoal(true);
           if (advisory.verdict.accept) {
             const reason = `the job was judged done on this page (${acceptedBy(advisory.verdict.outcome).replace(/^goal verified by /, "")}), but ${verdict.reason}`;
             record(false, `done rejected: ${reason} — stopped (the success check decides; it failed)`, {
               ...(advisory.judgments === undefined ? {} : { judgments: advisory.judgments }),
             });
-            incomplete = reason;
-            endedOnRejectedDone = true;
-            stop = "done";
+            ctx.incomplete = reason;
+            ctx.endedOnRejectedDone = true;
+            ctx.stop = "done";
             break;
           }
         }
-        doneRejections += 1;
-        history.push(`done rejected: ${verdict.reason} — keep working toward the goal`);
-        record(false, `done rejected (${doneRejections}/${MAX_DONE_REJECTIONS}): ${verdict.reason}`, {
+        ctx.doneRejections += 1;
+        ctx.history.push(`done rejected: ${verdict.reason} — keep working toward the goal`);
+        record(false, `done rejected (${ctx.doneRejections}/${MAX_DONE_REJECTIONS}): ${verdict.reason}`, {
           ...(judgments === undefined ? {} : { judgments }),
         });
-        if (doneRejections >= MAX_DONE_REJECTIONS) {
-          incomplete = `the model proposed done ${doneRejections} times, but ${verdict.reason}`;
-          endedOnRejectedDone = true;
+        if (ctx.doneRejections >= MAX_DONE_REJECTIONS) {
+          ctx.incomplete = `the model proposed done ${ctx.doneRejections} times, but ${verdict.reason}`;
+          ctx.endedOnRejectedDone = true;
           // #217: the loop ended on the model's `done` (code rejected it) — the stop says so; it
           // never reads `blocked` (the model did not give up). The outcome stays incomplete.
-          stop = "done";
+          ctx.stop = "done";
           break;
         }
         continue;
@@ -1731,49 +1993,49 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // `report` (#101) ends a find-out goal with an ANSWER — a proposal too: the answer is generated
       // from the observed page text and accepted only when code grounds every claim on it.
       if (decision.op === "report") {
-        if (replyGoal) {
+        if (ctx.replyGoal) {
           // #200 — a reply still on its way is listened for (what is left of the reply wait) before
           // the report is judged; then the current page's post-send text is taken in.
-          if (awaitingReply && lastTurn !== null && busyWaitedMs < replyWaitMs) {
-            const t0 = now();
-            const listen = replyWaitMs - busyWaitedMs;
-            const reply = await waitForReply(page, { secrets, ...lastTurn, timeoutMs: listen, ceilingMs: listen });
-            busyWaitedMs += now() - t0;
+          if (ctx.awaitingReply && ctx.lastTurn !== null && ctx.busyWaitedMs < ctx.replyWaitMs) {
+            const t0 = ctx.now();
+            const listen = ctx.replyWaitMs - ctx.busyWaitedMs;
+            const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen });
+            ctx.busyWaitedMs += ctx.now() - t0;
             if (reply.received) {
-              conversation.latestReply = reply.text;
-              replies.add(snap.url, reply.text);
-              awaitingReply = false;
-              busyWaitedMs = 0;
-              history.push(`waited for the reply → reply: ${quote(reply.text, 300)}`);
+              ctx.conversation.latestReply = reply.text;
+              ctx.replies.add(snap.url, reply.text);
+              ctx.awaitingReply = false;
+              ctx.busyWaitedMs = 0;
+              ctx.history.push(`waited for the reply → reply: ${quote(reply.text, 300)}`);
             }
           }
-          noteReplyText(snap.url, await readPageText(page, secrets));
+          ctx.noteReplyText(snap.url, await readPageText(ctx.page, ctx.secrets));
         }
-        const replyPages = replyGoal ? replies.pages() : null;
+        const replyPages = ctx.replyGoal ? ctx.replies.pages() : null;
         const verdict: AnswerVerdict =
           replyPages !== null && replyPages.length === 0
             ? {
                 accept: false as const,
                 reason:
-                  preSend === null
+                  ctx.preSend === null
                     ? "no reply observed: no message was sent yet — text on the page before the conversation is not a reply"
-                    : `no reply observed: no new message appeared after the send within the reply wait (${Math.round(replyWaitMs / 1000)}s)`,
+                    : `no reply observed: no new message appeared after the send within the reply wait (${Math.round(ctx.replyWaitMs / 1000)}s)`,
                 answer: null,
               }
             : await reportAnswer(cfg.gen, {
                 goal: cfg.goal,
                 url: snap.url,
-                pages: replyPages ?? observed.pages(),
-                history,
-                secrets,
+                pages: replyPages ?? ctx.observed.pages(),
+                history: ctx.history,
+                secrets: ctx.secrets,
                 judge: cfg.judge,
-                vetoes,
+                vetoes: ctx.vetoes,
                 // #238: "none exists" is an answer only on observed pages that cover the app enough.
-                ...(replyPages === null ? { topNav: observed.topNavigation(), ownInputs: observed.ownInputs() } : {}),
+                ...(replyPages === null ? { topNav: ctx.observed.topNavigation(), ownInputs: ctx.observed.ownInputs() } : {}),
               })
                 // #239: a write goal's report settles nothing before a write of the run succeeded.
                 .then((v): AnswerVerdict =>
-                  v.accept && writeGoal && !wroteOk && v.answer.absent !== true ? { accept: false, reason: UNSAVED_WRITE_REASON, answer: v.answer } : v,
+                  v.accept && ctx.writeGoal && !ctx.wroteOk && v.answer.absent !== true ? { accept: false, reason: UNSAVED_WRITE_REASON, answer: v.answer } : v,
                 )
                 .catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
@@ -1781,22 +2043,22 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           record(true, `report accepted: answer grounded on ${on} (${verdict.answer.evidence.length} claim(s))`, {
             answer: verdict.answer,
           });
-          answer = verdict.answer;
-          outcome = { status: "completed", verifiedBy: "grounded-answer" };
-          stop = "done";
+          ctx.answer = verdict.answer;
+          ctx.outcome = { status: "completed", verifiedBy: "grounded-answer" };
+          ctx.stop = "done";
           break;
         }
-        reportRejections += 1;
+        ctx.reportRejections += 1;
         // #223: an answer that is on the page but does not answer the question is no answer either.
-        lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
-        lastAbsenceUncovered = verdict.absenceUncovered === true ? verdict.reason : null;
-        history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
-        record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
+        ctx.lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
+        ctx.lastAbsenceUncovered = verdict.absenceUncovered === true ? verdict.reason : null;
+        ctx.history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
+        record(false, `report rejected (${ctx.reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
           answer: verdict.answer,
         });
-        if (reportRejections >= MAX_REPORT_REJECTIONS) {
-          incomplete = `the model reported an answer ${reportRejections} times, but ${verdict.reason}`;
-          stop = "blocked";
+        if (ctx.reportRejections >= MAX_REPORT_REJECTIONS) {
+          ctx.incomplete = `the model reported an answer ${ctx.reportRejections} times, but ${verdict.reason}`;
+          ctx.stop = "blocked";
           break;
         }
         continue;
@@ -1804,144 +2066,144 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (decision.op === "blocked") {
         // The page says work is under way (#92): "blocked" is premature while a job the page reports
         // is still running. Code defers it into a bounded job wait; past the budget it stands.
-        const job = await readInProgressStatus(page);
+        const job = await readInProgressStatus(ctx.page);
         // #283: likewise while a write an earlier click fired is still in flight (the request IS the job).
-        if (job === null && jobWaitedMs < jobWaitMs && sideEffects.inflight().length > 0) {
-          const what = inflightWrites();
-          const w = await awaitWrites(monitorFor(page), sideEffects, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
-          jobWaitedMs = w.resolved ? 0 : jobWaitedMs + w.waitedMs;
+        if (job === null && ctx.jobWaitedMs < ctx.jobWaitMs && ctx.sideEffects.inflight().length > 0) {
+          const what = ctx.inflightWrites();
+          const w = await awaitWrites(monitorFor(ctx.page), ctx.sideEffects, Math.min(ctx.jobWaitMs - ctx.jobWaitedMs, JOB_WAIT_SLICE_MS));
+          ctx.jobWaitedMs = w.resolved ? 0 : ctx.jobWaitedMs + w.waitedMs;
           const note = `blocked deferred: ${what} (sent by an earlier click) is still in flight — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
-            w.resolved ? "it resolved" : `still in flight; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+            w.resolved ? "it resolved" : `still in flight; ${Math.round(ctx.jobWaitedMs / 1000)}s of the ${Math.round(ctx.jobWaitMs / 1000)}s job-wait budget used`
           })`;
-          history.push(note);
+          ctx.history.push(note);
           record(true, note, { op: "wait" });
-          idleSteps = 0;
-          idleSince = null;
-          quietWaits = 0;
-          lastActedOp = "wait";
-          statusAfter = "waiting";
+          ctx.idleSteps = 0;
+          ctx.idleSince = null;
+          ctx.quietWaits = 0;
+          ctx.lastActedOp = "wait";
+          ctx.statusAfter = "waiting";
           continue;
         }
-        if (job !== null && jobWaitedMs < jobWaitMs) {
-          const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
-          jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
+        if (job !== null && ctx.jobWaitedMs < ctx.jobWaitMs) {
+          const w = await waitOutJob(ctx.page, Math.min(ctx.jobWaitMs - ctx.jobWaitedMs, JOB_WAIT_SLICE_MS));
+          ctx.jobWaitedMs = w.cleared ? 0 : ctx.jobWaitedMs + w.waitedMs;
           const note = `blocked deferred: the page shows ${job} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
-            w.cleared ? "the status cleared" : `still in progress; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+            w.cleared ? "the status cleared" : `still in progress; ${Math.round(ctx.jobWaitedMs / 1000)}s of the ${Math.round(ctx.jobWaitMs / 1000)}s job-wait budget used`
           })`;
-          history.push(note);
+          ctx.history.push(note);
           record(true, note, { op: "wait" });
-          idleSteps = 0;
-          idleSince = null;
-          quietWaits = 0;
-          lastActedOp = "wait";
-          statusAfter = "waiting";
+          ctx.idleSteps = 0;
+          ctx.idleSince = null;
+          ctx.quietWaits = 0;
+          ctx.lastActedOp = "wait";
+          ctx.statusAfter = "waiting";
           continue;
         }
         // #237: giving up before trying anything proves nothing about the app. Refused (and the model
         // told to explore) while the page offers controls; a model that insists ends `inconclusive`.
         const untried = modelControls.filter((c) => c.enabled);
         // A find-out goal that already made a grounded report attempt here searched the page (#207).
-        if (actionAttempts === 0 && untried.length > 0 && reportRejections === 0) {
-          earlyBlocked += 1;
-          if (earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
+        if (ctx.actionAttempts === 0 && untried.length > 0 && ctx.reportRejections === 0) {
+          ctx.earlyBlocked += 1;
+          if (ctx.earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
             const nav = [...untried.filter((c) => (c.landmark ?? null) !== null), ...untried.filter((c) => (c.landmark ?? null) === null)];
             const names = nav.slice(0, 6).map((c) => quote(c.name || c.summary, 40)).join(", ");
             const reason = `blocked refused: nothing was tried yet — ${untried.length} control(s) on this page are untried (e.g. ${names}); explore them (the navigation, settings, menus) before giving up`;
-            history.push(reason);
+            ctx.history.push(reason);
             record(false, reason, { origin: "engine" });
             continue;
           }
           record(false, "model blocked before trying any action", { origin: "engine" });
-          failure = {
+          ctx.failure = {
             kind: "insufficient-coverage",
             message: `the model gave up before trying any of the page's ${untried.length} controls — too little exploration to conclude the goal cannot be done`,
           };
-          stop = "inconclusive";
+          ctx.stop = "inconclusive";
           break;
         }
         record(true, "model blocked");
         // #235: a control the goal needed may have been refused — the reason says so, actionably.
-        incomplete = `the model reported the goal cannot be advanced from this page${lastRefusal === null ? "" : ` (${lastRefusal})`}`;
-        stop = "blocked";
+        ctx.incomplete = `the model reported the goal cannot be advanced from this page${ctx.lastRefusal === null ? "" : ` (${ctx.lastRefusal})`}`;
+        ctx.stop = "blocked";
         break;
       }
 
       const control = decision.control;
-      if (overlay !== null && (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait" || decision.op === "reload")) {
-        await overlay.announce(page, { step: transcript.nextStep, strategy: "goal", op: decision.op, why: overlayWhy });
+      if (ctx.overlay !== null && (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait" || decision.op === "reload")) {
+        await ctx.overlay.announce(ctx.page, { step: ctx.transcript.nextStep, strategy: "goal", op: decision.op, why: ctx.overlayWhy });
       }
       if (decision.op === "scroll_up" || decision.op === "scroll_down" || decision.op === "wait") {
         // No recorded mutation — but visible to history (J-4), and an idle streak is a stuck signal.
         let changed: boolean;
         let note: string;
-        if (decision.op === "wait" && awaitingReply && lastTurn !== null && busyWaitedMs < replyWaitMs) {
+        if (decision.op === "wait" && ctx.awaitingReply && ctx.lastTurn !== null && ctx.busyWaitedMs < ctx.replyWaitMs) {
           // Still listening for the last message's reply (a slow LLM turn): this wait keeps
           // listening, bounded by what is left of the reply wait, and records the reply if it lands.
-          const t0 = now();
-          const listen = Math.min(replyWaitMs - busyWaitedMs, 20_000);
-          const reply = await waitForReply(page, { secrets, ...lastTurn, timeoutMs: listen, ceilingMs: listen });
-          busyWaitedMs += now() - t0;
+          const t0 = ctx.now();
+          const listen = Math.min(ctx.replyWaitMs - ctx.busyWaitedMs, 20_000);
+          const reply = await waitForReply(ctx.page, { secrets: ctx.secrets, ...ctx.lastTurn, timeoutMs: listen, ceilingMs: listen });
+          ctx.busyWaitedMs += ctx.now() - t0;
           if (reply.received) {
-            conversation.latestReply = reply.text;
-            replies.add(snap.url, reply.text);
-            awaitingReply = false;
-            busyWaitedMs = 0;
+            ctx.conversation.latestReply = reply.text;
+            ctx.replies.add(snap.url, reply.text);
+            ctx.awaitingReply = false;
+            ctx.busyWaitedMs = 0;
           }
           // #241: no reply and nothing of the send's in flight (no request, no busy sign) — this wait
           // was quiet, not patience: repeated, it ends the run instead of listening on.
           const idle = !reply.received && reply.endedBy === "idle";
           note = reply.received
-            ? `waited ${((now() - t0) / 1000).toFixed(1)}s → reply: ${quote(reply.text, 300)}`
+            ? `waited ${((ctx.now() - t0) / 1000).toFixed(1)}s → reply: ${quote(reply.text, 300)}`
             : idle
-              ? `waited ${((now() - t0) / 1000).toFixed(1)}s (no reply, and the page shows no sign of working on one)`
-              : `waited ${((now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
+              ? `waited ${((ctx.now() - t0) / 1000).toFixed(1)}s (no reply, and the page shows no sign of working on one)`
+              : `waited ${((ctx.now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
           changed = !idle;
-          quietWaits = idle ? quietWaits + 1 : 0;
+          ctx.quietWaits = idle ? ctx.quietWaits + 1 : 0;
           record(true, note, reply.received ? { reply } : {});
-        } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && (await readInProgressStatus(page)) !== null) {
+        } else if (decision.op === "wait" && ctx.jobWaitedMs < ctx.jobWaitMs && (await readInProgressStatus(ctx.page)) !== null) {
           // The page shows an in-progress status (#92: "Simulating…", aria-busy, a job "is running")
           // — pending work even with no request in flight (the app polls). Wait it out with backoff,
           // bounded by the job-wait budget: patience, never "nothing is pending".
-          const job = (await readInProgressStatus(page)) ?? "an in-progress status";
-          const w = await waitOutJob(page, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
-          jobWaitedMs = w.cleared ? 0 : jobWaitedMs + w.waitedMs;
+          const job = (await readInProgressStatus(ctx.page)) ?? "an in-progress status";
+          const w = await waitOutJob(ctx.page, Math.min(ctx.jobWaitMs - ctx.jobWaitedMs, JOB_WAIT_SLICE_MS));
+          ctx.jobWaitedMs = w.cleared ? 0 : ctx.jobWaitedMs + w.waitedMs;
           note = `waited ${(w.waitedMs / 1000).toFixed(1)}s (${
             w.cleared
               ? `the in-progress status ${job} cleared`
-              : `the page still shows ${job} — the app is still working; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+              : `the page still shows ${job} — the app is still working; ${Math.round(ctx.jobWaitedMs / 1000)}s of the ${Math.round(ctx.jobWaitMs / 1000)}s job-wait budget used`
           })`;
           changed = true;
-          quietWaits = 0;
+          ctx.quietWaits = 0;
           record(true, note);
-        } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && sideEffects.inflight().length > 0) {
+        } else if (decision.op === "wait" && ctx.jobWaitedMs < ctx.jobWaitMs && ctx.sideEffects.inflight().length > 0) {
           // #283: a write an earlier click fired is still in flight (a unary RPC the server holds open
           // while its job runs, past the long-poll threshold): pending work, wherever the page shows
           // it. Observe it until it resolves, bounded by the job-wait budget — never "nothing is pending".
-          const what = inflightWrites();
-          const w = await awaitWrites(monitorFor(page), sideEffects, Math.min(jobWaitMs - jobWaitedMs, JOB_WAIT_SLICE_MS));
-          jobWaitedMs = w.resolved ? 0 : jobWaitedMs + w.waitedMs;
+          const what = ctx.inflightWrites();
+          const w = await awaitWrites(monitorFor(ctx.page), ctx.sideEffects, Math.min(ctx.jobWaitMs - ctx.jobWaitedMs, JOB_WAIT_SLICE_MS));
+          ctx.jobWaitedMs = w.resolved ? 0 : ctx.jobWaitedMs + w.waitedMs;
           note = `waited ${(w.waitedMs / 1000).toFixed(1)}s (${
             w.resolved
               ? `${what} (sent by an earlier click) resolved`
-              : `${what} (sent by an earlier click) is still in flight — the app is still working; ${Math.round(jobWaitedMs / 1000)}s of the ${Math.round(jobWaitMs / 1000)}s job-wait budget used`
+              : `${what} (sent by an earlier click) is still in flight — the app is still working; ${Math.round(ctx.jobWaitedMs / 1000)}s of the ${Math.round(ctx.jobWaitMs / 1000)}s job-wait budget used`
           })`;
           changed = true;
-          quietWaits = 0;
+          ctx.quietWaits = 0;
           record(true, note);
         } else if (decision.op === "wait") {
-          const t0 = now();
-          changed = await waitForChange(page, waitOpMs);
+          const t0 = ctx.now();
+          changed = await waitForChange(ctx.page, ctx.waitOpMs);
           // No change while the app is still busy (a request in flight, a spinner) is patience —
           // a slow reply — not idleness: it does not count toward the idle cap.
           // Bounded: patience lasts as long as a conversational reply may take (`replyWaitMs`).
           // A sent message whose reply has not arrived yet is also still in flight.
           const pending =
-            !changed && (awaitingReply || (await stillBusy(page)) || (await readInProgressStatus(page)) !== null);
-          const busy = pending && busyWaitedMs < replyWaitMs;
-          busyWaitedMs = busy ? busyWaitedMs + (now() - t0) : 0;
+            !changed && (ctx.awaitingReply || (await stillBusy(ctx.page)) || (await readInProgressStatus(ctx.page)) !== null);
+          const busy = pending && ctx.busyWaitedMs < ctx.replyWaitMs;
+          ctx.busyWaitedMs = busy ? ctx.busyWaitedMs + (ctx.now() - t0) : 0;
           // Nothing changed and nothing is pending: waiting again cannot help (#79).
-          quietWaits = changed || pending ? 0 : quietWaits + 1;
-          note = `waited ${((now() - t0) / 1000).toFixed(1)}s (${
+          ctx.quietWaits = changed || pending ? 0 : ctx.quietWaits + 1;
+          note = `waited ${((ctx.now() - t0) / 1000).toFixed(1)}s (${
             changed
               ? "the page changed"
               : busy
@@ -1953,149 +2215,149 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           if (busy) changed = true;
           record(true, note);
         } else {
-          quietWaits = 0;
+          ctx.quietWaits = 0;
           // #109 — act() itself polls the scroll position (of the nearest scrollable container under
           // the pointer, else the window) until it settles, so this never reads immediately after the
           // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
-          if (r.ok && r.moved === true) scrollsSinceMutation += 1;
+          if (r.ok && r.moved === true) ctx.scrollsSinceMutation += 1;
           changed = r.moved === true;
-          lastScrollMoved = r.ok && changed;
+          ctx.lastScrollMoved = r.ok && changed;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
           record(r.ok, r.ok ? note : r.reason);
         }
-        history.push(note);
+        ctx.history.push(note);
         if (changed) {
-          idleSteps = 0;
-      idleSince = null;
-          idleSince = null;
+          ctx.idleSteps = 0;
+      ctx.idleSince = null;
+          ctx.idleSince = null;
         } else {
-          idleSteps += 1;
-          idleSince = idleSince ?? now();
+          ctx.idleSteps += 1;
+          ctx.idleSince = ctx.idleSince ?? ctx.now();
         }
-        lastActedOp = decision.op;
-        statusAfter = decision.op === "wait" ? "waiting" : "scrolling";
-        if (quietWaits >= MAX_QUIET_WAITS) {
-          const cause = blockingCause();
-          incomplete = `stuck: ${cause ?? `${quietWaits} waits changed nothing and nothing was pending`}`;
-          stop = "no-progress";
+        ctx.lastActedOp = decision.op;
+        ctx.statusAfter = decision.op === "wait" ? "waiting" : "scrolling";
+        if (ctx.quietWaits >= MAX_QUIET_WAITS) {
+          const cause = ctx.blockingCause();
+          ctx.incomplete = `stuck: ${cause ?? `${ctx.quietWaits} waits changed nothing and nothing was pending`}`;
+          ctx.stop = "no-progress";
           break;
         }
         // Stuck = several idle steps AND for as long as a slow reply may take (`replyWaitMs`): a long
         // simulation or LLM turn gets that long before the run gives up on it.
-        if (idleSteps >= MAX_IDLE_STEPS && idleSince !== null && now() - idleSince >= replyWaitMs) {
-          incomplete = `stuck: ${idleSteps} wait/scroll steps over ${Math.round((now() - (idleSince ?? now())) / 1000)}s changed nothing`;
-          stop = "no-progress";
+        if (ctx.idleSteps >= MAX_IDLE_STEPS && ctx.idleSince !== null && ctx.now() - ctx.idleSince >= ctx.replyWaitMs) {
+          ctx.incomplete = `stuck: ${ctx.idleSteps} wait/scroll steps over ${Math.round((ctx.now() - (ctx.idleSince ?? ctx.now())) / 1000)}s changed nothing`;
+          ctx.stop = "no-progress";
           break;
         }
         continue;
       }
-      idleSteps = 0;
-      quietWaits = 0;
-      actionAttempts += 1;
+      ctx.idleSteps = 0;
+      ctx.quietWaits = 0;
+      ctx.actionAttempts += 1;
 
       if (decision.op === "reload") {
         // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
         // and it counts as an action. Returning to the state the page had is its point, never a stall.
-        if (!tracker.mayAct()) {
+        if (!ctx.tracker.mayAct()) {
           record(false, "action budget exhausted", { origin: "engine" });
-          stop = "exhausted";
+          ctx.stop = "exhausted";
           break;
         }
         // A write this run fired is still in flight (a job it started): reloading now abandons it and
         // invites a duplicate. Observe until it resolves instead (#92).
-        if (sideEffects.inflight().length > 0) {
-          const what = sideEffects
+        if (ctx.sideEffects.inflight().length > 0) {
+          const what = ctx.sideEffects
             .inflight()
             .map((w) => `${w.method} ${w.path}`)
             .join(", ");
-          const w = await awaitWrites(monitorFor(page), sideEffects, replyCeilingMs);
+          const w = await awaitWrites(monitorFor(ctx.page), ctx.sideEffects, ctx.replyCeilingMs);
           const note = `reload deferred: ${what} (sent by an earlier click) is still in flight — waited ${(w.waitedMs / 1000).toFixed(1)}s, ${
             w.resolved ? "it resolved" : "it is still in flight"
           }`;
-          history.push(note);
+          ctx.history.push(note);
           record(false, note, { origin: "engine" });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
-        const at = now();
-        effectLog.mark(transcript.nextStep, "reload");
-        cfg.onAction?.({ step: transcript.nextStep, at });
-        readOnly?.beginAction();
+        const at = ctx.now();
+        ctx.effectLog.mark(ctx.transcript.nextStep, "reload");
+        cfg.onAction?.({ step: ctx.transcript.nextStep, at });
+        ctx.readOnly?.beginAction();
         const r = await act(cfg.actor, { op: "reload", control: null });
         if (r.ok) {
-          recorder.navigate(page.url(), at);
-          track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
-          refusedSinceMutation = 0;
-          scrollsSinceMutation = 0;
-          track.lastRecordedTarget = null;
-          tracker.countAction();
-          failedActs.succeeded();
+          ctx.recorder.navigate(ctx.page.url(), at);
+          ctx.track.lastMutation = { at, before: snap.signature, seenBefore: new Set(ctx.seen), label: "reload", recordIndex: ctx.recorder.stepCount - 1, sawNewState: false };
+          ctx.refusedSinceMutation = 0;
+          ctx.scrollsSinceMutation = 0;
+          ctx.track.lastRecordedTarget = null;
+          ctx.tracker.countAction();
+          ctx.failedActs.succeeded();
           // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
-          valueLog.reloaded();
-          save.reset();
-          history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
+          ctx.valueLog.reloaded();
+          ctx.save.reset();
+          ctx.history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
         } else {
-          history.push(`reload failed: ${r.reason ?? "?"}`);
+          ctx.history.push(`reload failed: ${r.reason ?? "?"}`);
         }
         record(r.ok, r.reason ?? r.note);
-        lastActedOp = decision.op;
+        ctx.lastActedOp = decision.op;
         continue;
       }
 
       // Target-requiring op with no valid target → fail-closed.
       if (control === null || decision.targetMissing) {
         record(false, "no valid target (fail-closed)", { origin: "engine" });
-        stop = "blocked";
+        ctx.stop = "blocked";
         break;
       }
-      if (!tracker.mayAct()) {
+      if (!ctx.tracker.mayAct()) {
         record(false, "action budget exhausted", { origin: "engine" });
-        stop = "exhausted";
+        ctx.stop = "exhausted";
         break;
       }
       // #158 — a read-only (find-out) goal: code refuses a control that would start a write flow,
       // submit a form, send a message or upload. Refused before any interaction, recorded, told.
-      if (readOnly !== null) {
-        const refusal = readOnly.refuses(decision.op, control);
+      if (ctx.readOnly !== null) {
+        const refusal = ctx.readOnly.refuses(decision.op, control);
         if (refusal !== null) {
-          history.push(refusal);
+          ctx.history.push(refusal);
           record(false, refusal, { origin: "engine" });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
       }
       // The shared safety policy (#116): a session-ending, destructive, paid or --deny'd control is
       // never clicked unless the goal itself asks for it (or --allow-destructive). Refused, recorded.
       if (decision.op === "click") {
-        const unsafe = safety.refuses(control);
+        const unsafe = ctx.safety.refuses(control);
         if (unsafe !== null) {
-          refusedKeys.add(keyOf(control));
-          lastRefusal = unsafe.reason;
-          history.push(unsafe.reason);
+          ctx.refusedKeys.add(keyOf(control));
+          ctx.lastRefusal = unsafe.reason;
+          ctx.history.push(unsafe.reason);
           record(false, unsafe.reason, { origin: "engine" });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
       }
       // #245: the demo overlay says what is about to happen and highlights the target (display only) —
       // before the action's attribution window opens, so its brief pause never counts as the action's.
-      if (overlay !== null) {
-        await overlay.announce(
-          page,
-          { step: transcript.nextStep, strategy: "goal", op: decision.op, target: control.name || control.summary, why: overlayWhy },
+      if (ctx.overlay !== null) {
+        await ctx.overlay.announce(
+          ctx.page,
+          { step: ctx.transcript.nextStep, strategy: "goal", op: decision.op, target: control.name || control.summary, why: ctx.overlayWhy },
           control,
         );
       }
 
       // #303: the page right before the action (and, with the perception's capture, the route's
       // volatility baseline) — the action's delta is read at the next perception.
-      if (deltas !== null) await deltas.beforeAction(hangRoute(snap.url), decision.op, control).catch(() => deltas.discard());
-      const at = now();
-      const risk = safety.riskOf(control);
-      effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
-      cfg.onAction?.({ step: transcript.nextStep, at });
-      readOnly?.beginAction();
+      if (ctx.deltas !== null) await ctx.deltas.beforeAction(hangRoute(snap.url), decision.op, control).catch(() => ctx.deltas!.discard());
+      const at = ctx.now();
+      const risk = ctx.safety.riskOf(control);
+      ctx.effectLog.mark(ctx.transcript.nextStep, control.name || control.summary, risk);
+      cfg.onAction?.({ step: ctx.transcript.nextStep, at });
+      ctx.readOnly?.beginAction();
 
       // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
       // would cross what remains of the budget is refused BEFORE it fires — code decides, never the
@@ -2103,10 +2365,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (cfg.onBeforeAction !== undefined) {
         const guard = await cfg.onBeforeAction({ op: decision.op, control: control.name || control.summary, paid: risk === "paid" });
         if (guard.refuse) {
-          history.push(guard.reason);
+          ctx.history.push(guard.reason);
           record(false, guard.reason, { origin: "engine" });
-          incomplete = guard.reason;
-          stop = "budget";
+          ctx.incomplete = guard.reason;
+          ctx.stop = "budget";
           break;
         }
       }
@@ -2119,23 +2381,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const submitting = decision.op === "click" && submitsAForm(control) ? control : null;
         const due = secretFieldsToFill(snap.controls, cfg.secretFields, {
           submitting,
-          status,
+          status: ctx.status,
           exclude: decision.op === "type" ? control : null,
         });
         for (const { control: field, field: binding, why } of due) {
-          if (!tracker.mayAct() || !(await secretFieldNeedsValue(page, field))) continue;
-          const t = now();
+          if (!ctx.tracker.mayAct() || !(await secretFieldNeedsValue(ctx.page, field))) continue;
+          const t = ctx.now();
           const value = secretFieldValue(binding, t);
           const placeholder = secretPlaceholder(binding);
           const r = await act(cfg.actor, { op: "type", control: field, value });
           const cause = why === "submit" ? `before submitting with ${control.name || control.summary}` : "a validation message names it";
           if (r.ok) {
-            recorder.fill(field.descriptor, { redacted: true, length: value.length }, t);
-            noteMutation(`type ${field.name}`, field.descriptor, snap.signature, t);
-            tracker.countAction();
-            history.push(`typed ${placeholder} into the empty ${field.name} (bound secret, typed by code — ${cause})`);
+            ctx.recorder.fill(field.descriptor, { redacted: true, length: value.length }, t);
+            ctx.noteMutation(`type ${field.name}`, field.descriptor, snap.signature, t);
+            ctx.tracker.countAction();
+            ctx.history.push(`typed ${placeholder} into the empty ${field.name} (bound secret, typed by code — ${cause})`);
           } else {
-            history.push(`type into ${field.name} failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
+            ctx.history.push(`type into ${field.name} failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
           }
           record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code — ${cause})` : (r.reason ?? "").split(value).join(placeholder), {
             op: "type",
@@ -2154,18 +2416,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const placeholder = secretPlaceholder(bound);
         const r = await act(cfg.actor, { op: "type", control, value });
         if (r.ok) {
-          recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
-          tracker.countAction();
-          history.push(`typed ${placeholder} into ${control.name} (bound secret, typed by code)`);
+          ctx.recorder.fill(control.descriptor, { redacted: true, length: value.length }, at);
+          ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
+          ctx.tracker.countAction();
+          ctx.history.push(`typed ${placeholder} into ${control.name} (bound secret, typed by code)`);
         } else {
-          history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
+          ctx.history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
         }
         record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder), {
           value: placeholder,
         });
-        lastActedOp = decision.op;
-        if (!r.ok && (await noteFailedAct(control, (r.reason ?? "").split(value).join(placeholder)))) break;
+        ctx.lastActedOp = decision.op;
+        if (!r.ok && (await ctx.noteFailedAct(control, (r.reason ?? "").split(value).join(placeholder)))) break;
         continue;
       }
 
@@ -2176,24 +2438,24 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (fixtureBinding !== null) {
         const value = fixtureBinding.text;
         const placeholder = typeFixturePlaceholder(fixtureBinding);
-        const holdsSecret = secrets.some((sec) => sec !== "" && value.includes(sec));
+        const holdsSecret = ctx.secrets.some((sec) => sec !== "" && value.includes(sec));
         const r = await act(cfg.actor, { op: "type", control, value });
         if (r.ok) {
-          recorder.fill(control.descriptor, holdsSecret ? { redacted: true, length: value.length } : value, at);
-          valueLog.typed(control.name || control.summary, value);
-          save.noteTyped(control.name || control.summary, value);
-          observed.noteOwnInput(value);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
-          tracker.countAction();
-          cleared(control);
-          history.push(`typed ${placeholder} into ${control.name} (type fixture, typed verbatim by code)`);
+          ctx.recorder.fill(control.descriptor, holdsSecret ? { redacted: true, length: value.length } : value, at);
+          ctx.valueLog.typed(control.name || control.summary, value);
+          ctx.save.noteTyped(control.name || control.summary, value);
+          ctx.observed.noteOwnInput(value);
+          ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
+          ctx.tracker.countAction();
+          ctx.cleared(control);
+          ctx.history.push(`typed ${placeholder} into ${control.name} (type fixture, typed verbatim by code)`);
         } else {
-          history.push(`type failed: ${redactText((r.reason ?? "?").split(value).join(placeholder), secrets)}`);
+          ctx.history.push(`type failed: ${redactText((r.reason ?? "?").split(value).join(placeholder), ctx.secrets)}`);
         }
-        record(r.ok, r.ok ? `typed ${placeholder} (type fixture, typed verbatim by code)` : redactText((r.reason ?? "").split(value).join(placeholder), secrets), {
+        record(r.ok, r.ok ? `typed ${placeholder} (type fixture, typed verbatim by code)` : redactText((r.reason ?? "").split(value).join(placeholder), ctx.secrets), {
           value: placeholder,
         });
-        lastActedOp = decision.op;
+        ctx.lastActedOp = decision.op;
         continue;
       }
 
@@ -2203,33 +2465,33 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const planned =
           boundSecretField(control, cfg.secretFields) !== null
             ? { refused: "a bound secret field is never edited as rich text" }
-            : await readEditableText(page, control).then((currentText) =>
+            : await readEditableText(ctx.page, control).then((currentText) =>
                 currentText === null
                   ? { refused: "the element's text could not be read" }
-                  : planTextEdit(cfg.gen, { goal: cfg.goal, control, currentText, history, secrets }),
+                  : planTextEdit(cfg.gen, { goal: cfg.goal, control, currentText, history: ctx.history, secrets: ctx.secrets }),
               ).catch((e: unknown) => ({ refused: `edit generation unavailable: ${firstLine(e)}` }));
         if ("refused" in planned) {
-          history.push(`edit in ${control.name || control.summary} refused: ${planned.refused}`);
+          ctx.history.push(`edit in ${control.name || control.summary} refused: ${planned.refused}`);
           record(false, planned.refused, { origin: "engine" });
         } else {
           const r = await act(cfg.actor, { op: "edit_text", control, edit: planned.edit });
           const what = describeTextEdit(planned.edit);
           if (r.ok) {
-            recorder.editText(control.descriptor, planned.edit, at);
-            noteMutation(`edit ${control.name}`, control.descriptor, snap.signature, at);
-            tracker.countAction();
-            history.push(`${what} in ${control.summary.slice(0, 80)}`);
-            cleared(control);
+            ctx.recorder.editText(control.descriptor, planned.edit, at);
+            ctx.noteMutation(`edit ${control.name}`, control.descriptor, snap.signature, at);
+            ctx.tracker.countAction();
+            ctx.history.push(`${what} in ${control.summary.slice(0, 80)}`);
+            ctx.cleared(control);
           } else {
-            history.push(`edit failed: ${failNote(r.reason, control)}`);
+            ctx.history.push(`edit failed: ${ctx.failNote(r.reason, control)}`);
           }
-          record(r.ok, r.ok ? what : failNote(r.reason, control), planned.edit.value === undefined ? {} : { value: planned.edit.value });
-          if (!r.ok && (await noteFailedAct(control, r.reason))) {
-            lastActedOp = decision.op;
+          record(r.ok, r.ok ? what : ctx.failNote(r.reason, control), planned.edit.value === undefined ? {} : { value: planned.edit.value });
+          if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
+            ctx.lastActedOp = decision.op;
             break;
           }
         }
-        lastActedOp = decision.op;
+        ctx.lastActedOp = decision.op;
         continue;
       }
 
@@ -2238,13 +2500,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // count it as a stuck signal.
       let op = decision.op;
       let forcedNote: string | null = null;
-      if (op === "type" && unsent.wouldRepeat(keyOf(control))) {
-        const n = unsent.noteRepeat();
+      if (op === "type" && ctx.unsent.wouldRepeat(keyOf(control))) {
+        const n = ctx.unsent.noteRepeat();
         forcedNote = `repeated type into ${control.name} without sending (stuck signal ${n}/${MAX_REPEAT_TYPE_SIGNALS}) — sent instead`;
         if (n >= MAX_REPEAT_TYPE_SIGNALS) {
           record(false, forcedNote, { origin: "engine" });
-          incomplete = `stuck: typed into ${quote(control.name, 60)} ${n} times without sending`;
-          stop = "no-progress";
+          ctx.incomplete = `stuck: typed into ${quote(control.name, 60)} ${n} times without sending`;
+          ctx.stop = "no-progress";
           break;
         }
         if (sendable(control)) op = "send";
@@ -2259,13 +2521,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // or said the same thing again. The next turn is generated with the stuck brief (answer the
         // assistant's question with a concrete fact or choice), the decision is pointed at the
         // page's call to action, and a conversation still stuck after that ends the run.
-        const stuck = repetitiveTurns(conversation.sent);
-        stuckTurns = stuck ? stuckTurns + 1 : 0;
-        if (stuckTurns > STUCK_TURNS) {
+        const stuck = repetitiveTurns(ctx.conversation.sent);
+        ctx.stuckTurns = stuck ? ctx.stuckTurns + 1 : 0;
+        if (ctx.stuckTurns > STUCK_TURNS) {
           const reason = `stuck: the messages kept acknowledging or repeating without answering the assistant (still after ${STUCK_TURNS} nudged turns)`;
           record(false, reason, { op });
-          incomplete = reason;
-          stop = "no-progress";
+          ctx.incomplete = reason;
+          ctx.stop = "no-progress";
           break;
         }
         let text: string | null;
@@ -2273,129 +2535,129 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           text = await chatReply(cfg.gen, {
             goal: cfg.goal,
             fieldLabel: control.name || control.summary,
-            latestReply: conversation.latestReply,
-            sentMessages: conversation.sent,
-            maxChars: replyMaxChars,
-            secrets,
-            question: lastQuestion(conversation.latestReply),
+            latestReply: ctx.conversation.latestReply,
+            sentMessages: ctx.conversation.sent,
+            maxChars: ctx.replyMaxChars,
+            secrets: ctx.secrets,
+            question: lastQuestion(ctx.conversation.latestReply),
             stuck,
           });
         } catch (e) {
           const reason = `message generation unavailable: ${firstLine(e)}`;
-          history.push(`${op} skipped: ${reason}`);
+          ctx.history.push(`${op} skipped: ${reason}`);
           record(false, reason, { op, origin: "engine" });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           continue;
         }
         if (text === null) {
-          blockers.failClosed = `no message for ${quote(control.name || control.summary, 80)} (the message generator returned none)`;
+          ctx.blockers.failClosed = `no message for ${quote(control.name || control.summary, 80)} (the message generator returned none)`;
           record(false, "no message available (fail-closed)", { op, origin: "engine" });
-          incomplete = "no message could be generated for the conversation";
-          stop = "blocked";
+          ctx.incomplete = "no message could be generated for the conversation";
+          ctx.stop = "blocked";
           break;
         }
         const message = text;
-        if (conversation.sent.some((m) => sameMessage(m, message))) {
-          const n = unsent.noteRepeat();
+        if (ctx.conversation.sent.some((m) => sameMessage(m, message))) {
+          const n = ctx.unsent.noteRepeat();
           const reason = `message not sent: it repeats an earlier message (stuck signal ${n}/${MAX_REPEAT_TYPE_SIGNALS})`;
-          history.push(`${reason} — answer the latest reply with something new`);
+          ctx.history.push(`${reason} — answer the latest reply with something new`);
           record(false, reason, { op, message, origin: "engine" });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           if (n >= MAX_REPEAT_TYPE_SIGNALS) {
-            incomplete = "stuck: the generated messages kept repeating";
-            stop = "no-progress";
+            ctx.incomplete = "stuck: the generated messages kept repeating";
+            ctx.stop = "no-progress";
             break;
           }
           continue;
         }
         if (op === "send") {
-          const baseline = await readPageText(page, secrets);
+          const baseline = await readPageText(ctx.page, ctx.secrets);
           const before = new Set(keys.keys());
-          const sendBackground = backgroundEndpoints(monitorFor(page), at, turnWrites);
+          const sendBackground = backgroundEndpoints(monitorFor(ctx.page), at, ctx.turnWrites);
           const r = await act(cfg.actor, { op: "send", control, value: message, candidates: snap.controls });
           if (!r.ok) {
-            history.push(`send failed: ${r.reason ?? "?"}`);
+            ctx.history.push(`send failed: ${r.reason ?? "?"}`);
             record(false, forcedNote === null ? r.reason : `${forcedNote}; ${r.reason ?? ""}`, { op, message });
-            lastActedOp = op;
-            if (await noteFailedAct(control, r.reason)) break;
+            ctx.lastActedOp = op;
+            if (await ctx.noteFailedAct(control, r.reason)) break;
             continue;
           }
           // #241: a send that started no request and changed nothing on the page was not sent (Enter
           // in a field whose real submit is a separate control): a failed send, never a pending reply.
-          const checkedFrom = now();
-          await monitorFor(page).waitSettled({ ceilingMs: 3_000 }).catch(() => undefined);
+          const checkedFrom = ctx.now();
+          await monitorFor(ctx.page).waitSettled({ ceilingMs: 3_000 }).catch(() => undefined);
           if (
-            requestsStartedSince(monitorFor(page), at, sendBackground).length === 0 &&
-            newPageText(baseline, await readPageText(page, secrets), "").trim() === ""
+            requestsStartedSince(monitorFor(ctx.page), at, sendBackground).length === 0 &&
+            newPageText(baseline, await readPageText(ctx.page, ctx.secrets), "").trim() === ""
           ) {
             const reason = `message was not sent: ${r.submittedVia?.kind === "click" ? `clicking ${quote(r.submittedVia.control.name, 40)}` : "Enter"} in ${quote(control.name || control.summary, 60)} started no request and changed nothing on the page`;
-            history.push(`${reason} — look for a send / continue control that submits it (it may need something else first)`);
+            ctx.history.push(`${reason} — look for a send / continue control that submits it (it may need something else first)`);
             record(false, reason, { op, message });
-            lastActedOp = op;
-            if (await noteFailedAct(control, reason)) break;
+            ctx.lastActedOp = op;
+            if (await ctx.noteFailedAct(control, reason)) break;
             continue;
           }
-          recorder.fill(control.descriptor, message, at);
+          ctx.recorder.fill(control.descriptor, message, at);
           const via = r.submittedVia;
-          if (via !== undefined && via.kind === "click") recorder.click(via.control.descriptor, now());
-          else recorder.press("Enter", control.descriptor, now());
-          noteMutation(`send ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
-          tracker.countAction();
-          unsent.submitted();
-          conversation.sent.push(message);
-          preSend ??= baseline;
+          if (via !== undefined && via.kind === "click") ctx.recorder.click(via.control.descriptor, ctx.now());
+          else ctx.recorder.press("Enter", control.descriptor, ctx.now());
+          ctx.noteMutation(`send ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
+          ctx.tracker.countAction();
+          ctx.unsent.submitted();
+          ctx.conversation.sent.push(message);
+          ctx.preSend ??= baseline;
           // The reply wait counts from the send: the check above already waited part of it.
-          const checkedMs = now() - checkedFrom;
+          const checkedMs = ctx.now() - checkedFrom;
           // The send's own writes (started by now: the not-sent check above settled) — never background.
-          for (const k of writesStartedSince(monitorFor(page), at, isWrite)) if (!sendBackground.has(k)) turnWrites.add(k);
-          const listened = await waitForReply(page, {
-            secrets,
+          for (const k of writesStartedSince(monitorFor(ctx.page), at, ctx.isWrite)) if (!sendBackground.has(k)) ctx.turnWrites.add(k);
+          const listened = await waitForReply(ctx.page, {
+            secrets: ctx.secrets,
             baseline,
             sent: message,
             sentAt: at,
             background: sendBackground,
-            timeoutMs: Math.max(1, replyWaitMs - checkedMs),
-            ceilingMs: Math.max(1, replyCeilingMs - checkedMs),
+            timeoutMs: Math.max(1, ctx.replyWaitMs - checkedMs),
+            ceilingMs: Math.max(1, ctx.replyCeilingMs - checkedMs),
           });
           const reply: ReplyResult = { ...listened, waitedMs: listened.waitedMs + checkedMs };
           if (reply.received) {
-            conversation.latestReply = reply.text;
-            replies.add(snap.url, reply.text);
+            ctx.conversation.latestReply = reply.text;
+            ctx.replies.add(snap.url, reply.text);
           }
-          awaitingReply = !reply.received;
-          busyWaitedMs = reply.waitedMs;
-          lastTurn = { baseline, sent: message, sentAt: at, background: sendBackground };
-          offerBaseline = before;
-          history.push(
+          ctx.awaitingReply = !reply.received;
+          ctx.busyWaitedMs = reply.waitedMs;
+          ctx.lastTurn = { baseline, sent: message, sentAt: at, background: sendBackground };
+          ctx.offerBaseline = before;
+          ctx.history.push(
             `sent ${quote(message)} via ${via?.kind === "click" ? `"${via.control.name}"` : "Enter"} → ` +
               (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
           );
-          noteStuckConversation(snap.controls);
+          ctx.noteStuckConversation(snap.controls);
           record(true, forcedNote ?? undefined, { op, message, reply });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           continue;
         }
         // A plain `type` of a message: typed, NOT sent yet (the Send control or Enter still has to follow).
         const r = await act(cfg.actor, { op: "type", control, value: message });
         if (r.ok) {
-          recorder.fill(control.descriptor, message, at);
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
-          tracker.countAction();
-          unsent.typed(keyOf(control), control.name, message, true);
-          history.push(`typed ${quote(message, 80)} into ${control.name} — NOT sent yet (send it)`);
+          ctx.recorder.fill(control.descriptor, message, at);
+          ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: message });
+          ctx.tracker.countAction();
+          ctx.unsent.typed(keyOf(control), control.name, message, true);
+          ctx.history.push(`typed ${quote(message, 80)} into ${control.name} — NOT sent yet (send it)`);
         } else {
-          history.push(`type failed: ${r.reason ?? "?"}`);
+          ctx.history.push(`type failed: ${r.reason ?? "?"}`);
         }
         record(r.ok, r.reason, { message });
-        lastActedOp = op;
-        if (!r.ok && (await noteFailedAct(control, r.reason))) break;
+        ctx.lastActedOp = op;
+        if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) break;
         continue;
       }
 
       if (op === "send") {
         // Not message-shaped after all (unreachable: `send` is always a message) — fail closed.
         record(false, "send without a message (fail-closed)", { op, origin: "engine" });
-        stop = "blocked";
+        ctx.stop = "blocked";
         break;
       }
 
@@ -2410,63 +2672,63 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const untried = (): string => choices.map((o) => quote(o, 60)).join(", ");
         if (choices.length === 0) {
           const reason = `no other option to choose in ${control.name || control.summary}${current === null ? "" : ` (${quote(current, 60)} is already selected)`}`;
-          history.push(`select refused: ${reason}`);
+          ctx.history.push(`select refused: ${reason}`);
           record(false, reason, { origin: "engine" });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           continue;
         }
         let text: string | null;
         try {
-          ({ text } = await fillHelper.valueFor({
+          ({ text } = await ctx.fillHelper.valueFor({
             fieldLabel: control.name || control.summary,
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
-            history,
-            secrets,
+            history: ctx.history,
+            secrets: ctx.secrets,
             options: choices,
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
-          history.push(`select skipped: ${reason}`);
+          ctx.history.push(`select skipped: ${reason}`);
           record(false, reason, { origin: "engine" });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           continue;
         }
         const named = text === null ? null : matchOption(text, control.options);
         if (named !== null && !choices.includes(named)) {
           // The current option (or a placeholder) again: never acted — the page would not change.
-          fillHelper.commit();
+          ctx.fillHelper.commit();
           const why = named === current ? `${quote(named, 60)} is already selected` : `${quote(named, 60)} is a placeholder, not a choice`;
           const reason = `select refused: ${why} in ${control.name || control.summary} — options not tried: ${untried()}`;
-          history.push(reason);
+          ctx.history.push(reason);
           record(false, reason, { origin: "engine", value: named });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           continue;
         }
         const option = named;
         if (option === null) {
-          fillHelper.commit();
+          ctx.fillHelper.commit();
           const reason = `no valid option chosen for ${control.name} (fail-closed)`;
-          blockers.failClosed = `no valid option for field ${quote(control.name || control.summary, 80)} (fail-closed)`;
-          history.push(`select failed: ${reason}`);
+          ctx.blockers.failClosed = `no valid option for field ${quote(control.name || control.summary, 80)} (fail-closed)`;
+          ctx.history.push(`select failed: ${reason}`);
           record(false, reason, { origin: "engine" });
-          lastActedOp = op;
+          ctx.lastActedOp = op;
           continue;
         }
         const r = await act(cfg.actor, { op: "select", control, value: option });
         if (r.ok) {
-          recorder.select(control.descriptor, option, at);
-          noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: option });
-          tracker.countAction();
-          fillHelper.commit();
-          history.push(`selected ${quote(option, 80)} in ${control.name}`);
-          cleared(control);
+          ctx.recorder.select(control.descriptor, option, at);
+          ctx.noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: option });
+          ctx.tracker.countAction();
+          ctx.fillHelper.commit();
+          ctx.history.push(`selected ${quote(option, 80)} in ${control.name}`);
+          ctx.cleared(control);
         } else {
-          history.push(`select failed: ${failNote(r.reason, control)}`);
+          ctx.history.push(`select failed: ${ctx.failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: option });
-        lastActedOp = op;
-        if (!r.ok && (await noteFailedAct(control, r.reason))) break;
+        record(r.ok, r.ok ? r.reason : ctx.failNote(r.reason, control), { value: option });
+        ctx.lastActedOp = op;
+        if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) break;
         continue;
       }
 
@@ -2477,39 +2739,39 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         let rejected: string | undefined;
         let source: "goal" | "model" | undefined;
         try {
-          ({ text, rejected, source } = await fillHelper.valueFor({
+          ({ text, rejected, source } = await ctx.fillHelper.valueFor({
             fieldLabel: control.name || control.summary,
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
-            history,
-            secrets,
+            history: ctx.history,
+            secrets: ctx.secrets,
             // A text field's value is field-scoped and checked before it is typed (#71); in an
             // add-another flow it is the next item, not one already submitted into this field (#123).
             ...(decision.op === "type"
-              ? { field: { tag: control.tag, inputType: control.inputType }, alreadyUsed: valueLog.used(control.name || control.summary) }
+              ? { field: { tag: control.tag, inputType: control.inputType }, alreadyUsed: ctx.valueLog.used(control.name || control.summary) }
               : {}),
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
-          history.push(`${decision.op} skipped: ${reason}`);
+          ctx.history.push(`${decision.op} skipped: ${reason}`);
           record(false, reason, { origin: "engine" });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
         if (rejected !== undefined) {
           // Not a value for this one field (an essay, a JSON map, a `Label:` echo…): a failed act the
           // model sees in its history, never typed.
           const reason = `typed value rejected: ${rejected}`;
-          history.push(`type into ${control.name} failed: ${reason} — the value must be only what goes in this one field`);
+          ctx.history.push(`type into ${control.name} failed: ${reason} — the value must be only what goes in this one field`);
           record(false, reason, { origin: "engine" });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
         if (text === null) {
           // The generator will not honestly supply a required value → never guess.
-          blockers.failClosed = `no value for field ${quote(control.name || control.summary, 80)} (the value generator returned none)`;
+          ctx.blockers.failClosed = `no value for field ${quote(control.name || control.summary, 80)} (the value generator returned none)`;
           record(false, "no value available (fail-closed)", { origin: "engine" });
-          stop = "blocked";
+          ctx.stop = "blocked";
           break;
         }
         // Free-text form values are bounded too (dogfood: 2–3k-char markdown essays in "Rationale").
@@ -2519,109 +2781,109 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         // #242: retyping a field whose last type(s) changed nothing else — a search-like field is
         // submitted this time (it searches on Enter); any other field ends the run once it is stuck.
-        const retypes = decision.op === "type" && typeNoEffect?.key === keyOf(control) ? typeNoEffect.count : 0;
+        const retypes = decision.op === "type" && ctx.typeNoEffect?.key === keyOf(control) ? ctx.typeNoEffect.count : 0;
         if (retypes >= MAX_TYPE_NO_EFFECT) {
           const reason = `stuck: typed into ${quote(control.name || control.summary, 60)} ${retypes} times in a row: nothing changed but its own value (no request, nothing else on the page)`;
           record(false, reason, { origin: "engine" });
-          incomplete = reason;
-          stop = "no-progress";
+          ctx.incomplete = reason;
+          ctx.stop = "no-progress";
           break;
         }
         const submitSearch = retypes >= 1 && searchLike(control);
-        const typedAt = now();
-        const typedBackground = decision.op === "type" ? backgroundEndpoints(monitorFor(page), typedAt) : new Set<string>();
+        const typedAt = ctx.now();
+        const typedBackground = decision.op === "type" ? backgroundEndpoints(monitorFor(ctx.page), typedAt) : new Set<string>();
         const typedState = stateBesides(snap, keyOf(control));
         const r = submitSearch
           ? await act(cfg.actor, { op: "send", control, value: text, candidates: snap.controls })
           : await act(cfg.actor, { op: decision.op, control, value: text });
         if (r.ok && submitSearch) {
-          recorder.fill(control.descriptor, text, at);
+          ctx.recorder.fill(control.descriptor, text, at);
           const via = r.submittedVia;
-          if (via !== undefined && via.kind === "click") recorder.click(via.control.descriptor, now());
-          else recorder.press("Enter", control.descriptor, now());
-          valueLog.typed(control.name || control.summary, text);
-          valueLog.submitted();
-          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
-          tracker.countAction();
-          fillHelper.commit();
-          typeNoEffect = null;
-          typeCredit = null;
-          history.push(
+          if (via !== undefined && via.kind === "click") ctx.recorder.click(via.control.descriptor, ctx.now());
+          else ctx.recorder.press("Enter", control.descriptor, ctx.now());
+          ctx.valueLog.typed(control.name || control.summary, text);
+          ctx.valueLog.submitted();
+          ctx.noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
+          ctx.tracker.countAction();
+          ctx.fillHelper.commit();
+          ctx.typeNoEffect = null;
+          ctx.typeCredit = null;
+          ctx.history.push(
             `submitted ${quote(control.name || control.summary, 60)} with ${via?.kind === "click" ? `its ${quote(via.control.name, 40)} button` : "Enter"} (typing alone fired nothing) — searched for ${quote(text, 80)}`,
           );
-          cleared(control);
+          ctx.cleared(control);
           record(true, "typed and submitted (typing alone fired nothing)", { value: text });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
         if (r.ok) {
           if (decision.op === "type") {
-            typeProbe = { key: keyOf(control), label: quote(control.name || control.summary, 60), at: typedAt, background: typedBackground, state: typedState };
+            ctx.typeProbe = { key: keyOf(control), label: quote(control.name || control.summary, 60), at: typedAt, background: typedBackground, state: typedState };
             // A form field (not a message composer) is submitted with its form's own button; retyping
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
-            recorder.fill(control.descriptor, text, at);
-            valueLog.typed(control.name || control.summary, text);
-            if (!isBound(control) && !isCredentialField(control) && !sendable(control)) {
-              save.noteTyped(control.name || control.summary, text);
+            ctx.recorder.fill(control.descriptor, text, at);
+            ctx.valueLog.typed(control.name || control.summary, text);
+            if (!ctx.isBound(control) && !isCredentialField(control) && !sendable(control)) {
+              ctx.save.noteTyped(control.name || control.summary, text);
               // #239: until a write after it succeeds, the field shows what the run entered — not grounds.
-              observed.noteOwnInput(text);
+              ctx.observed.noteOwnInput(text);
             }
-          } else recorder.select(control.descriptor, text, at);
-          noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
-          tracker.countAction();
-          fillHelper.commit();
-          history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
-          cleared(control);
+          } else ctx.recorder.select(control.descriptor, text, at);
+          ctx.noteMutation(`${decision.op} ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
+          ctx.tracker.countAction();
+          ctx.fillHelper.commit();
+          ctx.history.push(`${decision.op === "type" ? "typed into" : "selected in"} ${control.name}`);
+          ctx.cleared(control);
         } else {
-          history.push(`${decision.op} failed: ${failNote(r.reason, control)}`);
+          ctx.history.push(`${decision.op} failed: ${ctx.failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: text });
-        if (!r.ok && (await noteFailedAct(control, r.reason))) {
-          lastActedOp = decision.op;
+        record(r.ok, r.ok ? r.reason : ctx.failNote(r.reason, control), { value: text });
+        if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
+          ctx.lastActedOp = decision.op;
           break;
         }
       } else if (decision.op === "click") {
         // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
         // latest reply is a conversation turn: its reply is awaited like a `send`'s.
-        const pendingTexts = [...unsent.pending().values()].filter((p) => p.message).map((p) => p.text);
+        const pendingTexts = [...ctx.unsent.pending().values()].filter((p) => p.message).map((p) => p.text);
         const submits = pendingTexts.length > 0 && isSubmitControl(control);
         // A quick reply: a short button that arrived with the latest reply (a chip, "Yes, draft it").
         const quickReply =
-          offeredKeys.has(keyOf(control)) && control.role === "button" && control.name.length <= 60 && !/[→›»]/.test(control.name);
+          ctx.offeredKeys.has(keyOf(control)) && control.role === "button" && control.name.length <= 60 && !/[→›»]/.test(control.name);
         const turn = submits || quickReply;
         // The repeated-side-effect guard (#92): a click that already fired a write on this page is not
         // re-fired while that write is in flight (wait for it instead) or after it went through,
         // unless the page offers a retry. Refused — never clicked — and the reason is recorded.
-        const repeat = sideEffects.check(keyOf(control), safePath(snap.url), {
+        const repeat = ctx.sideEffects.check(keyOf(control), safePath(snap.url), {
           controlNames: snap.controls.map((c) => c.name),
-          alerts: status.alerts,
+          alerts: ctx.status.alerts,
         });
         if (repeat.refuse) {
           let note = repeat.reason;
           if (repeat.inflight) {
-            const w = await awaitWrites(monitorFor(page), sideEffects, replyCeilingMs);
+            const w = await awaitWrites(monitorFor(ctx.page), ctx.sideEffects, ctx.replyCeilingMs);
             note += ` (waited ${(w.waitedMs / 1000).toFixed(1)}s: ${w.resolved ? "it resolved" : "it is still in flight"})`;
           }
-          history.push(note);
+          ctx.history.push(note);
           record(false, note, { origin: "engine" });
-          lastActedOp = decision.op;
+          ctx.lastActedOp = decision.op;
           continue;
         }
-        const baseline = turn ? await readPageText(page, secrets) : "";
-        sideEffects.beginClick(keyOf(control), control.name || control.summary, safePath(snap.url), now());
+        const baseline = turn ? await readPageText(ctx.page, ctx.secrets) : "";
+        ctx.sideEffects.beginClick(keyOf(control), control.name || control.summary, safePath(snap.url), ctx.now());
         const r = await act(cfg.actor, { op: "click", control });
         let reply: ReplyResult | undefined;
         let message: string | undefined;
         if (r.ok) {
-          recorder.click(control.descriptor, at);
-          noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null, hangRoute(snap.url));
-          tracker.countAction();
-          if (isSubmitControl(control)) unsent.submitted();
+          ctx.recorder.click(control.descriptor, at);
+          ctx.noteMutation(`click ${control.name}`, control.descriptor, snap.signature, at, undefined, control.role === "link" ? hangRoute(snap.url) : null, hangRoute(snap.url));
+          ctx.tracker.countAction();
+          if (isSubmitControl(control)) ctx.unsent.submitted();
           // What was typed has now been submitted (a form's button): an add-another flow's next
           // item must differ from it (#123).
           if (buttonLike(control) || control.submits === true) {
-            valueLog.submitted();
-            save.noteSubmitClick(control.name || control.summary);
+            ctx.valueLog.submitted();
+            ctx.save.noteSubmitClick(control.name || control.summary);
           }
           // Toggling an input (a checkbox, a radio, a switch) changes what a repeat would send (#92).
           if (TOGGLE_ROLES.has(control.role) || (control.tag === "input" && control.inputType !== "submit" && control.inputType !== "button")) {
@@ -2629,100 +2891,100 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             // change (#123). Clicking into a text input changes nothing it would send.
             const picks = ["radio", "option", "menuitemradio"].includes(control.role) || control.inputType === "radio";
             const flips = ["checkbox", "switch", "menuitemcheckbox"].includes(control.role) || control.inputType === "checkbox";
-            if (picks) sideEffects.inputChanged(keyOf(control), "selected");
-            else if (flips) sideEffects.inputChanged(keyOf(control), { toggled: true });
+            if (picks) ctx.sideEffects.inputChanged(keyOf(control), "selected");
+            else if (flips) ctx.sideEffects.inputChanged(keyOf(control), { toggled: true });
           }
           if (turn) {
             message = submits ? pendingTexts.join("\n") : control.name;
-            conversation.sent.push(message);
-            preSend ??= baseline;
+            ctx.conversation.sent.push(message);
+            ctx.preSend ??= baseline;
             // The endpoints requested before the click (computed after it: only requests started
             // before `at` count) — the turn's own write is its work, never background (#241 × #283).
-            const turnBackground = backgroundEndpoints(monitorFor(page), at, turnWrites);
-            for (const k of writesStartedSince(monitorFor(page), at, isWrite)) if (!turnBackground.has(k)) turnWrites.add(k);
-            reply = await waitForReply(page, {
-              secrets,
+            const turnBackground = backgroundEndpoints(monitorFor(ctx.page), at, ctx.turnWrites);
+            for (const k of writesStartedSince(monitorFor(ctx.page), at, ctx.isWrite)) if (!turnBackground.has(k)) ctx.turnWrites.add(k);
+            reply = await waitForReply(ctx.page, {
+              secrets: ctx.secrets,
               baseline,
               sent: message,
               sentAt: at,
               background: turnBackground,
-              timeoutMs: replyWaitMs,
-              ceilingMs: replyCeilingMs,
+              timeoutMs: ctx.replyWaitMs,
+              ceilingMs: ctx.replyCeilingMs,
             });
             if (reply.received) {
-              conversation.latestReply = reply.text;
-              replies.add(snap.url, reply.text);
+              ctx.conversation.latestReply = reply.text;
+              ctx.replies.add(snap.url, reply.text);
             }
-            awaitingReply = !reply.received;
-            busyWaitedMs = reply.waitedMs;
-            lastTurn = { baseline, sent: message, sentAt: at, background: turnBackground };
-            offerBaseline = new Set(keys.keys());
-            history.push(
+            ctx.awaitingReply = !reply.received;
+            ctx.busyWaitedMs = reply.waitedMs;
+            ctx.lastTurn = { baseline, sent: message, sentAt: at, background: turnBackground };
+            ctx.offerBaseline = new Set(keys.keys());
+            ctx.history.push(
               `clicked ${control.name}${quickReply ? " (a quick reply)" : ""} → ` +
                 (reply.received ? `reply: ${quote(reply.text, 300)}` : noReply(reply)),
             );
-            noteStuckConversation(snap.controls);
+            ctx.noteStuckConversation(snap.controls);
           } else {
-            history.push(`clicked ${control.name}`);
+            ctx.history.push(`clicked ${control.name}`);
           }
-          cleared(control);
+          ctx.cleared(control);
         } else {
-          history.push(`click failed: ${failNote(r.reason, control)}`);
+          ctx.history.push(`click failed: ${ctx.failNote(r.reason, control)}`);
           // #90 — a real "intercepts pointer events" failure proves what covers this control (and,
           // in practice, its neighbours under the same backdrop): remember it so the model is not
           // offered another target it covers until the page changes.
           const interceptor = r.reason === undefined ? null : parseInterceptor(r.reason);
-          if (interceptor !== null && !blockedInterceptors.includes(interceptor)) {
-            blockedInterceptors = [...blockedInterceptors, interceptor];
-            blockedSinceSignature = snap.signature;
+          if (interceptor !== null && !ctx.blockedInterceptors.includes(interceptor)) {
+            ctx.blockedInterceptors = [...ctx.blockedInterceptors, interceptor];
+            ctx.blockedSinceSignature = snap.signature;
           }
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control), {
+        record(r.ok, r.ok ? r.reason : ctx.failNote(r.reason, control), {
           ...(message === undefined ? {} : { message }),
           ...(reply === undefined ? {} : { reply }),
         });
-        if (!r.ok && (await noteFailedAct(control, r.reason))) {
-          lastActedOp = decision.op;
+        if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
+          ctx.lastActedOp = decision.op;
           break;
         }
       } else {
         // upload — act fails closed without a fixture.
-        const r = await act(cfg.actor, { op: "upload", control, fixture });
-        if (r.ok && fixture !== null) {
+        const r = await act(cfg.actor, { op: "upload", control, fixture: ctx.fixture });
+        if (r.ok && ctx.fixture !== null) {
           // The recorded path goes through the shared redaction seam: a path that
           // contains a registered secret is recorded redacted (replay then fails
           // closed) rather than persisting the secret into the artifact.
           const recordedFile: ValueOrVar =
-            redactText(fixture, secrets) === fixture
-              ? { redacted: false, value: fixture }
-              : { redacted: true, length: fixture.length };
-          recorder.upload(control.descriptor, recordedFile, at);
-        noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);
-          tracker.countAction();
-          history.push(`uploaded the fixture into ${control.name}`);
-          fixtureAttached = true;
-          cleared(control);
+            redactText(ctx.fixture, ctx.secrets) === ctx.fixture
+              ? { redacted: false, value: ctx.fixture }
+              : { redacted: true, length: ctx.fixture.length };
+          ctx.recorder.upload(control.descriptor, recordedFile, at);
+        ctx.noteMutation(`upload into ${control.name}`, control.descriptor, snap.signature, at);
+          ctx.tracker.countAction();
+          ctx.history.push(`uploaded the fixture into ${control.name}`);
+          ctx.fixtureAttached = true;
+          ctx.cleared(control);
         } else {
-          history.push(`upload failed: ${failNote(r.reason, control)}`);
+          ctx.history.push(`upload failed: ${ctx.failNote(r.reason, control)}`);
         }
-        record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
-        if (!r.ok && (await noteFailedAct(control, r.reason))) {
-          lastActedOp = decision.op;
+        record(r.ok, r.ok ? r.reason : ctx.failNote(r.reason, control));
+        if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
+          ctx.lastActedOp = decision.op;
           break;
         }
       }
 
-      lastActedOp = decision.op;
+      ctx.lastActedOp = decision.op;
     }
   } catch (e) {
     if (!(e instanceof FirstNavigationFailedSentinel)) {
       // Engine failure (browser/page crash, automation error outside `act`'s own guard): a typed
       // `crashed` stop carrying the partial transcript and Recording — the run never throws here.
-      failure = describeFailure(e, crashWatch.signals());
+      ctx.failure = describeFailure(e, ctx.crashWatch.signals());
       // #226: the app stopped answering navigation (a frozen backend) — nothing in the engine broke:
       // `inconclusive` with the typed `target-unresponsive` reason, never `crashed`.
       // #296: likewise a page whose renderer stopped answering (closed by the liveness watchdog).
-      stop = isTargetUnresponsive(failure) || isPageUnresponsive(failure) ? "inconclusive" : "crashed";
+      ctx.stop = isTargetUnresponsive(ctx.failure) || isPageUnresponsive(ctx.failure) ? "inconclusive" : "crashed";
     }
     // Else (#128): `stop`/`failure` were already set to `inconclusive`/`target-unreachable` at the
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
@@ -2730,76 +2992,76 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
   // #230: a no-progress stop on an app that stopped answering is `target-unresponsive` — before the
   // host is blamed for it (#203).
-  if (stop === "no-progress") {
-    const unresponsive = await targetStoppedAnswering(livenessOf()).catch(() => null);
+  if (ctx.stop === "no-progress") {
+    const unresponsive = await targetStoppedAnswering(ctx.livenessOf()).catch(() => null);
     if (unresponsive !== null) {
-      failure = { kind: "target-unresponsive", message: unresponsive };
-      stop = "inconclusive";
+      ctx.failure = { kind: "target-unresponsive", message: unresponsive };
+      ctx.stop = "inconclusive";
     }
   }
 
   // #203: a no-progress stop met while the host was starved is the host, not the app.
-  if (stop === "no-progress" && cfg.hostHealth !== undefined) {
+  if (ctx.stop === "no-progress" && cfg.hostHealth !== undefined) {
     const judged = await cfg.hostHealth.judge();
-    if (judged.starved !== null) degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
+    if (judged.starved !== null) ctx.degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
   }
 
   // #238 — the latest report's answer was "none exists", but the run never covered enough of the app
   // to establish it: it proved nothing either way — `inconclusive` (insufficient coverage), never a defect.
-  if (lastAbsenceUncovered !== null && answer === undefined && (stop === "no-progress" || stop === "blocked" || stop === "exhausted") && failure === undefined) {
-    failure = { kind: "insufficient-coverage", message: lastAbsenceUncovered };
-    incomplete = lastAbsenceUncovered;
-    stop = "inconclusive";
-    lastReportNotFound = false;
+  if (ctx.lastAbsenceUncovered !== null && ctx.answer === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked" || ctx.stop === "exhausted") && ctx.failure === undefined) {
+    ctx.failure = { kind: "insufficient-coverage", message: ctx.lastAbsenceUncovered };
+    ctx.incomplete = ctx.lastAbsenceUncovered;
+    ctx.stop = "inconclusive";
+    ctx.lastReportNotFound = false;
   }
 
   // #207 — a run whose latest report found no answer, and that then stopped for want of progress or
   // gave up, ends saying so and what it searched — not a generic "no progress" / "blocked".
-  if (lastReportNotFound && answer === undefined && (stop === "no-progress" || stop === "blocked") && failure === undefined) {
-    incomplete = answerNotFoundReason(observed.pages());
+  if (ctx.lastReportNotFound && ctx.answer === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked") && ctx.failure === undefined) {
+    ctx.incomplete = answerNotFoundReason(ctx.observed.pages());
   }
 
-  await readOnly?.disarm();
-  page.off("request", onRequestSeen);
-  page.off("response", onDocumentResponse);
-  const finished = recorder.tryFinish({ intent: cfg.goal });
-  const cause = blockingCause();
+  await ctx.readOnly?.disarm();
+  ctx.page.off("request", ctx.onRequestSeen);
+  ctx.page.off("response", ctx.onDocumentResponse);
+  const finished = ctx.recorder.tryFinish({ intent: cfg.goal });
+  const cause = ctx.blockingCause();
   const finalOutcome: RunOutcome =
-    stop === "done" && outcome !== null && finished.ok
-      ? outcome
-      : { status: "incomplete", reason: withCause(incompleteReason(stop, incomplete, failure, hang, tracker), stop, cause) };
+    ctx.stop === "done" && ctx.outcome !== null && finished.ok
+      ? ctx.outcome
+      : { status: "incomplete", reason: withCause(incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker), ctx.stop, cause) };
   if (!finished.ok) {
     // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
     // written; the run is reported crashed so this can never read as a pass.
-    failure = failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
-    stop = "crashed";
+    ctx.failure = ctx.failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
+    ctx.stop = "crashed";
   }
-  const fired = effectLog.entries();
-  effectLog.close();
-  if (overlay !== null) {
-    const banner = finalOutcome.status === "completed" ? `jevitate · done — ${stop}` : `jevitate · ${stop} — ${finalOutcome.reason}`;
-    await overlay.finish(banner, finalOutcome.status === "completed", page);
+  const fired = ctx.effectLog.entries();
+  ctx.effectLog.close();
+  if (ctx.overlay !== null) {
+    const banner = finalOutcome.status === "completed" ? `jevitate · done — ${ctx.stop}` : `jevitate · ${ctx.stop} — ${finalOutcome.reason}`;
+    await ctx.overlay.finish(banner, finalOutcome.status === "completed", ctx.page);
   }
   return {
     sideEffects: fired.sideEffects,
     ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
-    ...(deltas === null ? {} : { actionDeltas: { ...deltas.stats(), ...(notPersisted.length === 0 ? {} : { notPersisted }) } }),
-    stop,
-    recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
-    transcript: transcript.entries(),
-    finalUrl: redactText(redactUrl(safeUrl(page)), secrets),
-    decisions: tracker.decisions,
-    actions: tracker.actions,
-    ...(failure === undefined ? {} : { failure }),
-    heap: heap.samples(),
-    timing: summarizeTimings(timings),
-    ...(hang === undefined ? {} : { hang }),
+    ...(ctx.deltas === null ? {} : { actionDeltas: { ...ctx.deltas.stats(), ...(ctx.notPersisted.length === 0 ? {} : { notPersisted: ctx.notPersisted }) } }),
+    stop: ctx.stop,
+    recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? ctx.startOrigin, finished.reason),
+    transcript: ctx.transcript.entries(),
+    finalUrl: redactText(redactUrl(safeUrl(ctx.page)), ctx.secrets),
+    decisions: ctx.tracker.decisions,
+    actions: ctx.tracker.actions,
+    ...(ctx.failure === undefined ? {} : { failure: ctx.failure }),
+    heap: ctx.heap.samples(),
+    timing: summarizeTimings(ctx.timings),
+    ...(ctx.hang === undefined ? {} : { hang: ctx.hang }),
     outcome: finalOutcome,
-    ...(answer !== undefined && finalOutcome.status === "completed" ? { answer } : {}),
+    ...(ctx.answer !== undefined && finalOutcome.status === "completed" ? { answer: ctx.answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
-    ...(endedOnRejectedDone && stop === "done" ? { doneRejected: true as const } : {}),
-    ...(stop === "crashed" && failure !== undefined
-      ? { crash: buildCrashReport(failure, crashWatch.signals(), heap.samples(), { host: await probeHost() }) }
+    ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
+    ...(ctx.stop === "crashed" && ctx.failure !== undefined
+      ? { crash: buildCrashReport(ctx.failure, ctx.crashWatch.signals(), ctx.heap.samples(), { host: await ctx.probeHost() }) }
       : {}),
   };
 }
