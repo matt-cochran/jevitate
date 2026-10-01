@@ -2105,8 +2105,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         // when it is unavailable the step fails (recorded, visible to the model) and the run goes on.
         let text: string | null;
         let rejected: string | undefined;
+        let source: "goal" | "model" | undefined;
         try {
-          ({ text, rejected } = await fillHelper.valueFor({
+          ({ text, rejected, source } = await fillHelper.valueFor({
             fieldLabel: control.name || control.summary,
             goal: cfg.goal,
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
@@ -2142,7 +2143,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           break;
         }
         // Free-text form values are bounded too (dogfood: 2–3k-char markdown essays in "Rationale").
-        if (decision.op === "type" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
+        // #281: a value the goal states verbatim is typed as stated (its line breaks kept), never capped.
+        if (decision.op === "type" && source !== "goal" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
           text = capMessage(text, FORM_TEXT_MAX_CHARS);
         }
         const r = await act(cfg.actor, { op: decision.op, control, value: text });

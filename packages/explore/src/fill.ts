@@ -348,6 +348,15 @@ export function valuesStatedInGoal(goal: string, fieldLabel: string, field: Fiel
       }
     }
   }
+  // #281: a passage the goal quotes as the text to type ("import this text: \"…\"") — typed VERBATIM,
+  // line breaks and all, never paraphrased by a model. Only for a multi-line text field (a textarea /
+  // rich text — a quoted title or name belongs to a single-line input), and only when the goal quotes
+  // exactly one such passage. Before `exactly:` (#185), whose unquoted form would stop at
+  // the passage's first line break.
+  if (found.size === 0 && field.tag !== "input" && field.tag !== "select") {
+    const passages = typedPassages(goal);
+    if (passages.length === 1 && !passages[0]!.includes("«")) found.add(passages[0]!);
+  }
   // `replace its text with exactly: <text>` / `exactly "<text>"` (#185): a label-free literal, for a
   // free-text field (a textarea or rich text, never a typed input) — only when the goal gives one.
   if (found.size === 0 && field.tag !== "input" && field.tag !== "select") {
@@ -362,6 +371,22 @@ export function valuesStatedInGoal(goal: string, fieldLabel: string, field: Fiel
   // Goal order: an add-another flow takes the items in the order the goal lists them (#123).
   return [...found].sort((a, b) => goal.indexOf(a) - goal.indexOf(b));
 }
+
+/**
+ * #281: the passages a goal quotes (in double quotes, line breaks allowed) as text to type — right
+ * after a typing verb ("type", "enter", "paste", "write", "import", "insert", "post", "reply", "add",
+ * "use", "with") or a `text:` / `content:` / `body:` / `message:` lead-in. Only a passage — several
+ * lines, or `PASSAGE_MIN_WORDS`+ words: a quoted button name or title is not one. Verbatim, outer
+ * whitespace trimmed.
+ */
+export function typedPassages(goal: string): string[] {
+  const lead = String.raw`(?:\b(?:type|enter|paste|write|import|insert|input|fill(?:\s+in)?|put|post|reply|add|use|with)\b[^"“”\n]{0,60}?|\b(?:text|content|body|message)\s*[:=]\s*)`;
+  const re = new RegExp(String.raw`${lead}["“]([^"“”]{1,5000})["”]`, "giu");
+  return [...goal.matchAll(re)].map((m) => (m[1] ?? "").trim()).filter((p) => /\n/.test(p) || words(p).length >= PASSAGE_MIN_WORDS);
+}
+
+/** #281: a quoted text shorter than this (on one line) is a name or a title, not a passage to type. */
+const PASSAGE_MIN_WORDS = 6;
 
 /** The generation gateway's documented input ceiling for `visibleContext`. */
 const CONTEXT_CEILING = 4000;
