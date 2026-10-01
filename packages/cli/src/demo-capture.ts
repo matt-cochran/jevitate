@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { BrowserContext, Frame, Locator, Page } from "playwright";
-import { secretForms } from "@jevitate/ai-core";
+import { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn, secretForms } from "@jevitate/ai-core";
 import { DEMO_OVERLAY_HIDE_STYLE } from "@jevitate/explore";
 import { descriptorToLocator } from "@jevitate/recorder";
 import type { TargetDescriptor } from "@jevitate/recording";
@@ -121,44 +121,7 @@ export const PIXEL_MASK_ATTR = "data-jevitate-mask-layer";
  * memory (the run's mask), never on disk. Limits (docs/safety.md): a secret with no marker and
  * no credential shape (a short code, a plain word) is not masked; a password field shows dots.
  */
-export const REVEALED_SECRET_SELECTORS: readonly string[] = [
-  "[data-jevitate-mask]",
-  "[data-secret]",
-  '[autocomplete="one-time-code"]',
-  '[data-testid*="secret" i]',
-  '[data-testid*="api-key" i]',
-  '[data-testid*="apikey" i]',
-  '[data-testid*="token" i]',
-  '[aria-label*="secret" i]',
-  '[aria-label*="api key" i]',
-  '[aria-label*="token" i]',
-];
-
-/** Credential shapes masked (and learned) wherever they appear (#298). Source strings; flags `g`. */
-export const REVEALED_SECRET_SHAPES: readonly string[] = [
-  // JWT / JWS (header.payload.signature).
-  String.raw`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
-  // Prefixed provider keys: Stripe, OpenAI/OpenRouter/Anthropic, GitHub, GitLab, Slack, AWS, Google.
-  String.raw`\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}`,
-  String.raw`\bsk-[A-Za-z0-9_-]{20,}`,
-  String.raw`\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,})`,
-  String.raw`\bxox[abprs]-[A-Za-z0-9-]{10,}`,
-  String.raw`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`,
-  String.raw`\bAIza[0-9A-Za-z_-]{35}`,
-  // <id>.<secret> hex pairs (a key id + secret), and long hex secrets.
-  String.raw`\b[0-9a-fA-F]{8,}\.[0-9a-fA-F]{16,}\b`,
-  String.raw`\b[0-9a-fA-F]{32,}\b`,
-  // A long mixed-case alphanumeric token (base64url-ish): upper, lower and digit, 32+ chars.
-  String.raw`(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])`,
-];
-
-/** The credential-shaped substrings of `text` (#298) — what the browser mask learns, in node form. */
-export function revealedSecretsIn(text: string): string[] {
-  const out = new Set<string>();
-  for (const src of REVEALED_SECRET_SHAPES) for (const m of text.matchAll(new RegExp(src, "g"))) out.add(m[0]);
-  // A shape found inside a longer one (the secret half of an id.secret pair) is the same secret.
-  return [...out].filter((v) => ![...out].some((o) => o !== v && o.includes(v)));
-}
+export { REVEALED_SECRET_SELECTORS, REVEALED_SECRET_SHAPES, revealedSecretsIn };
 
 /** The mask could not be applied or proven: the capture is skipped (fail closed), never written. */
 export class MaskUnavailableError extends Error {

@@ -154,6 +154,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     // #243: without it the fixture's `auth.identity: "owner"` is unbound — refused before the runner
     fixtureIdentity: { kind: "goal", set: ["owner=alice.json"], with: { fixtures: "owner-fixtures.json" } },
     allowVacuousChecks: { kind: "goal", set: true },
+    actionDeltas: { kind: "goal", set: true },
     // #245: demo mode reaches the runner's `browser` option
     headed: { kind: "coverage", set: true },
     slowMo: { kind: "feature", set: 100 },

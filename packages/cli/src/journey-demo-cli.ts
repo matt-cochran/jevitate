@@ -56,10 +56,12 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
     .option("--video <file>", "write the demo video here (.webm) and its subtitles beside it (.vtt)")
     .option("--guide <file>", "write a Markdown guide here (.md), screenshots in <name>.assets/ beside it")
     .option("--pace <ms>", `how long each step's caption shows before it acts (default ${DEMO_DEFAULT_PACE_MS})`, intArg({ min: 0, max: DEMO_MAX_PACE_MS }))
+    .option("--action-deltas", "opt-in (#303): record each replayed step's delta, and caption each step with what it changed when its Recording was made (an \"observed:\" line in the subtitles and the guide)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, ...rest } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, ...rest } = this.opts<{
+        actionDeltas?: boolean;
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -122,6 +124,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
             ...(browser === undefined ? {} : { browser }),
             ...(emulation === undefined ? {} : { emulation }),
             ...(screenshots === undefined ? {} : { screenshots }),
+            ...(actionDeltas === true ? { actionDeltas: true } : {}),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             ...(video === undefined ? {} : { video }),

@@ -58,10 +58,12 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
     .option("--real", "draft with the live OpenRouter generation gateway (requires keys)", false)
     .option("--fake-ai", "draft with the deterministic fake generator (pipeline smoke only)", false)
     .option("--approve", "apply the reviewed draft to the Journey (shows the diff; refused if the Journey changed since the draft)", false)
+    .option("--action-deltas", "opt-in (#303): record what each replayed step changed and draft its expected result from that delta (by code, redacted) — the model is asked only for what the delta cannot say")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, screenshots: screenshotsFlag, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, ...emulationFlags } = this.opts<{
+        actionDeltas?: boolean;
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -159,6 +161,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
             ...browserOption(this.opts<BrowserLaunchFlags>()),
             ...(emulation === undefined ? {} : { emulation }),
             ...(screenshots === undefined ? {} : { screenshots }),
+            ...(actionDeltas === true ? { actionDeltas: true } : {}),
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             fixtures: (site) => {

@@ -45,6 +45,24 @@ behaviour changes).
   problem listed (exit 64). MCP `journey_anchors` and `run_campaign`; `run_exploration` and
   check-suite mission items take `fromJourney`/`atStep`/`params`/`env`/`baseUrl`. The
   `jevitate-test-campaign` skill now uses them (#293).
+- `--action-deltas` (opt-in; MCP `actionDeltas`, check-suite option `actionDeltas`; goal and
+  usability runs): after each action, code records what changed on the page
+  (accessibility snapshot before/after, announcements in between, the action's requests, URL and
+  title), redacted first, with volatile nodes learned per route and dropped, changes ranked by
+  closeness to the action and big changes summarised. Code's verdict per action is `no-change`,
+  `relevant-change` or `inconclusive`; only `no-change` counts toward a no-progress stop. Deltas
+  are attached to transcript and Recording steps (`delta`, additive), counted in the result
+  (`actionDeltas`) and the human output, and summarised in the model's step history; the expected
+  change is compared with the delta. Jev labels are advisory, and its ignore rules are accepted only
+  for nodes seen changing on their own. Off by default; on, about 50–110 ms per action on a small
+  page, 0.35–0.5 s on a 400-row page (#303).
+- `--action-deltas` also on `journey run`, `journey annotate`, `journey demo` and `verify-fix`
+  (MCP `actionDeltas` on `run_journey`, `annotate_journey`, `demo_journey`, `verify_fix`) and on
+  adversarial and coverage runs: replays compare each step's delta with the Recording's (evidence
+  only), annotate drafts expected results from deltas, demo adds an "observed" caption line,
+  adversarial defects carry their action's delta and coverage lists no-effect actions. Goal runs
+  re-check a write's changes after a reload (`persisted: yes | no | inconclusive`; never a re-post),
+  and a report may quote a toast that vanished before it (#303).
 - Adversarial `boundary-submit` checks whether a field's input is rendered as markup. It submits
   inert canaries with a per-submission random token: `<i data-jev-canary="T">jevT</i>` and an
   attribute break, `jevT" data-jev-canary="T`, with no script or event handler. It then inspects the
@@ -113,6 +131,11 @@ behaviour changes).
 
 ### Changed
 
+- With `--action-deltas`, the goal loop's no-progress check reads each action's delta (#303): an
+  action whose delta is `relevant-change` is progress even when the control set is unchanged, and an
+  `inconclusive` one does not count toward the stop. Without it, no-progress is unchanged.
+- The #298 credential shapes and secret markers moved to `@jevitate/ai-core` (shared by the pixel
+  mask and action deltas); behaviour is unchanged.
 - Releases are published by hand with `scripts/release.sh` while npm OIDC publishing is blocked
   (npm/cli#9969). The Release workflow versions on `main` and prints how to open the version PR,
   publishes only from a manual run, and no longer fails on every push; its actions are pinned to

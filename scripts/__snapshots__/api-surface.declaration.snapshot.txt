@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (146 exports)
+# @jevitate/ai-core (150 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -92,6 +92,7 @@
   Question: type-alias
   realJevClientCall: function
   redactContext: function
+  redactCredentialShapes: function
   REDACTION_MASK: variable
   redactText: function
   redactUrl: function
@@ -102,6 +103,9 @@
   RetryingJudgmentPort: class
   RetryResult: type-alias
   retryTransient: function
+  REVEALED_SECRET_SELECTORS: variable
+  REVEALED_SECRET_SHAPES: variable
+  revealedSecretsIn: function
   ScoreAnswer: interface
   ScoreQuestion: interface
   SdkChoiceQuestion: type-alias
@@ -259,11 +263,15 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (521 exports)
+# @jevitate/explore (561 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
   ActArgs: interface
+  ActionDelta: interface
+  ActionDeltas: class
+  ActionDeltasOptions: interface
+  ActionDeltaStats: interface
   actionName: function
   ActResult: interface
   AdversarialCoverage: interface
@@ -286,6 +294,8 @@
   answerNotFoundReason: function
   AnswerVerdict: type-alias
   API_CREDENTIAL_HEADERS: variable
+  AriaCapture: interface
+  AriaLine: interface
   assertAuthorizedExploreTarget: function
   assertSeedReachable: function
   assertTargetAnswering: function
@@ -319,6 +329,7 @@
   CapabilityScope: interface
   capFormText: function
   capMessage: function
+  captureAria: function
   CapturedRequest: interface
   chatReply: function
   ChatReplyRequest: interface
@@ -330,6 +341,7 @@
   ClippingCause: type-alias
   ClippingFinding: interface
   clippingSummary: function
+  compareDeltas: function
   CompletedRequest: interface
   Control: interface
   controlFields: function
@@ -377,6 +389,20 @@
   DEFERRED_EFFECT_MAX_MS: variable
   DEGRADED_STEP_MAJORITY: variable
   degradedEnvironmentOutcome: function
+  DELTA_HISTORY_GUIDE: variable
+  DELTA_JEV_MAX_CALLS: variable
+  DELTA_LINE_MAX: variable
+  DELTA_MAX_CHANGES: variable
+  DELTA_PROMPT_CHARS: variable
+  DELTA_SNAPSHOT_TIMEOUT_MS: variable
+  DeltaChange: interface
+  DeltaComparison: interface
+  DeltaLocality: type-alias
+  deltaPromptLine: function
+  deltaQuotableText: function
+  deltaRecord: function
+  deltaStatsOf: function
+  DeltaVerdict: type-alias
   DEMO_HIGHLIGHT_MS: variable
   DEMO_OVERLAY_ATTR: variable
   DEMO_OVERLAY_HIDE_STYLE: variable
@@ -387,7 +413,9 @@
   DemoOverlayIntent: interface
   describeAction: function
   describeAssertionSpec: function
+  describeChange: function
   describeCheck: function
+  describeExpected: function
   describeFailure: function
   describeStatus: function
   describeUnreachable: function
@@ -397,6 +425,7 @@
   detectForms: function
   detectOverflow: function
   DetectOverflowOptions: interface
+  diffAria: function
   disambiguate: function
   DisclosureMemory: interface
   DraftContext: interface
@@ -413,6 +442,9 @@
   errorPageReason: function
   evaluateNetworkCheck: function
   exactLiterals: function
+  expectedChange: function
+  ExpectedChange: interface
+  expectedResultFromDelta: function
   explore: function
   EXPLORE: variable
   ExploreConfig: interface
@@ -587,6 +619,7 @@
   OVERSIZE_CHARS: variable
   p50: function
   PAGE_TEXT_GUIDE: variable
+  PageDeltas: class
   PageFacts: interface
   PageHeadings: interface
   PageMonitor: class
@@ -595,6 +628,7 @@
   PageTiming: interface
   PageTimingStat: interface
   PAID: variable
+  parseAria: function
   parseFirstNumber: function
   parseInterceptor: function
   parseNumbers: function
@@ -613,11 +647,13 @@
   PROMPT_INJECTION_GUARD: variable
   PROMPT_PAGE_TEXT_CHARS: variable
   quoteIsOnlyControlNames: function
+  RawChange: interface
   READ_ONLY_NOTE: variable
   ReadOnlyGuard: class
   ReadOnlyMode: type-alias
   recordCoverageHang: function
   recordingStepCount: function
+  redactAriaLine: function
   redactContext: other
   redactControl: function
   REDACTION_MASK: other
@@ -636,6 +672,10 @@
   RepeatVerdict: type-alias
   replayAndDetectHang: function
   ReplayAttemptEvidence: interface
+  ReplayDeltas: class
+  replayDeltaSummary: function
+  ReplayDeltaSummary: interface
+  ReplayStepDelta: interface
   replayTargetWaitMs: function
   replayWouldRepeatWrite: function
   REPLY_MAX_CHARS: variable
@@ -723,6 +763,7 @@
   SuccessCheckResult: interface
   SuccessWhen: type-alias
   summarizeTimings: function
+  SUMMARY_GROUP_MIN: variable
   TARGET_FREE_ACTIONS: variable
   TARGET_LIVENESS_PROBE_MS: variable
   TargetCandidateOptions: interface
@@ -748,6 +789,8 @@
   TranscriptLog: class
   TranscriptReply: interface
   TranscriptStep: interface
+  TRANSIENT_SELECTOR: variable
+  TransientNote: interface
   Triage: type-alias
   tryTriage: function
   typedPassages: function
@@ -776,6 +819,7 @@
   VerifySession: interface
   VetoedAnswers: class
   visibleBusyIndicator: function
+  VOLATILITY_GAP_MS: variable
   WAIT_OP_MS: variable
   WITHHELD_ANSWER_NOTE: variable
   withheldReason: function
@@ -1232,8 +1276,9 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (134 exports)
+# @jevitate/recording (135 exports)
   ACTION_OPS: variable
+  ActionDeltaRecord: interface
   ActionOp: type-alias
   ACTOR_NAME_RE: variable
   AlignedColumn: interface

@@ -226,6 +226,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         successChecks,
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
         ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         allowlist: item.t.allowlist,
         judge,
         gen,
@@ -313,6 +314,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...withOverflow,
         ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
         ...withPrefix,
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -327,6 +329,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         seedUrl: url,
         allowlist: item.t.allowlist,
         strategies: CLI_ADVERSARIAL_STRATEGIES,
+        ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         judgment: judge,
         generation: gen,
         usage,
@@ -366,6 +369,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       ...(m.success === undefined ? {} : { successChecks: m.success.map(parseSuccessSpec) }),
       ...(m.successWhen === undefined ? {} : { successWhen: m.successWhen }),
       ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+      ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
       judge,
       gen,
       usage,

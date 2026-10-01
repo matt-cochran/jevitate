@@ -215,6 +215,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed " +
         "(an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal",
     )
+    .option(
+      "--action-deltas",
+      "opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, " +
+        "the action's requests — redacted, with a code verdict per step (no-change | relevant-change | inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); " +
+        "adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one",
+    )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
@@ -546,6 +552,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         success: string[];
         successWhen?: string;
         allowVacuousChecks?: boolean;
+        actionDeltas?: boolean;
         feature?: string;
         route: string[];
         scope?: string;
@@ -920,6 +927,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         );
         return;
       }
+      // #303: action deltas are recorded by the goal loop (goal and usability runs) only — refused
+      // elsewhere, never silently ignored.
+      if (o.actionDeltas === true && o.feature !== undefined) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--action-deltas is not supported with --feature (goal, usability, coverage, exploratory and adversarial runs record deltas)"));
+        return;
+      }
       if (o.storageState !== undefined && !existsSync(o.storageState)) {
         emitExplore(fail("E_EXPLORE_ARGS", `storage state not found: ${o.storageState}`));
         return;
@@ -1102,6 +1115,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         try {
           const result = await runCoverageMission({
             ...(target === undefined ? {} : { target }),
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
             url: o.url,
             allowlist: covAllowlist,
             judge: covJudge,
@@ -1181,6 +1195,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         try {
           const result = await runAdversarialCliMission({
             ...(target === undefined ? {} : { target }),
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
             seedUrl: o.url,
             allowlist: advAllowlist,
             usage: advUsage,
@@ -1308,6 +1323,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
             ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
             ...withPrefix,
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           });
           // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
           // broken run or an unavailable analysis is 2.
@@ -1474,6 +1490,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           successChecks,
           ...(successWhen === undefined ? {} : { successWhen }),
           ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+          ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           allowlist,
           judge,
           gen,

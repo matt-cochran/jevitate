@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
-import type { HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
+import type { ActionDeltaStats, HostHealthSampler, InvariantDefect, InvariantReport, SideEffect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, resolveMissionFixture, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type TypeFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
@@ -62,6 +62,12 @@ export interface RunExplorationOptions {
    * of a failure. Default: it fails — a run that proved nothing is never clean.
    */
   readonly allowVacuousChecks?: boolean;
+  /**
+   * #303 `--action-deltas` (opt-in, off by default): record what each action changed on the page
+   * (code's verdict per action) — attached to every transcript and Recording step, summarised in the
+   * result (`actionDeltas`), told to the model and used by the no-progress check. Off: no capture.
+   */
+  readonly actionDeltas?: boolean;
   readonly allowlist: readonly string[];
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
@@ -187,6 +193,8 @@ export interface RunExplorationResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
+  readonly actionDeltas?: ActionDeltaStats;
   /**
    * Did the loop complete its goal (`completed`, verified by the success assertion), or why not
    * (`incomplete` + reason)? `outcome` above is the mission verdict; this is the run's own account.
@@ -513,6 +521,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(opts.actors === undefined ? {} : { primaryActor: opts.actors.primary.name }),
       hostHealth: health,
       demoOverlay: demoOverlayOf(opts.browser),
+      // #303 (opt-in): action deltas, with Jev's advisory relevance labels for changes code cannot tie.
+      ...(opts.actionDeltas === true ? { actionDeltas: { jev: true } } : {}),
     });
     await observers?.close();
 
@@ -614,6 +624,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       ...(mission.budget === undefined ? {} : { budget: mission.budget }),
       sideEffects: mission.run.sideEffects,
       ...(mission.run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: mission.run.sideEffectsTruncated }),
+      ...(mission.run.actionDeltas === undefined ? {} : { actionDeltas: mission.run.actionDeltas }),
       engine,
       ...(fx === undefined || missionFixture === undefined
         ? {}

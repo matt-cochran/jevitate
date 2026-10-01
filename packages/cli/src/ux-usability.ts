@@ -23,7 +23,7 @@ import { launchArmed } from "./launch-armed.js";
 import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
 import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
-import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
+import { Http5xxOracle, type ActionDeltaStats, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
@@ -163,6 +163,12 @@ export interface RunUsabilityMissionOptions {
    * on the live page it left — never a fresh navigation. `url` is only the expected landing.
    */
   readonly journeyPrefix?: JourneyPrefix;
+  /**
+   * #303 `--action-deltas` (opt-in, off by default): record what each action changed on the page
+   * (code's verdict per action) — attached to every transcript and Recording step, summarised in the
+   * result (`actionDeltas`), told to the model and used by the no-progress check. Off: no capture.
+   */
+  readonly actionDeltas?: boolean;
 }
 
 /** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
@@ -233,6 +239,8 @@ export interface RunUsabilityMissionResult {
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: readonly SideEffect[];
   readonly sideEffectsTruncated?: number;
+  /** #303: the run's action deltas (verdict counts, per-action overhead) — only with `--action-deltas`. */
+  readonly actionDeltas?: ActionDeltaStats;
   /**
    * The typed verdict. UX findings are advisory, so a completed review is `clean`; a run whose
    * loop broke is `crashed`/`inconclusive`, and so is one whose analysis could not be produced — or
@@ -449,6 +457,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       onTranscriptEntry: serverLog?.onTranscriptEntry ?? journalListener,
       onRecording: journal.onRecording,
+      // #303 (opt-in): action deltas, with Jev's advisory relevance labels.
+      ...(opts.actionDeltas === true ? { actionDeltas: { jev: true } } : {}),
       hostHealth: health,
       demoOverlay: demoOverlayOf(opts.browser),
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
@@ -769,6 +779,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       screenshots: capture.screenshots(),
       sideEffects: run.sideEffects,
       ...(run.sideEffectsTruncated === undefined ? {} : { sideEffectsTruncated: run.sideEffectsTruncated }),
+      ...(run.actionDeltas === undefined ? {} : { actionDeltas: run.actionDeltas }),
       engine: currentEngineInfo(),
       ...((): { failure?: MissionFailure } => {
         const f = run.failure ?? host.failure ?? jobFailure;

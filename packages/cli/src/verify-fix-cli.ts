@@ -84,6 +84,7 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
       collectParam,
       {} as Record<string, string>,
     )
+    .option("--action-deltas", "opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict)")
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .action(async function (this: Command, positional?: string) {
       const o = this.opts<
@@ -97,6 +98,7 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           invariants: string[];
           allowLogCmd?: boolean;
           hangReplayWrites?: boolean;
+          actionDeltas?: boolean;
           secret: string[];
           param: Record<string, string>;
           json?: boolean;
@@ -160,6 +162,7 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(screenshots === undefined ? {} : { screenshots }),
+          ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(verifyFixEmulation === undefined ? {} : { emulation: verifyFixEmulation }),
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });

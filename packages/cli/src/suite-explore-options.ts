@@ -121,6 +121,8 @@ export const SUITE_EXPLORE_OPTIONS = {
   fixtureIdentity: { shape: "named-paths", appliesTo: ["goal"] },
   // #202: a success check satisfied before the run's first action is a warning, not a failure
   allowVacuousChecks: { shape: "boolean", appliesTo: GOAL_UX },
+  // #303: opt-in action deltas (every explore item kind but feature)
+  actionDeltas: { shape: "boolean", appliesTo: ["goal", "usability", "coverage", "exploratory", "adversarial"] },
   // #245 demo mode: opt-in per item (a check stays headless by default, CI included)
   headed: { shape: "boolean", appliesTo: ALL_KINDS },
   slowMo: { shape: "count", appliesTo: ALL_KINDS },

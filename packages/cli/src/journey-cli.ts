@@ -135,6 +135,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
     .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full", "fail-closed")
     .option("--real", "use live Jev + OpenRouter gateways for self-heal (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways for self-heal (pipeline smoke only)", false)
+    .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
@@ -154,7 +155,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
-      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, selfHeal, real, fakeAi, json, screenshots: _screenshots, actionDeltas, ...emulationFlags } = this.opts<{
+        actionDeltas?: boolean;
         dir?: string;
         param: Record<string, string>;
         storageState?: string;
@@ -242,6 +244,7 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
           ...(journeyRunEmulation === undefined ? {} : { emulation: journeyRunEmulation }),
           ...(screenshots === undefined ? {} : { screenshots }),
           ...(storageState !== undefined ? { storageState } : {}),
+          ...(actionDeltas === true ? { actionDeltas: true } : {}),
           ...(environment === undefined ? {} : { environment }),
           // #140: fixture HTTP steps may only reach the journey's own site (authenticated from --storage-state);
           // #247: under an environment, its allowed origins.
