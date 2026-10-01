@@ -112,6 +112,7 @@ import {
 import { handleDone } from "./goal-loop/handle-done.js";
 import { handleBlocked } from "./goal-loop/handle-blocked.js";
 import { handleWaitOrScroll } from "./goal-loop/handle-idle.js";
+import { handleReload } from "./goal-loop/handle-reload.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -1074,51 +1075,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       ctx.actionAttempts += 1;
 
       if (decision.op === "reload") {
-        // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
-        // and it counts as an action. Returning to the state the page had is its point, never a stall.
-        if (!ctx.tracker.mayAct()) {
-          record(false, "action budget exhausted", { origin: "engine" });
-          ctx.stop = "exhausted";
-          break;
-        }
-        // A write this run fired is still in flight (a job it started): reloading now abandons it and
-        // invites a duplicate. Observe until it resolves instead (#92).
-        if (ctx.sideEffects.inflight().length > 0) {
-          const what = ctx.sideEffects
-            .inflight()
-            .map((w) => `${w.method} ${w.path}`)
-            .join(", ");
-          const w = await awaitWrites(monitorFor(ctx.page), ctx.sideEffects, ctx.replyCeilingMs);
-          const note = `reload deferred: ${what} (sent by an earlier click) is still in flight — waited ${(w.waitedMs / 1000).toFixed(1)}s, ${
-            w.resolved ? "it resolved" : "it is still in flight"
-          }`;
-          ctx.history.push(note);
-          record(false, note, { origin: "engine" });
-          ctx.lastActedOp = decision.op;
-          continue;
-        }
-        const at = ctx.now();
-        ctx.effectLog.mark(ctx.transcript.nextStep, "reload");
-        cfg.onAction?.({ step: ctx.transcript.nextStep, at });
-        ctx.readOnly?.beginAction();
-        const r = await act(cfg.actor, { op: "reload", control: null });
-        if (r.ok) {
-          ctx.recorder.navigate(ctx.page.url(), at);
-          ctx.track.lastMutation = { at, before: snap.signature, seenBefore: new Set(ctx.seen), label: "reload", recordIndex: ctx.recorder.stepCount - 1, sawNewState: false };
-          ctx.refusedSinceMutation = 0;
-          ctx.scrollsSinceMutation = 0;
-          ctx.track.lastRecordedTarget = null;
-          ctx.tracker.countAction();
-          ctx.failedActs.succeeded();
-          // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
-          ctx.valueLog.reloaded();
-          ctx.save.reset();
-          ctx.history.push(r.note === undefined ? "reloaded the page" : `reloaded the page (${r.note})`);
-        } else {
-          ctx.history.push(`reload failed: ${r.reason ?? "?"}`);
-        }
-        record(r.ok, r.reason ?? r.note);
-        ctx.lastActedOp = decision.op;
+        const flow = await handleReload(ctx, step);
+        if (flow === "stop") break;
         continue;
       }
 
