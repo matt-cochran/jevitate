@@ -1,5 +1,6 @@
+import { BranchReplayInputError, JourneyPrefixStaleError, prefixFromBranch, recordedBranchOf, type JourneyPrefix, type RecordedBranch } from "./journey-prefix.js";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
 import { RecordingSchema } from "@jevitate/recording";
@@ -27,6 +28,8 @@ import {
   emulationFromFlags,
   emitJson,
   environmentSeams,
+  collectParam,
+  resolveDbPath,
   refuseUnsafeName,
   writeHumanResult,
 } from "./cli-shared.js";
@@ -40,6 +43,22 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   // reproduce/minimize attempt, closed after each use) into
   // `runRegressionCapture`.
   const regression = program.command("regression").description("capture, run and manage regression tests from discovered failures");
+
+  /** #293: the prefix a branch-point failure replays through; `null` after refusing (exit 64). */
+  const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined): Promise<JourneyPrefix | null> => {
+    try {
+      return await prefixFromBranch(branch, { params, ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
+    } catch (err) {
+      if (!(err instanceof BranchReplayInputError)) throw err;
+      emitJson(program, fail("E_REGRESSION_ARGS", err.message));
+      return null;
+    }
+  };
+  /** #293: a prefix that no longer replays proved nothing — a typed inconclusive (exit 2). */
+  const emitJourneyStale = (err: JourneyPrefixStaleError): void => {
+    emitJson(program, ok(withEngine({ verdict: "inconclusive", reason: `journey-stale: ${err.message}`, failure: { kind: "journey-stale", message: err.message }, branch: err.branch })));
+    process.exitCode = 2;
+  };
 
   withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(regression.command("capture")))))
     .requiredOption("--from <file>", "path to the schema-valid failing Recording JSON to capture")
@@ -60,6 +79,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
       "Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist",
     )
     .option("--force", "overwrite an existing regression id's committed files (default: refused, #213)", false)
+    .option(
+      "--param <kv>",
+      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again",
+      collectParam,
+      {} as Record<string, string>,
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
@@ -80,9 +105,10 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         fingerprint?: string;
         storageState?: string;
         force?: boolean;
+        param: Record<string, string>;
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
-      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json } = flags;
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json, param } = flags;
       if (refuseUnsafeName(program, id, "regression id")) return;
       // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
       for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
@@ -123,8 +149,13 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           storageState,
         );
         const replayFixture = fx;
+        // #293: a failure found from a Journey branch point is reproduced THROUGH that prefix.
+        const branch = resultPath === undefined ? undefined : recordedBranchOf((JSON.parse(await readFile(resultPath, "utf8")) as { result?: unknown }).result);
+        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState);
+        if (prefix === null) return;
 
         const result = await runRegressionCapture({
+          ...(prefix === undefined ? {} : { anchored: true }),
           failingRecordingPath: from,
           id,
           regressionsDir: resolveRegressionsDir(dir),
@@ -137,6 +168,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             await replayFixture?.reset();
             const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browser, deps.explore?.browserPortFactory);
             opened.push(close);
+            if (prefix !== undefined) await prefix.replay(actor.ability(BrowseTheWebToken).session, browser);
             if (replayFixture !== undefined) {
               rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
             }
@@ -144,6 +176,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           },
         }).then((r) => withEngine(r));
         await fx?.restore();
+        // #293: the committed regression remembers its branch point, so `regression run` replays through it.
+        if (branch !== undefined && "metaPath" in result) {
+          const meta = JSON.parse(await readFile(result.metaPath, "utf8")) as Record<string, unknown>;
+          await writeFile(result.metaPath, `${JSON.stringify({ ...meta, branch }, null, 2)}\n`);
+        }
         const envelope = ok(fx === undefined ? result : { ...result, fixtures: fx.record() });
         if (json) {
           emitJson(program, envelope);
@@ -159,6 +196,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         // hard-signal defect that needs `ledger add` instead — never a generic capture failure (2).
         if (err instanceof RegressionExistsError || err instanceof RegressionHardSignalOracleError) {
           emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof JourneyPrefixStaleError) {
+          emitJourneyStale(err);
         } else {
           emitJson(program, fail("E_REGRESSION_CAPTURE", String(err instanceof Error ? err.message : err)));
         }
@@ -177,6 +216,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
     .option("--dir <path>", "regressions directory (default: the repo's .jevitate/regressions; outside a repo ~/.jevitate/regressions)")
     .option("--attempts <n>", "fresh-context replays for a declared-invariant oracle (default 3)", positiveIntArg)
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
+    .option(
+      "--param <kv>",
+      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again",
+      collectParam,
+      {} as Record<string, string>,
+    )
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
@@ -187,8 +232,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
-      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
-        { dir?: string; attempts?: string; storageState?: string; json?: boolean } & EmulationFlags & EnvironmentFlags
+      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, param, ...emulationFlags } = this.opts<
+        { dir?: string; attempts?: string; storageState?: string; json?: boolean; param: Record<string, string> } & EmulationFlags & EnvironmentFlags
       >();
       // #247: --env/--base-url choose where the regression replays (unknown env / bad file → 64).
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -223,6 +268,15 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
       const opened: Array<() => Promise<void>> = [];
       try {
         const recording = RecordingSchema.parse(JSON.parse(await readFile(join(regressionsDir, `${id}.recording.json`), "utf8")));
+        // #293: a regression captured from a Journey branch point replays through that prefix.
+        let branch: RecordedBranch | undefined;
+        try {
+          branch = recordedBranchOf(JSON.parse(await readFile(join(regressionsDir, `${id}.meta.json`), "utf8")));
+        } catch {
+          branch = undefined;
+        }
+        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState);
+        if (prefix === null) return;
         // #149: --viewport/--device, else the committed Recording's OWN emulation.
         const runEmulation: EmulationSpec | undefined =
           runEmulationFlag ??
@@ -246,6 +300,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
               environment?.allowedOrigins,
             );
             opened.push(close);
+            if (prefix !== undefined) await prefix.replay(actor.ability(BrowseTheWebToken).session, browser);
             return actor;
           },
         });
@@ -261,6 +316,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
       } catch (err) {
         if (err instanceof RegressionNotFoundError || isEnvironmentError(err)) {
           emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof JourneyPrefixStaleError) {
+          emitJourneyStale(err);
         } else {
           emitJson(program, fail("E_REGRESSION_RUN", String(err instanceof Error ? err.message : err)));
         }

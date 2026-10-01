@@ -70,9 +70,10 @@ jevitate explore --from-journey <journey-id> --at-step <anchor|n> --param <k=v> 
 - A prefix that no longer replays ends the run `inconclusive` with `failure.kind: "journey-stale"`
   (exit 2): the Journey drifted. Fix or re-author it; never fall back to a bare `--url`.
 - Results and findings carry `branch: {journeyId, step, anchor}`: the exact point they came from.
-- `verify-fix` and regressions replay a finding's own Recording from the anchor's URL; the Journey
-  prefix is not replayed there. A finding that needs the in-page state (a half-filled form) is
-  re-proved by re-running the same anchored mission.
+- `--at-step all` (or `anchors`) sweeps every step: each in a fresh session restored by
+  `--fixtures`, `--max-actions` split evenly per step, one deduped report naming each defect's steps.
+- `verify-fix` and regressions replay such a finding THROUGH the Journey prefix (re-supply secret
+  params with `--param`); a stale prefix is `inconclusive` (`journey-stale`), never `fixed`.
 - `--strategy adversarial` attacks the anchor: replaying a one-time code, swapping a tenant id
   mid-flow, a double submit at checkout, an expired share link, skipping a step-up (the anchor's
   `probes` list what to try). `--strategy exploratory` follows newly revealed controls from there.

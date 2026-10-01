@@ -24,7 +24,11 @@ const CampaignJobSchema = z
     params: z.record(z.string(), z.string()).optional(),
     storageState: z.string().min(1).optional(),
     /** Anchor names or 1-based step numbers; default: every anchor the Journey declares. */
-    anchors: z.array(z.union([z.string().min(1), z.number().int().positive()])).min(1).max(50).optional(),
+    /**
+     * Anchor names / step numbers, or a sweep: `"all"` (every step) or `"anchors"` (every declared
+     * anchor) — a sweep's `maxActions`/`maxDecisions` are its TOTAL, split evenly per stop point.
+     */
+    anchors: z.union([z.enum(["all", "anchors"]), z.array(z.union([z.string().min(1), z.number().int().positive()])).min(1).max(50)]).optional(),
     strategies: z.array(z.enum(ANCHORED_STRATEGIES)).min(1).max(ANCHORED_STRATEGIES.length),
     /** The job in words (required by goal and usability missions). */
     goal: z.string().min(1).max(2000).optional(),

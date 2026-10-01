@@ -492,6 +492,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       allowlist: opts.allowlist,
       startUrl: start.url,
       ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a retried run re-replays the Journey prefix instead of loading the anchor URL.
+      ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
       ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),

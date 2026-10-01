@@ -307,6 +307,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       generation: opts.gen,
       seedUrl: start.url,
       ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a return to a queued state re-replays the Journey prefix (counted against --max-actions).
+      ...(start.restart ?? {}),
       allowlist: opts.allowlist,
       bounds: opts.bounds,
       onTranscriptEntry,

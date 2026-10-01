@@ -364,7 +364,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--allow-writes` | let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow (checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change |  |  |  |  |
 | `--api-prefix <path>` | a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/ | `[]` |  |  |  |
 | `--app-class <class>` | app class for UX calibration (required for --strategy usability), e.g. consumer\|admin\|internal |  |  |  |  |
-| `--at-step <n|name>` | with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`) |  |  |  |  |
+| `--at-step <n|name|all|anchors>` | with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`); `all` sweeps every step and `anchors` every anchor: each a fresh session (restored by --fixtures), --max-actions/--max-decisions split evenly per stop, one deduped report |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -1457,6 +1457,7 @@ jevitate regression capture [options]
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--id <id>` | regression id (used for the committed <id>.recording.json/<id>.meta.json filenames) |  |  | yes |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
 | `--result <file>` | mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist |  |  |  |  |
@@ -1490,6 +1491,7 @@ jevitate regression run [options] <id>
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--headed` | show the browser window (demo mode); also JEVITATE_HEADED=1. Default: headless. Needs a display |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -1824,6 +1826,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
 | `--invariants <file>` | re-check a declared-invariant defect with these invariant files (repeatable) instead of the spec saved with the mission | `[]` |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a finding found from a Journey branch point — its replays go through the same prefix; a secret param (never persisted with the result) must be given again; redacted like --secret | `{}` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--regressions-dir <path>` | regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions) |  |  |  |  |
 | `--replays <n>` | fresh-context replays that confirm a fix (default 3) |  |  |  |  |

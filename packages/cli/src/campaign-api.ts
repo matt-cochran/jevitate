@@ -14,6 +14,8 @@ import {
   validateParams,
   CAMPAIGN_LIMITS,
   CampaignSpecSchema,
+  splitBudget,
+  sweepStops,
   type JourneyBranchPoint,
 } from "@jevitate/journey";
 import { assertSafeName, combineOutcomes, MISSION_OUTCOMES, type MissionOutcome } from "@jevitate/domain";
@@ -81,8 +83,11 @@ export interface CampaignJobPlan {
   readonly goal?: string;
   readonly appClass?: string;
   readonly success: readonly string[];
+  /** Per mission (a sweep's total already split). */
   readonly maxActions: number;
   readonly maxDecisions?: number;
+  /** #293: set when the job sweeps every step (`all`) or every anchor (`anchors`). */
+  readonly sweep?: "all" | "anchors";
   /** The campaign's state restore for this job's runs (built for its Journey's origins). */
   readonly fixtures?: MissionFixtures;
 }
@@ -119,6 +124,14 @@ export async function validateCampaign(specPath: string, opts: ValidateCampaignO
   } catch (e) {
     throw new CampaignSpecError([`cannot read ${specPath}: ${e instanceof SyntaxError ? "not valid JSON" : e instanceof Error ? e.message : String(e)}`]);
   }
+  return validateCampaignSpec(raw, resolve(specPath), opts);
+}
+
+/**
+ * Validates a campaign spec OBJECT (`specPath` names where it came from; its relative paths resolve
+ * against that file's directory) — what `explore --at-step all|anchors` builds for its sweep.
+ */
+export async function validateCampaignSpec(raw: unknown, specPath: string, opts: ValidateCampaignOptions): Promise<CampaignPlan> {
   const parsed = CampaignSpecSchema.safeParse(raw);
   if (!parsed.success) throw new CampaignSpecError(parsed.error.issues.map((i) => `${at(i.path)}: ${i.message}`));
   const spec = parsed.data;
@@ -187,8 +200,16 @@ export async function validateCampaign(specPath: string, opts: ValidateCampaignO
       continue;
     }
     if (full.metadata.requiresAuth === true && session === undefined) problems.push(`${where}: journey '${job.journey}' requires auth — give storageState`);
-    const refs = job.anchors ?? (full.metadata.anchors ?? []).map((a) => a.name);
-    if (refs.length === 0) problems.push(`${where}.anchors: journey '${job.journey}' declares no anchors — list anchor names or step numbers`);
+    // #293: a sweep — every step ("all") or every declared anchor ("anchors") — or the listed stops.
+    let refs: Array<string | number> = [];
+    const sweep = typeof job.anchors === "string" ? job.anchors : undefined;
+    try {
+      refs = sweep !== undefined ? sweepStops(full, sweep) : (job.anchors as Array<string | number> | undefined) ?? (full.metadata.anchors ?? []).map((a) => a.name);
+    } catch (err) {
+      if (!(err instanceof JourneyStepError)) throw err;
+      problems.push(`${where}.anchors: ${err.message}`);
+    }
+    if (refs.length === 0 && sweep === undefined) problems.push(`${where}.anchors: journey '${job.journey}' declares no anchors — list anchor names or step numbers`);
     const anchors: CampaignAnchor[] = [];
     for (const [k, ref] of refs.entries()) {
       try {
@@ -243,8 +264,9 @@ export async function validateCampaign(specPath: string, opts: ValidateCampaignO
       ...(job.goal === undefined ? {} : { goal: job.goal }),
       ...(job.appClass === undefined ? {} : { appClass: job.appClass }),
       success: job.success ?? [],
-      maxActions: job.maxActions ?? spec.maxActions ?? CAMPAIGN_LIMITS.defaultMaxActions,
-      ...((job.maxDecisions ?? spec.maxDecisions) === undefined ? {} : { maxDecisions: (job.maxDecisions ?? spec.maxDecisions)! }),
+      // #293: a sweep's budgets are its TOTAL, split evenly over its missions (stop points × strategies).
+      ...budgetsOf(job.maxActions ?? spec.maxActions, job.maxDecisions ?? spec.maxDecisions, sweep === undefined ? 1 : anchors.length * job.strategies.length),
+      ...(sweep === undefined ? {} : { sweep }),
       ...(fixtures === undefined ? {} : { fixtures }),
     });
   }
@@ -318,6 +340,8 @@ export interface RunCampaignOptions {
   /** Where `jevitate report`'s target filter would read mission targets (unused without one). */
   readonly missionTargetsDir: string;
   readonly nowIso?: () => string;
+  /** More `explore` flags every mission is run with (an `explore --at-step all` sweep forwards its own). */
+  readonly missionArgs?: readonly string[];
 }
 
 interface ChildRun {
@@ -345,6 +369,18 @@ async function runChild(newProgram: () => Command, argv: readonly string[]): Pro
 }
 
 const isOutcome = (v: unknown): v is MissionOutcome => typeof v === "string" && (MISSION_OUTCOMES as readonly string[]).includes(v);
+
+/**
+ * Per-mission budgets: as given for listed stops; for a sweep (`missions` > 1 stop × strategy) the
+ * given value is the sweep's TOTAL, split evenly (each mission at least 1 action). Without a value,
+ * every mission gets the default 40 actions.
+ */
+function budgetsOf(maxActions: number | undefined, maxDecisions: number | undefined, missions: number): { maxActions: number; maxDecisions?: number } {
+  return {
+    maxActions: maxActions === undefined ? CAMPAIGN_LIMITS.defaultMaxActions : splitBudget(maxActions, missions),
+    ...(maxDecisions === undefined ? {} : { maxDecisions: splitBudget(maxDecisions, missions) }),
+  };
+}
 
 /** The flags a job's discovery replay and its missions share: params, environment, session. */
 function commonArgs(plan: CampaignPlan, job: CampaignJobPlan): string[] {
@@ -428,6 +464,7 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
           ...(strategy === "goal" || strategy === "usability" ? [...(job.goal === undefined ? [] : ["--goal", job.goal]), ...job.success.flatMap((c) => ["--success", c])] : []),
           ...(strategy === "usability" && job.appClass !== undefined ? ["--app-class", job.appClass] : []),
           ...ai,
+          ...(opts.missionArgs ?? []),
           "--out", runDir,
           "--json",
         ];

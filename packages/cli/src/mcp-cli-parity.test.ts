@@ -233,6 +233,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
     omitted: {
       "--fingerprint": "the positional's alias: MCP takes one 'fingerprint'",
       "--regressions-dir": "MCP names the finding by its result id (never a path); the ledger fallback is the ledger tool's `verify` action",
+      "--param": OMIT.branchParams,
       "--allow-log-cmd": OMIT.logCmd,
       "--hang-replay-writes": OMIT.hangWrites,
       "--secret": OMIT.envSecret,

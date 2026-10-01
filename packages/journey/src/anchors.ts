@@ -137,3 +137,33 @@ export function prefixLandingPath(journey: Journey, steps: number): string {
   }
   return pages.at(-1)?.url ?? "/";
 }
+
+/** #293: `--at-step all` (every step) or `--at-step anchors` (every declared anchor) — a sweep. */
+export const SWEEP_MODES = ["all", "anchors"] as const;
+export type SweepMode = (typeof SWEEP_MODES)[number];
+
+export function isSweepMode(atStep: string): atStep is SweepMode {
+  return (SWEEP_MODES as readonly string[]).includes(atStep.trim());
+}
+
+/**
+ * A sweep's stop points, as `--at-step` values: every top-level step 1..N (an anchor's name where
+ * one names that step), or every declared anchor. Throws `JourneyStepError` for `anchors` on a
+ * Journey that declares none.
+ */
+export function sweepStops(journey: Journey, mode: SweepMode): string[] {
+  const anchors = journey.metadata.anchors ?? [];
+  if (mode === "anchors") {
+    if (anchors.length === 0) throw new JourneyStepError(`--at-step anchors: journey '${journey.metadata.id}' declares no anchors (use --at-step all)`);
+    return anchors.map((a) => a.name);
+  }
+  return Array.from({ length: journeyStepCount(journey) }, (_, i) => {
+    const named = anchors.filter((a) => a.step === i + 1);
+    return named.length === 1 ? named[0]!.name : String(i + 1);
+  });
+}
+
+/** #293: a sweep's total action budget split evenly over its stop points (each gets at least 1). */
+export function splitBudget(total: number, stops: number): number {
+  return Math.max(1, Math.floor(total / Math.max(1, stops)));
+}

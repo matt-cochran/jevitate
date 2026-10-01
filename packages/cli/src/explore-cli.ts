@@ -86,6 +86,7 @@ import {
   environmentSeams,
   resolveDbPath,
   resolveJourneysDir,
+  resolveMissionTargetsDir,
   stallTimeoutMs,
   EXPLORE_STRATEGIES,
   EXPLORE_OUTCOME_HELP,
@@ -97,6 +98,11 @@ import { ParamValidationError } from "@jevitate/journey";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { JourneyRequiresAuthError, UnknownJourneyError } from "./journey-api.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags } from "./environments.js";
+import { resolve as resolvePath } from "node:path";
+import { CAMPAIGN_LIMITS, isSweepMode } from "@jevitate/journey";
+import { CampaignSpecError, runCampaign, validateCampaignSpec } from "./campaign-api.js";
+import { formatCampaignHuman } from "./campaign-cli.js";
+import { forwardedArgv } from "./multi-run-cli.js";
 import {
   ANCHORED_STRATEGIES,
   JourneyPrefixArgsError,
@@ -105,6 +111,15 @@ import {
   resolveJourneyPrefix,
   type JourneyPrefix,
 } from "./journey-prefix.js";
+
+/**
+ * #293: the flags a sweep sets on each of its missions itself (the rest of the command line is
+ * forwarded to every mission as given).
+ */
+const SWEEP_OWNED: ReadonlySet<string> = new Set([
+  "fromJourney", "atStep", "strategy", "journeysDir", "param", "env", "baseUrl", "storageState", "maxActions", "maxDecisions",
+  "goal", "success", "appClass", "real", "fakeAi", "fixtures", "before", "after", "allowShellHooks", "hookTimeoutMs",
+]);
 
 /**
  * Registers `jevitate explore` (every strategy: goal, coverage, exploratory, adversarial, usability, feature, multi-run).
@@ -131,7 +146,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         "then the mission starts on the live page. A replay that stops before the anchor ends the run inconclusive (failure.kind journey-stale, exit 2). " +
         "Strategies: goal, coverage, exploratory, adversarial, usability",
     )
-    .option("--at-step <n|name>", "with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`)")
+    .option(
+      "--at-step <n|name|all|anchors>",
+      "with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`); " +
+        "`all` sweeps every step and `anchors` every anchor: each a fresh session (restored by --fixtures), --max-actions/--max-decisions split evenly per stop, one deduped report",
+    )
     .option("--param <kv>", "with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required", collectParam, {} as Record<string, string>)
     .option("--journeys-dir <path>", "with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
@@ -587,6 +606,64 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           refuse("--from-journey runs one anchored mission: --repeat, --persona, --personas and --actor are not supported with it (a campaign runs several)");
           return;
         }
+        // #293 sweep: `--at-step all|anchors` runs the strategy from EVERY step (or anchor), each in a
+        // fresh session with --fixtures restored around it, --max-actions/--max-decisions split evenly
+        // over the stop points, and reads them as one deduped report (a one-job campaign).
+        if (isSweepMode(o.atStep)) {
+          if (o.real !== true && o.fakeAi !== true) {
+            emitExplore(fail("E_AI_SETUP_REQUIRED", "a sweep's missions are model-driven: pass --real or --fake-ai"));
+            return;
+          }
+          const journeysDir = resolveJourneysDir(deps, o.journeysDir);
+          const abs = (p: string): string => resolvePath(p);
+          const spec = {
+            version: 1,
+            name: `sweep of ${o.fromJourney} (${o.atStep}, ${strategy})`,
+            ...(o.env === undefined ? {} : { env: o.env }),
+            ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
+            ...(o.storageState === undefined ? {} : { storageState: abs(o.storageState) }),
+            ...(o.fixtures === undefined ? {} : { fixtures: abs(o.fixtures) }),
+            ...(o.before === undefined ? {} : { before: o.before }),
+            ...(o.after === undefined ? {} : { after: o.after }),
+            discovery: false,
+            maxRuns: CAMPAIGN_LIMITS.maxRuns,
+            jobs: [
+              {
+                id: "sweep",
+                journey: o.fromJourney,
+                params: o.param,
+                anchors: o.atStep.trim(),
+                strategies: [strategy],
+                ...(o.goal === undefined ? {} : { goal: o.goal }),
+                ...(o.appClass === undefined ? {} : { appClass: o.appClass }),
+                ...(o.success.length === 0 ? {} : { success: o.success }),
+                ...(o.maxActions === undefined ? {} : { maxActions: Number(o.maxActions) }),
+                ...(o.maxDecisions === undefined ? {} : { maxDecisions: Number(o.maxDecisions) }),
+              },
+            ],
+          };
+          try {
+            const plan = await validateCampaignSpec(spec, resolvePath("explore-sweep.json"), {
+              journeysDir,
+              allowShellHooks: o.allowShellHooks === true,
+              environmentSeams: environmentSeams(deps),
+            });
+            const result = await runCampaign(plan, {
+              newProgram: () => buildProgram(deps),
+              journeysDir,
+              missionTargetsDir: resolveMissionTargetsDir(deps),
+              ...(o.out === undefined ? {} : { outDir: o.out }),
+              ...(o.real === true ? { real: true } : {}),
+              ...(o.fakeAi === true ? { fakeAi: true } : {}),
+              missionArgs: forwardedArgv(this, SWEEP_OWNED),
+            });
+            emitExplore(ok(withEngine({ sweep: { journeyId: o.fromJourney, mode: o.atStep.trim(), strategy, stops: plan.totalRuns, budgetPerStop: { maxActions: plan.jobs[0]?.maxActions, ...(plan.jobs[0]?.maxDecisions === undefined ? {} : { maxDecisions: plan.jobs[0].maxDecisions }) } }, ...result })), result.exitCode, formatCampaignHuman);
+          } catch (err) {
+            if (err instanceof CampaignSpecError) emitExplore(fail("E_EXPLORE_ARGS", err.message));
+            else emitExplore(fail("E_EXPLORE_RUN", String(err instanceof Error ? err.message : err)));
+          }
+          return;
+        }
         try {
           const environment = environmentFromFlags(
             { ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) },
@@ -602,6 +679,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(environment === undefined ? {} : { environment }),
             ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
             dbPath: resolveDbPath(deps),
+            environmentFlags: { ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) },
           });
         } catch (err) {
           if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));

@@ -101,6 +101,8 @@ export const OMIT = {
   hangWrites: "re-sending a paid/destructive write is the operator's call (targets.json safety.hangReplayWrites)",
   filingRepo: "where findings are filed (a GitHub repo, under the operator's identity) is the operator's filing config (~/.jevitate/filing.json)",
   watch: "a watch loop never returns: MCP drains once (call again to drain more)",
+  branchParams:
+    "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
 } as const;
 
@@ -517,12 +519,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
           ...EMULATION,
           ...DEMO_SHOW,
         },
-        omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
       run: {
         path: "regression run",
         params: { ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
-        omitted: { "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },

@@ -210,6 +210,15 @@ export interface InductionMissionParams {
    * half-filled form is not restored by a reset).
    */
   readonly startInPlace?: boolean;
+  /**
+   * #293: how a reset gets back to the start state before replaying a queued state's path, instead
+   * of re-navigating to `seedUrl` — a journey-anchored run re-replays its Journey prefix, so in-page
+   * state is restored too. Resolves `false` when it could not (the reset is then `seed-unreachable`).
+   * Each call costs `restartCost` actions from `maxActions`.
+   */
+  readonly restartAtStart?: (actor: Actor) => Promise<boolean>;
+  /** #293: the actions one `restartAtStart` costs against `maxActions` (the prefix's step count). Default 0. */
+  readonly restartCost?: number;
   readonly allowlist: readonly string[];
   readonly bounds?: Partial<Bounds>;
   readonly maxDepth?: number;
@@ -488,6 +497,8 @@ async function runInductionFrontier(
   };
   let transitionsExercised = 0;
   let actions = 0;
+  /** #293: actions spent re-replaying the Journey prefix on resets (counted against `maxActions`). */
+  let restartSpend = 0;
   let failedActions = 0;
   let timedOutActions = 0;
   /** #213: what explains a run that took no action — the seed's candidates, safety refusals, dropped chrome. */
@@ -673,7 +684,7 @@ async function runInductionFrontier(
 
     while (!frontier.isExhausted()) {
       // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
-      if (actions >= bounds.maxActions) {
+      if (actions + restartSpend >= bounds.maxActions) {
         return {
           outcome: "cap",
           coverage: report(false),
@@ -696,6 +707,14 @@ async function runInductionFrontier(
           reachFrontierState({
             actor: sessions.actor,
             seedUrl: params.seedUrl,
+            ...(params.restartAtStart === undefined
+              ? {}
+              : {
+                  reachSeed: async (): Promise<boolean> => {
+                    restartSpend += params.restartCost ?? 0;
+                    return params.restartAtStart!(sessions.actor);
+                  },
+                }),
             item,
             snapshotNow: takeSnapshot,
             homeUrl: params.seedUrl,

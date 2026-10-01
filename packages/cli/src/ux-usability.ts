@@ -440,6 +440,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       allowlist: opts.allowlist,
       startUrl: start.url,
       ...(start.branch === undefined ? {} : { startInPlace: true }),
+      ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,

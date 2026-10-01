@@ -15,7 +15,12 @@ behaviour changes).
   the goal, coverage, exploratory, adversarial or usability mission on the live page. A prefix that
   no longer replays ends the run `inconclusive` with `failure.kind: "journey-stale"` (exit 2).
   Results and findings record `branch: {journeyId, step, anchor}` (additive, schemaVersion 1), and
-  `report` lists each defect's branch points (#293).
+  `report` lists each defect's branch points. `--at-step all|anchors` sweeps every step (or
+  anchor), each in a fresh session restored by `--fixtures`, `--max-actions` split per step, one
+  deduped report. Resets inside an anchored mission re-replay the prefix (counted against
+  `--max-actions`). `verify-fix` and `regression capture|run` replay a branch-point finding
+  through its prefix (`--param` re-supplies secret params); a stale prefix is a typed
+  `inconclusive` (#293).
 - Journey anchors: an optional, validated `metadata.anchors` (`{name, step, description?,
   probes?}`) names states worth exploring from; `journey anchors <id>` lists them, and `--at-step`
   takes an anchor name (#293).

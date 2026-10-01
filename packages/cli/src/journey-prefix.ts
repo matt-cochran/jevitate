@@ -7,14 +7,18 @@ import {
   journeyPrefix,
   prefixLandingPath,
   resolveJourneyStep,
+  secretParamNames,
   secretParamValues,
   validateParams,
   type JourneyBranchPoint,
 } from "@jevitate/journey";
-import { assertAuthorizedExploreTarget } from "@jevitate/explore";
+import { resolve as resolvePath } from "node:path";
+import { UnauthorizedExploreTargetError, assertAuthorizedExploreTarget } from "@jevitate/explore";
+import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
+import type { Recording, RecordedStep } from "@jevitate/recording";
 import type { BrowserSession } from "@jevitate/playwright";
 import { SiteGateRefusedError } from "@jevitate/runtime";
-import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
+import { applyJourneyEnvironment, environmentFromFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import { JourneyRequiresAuthError, UnknownJourneyError, prefixParams, runJourneyProgrammatically } from "./journey-api.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import { withSiteGate } from "./site-gate-cli.js";
@@ -78,6 +82,13 @@ export interface JourneyPrefix {
    * replay types them into the page the mission then perceives, so the mission must redact them.
    */
   readonly secrets: readonly string[];
+  /** Top-level steps the prefix replays: what one re-replay on a reset costs against `maxActions`. */
+  readonly steps: number;
+  /**
+   * What a later replay of a finding needs to go through the same prefix (persisted on the result
+   * as `branch.replay`): never a secret param's value — only its name, re-supplied as `--param`.
+   */
+  readonly replayInfo: BranchReplayInfo;
   /**
    * Replays the prefix into `session` (left open) and returns the live URL the mission starts on.
    * `browser` is how the run launched (a Journey recorded with extensions needs the same build).
@@ -99,7 +110,24 @@ export interface ResolveJourneyPrefixOptions {
   readonly storageState?: string;
   /** The site-policy database (`jevitate site policy`): pacing and budgets apply to the replay. */
   readonly dbPath?: string;
+  /** The `--env`/`--base-url` names `environment` came from (persisted for later replays). */
+  readonly environmentFlags?: { readonly env?: string; readonly baseUrl?: string };
 }
+
+/** #293: how a finding's replay goes back through its run's Journey prefix (`result.branch.replay`). */
+export interface BranchReplayInfo {
+  /** The Journey store the prefix was read from (absolute). */
+  readonly journeysDir: string;
+  /** The prefix's NON-secret params, by value. */
+  readonly params: Readonly<Record<string, string>>;
+  /** The prefix's secret params, by NAME only: a replay is given them again (`--param`). */
+  readonly secretParams: readonly string[];
+  readonly env?: string;
+  readonly baseUrl?: string;
+}
+
+/** A result's `branch`, as an anchored run persists it (#293): the branch point plus how to replay it. */
+export type RecordedBranch = JourneyBranchPoint & { readonly replay?: BranchReplayInfo };
 
 /**
  * Resolves `--from-journey <id> --at-step <n|name>` into a replayable prefix — refusing, before any
@@ -139,11 +167,20 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
   }
   const allowedOrigins = opts.environment === undefined ? [new URL(site).origin] : [...opts.environment.allowedOrigins];
   const where = `step ${branch.step}${branch.anchor === undefined ? "" : ` (anchor ${branch.anchor})`}`;
+  const secretNames = secretParamNames(full, used).filter((n) => n in used);
   return {
     branch,
     startUrl,
     allowedOrigins,
     secrets: secretParamValues(full, used),
+    steps: resolved.step,
+    replayInfo: {
+      journeysDir: resolvePath(opts.dir),
+      params: Object.fromEntries(Object.entries(used).filter(([k]) => !secretNames.includes(k))),
+      secretParams: secretNames,
+      ...(opts.environmentFlags?.env === undefined ? {} : { env: opts.environmentFlags.env }),
+      ...(opts.environmentFlags?.baseUrl === undefined ? {} : { baseUrl: opts.environmentFlags.baseUrl }),
+    },
     replay: async (session, browser) => {
       let run: Awaited<ReturnType<typeof runJourneyProgrammatically>>;
       try {
@@ -177,10 +214,32 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
   };
 }
 
-/** What an anchored run starts from: the live URL after the prefix, and its branch point. */
+/** What an anchored run starts from: the live URL after the prefix, its branch point, and how it resets. */
 export interface AnchoredStart {
   readonly url: string;
-  readonly branch?: JourneyBranchPoint;
+  readonly branch?: RecordedBranch;
+  /**
+   * #293: what a reset inside the mission uses instead of re-navigating to the anchor URL — the
+   * prefix replayed again into the mission's (current) session, costing `restartCost` actions.
+   */
+  readonly restart?: { readonly restartAtStart: (actor: Actor) => Promise<boolean>; readonly restartCost: number };
+}
+
+/**
+ * #293: a reset's prefix re-replay — into the actor's current session; `false` (never a throw) when
+ * the prefix no longer replays or lands off the allowlist, so the mission stops there honestly.
+ */
+export function prefixRestart(prefix: JourneyPrefix, allowlist: readonly string[], browser?: BrowserRunOptions): (actor: Actor) => Promise<boolean> {
+  return async (actor) => {
+    try {
+      const live = await prefix.replay(actor.ability(BrowseTheWebToken).session, browser);
+      assertAuthorizedExploreTarget(live, allowlist);
+      return true;
+    } catch (err) {
+      if (err instanceof JourneyPrefixStaleError || err instanceof UnauthorizedExploreTargetError) return false;
+      throw err;
+    }
+  };
 }
 
 /**
@@ -198,11 +257,12 @@ export async function startFromJourney(
   if (prefix === undefined) return { url };
   const live = await prefix.replay(session, browser);
   assertAuthorizedExploreTarget(live, allowlist);
-  return { url: live, branch: prefix.branch };
+  const restart = { restartAtStart: prefixRestart(prefix, allowlist, browser), restartCost: prefix.steps };
+  return { url: live, branch: { ...prefix.branch, replay: prefix.replayInfo }, restart };
 }
 
-/** The result fields an anchored run adds (#293, additive): its branch point. */
-export function branchFields(start: AnchoredStart): { branch?: JourneyBranchPoint } {
+/** The result fields an anchored run adds (#293, additive): its branch point (and how to replay it). */
+export function branchFields(start: AnchoredStart): { branch?: RecordedBranch } {
   return start.branch === undefined ? {} : { branch: start.branch };
 }
 
@@ -229,5 +289,111 @@ export function journeyStaleResult(err: JourneyPrefixStaleError, strategy: strin
     branch: err.branch,
     ...(err.failedStep === undefined ? {} : { failedStep: err.failedStep }),
     exitCode: 2,
+  };
+}
+
+// ── Replaying a finding through its branch point (#293) ─────────────────────────────────────────
+
+/** A finding's result names a branch point it was found from (with how to replay through it). */
+export function recordedBranchOf(result: unknown): RecordedBranch | undefined {
+  const b = (result as { branch?: unknown } | null)?.branch;
+  if (b === null || typeof b !== "object") return undefined;
+  const r = b as Record<string, unknown>;
+  if (typeof r.journeyId !== "string" || typeof r.step !== "number") return undefined;
+  return r as unknown as RecordedBranch;
+}
+
+/** `verify-fix`/`regression` of a branch-point finding cannot replay through its prefix (exit 64). */
+export class BranchReplayInputError extends Error {
+  readonly code = "E_VERIFY_FIX_INPUT" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "BranchReplayInputError";
+  }
+}
+
+export interface PrefixFromBranchOptions {
+  /** `--param` values: the branch's secret params (by name), or overrides of its recorded ones. */
+  readonly params?: Readonly<Record<string, string>>;
+  readonly storageState?: string;
+  readonly dbPath?: string;
+  readonly environmentSeams?: { readonly environmentsFile?: string; readonly targetsFile?: string };
+}
+
+/**
+ * The Journey prefix a finding's run branched from, resolved again from `branch.replay` (the
+ * Journey store, its non-secret params, the environment) — a secret param must be given again.
+ * Refused (`BranchReplayInputError`) when the result predates replay info or a secret is missing.
+ */
+export async function prefixFromBranch(branch: RecordedBranch, opts: PrefixFromBranchOptions = {}): Promise<JourneyPrefix> {
+  const info = branch.replay;
+  if (info === undefined) throw new BranchReplayInputError(`the finding branched from journey '${branch.journeyId}' step ${branch.step}, but its result records no replay info — re-run the anchored mission`);
+  const params = { ...info.params, ...(opts.params ?? {}) };
+  const missing = info.secretParams.filter((n) => !(n in params));
+  if (missing.length > 0) {
+    throw new BranchReplayInputError(`the finding's Journey prefix types secret param(s) ${missing.join(", ")}: give them again with --param <name>=<value>`);
+  }
+  try {
+    const environment = environmentFromFlags({ ...(info.env === undefined ? {} : { env: info.env }), ...(info.baseUrl === undefined ? {} : { baseUrl: info.baseUrl }) }, opts.environmentSeams ?? {});
+    return await resolveJourneyPrefix({
+      dir: info.journeysDir,
+      id: branch.journeyId,
+      atStep: String(branch.step),
+      params,
+      ...(environment === undefined ? {} : { environment }),
+      ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+      ...(opts.dbPath === undefined ? {} : { dbPath: opts.dbPath }),
+    });
+  } catch (err) {
+    if (err instanceof Error && !(err instanceof JourneyPrefixStaleError)) throw new BranchReplayInputError(`cannot replay through journey '${branch.journeyId}' step ${branch.step}: ${err.message}`);
+    throw err;
+  }
+}
+
+/**
+ * A branch-point finding's Recording, for a replay that starts on the prefix's live page: its
+ * leading navigate to the anchor URL (which would reload the page and lose in-page state) becomes
+ * an `assert urlIncludes <path>` — the same flat step indices, so `recordingStepIndex` still holds.
+ */
+export function anchoredRecording(rec: Recording): Recording {
+  const first = rec.pages[0]?.steps[0];
+  if (first === undefined || first.step.kind !== "navigate") return rec;
+  let path: string;
+  try {
+    path = new URL(first.step.url, rec.site).pathname;
+  } catch {
+    path = first.step.url;
+  }
+  const replaced: RecordedStep = { step: { kind: "assert", label: "the Journey prefix reached the anchor", check: { kind: "urlIncludes", text: path } } };
+  const [page0, ...rest] = rec.pages;
+  return { ...rec, pages: [{ ...page0!, steps: [replaced, ...page0!.steps.slice(1)] }, ...rest] };
+}
+
+/**
+ * Wraps a fresh-session opener so every replay session first goes through the Journey prefix.
+ * A stale prefix is remembered (`stale()`), and the opener throws — the replay then has no evidence,
+ * and the caller reports a typed `journey-stale` inconclusive.
+ */
+export function prefixedOpener<S extends { readonly actor: Actor }>(
+  open: () => Promise<S>,
+  prefix: JourneyPrefix,
+  allowlist: readonly string[],
+  browser?: BrowserRunOptions,
+): { open: () => Promise<S>; stale: () => JourneyPrefixStaleError | undefined } {
+  let stale: JourneyPrefixStaleError | undefined;
+  return {
+    stale: () => stale,
+    open: async () => {
+      const s = await open();
+      try {
+        const live = await prefix.replay(s.actor.ability(BrowseTheWebToken).session, browser);
+        assertAuthorizedExploreTarget(live, allowlist);
+      } catch (err) {
+        if (err instanceof JourneyPrefixStaleError) stale ??= err;
+        await (s as unknown as { close?: () => Promise<void> }).close?.();
+        throw err;
+      }
+      return s;
+    },
   };
 }

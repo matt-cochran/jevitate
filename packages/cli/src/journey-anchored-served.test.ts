@@ -48,10 +48,47 @@ const WIZARD = `<!doctype html><html><head><title>Order</title></head><body><mai
     };
   </script></main></body></html>`;
 
+/** A defect reachable ONLY from step 2: the editor opens on the exact passphrase, and crashes while open. */
+const SWEEP_APP = `<!doctype html><html><head><title>Editor</title></head><body><main>
+  <h1>Editor</h1>
+  <section id="gate"><label>Passphrase <input id="phrase" aria-label="Passphrase"></label></section>
+  <section id="editor" hidden><h2>Editing</h2><button type="button" id="close">Close editor</button></section>
+  <p id="done" hidden>Done</p>
+  <script>
+    let timer = null;
+    document.getElementById("phrase").addEventListener("input", (e) => {
+      if (e.target.value !== "open sesame" || timer !== null) return;
+      document.getElementById("editor").hidden = false;
+      timer = setInterval(() => { throw new Error("editor crashed"); }, 150);
+    });
+    document.getElementById("close").onclick = () => {
+      clearInterval(timer);
+      document.getElementById("gate").hidden = true;
+      document.getElementById("editor").hidden = true;
+      document.getElementById("done").hidden = false;
+    };
+  </script></main></body></html>`;
+
+/** In-page tabs revealed by a prefix step; each tab is a leaf (a reset is needed to try the other). */
+const PANEL_APP = `<!doctype html><html><head><title>Panel</title></head><body><main>
+  <h1>Panel</h1>
+  <label>Name <input id="name" aria-label="Name"></label>
+  <button type="button" id="show">Show panel</button>
+  <section id="tabs" hidden><button type="button" id="a">Tab A</button><button type="button" id="b">Tab B</button></section>
+  <p id="content"></p>
+  <script>
+    const leaf = (text) => { document.getElementById("tabs").remove(); document.getElementById("show").remove(); document.getElementById("name").remove(); document.getElementById("content").textContent = text; };
+    document.getElementById("show").onclick = () => { document.getElementById("tabs").hidden = false; };
+    document.getElementById("a").onclick = () => leaf("Showing A");
+    document.getElementById("b").onclick = () => leaf("Showing B");
+  </script></main></body></html>`;
+
 let server: Server;
 let origin: string;
 let dir: string;
 let journeysDir: string;
+/** The sweep's step-2 finding (its result and fingerprint), verified through its prefix below. */
+let sweepFinding: { resultPath: string; fingerprint: string } | undefined;
 /** Every request the app served, in order (`GET /wizard`, `POST /api/seed`, …). */
 const served: string[] = [];
 
@@ -60,6 +97,8 @@ beforeAll(async () => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     served.push(`${req.method} ${path}`);
     if (path === "/wizard") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(WIZARD);
+    if (path === "/editor") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(SWEEP_APP);
+    if (path === "/panel") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(PANEL_APP);
     if (path === "/api/seed" || path === "/api/reset") return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
     res.writeHead(404).end();
   });
@@ -72,6 +111,8 @@ beforeAll(async () => {
   await store.put(order("order-stale", "Continue")); // the app has no "Continue" button any more
   await store.put({ ...order("order-draft", "Next"), metadata: { ...order("order-draft", "Next").metadata, promoted: false } });
   await store.put(orderWithNote("order-noted"));
+  await store.put(editorJourney("Passphrase"));
+  await store.put(panelJourney());
   // A Journey whose prefix types a secret (a credential-like param name): never into an unredacted strategy.
   await store.put({
     ...order("signin", "Next"),
@@ -113,6 +154,46 @@ function orderWithNote(id: string): Journey {
   return {
     metadata: { id, name: "Order with a note", promoted: true, params: ["name"], createdAtIso: "2026-10-01T00:00:00.000Z", anchors: [{ name: "noted-review", step: 4 }] },
     recording: { version: "1", site: origin, pages: [{ url: "/wizard", steps: [nav, fillName, fillNote, next("Next")] }] },
+  };
+}
+
+function editorJourney(gateLabel: string): Journey {
+  return {
+    metadata: { id: "editor", name: "Edit a document", promoted: true, params: ["phrase"], createdAtIso: "2026-10-01T00:00:00.000Z", anchors: [{ name: "editing", step: 2 }] },
+    recording: {
+      version: "1",
+      site: origin,
+      pages: [
+        {
+          url: "/editor",
+          steps: [
+            { step: { kind: "navigate", url: "/editor", expect: { kind: "visible", target: { role: "heading", name: "Editor" } } } },
+            { step: { kind: "fill", target: { label: gateLabel }, value: { var: "phrase" }, expect: { kind: "visible", target: { role: "heading", name: "Editing" } } }, variableName: "phrase" },
+            { step: { kind: "click", target: { role: "button", name: "Close editor" }, expect: { kind: "visible", target: { text: "Done" } } } },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function panelJourney(): Journey {
+  return {
+    metadata: { id: "panel", name: "Open the panel", promoted: true, params: [], createdAtIso: "2026-10-01T00:00:00.000Z" },
+    recording: {
+      version: "1",
+      site: origin,
+      pages: [
+        {
+          url: "/panel",
+          steps: [
+            { step: { kind: "navigate", url: "/panel", expect: { kind: "visible", target: { role: "heading", name: "Panel" } } } },
+            { step: { kind: "fill", target: { label: "Name" }, value: { redacted: false, value: "Ada" }, expect: { kind: "visible", target: { label: "Name" } } } },
+            { step: { kind: "click", target: { role: "button", name: "Show panel" }, expect: { kind: "visible", target: { role: "button", name: "Tab A" } } } },
+          ],
+        },
+      ],
+    },
   };
 }
 
@@ -163,7 +244,7 @@ describe("journey-anchored exploration (#293, served)", () => {
     expect(r.envelope?.ok, r.out + r.err).toBe(true);
     const data = r.envelope!.data!;
     // The branch point: step 3 is the "review" anchor; every finding of the run came from there.
-    expect(data.branch).toEqual({ journeyId: "order", step: 3, anchor: "review", stepLabel: "Go to review" });
+    expect(data.branch).toMatchObject({ journeyId: "order", step: 3, anchor: "review", stepLabel: "Go to review", replay: { params: { name: "Alice" }, secretParams: [] } });
     expect((data.target as { seedUrl: string }).seedUrl).toBe(`${origin}/wizard`);
     // ONE page load: the Journey's own navigate. The mission never reloaded the start URL.
     expect(served.filter((s) => s === "GET /wizard")).toHaveLength(1);
@@ -319,4 +400,68 @@ describe("journey-anchored exploration (#293, served)", () => {
     const shape = await cli(["campaign", "run", spec, "--journeys-dir", journeysDir, "--json"]);
     expect(shape.envelope?.error?.code).toBe("E_CAMPAIGN_ARGS");
   });
+
+  it("--at-step all sweeps every step in a fresh, restored session (budget split), and the report names the ONE step the defect is reachable from", async () => {
+    const fixtures = join(dir, "sweep-restore.json");
+    await writeFile(fixtures, JSON.stringify({ setup: [{ name: "seed", method: "POST", url: "/api/seed" }], restore: [{ name: "reset", method: "POST", url: "/api/reset" }] }));
+    const out = join(dir, "sweep");
+    served.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "editor", "--at-step", "all", "--param", "phrase=open sesame", "--journeys-dir", journeysDir,
+      "--strategy", "adversarial", "--fixtures", fixtures, "--max-actions", "6", "--fake-ai", "--out", out, "--json",
+    ]);
+    expect(r.envelope?.ok, r.out + r.err).toBe(true);
+    const data = r.envelope!.data! as {
+      sweep: { stops: number; budgetPerStop: { maxActions: number } };
+      missions: Array<{ status: string; branch: { step: number; anchor?: string }; resultPath?: string }>;
+      report: { defects: Array<{ title: string; fingerprints: string[]; branches?: Array<{ journeyId: string; step: number; anchor?: string }> }> };
+    };
+    expect(data.sweep).toMatchObject({ stops: 3, budgetPerStop: { maxActions: 2 } });
+    expect(data.missions.map((m) => [m.status, m.branch.step, m.branch.anchor])).toEqual([["ran", 1, undefined], ["ran", 2, "editing"], ["ran", 3, undefined]]);
+    // Every stop point in its own fresh session, between the fixture's setup and restore.
+    const lifecycle = served.filter((x) => x === "POST /api/seed" || x === "POST /api/reset");
+    expect(lifecycle).toEqual(Array.from({ length: 3 }, () => ["POST /api/seed", "POST /api/reset"]).flat());
+    const crash = data.report.defects.filter((d) => /editor crashed/.test(d.title));
+    expect(crash, JSON.stringify(data.report.defects.map((d) => d.title))).toHaveLength(1);
+    expect(crash[0]?.branches).toEqual([{ journeyId: "editor", step: 2, anchor: "editing" }]);
+    sweepFinding = { resultPath: String(data.missions[1]?.resultPath), fingerprint: String(crash[0]?.fingerprints[0]) };
+  }, 300_000);
+
+  it("verify-fix replays a branch-point finding THROUGH the Journey prefix (it reproduces only there); a stale prefix is a typed inconclusive", async () => {
+    expect(sweepFinding).toBeDefined();
+    const { resultPath, fingerprint } = sweepFinding!;
+    // The persisted branch carries how to replay it (no secret here: the phrase is a plain param).
+    const persisted = JSON.parse(readFileSync(resultPath, "utf8")) as { result: { branch: { replay: { params: Record<string, string>; secretParams: string[] } } } };
+    expect(persisted.result.branch.replay).toMatchObject({ params: { phrase: "open sesame" }, secretParams: [] });
+    served.length = 0;
+    const r = await cli(["verify-fix", "--result", resultPath, "--fingerprint", fingerprint, "--replays", "1", "--json"]);
+    expect(r.envelope?.ok, r.out + r.err).toBe(true);
+    expect(r.envelope?.data).toMatchObject({ verdict: "still-reproduces", branch: { journeyId: "editor", step: 2 } });
+    expect(r.exitCode).toBe(1);
+    expect(served.filter((x) => x === "GET /editor").length).toBeGreaterThanOrEqual(1); // the prefix's own navigate
+    // The Journey drifted (its passphrase field was renamed): the replay cannot reach the branch point.
+    await new FsJourneyStore(journeysDir).put(editorJourney("Secret phrase"));
+    try {
+      const stale = await cli(["verify-fix", "--result", resultPath, "--fingerprint", fingerprint, "--replays", "1", "--json"]);
+      expect(stale.exitCode).toBe(2);
+      expect(stale.envelope?.data).toMatchObject({ verdict: "inconclusive", failure: { kind: "journey-stale" } });
+    } finally {
+      await new FsJourneyStore(journeysDir).put(editorJourney("Passphrase"));
+    }
+  }, 300_000);
+
+  it("a reset inside an anchored coverage mission re-replays the prefix, so the in-page state the queued item needs is restored", async () => {
+    served.length = 0;
+    const r = await cli([
+      "explore", "--from-journey", "panel", "--at-step", "3", "--journeys-dir", journeysDir,
+      "--strategy", "coverage", "--fake-ai", "--max-actions", "12", "--out", join(dir, "reset"), "--json",
+    ]);
+    expect(r.envelope?.ok, r.out + r.err).toBe(true);
+    const transcript = JSON.parse(readFileSync(String(r.envelope!.data!.transcriptPath), "utf8")) as Array<{ target: string | null; actOk: boolean }>;
+    const clicked = (name: string): boolean => transcript.some((e) => e.actOk && (e.target ?? "").includes(name));
+    // Both leaf tabs were reached: the second only after a reset back to the anchor state — which a
+    // bare re-navigation to /panel could never reach (the tabs are in-page state the prefix creates).
+    expect(clicked("Tab A") && clicked("Tab B"), JSON.stringify(transcript.map((e) => [e.target, e.actOk]))).toBe(true);
+    expect(served.filter((x) => x === "GET /panel").length).toBeGreaterThanOrEqual(2); // the first replay + the reset's
+  }, 300_000);
 });

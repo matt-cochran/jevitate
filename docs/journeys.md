@@ -140,9 +140,36 @@ jevitate explore --from-journey checkout --at-step payment --param email=a@examp
 - Every result and finding records its branch point: `branch: { journeyId, step, anchor?,
   stepLabel? }` (additive, `schemaVersion` 1), and `jevitate report` lists each deduped defect's
   branch points.
-- Known limits: a reset inside the mission (after a hang, an identity change, or a coverage /
-  exploratory return to a queued state) re-navigates to the anchor's URL, which keeps the session
-  but not in-page state; `verify-fix` and regressions replay a finding from the anchor's URL too.
+- A reset inside the mission (after a hang or an identity change, a coverage / exploratory return
+  to a queued state, a goal run's retry) **re-replays the prefix** into the mission's session, so
+  in-page state comes back too. Cost: each reset spends the prefix's step count from
+  `--max-actions` (and its time from the reset's own bound); a reset whose prefix no longer replays
+  ends the run `scope-unreachable` instead of guessing. Hang *confirmation* replays (fresh
+  contexts) still start from the anchor URL.
+- `verify-fix`, `regression capture` and `regression run` replay a branch-point finding THROUGH its
+  prefix: the result's `branch.replay` records the Journey store, its non-secret params and the
+  environment; every replay session goes through the prefix first, and the finding's leading
+  navigate becomes an assertion that the prefix landed on the anchor (same step indices). A secret
+  param is never persisted: give it again with `--param <name>=<value>` (refused, exit 64, when
+  missing). A prefix that no longer replays makes the check `inconclusive` with
+  `failure.kind: "journey-stale"` (exit 2), never `fixed`.
+
+### Sweeping every step
+
+`--at-step all` runs the strategy from EVERY top-level step (an anchor's name where one names the
+step); `--at-step anchors` from every declared anchor:
+
+```bash
+jevitate explore --from-journey checkout --at-step all --strategy adversarial --fixtures restore.json \
+  --max-actions 120 --real --json
+```
+
+Each stop point is its own `explore --from-journey` run in a fresh browser session, between the
+`--fixtures` setup and restore (any strategy; hooks need `--allow-shell-hooks`). `--max-actions`
+and `--max-decisions` are the sweep's TOTAL, split evenly per stop point (each gets at least 1;
+without them, 40 actions per stop). The rest of the command line is forwarded to every stop. The
+result is one deduped report, as a campaign's (`sweep.stops`, `sweep.budgetPerStop`, `missions`,
+`report.defects[].branches` naming exactly the steps each defect is reachable from), in `--out`.
 
 Declare anchors in the Journey's `metadata` (validated: names unique, each step one of the Journey's):
 
@@ -186,7 +213,7 @@ Declare anchors in the Journey's `metadata` (validated: names unique, each step 
 | Spec field | Meaning |
 |---|---|
 | `version` | `1` |
-| `jobs[]` | `{ id, journey, strategies, anchors?, params?, storageState?, goal?, appClass?, success?, maxActions?, maxDecisions? }`. `anchors` default to every anchor the Journey declares; `goal` is required by goal and usability, `appClass` by usability |
+| `jobs[]` | `{ id, journey, strategies, anchors?, params?, storageState?, goal?, appClass?, success?, maxActions?, maxDecisions? }`. `anchors` default to every anchor the Journey declares; `"all"` / `"anchors"` sweep every step / every anchor, and then the job's `maxActions`/`maxDecisions` are its TOTAL, split evenly per mission; `goal` is required by goal and usability, `appClass` by usability |
 | `env`, `baseUrl`, `storageState` | As `--env` / `--base-url` / `--storage-state` for every job (a job's own session wins) |
 | `fixtures`, `before`, `after` | The state restore around every run (paths relative to the spec; `~/` is home) |
 | `discovery` | `false` skips the discovery replay |
@@ -197,7 +224,9 @@ mission makes it `inconclusive`, exit 2; its findings are still reported). An in
 refused with every problem listed (`E_CAMPAIGN_SPEC`, exit 64) before any browser opens. A
 campaign needs `--real` or `--fake-ai`. Over MCP: `journey_anchors`, `run_exploration` with
 `fromJourney`/`atStep`, and `run_campaign`. In a `check` suite, a mission item takes `fromJourney`,
-`atStep`, `params`, `env` and `baseUrl` (resolved at preflight).
+`atStep`, `params`, `env` and `baseUrl` (resolved at preflight); `atStep: "all"`/`"anchors"`
+expands into one item per stop point (`<name>@<stop>`, its `maxActions` split evenly), each between
+the target's fixture setup and restore.
 
 ## Annotate a Journey: draft its intent, then approve it
 

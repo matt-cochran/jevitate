@@ -57,6 +57,11 @@ export async function reachFrontierState(params: {
   item: FrontierItem;
   snapshotNow: () => Promise<Snapshot>;
   seedUrl?: string;
+  /**
+   * #293: replaces the navigation to `seedUrl` (a journey-anchored run re-replays its Journey prefix,
+   * restoring in-page state). `false`: it could not — the reset is `seed-unreachable`.
+   */
+  reachSeed?: () => Promise<boolean>;
   fingerprintOf?: (snapshot: Snapshot) => string;
   /** The seed the mission started from — a landing elsewhere after the seed navigation is `seed-unreachable`. */
   homeUrl?: string;
@@ -100,6 +105,7 @@ async function reach(params: {
   item: FrontierItem;
   snapshotNow: () => Promise<Snapshot>;
   seedUrl?: string;
+  reachSeed?: () => Promise<boolean>;
   fingerprintOf?: (snapshot: Snapshot) => string;
   homeUrl?: string;
   currentUrl?: () => string;
@@ -127,7 +133,11 @@ async function reach(params: {
     }
   };
   if (params.seedUrl !== undefined) {
-    await params.actor.attemptsTo(Navigate.to(params.seedUrl));
+    if (params.reachSeed !== undefined) {
+      if (!(await params.reachSeed())) return { ok: false, reason: "seed-unreachable", detail: "the Journey prefix no longer replays to the start state" };
+    } else {
+      await params.actor.attemptsTo(Navigate.to(params.seedUrl));
+    }
     const lost = seedLanding();
     if (lost !== null) return lost;
     phase.seedLoaded = true;

@@ -70,7 +70,25 @@ function itemBrowser(base: BrowserRunOptions | undefined, x: SuiteExploreOptions
   return Object.keys(demo).length === 0 ? base : { ...base, ...demo };
 }
 
+/**
+ * #293: a journey-anchored mission item runs between the target's fixture setup and restore (as a
+ * Journey item does), so one stop point's side effects never leak into the next of a sweep.
+ */
 export async function execute(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
+  const anchored = item.kind === "mission" && item.mission !== undefined && item.t.prefixes?.has(item.mission) === true;
+  if (!anchored || item.t.fixturesFile === undefined) return executeItem(item, ctx, remaining);
+  const session = item.setup?.storageState;
+  const fx = fixturesFor(targetFixtures(item.t, session), item.t.prefixes!.get(item.mission!)!.startUrl);
+  if (fx === undefined) return executeItem(item, ctx, remaining);
+  try {
+    await fx.setup();
+    return await executeItem(item, ctx, remaining);
+  } finally {
+    await fx.restore();
+  }
+}
+
+async function executeItem(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
   const { opts, runners } = ctx;
   const t = item.t.target;
   const stamp: Stamp = {

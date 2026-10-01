@@ -5,7 +5,7 @@ import { CampaignSpecError, runCampaign, validateCampaign, type CampaignResult }
 import { type CliDeps, emitCommandResult, environmentSeams, resolveJourneysDir, resolveMissionTargetsDir } from "./cli-shared.js";
 
 /** `campaign run`'s human summary: the outcome, every mission's branch point, and the deduped defects. */
-function formatCampaignHuman(data: unknown): string {
+export function formatCampaignHuman(data: unknown): string {
   const r = data as CampaignResult;
   const lines = [
     `CAMPAIGN ${r.name ?? ""}`.trimEnd(),

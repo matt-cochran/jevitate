@@ -63,6 +63,7 @@ const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PA
 const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
 const WHOLE_JOURNEY = "#293: only an anchored mission replays a Journey PREFIX into its own open session (journey-prefix.ts); this surface replays the whole Journey in a browser of its own";
 const PREFIX_IN_SESSION = "#293: a Journey prefix replays INTO the mission's already-open session — the mission's own browser, emulation and capture apply";
+const BRANCH_RECORDED = "#293: a branch-point finding still replays through its Journey prefix, with the params its result recorded (non-secret); secret ones are re-supplied only on `verify-fix --param`";
 const NO_ANCHORED_HERE = "#293: a journey-anchored mission is an `explore --from-journey` run, a suite mission item or a campaign job — never this surface";
 
 /** `<file> <api>` → option → why that surface does not pass it. */
@@ -102,6 +103,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     secrets: "redaction of fixture logs only; a batch re-check takes no fixture hooks",
     emulation: "replays under each finding's own recorded emulation",
     allowEmulationOverride: "replays under each finding's own recorded emulation",
+    journeyPrefix: BRANCH_RECORDED,
   },
   "regression-cli.ts runRegressionCapture": {},
   "regression-cli.ts runRegressionRun": {},
@@ -113,6 +115,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     allowLogCmd: MCP_NARROW,
     hangReplayWrites: MCP_NARROW,
     secrets: MCP_NARROW,
+    journeyPrefix: BRANCH_RECORDED,
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
@@ -261,6 +264,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     secrets: "redaction comes from the target's secret fields",
     emulation: "replays under the finding's own recorded emulation",
     allowEmulationOverride: "replays under the finding's own recorded emulation",
+    journeyPrefix: BRANCH_RECORDED,
   },
 };
 

@@ -299,6 +299,8 @@ export async function runAdversarialCliMission(
       generation: opts.generation,
       seedUrl: start.url,
       ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a reset re-replays the Journey prefix (counted against --max-actions), never just the URL.
+      ...(start.restart ?? {}),
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),

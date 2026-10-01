@@ -98,6 +98,12 @@ import { secretFieldSecrets } from "../secret-fields.js";
  */
 
 export interface GoalBasedMissionConfig extends Omit<ExploreConfig, "missionContext"> {
+  /**
+   * #293: how a retried run (#126) gets back to its start state instead of loading `startUrl` — a
+   * journey-anchored run re-replays its Journey prefix. `false`: it could not (the retry then loads
+   * `startUrl`, as without it).
+   */
+  readonly restartAtStart?: (actor: ExploreConfig["actor"]) => Promise<boolean>;
   /** The independent success oracle (user-supplied): an assertion on the final page. */
   readonly successAssertion?: Assertion;
   /**
@@ -529,10 +535,12 @@ async function adjudicatedRun(
   // independent code refuses write flows and aborts write requests; the model is told.
   const readOnly = !hasChecks && cfg.safety?.allowWrites !== true && !goalAsksForChange(cfg.goal);
   let attempts = 0;
-  const runOnce = (): Promise<ExploreRun> => {
+  const runOnce = async (): Promise<ExploreRun> => {
     // A retried run (#126) starts over from the seed: nothing the first attempt saw carries over.
-    // #293: only the first attempt starts in place (on the anchored page); a retry loads the seed.
-    const startInPlace = cfg.startInPlace === true && attempts++ === 0;
+    // #293: the first attempt starts in place (on the anchored page); a retry re-replays the Journey
+    // prefix when it can (`restartAtStart`), else loads the seed.
+    const first = attempts++ === 0;
+    const startInPlace = cfg.startInPlace === true && (first || (cfg.restartAtStart !== undefined && (await cfg.restartAtStart(cfg.actor))));
     settledSteps = 0;
     heldAtStep = null;
     sawNotHolding = false;

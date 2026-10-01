@@ -9,7 +9,8 @@ Every strategy except `--feature` can start from a promoted Journey instead of a
 prefix in the mission's own browser context (page, form contents and session kept), and the mission
 starts on the live page — its scope is that page's route, as if it were `--url`. A prefix that no
 longer replays ends the run `inconclusive` (`failure.kind: "journey-stale"`, exit 2). Results carry
-`branch: { journeyId, step, anchor? }`. See [Explore from a Journey step](./journeys.md#explore-from-a-journey-step-anchors-and-campaigns)
+`branch: { journeyId, step, anchor? }`. `--at-step all` (or `anchors`) sweeps every step, and a
+reset inside an anchored mission re-replays the prefix (its steps count against `--max-actions`). See [Explore from a Journey step](./journeys.md#explore-from-a-journey-step-anchors-and-campaigns)
 for anchors, campaigns and the known limits.
 
 ## Adversarial scope, form misuse and coverage
