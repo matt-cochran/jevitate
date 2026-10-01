@@ -59,7 +59,8 @@ import {
   type ServerLogOptions,
 } from "./explore-api.js";
 import { parseLogSourceSpecs, LogSourceSpecError } from "./log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { LogSpecError } from "./log-lines.js";
 import { MultiRunArgsError, resolveMultiRunPlan, wantsMultiRun } from "./multi-run.js";
 import { MultiRunAbortedError, runExploreMultiRun } from "./multi-run-cli.js";
@@ -362,6 +363,24 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       [] as string[],
     )
     .option(
+      "--log-scope <regex|substring>",
+      "attributes only backend log lines matching this (repeatable, /regex/flags/ or a plain substring, e.g. a tenant id) to the run (#282); the rest count as serverLogs.ignoredLines. For concurrent runs tailing one log. A line carrying one of the run's own correlation ids is in scope",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--log-correlation-header <name>",
+      "another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
+      "--log-id-pattern </regex/>",
+      "how a correlation id is written in your log lines, when not as trace_id=/request_id=/correlation_id= or a traceparent (repeatable; the first capture group is the id). Once ids correlate, a line with another request's id is never attributed to the run (#204)",
+      (v, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
+    .option(
       "--server-log-drain-ms <ms>",
       "how long to keep tailing --log-source after the run's last action, to catch async backend work that settles after the browser gave up (default 3000)",
       nonNegativeIntArg,
@@ -428,6 +447,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         logDefect: string[];
         logQuietOk: string[];
         logIgnore: string[];
+        logScope: string[];
+        logCorrelationHeader: string[];
+        logIdPattern: string[];
         serverLogDrainMs?: string;
         actor: string[];
         repeat?: string;
@@ -759,12 +781,18 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           const sources = parseLogSourceSpecs(o.logSource, o.allowLogCmd ?? false);
           const logDefect = parseLogDefectSpecs(o.logDefect);
           const logIgnore = parseLogIgnoreSpecs(o.logIgnore);
+          const logScope = parseLogScopeSpecs(o.logScope);
+          const correlationHeaders = parseCorrelationHeaders(o.logCorrelationHeader);
+          const idPatterns = parseLogIdPatterns(o.logIdPattern);
           serverLog = {
             sources,
             logDefect,
             allowLogCmd: o.allowLogCmd ?? false,
             quietOk: o.logQuietOk,
             logIgnore,
+            logScope,
+            correlationHeaders,
+            idPatterns,
             ...(o.serverLogDrainMs === undefined ? {} : { drainMs: Number(o.serverLogDrainMs) }),
           };
         } catch (err) {

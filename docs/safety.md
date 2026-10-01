@@ -70,7 +70,9 @@ security bug, and how to report one.
 - Every write request a run fires is listed in the result (`sideEffects`). A request outside
   the `--allow` origins is listed by its full origin and path. A repeat guard refuses
   re-firing the same write, and `--read-rpc` marks POST-based read RPCs so they are not mistaken
-  for writes.
+  for writes. The repeat guard counts only the app's own writes: a third-party write (a vendor's
+  telemetry or `csp-report` beacon, Stripe.js's `m.stripe.com` beacon) and a request matched by
+  `--settle-ignore` are listed but never make a control unclickable a second time.
 - Adversarial runs never target password fields, file inputs or log-out controls, and never use
   real PII or real recipients.
 

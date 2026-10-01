@@ -155,7 +155,14 @@ export interface PersistedFinding {
   /** For a declared-invariant defect (#86): the invariant id to re-check. */
   readonly invariantId?: string;
   /** For a `server-log` defect (#142): what to re-tail and match, from the defect's own `serverLog`. */
-  readonly serverLog?: { readonly sources: readonly string[]; readonly matcher: string; readonly normalizedMessage: string; readonly drainMs: number };
+  readonly serverLog?: {
+    readonly sources: readonly string[];
+    readonly matcher: string;
+    readonly normalizedMessage: string;
+    readonly drainMs: number;
+    /** #282: the run's `--log-scope`. */
+    readonly scope?: readonly string[];
+  };
 }
 
 const HANG_KINDS = new Set(["main-thread-unresponsive", "request-pending", "never-settled", "ui-no-progress"]);
@@ -225,7 +232,10 @@ function asServerLog(v: unknown): PersistedFinding["serverLog"] | null {
   if (!isRecord(v)) return null;
   if (!Array.isArray(v.sources) || !v.sources.every((s): s is string => typeof s === "string")) return null;
   if (typeof v.matcher !== "string" || typeof v.normalizedMessage !== "string" || typeof v.drainMs !== "number") return null;
-  return { sources: v.sources, matcher: v.matcher, normalizedMessage: v.normalizedMessage, drainMs: v.drainMs };
+  // A scope that does not parse is refused (never dropped: that would widen what counts as a reproduction).
+  if (v.scope !== undefined && !(Array.isArray(v.scope) && v.scope.every((s): s is string => typeof s === "string"))) return null;
+  const scope = v.scope === undefined ? {} : { scope: v.scope as string[] };
+  return { sources: v.sources, matcher: v.matcher, normalizedMessage: v.normalizedMessage, drainMs: v.drainMs, ...scope };
 }
 
 function asFinding(v: unknown): PersistedFinding | null {
@@ -465,6 +475,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
           matcher: finding.serverLog.matcher,
           normalizedMessage: finding.serverLog.normalizedMessage,
           drainMs: finding.serverLog.drainMs,
+          ...(finding.serverLog.scope === undefined ? {} : { scope: finding.serverLog.scope }),
           // #142 follow-up: an explicit --allow-log-cmd wins; otherwise the operator's own
           // ~/.jevitate/targets.json entry for this origin may opt in (never an MCP argument).
           allowLogCmd: opts.allowLogCmd === true || target.allowLogCmd === true,

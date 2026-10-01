@@ -5,7 +5,8 @@ import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey
 import { assertAuthorizedExploreTarget, matchGlob, parseSecretField, resolveCoverageThresholds, secretFieldSecrets, SecretFieldSpecError, type CoverageThresholds, type SecretField, type SuccessCheck } from "@jevitate/explore";
 import { buildMissionFixtures, checkSetupRefs, type FixtureFlags } from "./fixture-cli.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "./mission-actors.js";
 import { loadPersonasFile, parsePersonaSpec, type Persona } from "./multi-run.js";
 import { assertHeadedDisplay } from "./browser-run-options.js";
@@ -270,6 +271,9 @@ function itemSetup(
       allowLogCmd,
       quietOk: x.logQuietOk ?? [],
       logIgnore: parseLogIgnoreSpecs(x.logIgnore ?? []),
+      logScope: parseLogScopeSpecs(x.logScope ?? []),
+      correlationHeaders: parseCorrelationHeaders(x.logCorrelationHeader ?? []),
+      idPatterns: parseLogIdPatterns(x.logIdPattern ?? []),
       ...(x.serverLogDrainMs === undefined ? {} : { drainMs: x.serverLogDrainMs }),
     };
   }

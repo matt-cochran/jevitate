@@ -101,6 +101,9 @@ These do not count:
 - auto-detected long-polls: a request pending longer than `settle.longPollMs`
   (default 5000) while the page is otherwise interactive (a control is rendered
   and no busy indicator shows);
+  a write that one of the run's clicks sent is still tracked until it ends, though: a
+  `wait` (or a `blocked`) observes it within the job-wait budget instead of reporting
+  that nothing is pending;
 - text-only updates of existing nodes (a clock, a live counter) and inline-style
   animation.
 

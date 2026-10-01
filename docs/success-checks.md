@@ -21,8 +21,8 @@ decides it. `--success` can be repeated, and every check must hold:
 | `attr:<d>\|<name>=<value>` | the first match's attribute equals the value (`attr:<d>\|<name>`: present; `attr:<d>\|!<name>`: absent) |
 | `flashed:<d>\|class=<cls>[\|withinMs=<n>]` | a match **gained** the class (or `attr=<name>`, or `animation`) after the last user input — a transient flash that is gone by the time the page settles |
 | `reloadThen:<check>` | the page is reloaded first, then the check holds (proves the value persisted) |
-| `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing) |
-| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status |
+| `requestMade:<METHOD> <path-glob>` | the run sent a matching request (catches a save that sends nothing). A request counts once it is sent, even when its response has not arrived (a long-running RPC the server holds open) |
+| `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered) |
 
 In these specs:
 

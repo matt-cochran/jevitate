@@ -102,6 +102,9 @@ export const SUITE_EXPLORE_OPTIONS = {
   logDefect: { shape: "strings", appliesTo: ALL_KINDS },
   logQuietOk: { shape: "strings", appliesTo: ALL_KINDS },
   logIgnore: { shape: "strings", appliesTo: ALL_KINDS },
+  logScope: { shape: "strings", appliesTo: ALL_KINDS },
+  logCorrelationHeader: { shape: "strings", appliesTo: ALL_KINDS },
+  logIdPattern: { shape: "strings", appliesTo: ALL_KINDS },
   serverLogDrainMs: { shape: "integer", appliesTo: ALL_KINDS },
   // horizontal overflow (#149)
   checkOverflow: { shape: "boolean", appliesTo: OVERFLOW },

@@ -32,6 +32,23 @@ behaviour changes).
 - Typing into a textarea keeps the value's newlines (#285).
 - A model-invented sign-up email or username is unique per run, so a repeated sign-up goal does
   not collide with an earlier run's account (#271).
+- Declared invariants can read a request's JSON payload (`network.request`) and compare lists in
+  order (`sameList(a, b)`), so "what was saved is what reloads" can be declared. Credential-named
+  keys are never read (#295).
+- Backend-log lines are matched to the exact request by trace or correlation id (`traceparent`,
+  `x-request-id`, …; `--log-correlation-header`, `--log-id-pattern`), and a `blocked` reason names
+  it: `caused by: … on POST /x (409)` (#204).
+- `--log-scope` attributes only matching backend-log lines to the run, for runs sharing one log (#282).
+
+### Fixed
+
+- The repeated-side-effect guard ignores third-party writes and `--settle-ignore`d requests
+  (telemetry and `csp-report` beacons, `m.stripe.com`), so a safe control can be clicked again
+  (#274, #284).
+- `requestMade` matches a request once it is sent, and a write still in flight (a unary RPC held
+  open for minutes) counts as pending work for `wait` and `blocked` (#283).
+- A console error raised inside a cross-origin third-party iframe (a vendor's own CSP noise) is an
+  advisory with its frame origin, not an app defect; every console signal records its `frameUrl` (#297).
 
 ## [0.2.0] – 2026-09-29
 

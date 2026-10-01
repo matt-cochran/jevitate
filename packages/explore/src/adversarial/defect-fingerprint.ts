@@ -91,6 +91,9 @@ export function signalKey(signal: DefectSignal): string {
     case "failed-request":
       return `failed-request|${normalizeRoute(signal.url)}|${messageClass(signal.detail)}`;
     case "console-error":
+      // #297: a third-party frame's error is the vendor's, whichever app route embeds it: one identity.
+      if (signal.thirdPartyFrame !== undefined) return `console-error|third-party|${signal.thirdPartyFrame}|${messageClass(signal.detail)}`;
+      return `${signal.kind}|${normalizeRoute(signal.pageUrl ?? "")}|${messageClass(signal.detail)}`;
     case "page-error":
       return `${signal.kind}|${normalizeRoute(signal.pageUrl ?? "")}|${messageClass(signal.detail)}`;
     case "horizontal-overflow":
@@ -168,11 +171,16 @@ export function groupStepSignals(signals: readonly DefectSignal[]): SignalGroup 
 }
 
 /**
- * A short human title for an ADVISORY console-error (#88): a console error correlated with a
- * captured 4xx response — reported for visibility, but never a defect title (never `defectTitle`).
+ * A short human title for an ADVISORY console-error: one correlated with a captured 4xx response
+ * (#88), or one raised inside a third-party frame (#297) — reported for visibility, but never a
+ * defect title (never `defectTitle`).
  */
-export function advisoryTitle(signal: Extract<DefectSignal, { kind: "console-error" }>, status: number): string {
-  return `Console error on ${normalizeRoute(signal.pageUrl ?? "")} (advisory — correlated with HTTP ${status}): ${messageClass(signal.detail).slice(0, 80)}`;
+export function advisoryTitle(signal: Extract<DefectSignal, { kind: "console-error" }>): string {
+  const why =
+    signal.thirdPartyFrame !== undefined
+      ? `raised in a third-party frame from ${signal.thirdPartyFrame}`
+      : `correlated with HTTP ${signal.correlatedStatus ?? "?"}`;
+  return `Console error on ${normalizeRoute(signal.pageUrl ?? "")} (advisory — ${why}): ${messageClass(signal.detail).slice(0, 80)}`;
 }
 
 /** A short human title for a defect's primary signal. */
