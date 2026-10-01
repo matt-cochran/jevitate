@@ -241,7 +241,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (481 exports)
+# @jevitate/explore (483 exports)
   act: function
   ActArgs: interface
   ActResult: interface
@@ -478,6 +478,7 @@
   isNavControl: function
   isNavigationTimeout: function
   isNon5xxResourceConsoleError: function
+  isPageUnresponsive: function
   isResourceLoadEcho: function
   isSecretLike: function
   isTargetUnresponsive: function
@@ -653,6 +654,7 @@
   SINGLE_LINE_MAX_CHARS: variable
   snapshot: function
   Snapshot: interface
+  SNAPSHOT_BUDGET_MS: variable
   SnapshotOptions: interface
   srOnlyLabelOf: function
   Stability: type-alias
