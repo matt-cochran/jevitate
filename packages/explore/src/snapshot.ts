@@ -167,7 +167,12 @@ const INTERACTIVE_SELECTOR = [
   "[role=switch]",
   "[role=treeitem]",
   "[contenteditable=true]",
+  // #287: a disclosure's summary ("Analysis & diagnostics") is what a user clicks to expand it.
+  "details > summary",
 ].join(",");
+
+/** #287: controls the goal names that are still kept past `maxCandidates` (never crowded out). */
+export const MENTIONED_PAST_CAP = 10;
 
 /** Raw per-control facts gathered in-page (safe values only). */
 interface ControlFacts {
@@ -233,6 +238,8 @@ interface ControlFacts {
    * scroll container (scrolling it may reach the control) or for a visually-hidden (sr-only) one.
    */
   readonly unreachable: boolean;
+  /** #287: a disclosure summary's state (its `<details>` open); null for every other control. */
+  readonly expanded: boolean | null;
 }
 
 /**
@@ -311,6 +318,7 @@ function readControlFacts(node: Node): ControlFacts {
     button: "button",
     select: "combobox",
     textarea: "textbox",
+    summary: "button",
   };
   const roleByInput: Record<string, string> = {
     button: "button",
@@ -484,6 +492,7 @@ function readControlFacts(node: Node): ControlFacts {
     clippedOffscreen,
     outsideModal,
     unreachable,
+    expanded: tag === "summary" ? (el.parentElement as HTMLDetailsElement | null)?.open === true : null,
   };
 }
 
@@ -503,6 +512,8 @@ function summarize(facts: DescribedFacts): string {
   if (!facts.enabled) bits.push("disabled");
   if (facts.checked === true) bits.push("checked");
   if (facts.checked === false) bits.push("unchecked");
+  if (facts.expanded === true) bits.push("expanded");
+  if (facts.expanded === false) bits.push("collapsed");
   if (facts.value !== null && facts.value !== "") bits.push(`value="${facts.value}"`);
   if (facts.richText) bits.push("rich text");
   if (facts.accept !== null && facts.accept !== "") bits.push(`accept=${facts.accept}`);
@@ -536,6 +547,7 @@ function computeSignature(
       checked: f.checked,
       value: f.value,
       selected: f.selected,
+      ...(f.expanded === null ? {} : { expanded: f.expanded }),
     })),
   });
 }
@@ -561,6 +573,20 @@ function readListItems(els: Element[], roles: string[]): Array<{ list: number; n
     const style = getComputedStyle(el);
     const visible = el.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
     return { list, name, visible };
+  });
+}
+
+/** BROWSER CODE — each candidate's approximate accessible name (aria-label, label, text, placeholder). */
+function readCheapNames(els: Element[]): string[] {
+  const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
+  return els.map((el) => {
+    const labels = (el as unknown as { labels?: NodeListOf<HTMLLabelElement> }).labels;
+    return (
+      norm(el.getAttribute("aria-label")) ||
+      norm(labels?.[0]?.textContent) ||
+      (el.tagName.toLowerCase() === "select" ? "" : norm(el.textContent)) ||
+      norm(el.getAttribute("placeholder"))
+    ).slice(0, 200);
   });
 }
 
@@ -603,12 +629,22 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
   // Bounded: a page with thousands of candidates never turns perception into a crawl.
   let evaluated = 0;
   const maxEvaluated = maxCandidates * 4;
+  // #287: past the cap, a control the goal names is still kept (bounded) — a disclosure below the
+  // first `maxCandidates` controls must never be unreachable. Its name is read cheaply, in one pass.
+  const mentioned = opts?.mentioned;
+  const cheapNames =
+    mentioned !== undefined && handles.length > maxCandidates
+      ? await page.locator(INTERACTIVE_SELECTOR).evaluateAll(readCheapNames).catch(() => null)
+      : null;
+  let pastCap = 0;
 
   for (const [i, handle] of handles.entries()) {
     try {
       if (controls.length >= maxCandidates || evaluated >= maxEvaluated) {
         truncated = true;
-        continue;
+        const name = cheapNames !== null && cheapNames.length === handles.length ? cheapNames[i] : undefined;
+        if (pastCap >= MENTIONED_PAST_CAP || name === undefined || name === "" || mentioned?.(name) !== true) continue;
+        pastCap += 1;
       }
       if (skip[i] === true) {
         truncated = truncated || skipReason[i] === "capped";
