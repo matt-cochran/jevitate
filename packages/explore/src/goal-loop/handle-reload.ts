@@ -3,8 +3,8 @@
  * — deferred while a write the run fired is still in flight. The goal loop's reload handler, moved
  * out of `explore.ts` unchanged (#232).
  */
-import { monitorFor } from "../page-monitor.js";
 import { act } from "../act.js";
+import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
 import type { RunContext } from "./context.js";
 import type { Flow, Step } from "./step.js";

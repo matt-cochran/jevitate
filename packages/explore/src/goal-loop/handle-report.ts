@@ -2,23 +2,12 @@
  * `report` (#101): a find-out goal ends with a grounded ANSWER — the goal loop's report handler,
  * moved out of `explore.ts` unchanged (#232).
  */
-import {
-  NO_ANSWER_REASON,
-  UNSAVED_WRITE_REASON,
-  reportAnswer,
-  type AnswerVerdict,
-} from "../answer.js";
-import {
-  readPageText,
-  waitForReply,
-} from "../conversation.js";
-import {
-  firstLine,
-  quote,
-} from "./helpers.js";
+import { NO_ANSWER_REASON, UNSAVED_WRITE_REASON, reportAnswer, type AnswerVerdict } from "../answer.js";
+import { readPageText, waitForReply } from "../conversation.js";
 import type { RunContext } from "./context.js";
-import type { Flow, Step } from "./step.js";
+import { firstLine, quote } from "./helpers.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
+import type { Flow, Step } from "./step.js";
 
 export async function handleReport(ctx: RunContext, step: Step): Promise<Flow> {
   const { cfg } = ctx;

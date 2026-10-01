@@ -113,6 +113,8 @@ import { handleDone } from "./goal-loop/handle-done.js";
 import { handleBlocked } from "./goal-loop/handle-blocked.js";
 import { handleWaitOrScroll } from "./goal-loop/handle-idle.js";
 import { handleReload } from "./goal-loop/handle-reload.js";
+import { beginAction } from "./goal-loop/act-gate.js";
+import { refuseAction } from "./goal-loop/act-gate.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -1086,67 +1088,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         ctx.stop = "blocked";
         break;
       }
-      if (!ctx.tracker.mayAct()) {
-        record(false, "action budget exhausted", { origin: "engine" });
-        ctx.stop = "exhausted";
-        break;
-      }
-      // #158 — a read-only (find-out) goal: code refuses a control that would start a write flow,
-      // submit a form, send a message or upload. Refused before any interaction, recorded, told.
-      if (ctx.readOnly !== null) {
-        const refusal = ctx.readOnly.refuses(decision.op, control);
-        if (refusal !== null) {
-          ctx.history.push(refusal);
-          record(false, refusal, { origin: "engine" });
-          ctx.lastActedOp = decision.op;
-          continue;
-        }
-      }
-      // The shared safety policy (#116): a session-ending, destructive, paid or --deny'd control is
-      // never clicked unless the goal itself asks for it (or --allow-destructive). Refused, recorded.
-      if (decision.op === "click") {
-        const unsafe = ctx.safety.refuses(control);
-        if (unsafe !== null) {
-          ctx.refusedKeys.add(keyOf(control));
-          ctx.lastRefusal = unsafe.reason;
-          ctx.history.push(unsafe.reason);
-          record(false, unsafe.reason, { origin: "engine" });
-          ctx.lastActedOp = decision.op;
-          continue;
-        }
-      }
-      // #245: the demo overlay says what is about to happen and highlights the target (display only) —
-      // before the action's attribution window opens, so its brief pause never counts as the action's.
-      if (ctx.overlay !== null) {
-        await ctx.overlay.announce(
-          ctx.page,
-          { step: ctx.transcript.nextStep, strategy: "goal", op: decision.op, target: control.name || control.summary, why: ctx.overlayWhy },
-          control,
-        );
-      }
-
-      // #303: the page right before the action (and, with the perception's capture, the route's
-      // volatility baseline) — the action's delta is read at the next perception.
-      if (ctx.deltas !== null) await ctx.deltas.beforeAction(hangRoute(snap.url), decision.op, control).catch(() => ctx.deltas!.discard());
-      const at = ctx.now();
-      const risk = ctx.safety.riskOf(control);
-      ctx.effectLog.mark(ctx.transcript.nextStep, control.name || control.summary, risk);
-      cfg.onAction?.({ step: ctx.transcript.nextStep, at });
-      ctx.readOnly?.beginAction();
-
-      // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
-      // would cross what remains of the budget is refused BEFORE it fires — code decides, never the
-      // model. The refusal is recorded and the run stops cleanly with `stop: "budget"`.
-      if (cfg.onBeforeAction !== undefined) {
-        const guard = await cfg.onBeforeAction({ op: decision.op, control: control.name || control.summary, paid: risk === "paid" });
-        if (guard.refuse) {
-          ctx.history.push(guard.reason);
-          record(false, guard.reason, { origin: "engine" });
-          ctx.incomplete = guard.reason;
-          ctx.stop = "budget";
-          break;
-        }
-      }
+      const refused = await refuseAction(ctx, step, control);
+      if (refused === "stop") break;
+      if (refused === "continue") continue;
+      const at = await beginAction(ctx, step, control);
+      if (at === "stop") break;
 
       // An EMPTY bound secret field (#111) is typed by code on its own — before a submit of its form,
       // or once a validation message names it: the model cannot see the value and was seen never

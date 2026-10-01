@@ -3,25 +3,15 @@
  * mutation, but visible to the history, and an idle streak is a stuck signal. The goal loop's
  * wait/scroll handler, moved out of `explore.ts` unchanged (#232).
  */
-import { monitorFor } from "../page-monitor.js";
 import { act } from "../act.js";
+import { stillBusy, waitForChange, waitForReply } from "../conversation.js";
+import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
-import {
-  stillBusy,
-  waitForChange,
-  waitForReply,
-} from "../conversation.js";
-import {
-  readInProgressStatus,
-} from "../status.js";
-import {
-  JOB_WAIT_SLICE_MS,
-  quote,
-  waitOutJob,
-} from "./helpers.js";
+import { readInProgressStatus } from "../status.js";
 import type { RunContext } from "./context.js";
-import type { Flow, Step } from "./step.js";
+import { JOB_WAIT_SLICE_MS, quote, waitOutJob } from "./helpers.js";
 import { MAX_IDLE_STEPS, MAX_QUIET_WAITS } from "./limits.js";
+import type { Flow, Step } from "./step.js";
 
 export async function handleWaitOrScroll(ctx: RunContext, step: Step): Promise<Flow> {
   const { cfg } = ctx;

@@ -3,12 +3,10 @@
  * handling, moved out of `explore.ts` unchanged (#232). "next" when the decision is not settled
  * here (it is acted on as usual).
  */
-import {
-  GOAL_CHECK_TRIGGER,
-} from "../conversation.js";
+import { GOAL_CHECK_TRIGGER } from "../conversation.js";
 import type { RunContext } from "./context.js";
-import type { Flow, Step } from "./step.js";
 import { MAX_DONE_REJECTIONS } from "./limits.js";
+import type { Flow, Step } from "./step.js";
 
 export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
   const { cfg } = ctx;
