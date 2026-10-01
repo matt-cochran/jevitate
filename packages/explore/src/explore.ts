@@ -47,9 +47,7 @@ import { assertTargetAnswering, describeFailure, describeUnreachable, isPageUnre
 import {
   describeStatus,
   isEmptyStatus,
-  readDocumentedWait,
   readPageStatus,
-  readWorkingStatus,
   statusDelta,
 } from "./status.js";
 import { type SafetyConfig } from "./safety.js";
@@ -66,22 +64,17 @@ import { handleReport } from "./goal-loop/handle-report.js";
 import {
   EXPECTED_RETURN,
   FirstNavigationFailedSentinel,
-  JOB_WAIT_SLICE_MS,
   TOO_MANY_CHOICES,
   TOO_MANY_CHOICES_RETRY,
-  documentedWaitBudgetMs,
   firstLine,
   incompleteReason,
   isActionOrChromeName as actionOrChromeName,
   keyOf,
-  liveBusyWork,
   quote,
   safePath,
   safeUrl,
   savedAndLeft,
   stateBesides,
-  stillShowsWork,
-  waitOutJob,
   withCause,
 } from "./goal-loop/helpers.js";
 import { handleDone } from "./goal-loop/handle-done.js";
@@ -99,6 +92,7 @@ import { handleClick } from "./goal-loop/handle-click.js";
 import { handleFill } from "./goal-loop/handle-fill.js";
 import { perceiveStep } from "./goal-loop/observe.js";
 import { captureDelta } from "./goal-loop/observe.js";
+import { checkHang } from "./goal-loop/hang-check.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -471,84 +465,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       const delta = await captureDelta(ctx, seen);
       if (delta === "continue") continue;
 
-      // Long-running legitimate work is not a hang (#153): a page that shows an in-progress status
-      // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
-      // determinate progress bar) is WORKING. Code waits it out, bounded by the job-wait budget;
-      // past the budget the hang stands. A main thread that does not answer is never "working".
-      // #258: a wait the page DOCUMENTS ("this usually takes less than a minute") is working too, and
-      // its stated duration can raise the budget (twice the stated time plus a grace, capped). #288: so
-      // is a busy indicator that outlasted the ceiling while the app visibly kept working (an
-      // in-progress status, with its requests completing or its progress text changing meanwhile).
-      const documented =
-        perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" ? await readDocumentedWait(ctx.page) : null;
-      if (documented !== null) ctx.documentedBudgetMs = Math.max(ctx.documentedBudgetMs, documentedWaitBudgetMs(documented.ms));
-      const workBudgetMs = Math.max(ctx.jobWaitMs, ctx.documentedBudgetMs);
-      if (perception.hang !== null && perception.hang.kind !== "main-thread-unresponsive" && ctx.hangWorkWaitedMs < workBudgetMs) {
-        const working =
-          (await readWorkingStatus(ctx.page)) ??
-          (documented === null ? null : `a documented wait ("${documented.text}")`) ??
-          (perception.hang.kind === "ui-no-progress" ? await liveBusyWork(ctx.page, perception.busyWait) : null);
-        if (working !== null) {
-          const w = await waitOutJob(ctx.page, Math.min(workBudgetMs - ctx.hangWorkWaitedMs, JOB_WAIT_SLICE_MS), stillShowsWork);
-          // The perception's own wait counts too (its whole time, the busy-indicator wait included): the
-          // budget bounds the whole time spent believing it.
-          ctx.hangWorkWaitedMs += Date.now() - perceiveStartedAt;
-          const note = `not a hang yet (${perception.hang.kind}): the page shows ${working} — the app is still working; waited ${(w.waitedMs / 1000).toFixed(1)}s (${
-            w.cleared ? "the status cleared" : `still in progress; ${Math.round(ctx.hangWorkWaitedMs / 1000)}s of the ${Math.round(workBudgetMs / 1000)}s job-wait budget used`
-          })`;
-          ctx.history.push(note);
-          ctx.transcript.record({
-            op: "wait",
-            control: null,
-            confidence: null,
-            chosenBy: "strategy",
-            strategy: "hang-check",
-            actOk: true,
-            reason: note,
-            snapshot: snap,
-            timing: perception.timing,
-          });
-          continue;
-        }
-      }
-
-      // A hang is its own first-class stop (owner ruling 7) — detected by perception's rule.
-      if (perception.hang !== null) {
-        ctx.transcript.record({
-          op: null,
-          control: null,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: "hang-check",
-          actOk: false,
-          reason: `hang (${perception.hang.kind}): ${perception.hang.detail}`,
-          snapshot: snap,
-          timing: perception.timing,
-        });
-        await assertTargetAnswering(ctx.livenessOf());
-        const judged = await ctx.judgeHost();
-        if (judged.starved !== null) {
-          ctx.degradedStop(perception.hang.kind === "ui-no-progress" ? "no-progress" : "hang", `${perception.hang.kind}: ${perception.hang.detail}`, judged.starved);
-          break;
-        }
-        const heapNow = await sampleHeap(ctx.page, 1_000);
-        // #288: a hang that stands after the page was believed to be working says how long, and how to
-        // allow a longer job — the operator's knob, never a silent longer wait.
-        const stood: HangSignal =
-          ctx.hangWorkWaitedMs > 0
-            ? {
-                ...perception.hang,
-                detail: `${perception.hang.detail} (still so after ${Math.round(ctx.hangWorkWaitedMs / 1000)}s of the page showing work — past the ${Math.round(workBudgetMs / 1000)}s job-wait budget; raise --job-wait-ms for longer jobs)`,
-              }
-            : perception.hang;
-        const withHost: HangSignal = { ...stood, host: judged.host };
-        ctx.hang = {
-          signal: heapNow === null ? withHost : { ...withHost, heapBytes: heapNow.usedBytes },
-          recordingStepIndex: Math.max(0, ctx.recorder.stepCount - 1),
-        };
-        ctx.stop = "hang";
-        break;
-      }
+      const hung = await checkHang(ctx, seen);
+      if (hung === "stop") break;
+      if (hung === "continue") continue;
 
       // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
       if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
