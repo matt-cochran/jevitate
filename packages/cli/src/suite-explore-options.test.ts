@@ -147,6 +147,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     // a hook outliving the timeout fails the setup: the runner is never reached
     hookTimeoutMs: { kind: "goal", set: 50, with: { before: "sleep 1", allowShellHooks: true } },
     allowVacuousChecks: { kind: "goal", set: true },
+    actionDeltas: { kind: "goal", set: true },
     // #245: demo mode reaches the runner's `browser` option
     headed: { kind: "coverage", set: true },
     slowMo: { kind: "feature", set: 100 },
