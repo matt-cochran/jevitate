@@ -7,6 +7,8 @@ import { withSession } from "../testkit.js";
 import { snapshot } from "../snapshot.js";
 
 /**
+ * #277 — a feature mission seeded at a list page whose controls do not name the feature must still
+ * follow the in-scope navigation (a project row → the piece that holds the feature) up to its budget.
  * #278 — a page that polls a status RPC every few seconds is idle between polls: the feature mission
  * perceives and acts on it, never stalls.
  */
@@ -101,6 +103,27 @@ const feature = (seed: string, stallTimeoutMs = 60_000, routeGlobs: readonly str
     },
     origin,
   );
+
+describe("#277 — no seed control names the feature: in-scope navigation is still followed", () => {
+  it("dismissing a persistent banner does not drop the seed's project row; the run reaches the feature", async () => {
+    const r = await feature("/projects");
+    const acted = r.transcript.filter((e) => e.actOk && e.op === "click").map((e) => e.target ?? "").join("\n");
+    expect(acted).toContain("Alpha project");
+    expect(acted).toContain("Chapter one");
+    expect(r.coverage.relevantActionsExercised).toBeGreaterThan(0);
+  }, 180_000);
+});
+
+describe("#277 — a seed that re-renders differently after a reset is queued afresh", () => {
+  it("an out-of-scope banner link that dismisses itself for good does not end the run at the seed", async () => {
+    const r = await feature("/workspace", 60_000, ["/workspace/**"]);
+    const acted = r.transcript.filter((e) => e.actOk && e.op === "click").map((e) => e.target ?? "").join("\n");
+    expect(acted).toContain("What's new");
+    expect(acted).toContain("Alpha project");
+    expect(acted).toContain("Heatmap");
+    expect(r.coverage.relevantActionsExercised).toBeGreaterThan(0);
+  }, 180_000);
+});
 
 describe("#278 — a page that polls a status RPC is idle between polls", () => {
   it("the feature mission seeded at the polling editor acts and finishes — never stalled", async () => {
