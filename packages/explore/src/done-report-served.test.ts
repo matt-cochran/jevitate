@@ -135,7 +135,9 @@ describe("done recognition (#91)", () => {
   it(
     "#188: a model `blocked` where the goal is not met still ends blocked (asked once, rejected)",
     async () => {
-      const judge = new ScriptedJudge([{ op: "blocked" }]);
+      // #237: the model tries something first (Double down, which does nothing) — a `blocked` before
+      // any action is refused as unexplored, never accepted.
+      const judge = new ScriptedJudge([{ op: "click", target: "1" }, { op: "blocked" }]);
       judge.goalMetProbability = 0.4;
       const r = await run(judge, "/decision", APPROVE_GOAL);
       expect(r.stop).toBe("blocked");

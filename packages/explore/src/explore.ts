@@ -28,6 +28,7 @@ import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
 import { AuthProgress, isCredentialField } from "./auth-completion.js";
 import { SaveProgress } from "./save-completion.js";
 import { FieldValueLog, FillHelper, capFormText, chatReply, goalListsSeveral, matchOption } from "./fill.js";
+import { CLEARS_FIELD, isPlaceholderOption } from "./select-choice.js";
 import {
   type SecretField,
   boundSecretField,
@@ -105,6 +106,7 @@ import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
+import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
 
 
@@ -140,6 +142,24 @@ export const MAX_QUIET_WAITS = 3;
  * scroll up/down loop) a moved scroll counts as an unchanged step again.
  */
 export const MAX_MOVING_SCROLLS = 12;
+/**
+ * #242: consecutive `type`s into one (non-message) field that changed nothing but its own value —
+ * no request, no other change on the page — before the run stops as stuck.
+ */
+const MAX_TYPE_NO_EFFECT = 3;
+/** #242: a search-like field (searches on Enter): its type is submitted once retyping fired nothing. */
+const SEARCH_LIKE = /\bsearch\b|⌘\s?k|ctrl\s?\+\s?k|\bfind\b|\bfilter\b/i;
+const searchLike = (c: Control): boolean => c.role === "searchbox" || c.inputType === "search" || SEARCH_LIKE.test(c.name);
+/** #242: the page's state with one field's own value left out (its typed text is not progress). */
+const stateBesides = (snap: Snapshot, key: string): string =>
+  JSON.stringify([snap.url, snap.controls.map((c) => (keyOf(c) === key ? `${c.role} ${c.name}` : c.summary))]);
+
+/**
+ * #237: a model `blocked` before the run tried any action is refused (and the model told to explore)
+ * this many times; a model that still gives up ends the run `inconclusive` (insufficient-coverage).
+ */
+const MAX_EARLY_BLOCKED_REFUSALS = 2;
+
 /** The one "last chance" turn the model gets before a no-progress stop (#172). */
 export const LAST_CHANCE_NOTE =
   "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
@@ -652,6 +672,29 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const refusedKeys = new Set<string>();
   /** #235: the latest safety refusal's reason (named when the model then gives up), else null. */
   let lastRefusal: string | null = null;
+  /**
+   * #272 / #294: real actions that failed, in a row — a covered / unreachable target is withheld
+   * after its second failure, and `MAX_FAILED_ACTIONS` failures in a row end the run, whatever the
+   * page signature did meanwhile (a failed click that scrolls the page can flicker it).
+   */
+  const failedActs = new FailedActionStreak();
+  /**
+   * #242: the last plain `type` into a form field, judged at the next perception — did anything
+   * besides that field's own value change (a request, another control)? — and how many such types in
+   * a row into the same field changed nothing else.
+   */
+  let typeProbe: { key: string; label: string; at: number; background: Set<string>; state: string } | null = null;
+  let typeNoEffect: { key: string; count: number } | null = null;
+  /** #237: actions the run attempted (any target op or reload, landed or not), and early `blocked`s refused. */
+  let actionAttempts = 0;
+  let earlyBlocked = 0;
+  /**
+   * #276: steps since the last executed page-changing action that were jevitate's own refusals, or
+   * scrolls that moved the page (the app answered them). A stall over such steps is the run's (nothing it tried reached the app), never an app
+   * `ui-no-progress` hang.
+   */
+  let refusedSinceMutation = 0;
+  let scrollsSinceMutation = 0;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -692,6 +735,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** A control acted on successfully is no longer the blocker. */
   const cleared = (c: Control): void => {
     if (blockers.target?.key === keyOf(c)) blockers.target = null;
+  };
+  /**
+   * #272 / #294: a REAL action on `c` failed (act ran, `ok: false`). Tells the model when the target
+   * is withheld; returns true when the run must stop (`stop` / `incomplete` are set) — too many
+   * failed actions in a row, naming the overlay that covers the page when there is one.
+   */
+  const noteFailedAct = async (c: Control, reason: string | undefined): Promise<boolean> => {
+    const v = failedActs.fail(keyOf(c), quote(c.name || c.summary, 80), reason ?? "?");
+    if (v.note !== null) history.push(v.note);
+    if (!v.stop) return false;
+    const n = failedActs.consecutive;
+    const last = quote(failedActs.lastReason() ?? "?", 200);
+    const covered = failedActs.dominantCause() === "covered";
+    const overlay = covered ? await page.evaluate(openOverlayName).catch(() => null) : null;
+    if (overlay !== null) {
+      incomplete = `blocked by an overlay: ${n} actions in a row failed because ${overlay} covers the page — it was never dismissed (last: ${last})`;
+      stop = "blocked";
+    } else {
+      incomplete = `stuck: ${n} actions in a row failed${covered ? " (their targets were covered)" : ""} (last: ${last})`;
+      stop = "no-progress";
+    }
+    return true;
   };
   const replyWaitMs = cfg.replyWaitMs ?? REPLY_WAIT_MS;
   const replyCeilingMs = Math.max(replyWaitMs, cfg.replyCeilingMs ?? REPLY_CEILING_MS);
@@ -806,7 +871,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
+    failedActs.succeeded();
+    if (!label.startsWith("type ")) typeNoEffect = null;
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
+    refusedSinceMutation = 0;
+    scrollsSinceMutation = 0;
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
   };
@@ -1068,6 +1137,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const m = track.lastMutation;
         if (
           m !== null &&
+          // #276: the steps since were refusals / moved scrolls — the app answered: plain no-progress.
+          refusedSinceMutation === 0 &&
+          scrollsSinceMutation === 0 &&
           !m.sawNewState &&
           snap.signature !== m.before &&
           m.seenBefore.has(snap.signature) &&
@@ -1156,11 +1228,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // #168 — a control the safety policy already refused this run is withheld from now on (never
       // re-offered, so the model cannot re-choose it and burn another action on the same refusal).
       if (refusedKeys.size > 0) modelControls = modelControls.filter((c) => !refusedKeys.has(keyOf(c)));
+      // #272 / #294 — a target whose action failed twice as covered / unreachable is withheld until
+      // an action succeeds (the model was told why).
+      {
+        const withheld = failedActs.withheld();
+        if (withheld.size > 0) modelControls = modelControls.filter((c) => !withheld.has(keyOf(c)));
+      }
 
       // Conversation bookkeeping (independent code). A navigation takes any typed text with it;
       // a field that left the page took its text too.
       const path = safePath(snap.url);
       if (lastPath !== null && path !== lastPath) {
+        failedActs.succeeded();
         unsent.submitted();
         valueLog.submitted();
         save.reset();
@@ -1176,6 +1255,20 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       prevSignature = snap.signature;
       const keys = new Map<string, Control>(snap.controls.map((c) => [keyOf(c), c]));
+      // #242: what the last plain `type` did besides setting its own field's value.
+      if (typeProbe !== null) {
+        const p = typeProbe;
+        typeProbe = null;
+        const sent = requestsStartedSince(monitorFor(page), p.at, p.background);
+        if (sent.length === 0 && stateBesides(snap, p.key) === p.state) {
+          const count: number = typeNoEffect?.key === p.key ? typeNoEffect.count + 1 : 1;
+          typeNoEffect = { key: p.key, count };
+          history.push(
+            `typing into ${p.label} changed nothing but its own value (no request, nothing else on the page changed) — ` +
+              "submit it (its form's button, or Enter) or do something else; typing it again will not help",
+          );
+        } else typeNoEffect = null;
+      }
       unsent.retain(new Set(keys.keys()));
       if (offerBaseline !== null) {
         const before = offerBaseline;
@@ -1327,6 +1420,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       ): void => {
         const op = extra.op ?? decision.op;
         const target = extra.control === undefined ? decision.control : extra.control;
+        if (!actOk && extra.origin === "engine") refusedSinceMutation += 1;
         if (op === "type" || op === "send") auth.noteTyped(target, snap.url, actOk, target !== null && isBound(target));
         // #225: typed credentials make the pending submit a sign-in, never a save.
         if ((op === "type" || op === "send") && actOk && target !== null && (isBound(target) || isCredentialField(target))) save.noteCredential();
@@ -1639,6 +1733,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           statusAfter = "waiting";
           continue;
         }
+        // #237: giving up before trying anything proves nothing about the app. Refused (and the model
+        // told to explore) while the page offers controls; a model that insists ends `inconclusive`.
+        const untried = modelControls.filter((c) => c.enabled);
+        // A find-out goal that already made a grounded report attempt here searched the page (#207).
+        if (actionAttempts === 0 && untried.length > 0 && reportRejections === 0) {
+          earlyBlocked += 1;
+          if (earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
+            const nav = [...untried.filter((c) => (c.landmark ?? null) !== null), ...untried.filter((c) => (c.landmark ?? null) === null)];
+            const names = nav.slice(0, 6).map((c) => quote(c.name || c.summary, 40)).join(", ");
+            const reason = `blocked refused: nothing was tried yet — ${untried.length} control(s) on this page are untried (e.g. ${names}); explore them (the navigation, settings, menus) before giving up`;
+            history.push(reason);
+            record(false, reason, { origin: "engine" });
+            continue;
+          }
+          record(false, "model blocked before trying any action", { origin: "engine" });
+          failure = {
+            kind: "insufficient-coverage",
+            message: `the model gave up before trying any of the page's ${untried.length} controls — too little exploration to conclude the goal cannot be done`,
+          };
+          stop = "inconclusive";
+          break;
+        }
         record(true, "model blocked");
         // #235: a control the goal needed may have been refused — the reason says so, actionably.
         incomplete = `the model reported the goal cannot be advanced from this page${lastRefusal === null ? "" : ` (${lastRefusal})`}`;
@@ -1667,11 +1783,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             awaitingReply = false;
             busyWaitedMs = 0;
           }
+          // #241: no reply and nothing of the send's in flight (no request, no busy sign) — this wait
+          // was quiet, not patience: repeated, it ends the run instead of listening on.
+          const idle = !reply.received && reply.endedBy === "idle";
           note = reply.received
             ? `waited ${((now() - t0) / 1000).toFixed(1)}s → reply: ${quote(reply.text, 300)}`
-            : `waited ${((now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
-          changed = true;
-          quietWaits = 0;
+            : idle
+              ? `waited ${((now() - t0) / 1000).toFixed(1)}s (no reply, and the page shows no sign of working on one)`
+              : `waited ${((now() - t0) / 1000).toFixed(1)}s (the reply is still on its way)`;
+          changed = !idle;
+          quietWaits = idle ? quietWaits + 1 : 0;
           record(true, note, reply.received ? { reply } : {});
         } else if (decision.op === "wait" && jobWaitedMs < jobWaitMs && (await readInProgressStatus(page)) !== null) {
           // The page shows an in-progress status (#92: "Simulating…", aria-busy, a job "is running")
@@ -1733,6 +1854,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // the pointer, else the window) until it settles, so this never reads immediately after the
           // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
+          if (r.ok && r.moved === true) scrollsSinceMutation += 1;
           changed = r.moved === true;
           lastScrollMoved = r.ok && changed;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
@@ -1766,6 +1888,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       idleSteps = 0;
       quietWaits = 0;
+      actionAttempts += 1;
 
       if (decision.op === "reload") {
         // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
@@ -1799,8 +1922,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (r.ok) {
           recorder.navigate(page.url(), at);
           track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
+          refusedSinceMutation = 0;
+          scrollsSinceMutation = 0;
           track.lastRecordedTarget = null;
           tracker.countAction();
+          failedActs.succeeded();
           // A reload retries the last submit: retyping what it sent is a retry, not a repeat (#184).
           valueLog.reloaded();
           save.reset();
@@ -1932,6 +2058,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           value: placeholder,
         });
         lastActedOp = decision.op;
+        if (!r.ok && (await noteFailedAct(control, (r.reason ?? "").split(value).join(placeholder)))) break;
         continue;
       }
 
@@ -1962,6 +2089,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             history.push(`edit failed: ${failNote(r.reason, control)}`);
           }
           record(r.ok, r.ok ? what : failNote(r.reason, control), planned.edit.value === undefined ? {} : { value: planned.edit.value });
+          if (!r.ok && (await noteFailedAct(control, r.reason))) {
+            lastActedOp = decision.op;
+            break;
+          }
         }
         lastActedOp = decision.op;
         continue;
@@ -2045,11 +2176,28 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (op === "send") {
           const baseline = await readPageText(page, secrets);
           const before = new Set(keys.keys());
+          const sendBackground = backgroundEndpoints(monitorFor(page), at);
           const r = await act(cfg.actor, { op: "send", control, value: message, candidates: snap.controls });
           if (!r.ok) {
             history.push(`send failed: ${r.reason ?? "?"}`);
             record(false, forcedNote === null ? r.reason : `${forcedNote}; ${r.reason ?? ""}`, { op, message });
             lastActedOp = op;
+            if (await noteFailedAct(control, r.reason)) break;
+            continue;
+          }
+          // #241: a send that started no request and changed nothing on the page was not sent (Enter
+          // in a field whose real submit is a separate control): a failed send, never a pending reply.
+          const checkedFrom = now();
+          await monitorFor(page).waitSettled({ ceilingMs: 3_000 }).catch(() => undefined);
+          if (
+            requestsStartedSince(monitorFor(page), at, sendBackground).length === 0 &&
+            newPageText(baseline, await readPageText(page, secrets), "").trim() === ""
+          ) {
+            const reason = `message was not sent: ${r.submittedVia?.kind === "click" ? `clicking ${quote(r.submittedVia.control.name, 40)}` : "Enter"} in ${quote(control.name || control.summary, 60)} started no request and changed nothing on the page`;
+            history.push(`${reason} — look for a send / continue control that submits it (it may need something else first)`);
+            record(false, reason, { op, message });
+            lastActedOp = op;
+            if (await noteFailedAct(control, reason)) break;
             continue;
           }
           recorder.fill(control.descriptor, message, at);
@@ -2061,7 +2209,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           unsent.submitted();
           conversation.sent.push(message);
           preSend ??= baseline;
-          const reply = await waitForReply(page, { secrets, baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
+          // The reply wait counts from the send: the check above already waited part of it.
+          const checkedMs = now() - checkedFrom;
+          const listened = await waitForReply(page, {
+            secrets,
+            baseline,
+            sent: message,
+            timeoutMs: Math.max(1, replyWaitMs - checkedMs),
+            ceilingMs: Math.max(1, replyCeilingMs - checkedMs),
+          });
+          const reply: ReplyResult = { ...listened, waitedMs: listened.waitedMs + checkedMs };
           if (reply.received) {
             conversation.latestReply = reply.text;
             replies.add(snap.url, reply.text);
@@ -2092,6 +2249,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         record(r.ok, r.reason, { message });
         lastActedOp = op;
+        if (!r.ok && (await noteFailedAct(control, r.reason))) break;
         continue;
       }
 
@@ -2105,6 +2263,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (op === "select" && control.options !== undefined && control.options.length > 0) {
         // Options-aware select (J-5): the generator sees the real options, and code selects only an
         // option the page actually has — never a guessed value.
+        // #273: never the option already selected (a no-op), never a placeholder ("—", "Select…")
+        // unless the goal asks to clear the field.
+        const current = control.selected ?? null;
+        const clearing = CLEARS_FIELD.test(cfg.goal);
+        const choices = control.options.filter((o) => o !== current && (clearing || !isPlaceholderOption(o)));
+        const untried = (): string => choices.map((o) => quote(o, 60)).join(", ");
+        if (choices.length === 0) {
+          const reason = `no other option to choose in ${control.name || control.summary}${current === null ? "" : ` (${quote(current, 60)} is already selected)`}`;
+          history.push(`select refused: ${reason}`);
+          record(false, reason, { origin: "engine" });
+          lastActedOp = op;
+          continue;
+        }
         let text: string | null;
         try {
           ({ text } = await fillHelper.valueFor({
@@ -2113,7 +2284,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
             secrets,
-            options: control.options,
+            options: choices,
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
@@ -2122,7 +2293,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           lastActedOp = op;
           continue;
         }
-        const option = text === null ? null : matchOption(text, control.options);
+        const named = text === null ? null : matchOption(text, control.options);
+        if (named !== null && !choices.includes(named)) {
+          // The current option (or a placeholder) again: never acted — the page would not change.
+          fillHelper.commit();
+          const why = named === current ? `${quote(named, 60)} is already selected` : `${quote(named, 60)} is a placeholder, not a choice`;
+          const reason = `select refused: ${why} in ${control.name || control.summary} — options not tried: ${untried()}`;
+          history.push(reason);
+          record(false, reason, { origin: "engine", value: named });
+          lastActedOp = op;
+          continue;
+        }
+        const option = named;
         if (option === null) {
           fillHelper.commit();
           const reason = `no valid option chosen for ${control.name} (fail-closed)`;
@@ -2145,6 +2327,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: option });
         lastActedOp = op;
+        if (!r.ok && (await noteFailedAct(control, r.reason))) break;
         continue;
       }
 
@@ -2195,9 +2378,45 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (decision.op === "type" && source !== "goal" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
           text = capFormText(text, FORM_TEXT_MAX_CHARS, control.tag === "textarea");
         }
-        const r = await act(cfg.actor, { op: decision.op, control, value: text });
+        // #242: retyping a field whose last type(s) changed nothing else — a search-like field is
+        // submitted this time (it searches on Enter); any other field ends the run once it is stuck.
+        const retypes = decision.op === "type" && typeNoEffect?.key === keyOf(control) ? typeNoEffect.count : 0;
+        if (retypes >= MAX_TYPE_NO_EFFECT) {
+          const reason = `stuck: typed into ${quote(control.name || control.summary, 60)} ${retypes} times in a row: nothing changed but its own value (no request, nothing else on the page)`;
+          record(false, reason, { origin: "engine" });
+          incomplete = reason;
+          stop = "no-progress";
+          break;
+        }
+        const submitSearch = retypes >= 1 && searchLike(control);
+        const typedAt = now();
+        const typedBackground = decision.op === "type" ? backgroundEndpoints(monitorFor(page), typedAt) : new Set<string>();
+        const typedState = stateBesides(snap, keyOf(control));
+        const r = submitSearch
+          ? await act(cfg.actor, { op: "send", control, value: text, candidates: snap.controls })
+          : await act(cfg.actor, { op: decision.op, control, value: text });
+        if (r.ok && submitSearch) {
+          recorder.fill(control.descriptor, text, at);
+          const via = r.submittedVia;
+          if (via !== undefined && via.kind === "click") recorder.click(via.control.descriptor, now());
+          else recorder.press("Enter", control.descriptor, now());
+          valueLog.typed(control.name || control.summary, text);
+          valueLog.submitted();
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
+          tracker.countAction();
+          fillHelper.commit();
+          typeNoEffect = null;
+          history.push(
+            `submitted ${quote(control.name || control.summary, 60)} with ${via?.kind === "click" ? `its ${quote(via.control.name, 40)} button` : "Enter"} (typing alone fired nothing) — searched for ${quote(text, 80)}`,
+          );
+          cleared(control);
+          record(true, "typed and submitted (typing alone fired nothing)", { value: text });
+          lastActedOp = decision.op;
+          continue;
+        }
         if (r.ok) {
           if (decision.op === "type") {
+            typeProbe = { key: keyOf(control), label: quote(control.name || control.summary, 60), at: typedAt, background: typedBackground, state: typedState };
             // A form field (not a message composer) is submitted with its form's own button; retyping
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
@@ -2217,6 +2436,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           history.push(`${decision.op} failed: ${failNote(r.reason, control)}`);
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control), { value: text });
+        if (!r.ok && (await noteFailedAct(control, r.reason))) {
+          lastActedOp = decision.op;
+          break;
+        }
       } else if (decision.op === "click") {
         // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
         // latest reply is a conversation turn: its reply is awaited like a `send`'s.
@@ -2306,6 +2529,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           ...(message === undefined ? {} : { message }),
           ...(reply === undefined ? {} : { reply }),
         });
+        if (!r.ok && (await noteFailedAct(control, r.reason))) {
+          lastActedOp = decision.op;
+          break;
+        }
       } else {
         // upload — act fails closed without a fixture.
         const r = await act(cfg.actor, { op: "upload", control, fixture });
@@ -2327,6 +2554,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           history.push(`upload failed: ${failNote(r.reason, control)}`);
         }
         record(r.ok, r.ok ? r.reason : failNote(r.reason, control));
+        if (!r.ok && (await noteFailedAct(control, r.reason))) {
+          lastActedOp = decision.op;
+          break;
+        }
       }
 
       lastActedOp = decision.op;

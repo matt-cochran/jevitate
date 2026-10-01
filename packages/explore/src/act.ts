@@ -194,6 +194,31 @@ function isClippedOrPulledOffscreen(el: Element): boolean {
 }
 
 /**
+ * BROWSER CODE — scrolls an element whose centre lies outside the viewport into view (centred), so
+ * the occlusion probe can hit-test it (#272). A visually-hidden (sr-only / skip-link) element is left
+ * alone: it is never where a user clicks.
+ */
+function scrollIntoViewForProbe(node: Node): void {
+  const el = node as Element;
+  const r = (el as HTMLElement).getBoundingClientRect();
+  if ((r.width <= 1 && r.height <= 1) || r.left <= -1_000 || r.top <= -1_000) return;
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  if (x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight) return;
+  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior });
+}
+
+/**
+ * BROWSER CODE — the element's box lies wholly outside the viewport (#294). A visually-hidden
+ * (sr-only / skip-link) element is never judged here (see `isHiddenSamePageAnchor` / the label path).
+ */
+function outsideViewport(node: Node): boolean {
+  const r = (node as HTMLElement).getBoundingClientRect();
+  if ((r.width <= 1 && r.height <= 1) || r.left <= -1_000 || r.top <= -1_000) return false;
+  return r.right <= 0 || r.bottom <= 0 || r.left >= window.innerWidth || r.top >= window.innerHeight;
+}
+
+/**
  * A same-page anchor (`<a href="#…">` whose target is THIS page) that is visually hidden by the
  * clip-to-nothing idiom — a "Skip to content" link is the common case. Playwright's actionability
  * treats it as clickable (non-zero-ish box, not `display:none`), so without this check the gate lets
@@ -251,6 +276,10 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
     try {
       visible = await handle.isVisible();
       enabled = visible && (await handle.isEnabled());
+      // #272: a target outside the viewport cannot be hit-tested where it is — bring it into view
+      // first (the click would scroll it there anyway), so an overlay that covers it there is named
+      // now instead of the click timing out against it.
+      if (visible && enabled) await handle.evaluate(scrollIntoViewForProbe).catch(() => undefined);
       cover = visible ? await handle.evaluate(occluderOf) : null;
     } catch (e) {
       // The handle resolved a moment ago but the element is gone by now (detached mid-check) —
@@ -260,6 +289,8 @@ async function gate(actor: Actor, control: Control): Promise<string | null> {
     if (!visible) return "target not visible";
     if (!enabled) return "target not enabled";
     if (cover !== null) return `target obscured by ${cover}`;
+    // #294: still wholly outside the viewport after being brought into view: nothing can reach it.
+    if (await handle.evaluate(outsideViewport).catch(() => false)) return "target not reachable: it lies outside the visible page (off-screen)";
     if (await isHiddenSamePageAnchor(handle, control, page.url())) {
       return "target not actionable: visually-hidden skip link";
     }

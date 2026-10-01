@@ -544,7 +544,15 @@ export class FillHelper {
  * it names none: the caller never selects a guessed option.
  */
 export function matchOption(text: string, options: readonly string[]): string | null {
-  const n = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
+  // #273: dashes and quotes are spelled loosely by a model ("$10k-$100k" for "$10k–$100k").
+  const n = (s: string): string =>
+    s
+      .replace(/[\u2010-\u2015\u2212]/g, "-")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"')
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
   const exact = options.find((o) => o === text);
   if (exact !== undefined) return exact;
   const t = n(text);

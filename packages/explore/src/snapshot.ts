@@ -43,6 +43,8 @@ export interface Control {
   readonly enabled: boolean;
   /** A native `<select>`'s selectable option labels (what a `select` may choose from). */
   readonly options?: readonly string[];
+  /** A native `<select>`'s currently selected option label (#273: a select of it is a no-op). */
+  readonly selected?: string | null;
   /** Model-facing one-liner (role/name/state). Never a raw secret value. */
   readonly summary: string;
   /**
@@ -165,7 +167,12 @@ const INTERACTIVE_SELECTOR = [
   "[role=switch]",
   "[role=treeitem]",
   "[contenteditable=true]",
+  // #287: a disclosure's summary ("Analysis & diagnostics") is what a user clicks to expand it.
+  "details > summary",
 ].join(",");
+
+/** #287: controls the goal names that are still kept past `maxCandidates` (never crowded out). */
+const MENTIONED_PAST_CAP = 10;
 
 /** Raw per-control facts gathered in-page (safe values only). */
 interface ControlFacts {
@@ -217,6 +224,22 @@ interface ControlFacts {
   readonly richText: boolean;
   /** See `Control.clippedOffscreen` (#75, #161). */
   readonly clippedOffscreen: boolean;
+  /**
+   * #272: a modal is open (`dialog:modal`, a visible `[aria-modal=true]`, or an open `<dialog>`
+   * drawn as a fixed overlay over much of the viewport) and this control is outside it — a user
+   * cannot reach it until the modal is dismissed, wherever it sits (even below the fold, where the
+   * centre-point occlusion probe cannot see the overlay).
+   */
+  readonly outsideModal: boolean;
+  /**
+   * #294: the control's box lies wholly outside what the page can ever bring into view — a fixed
+   * element (or one in a fixed panel, like a closed drawer translated off-screen) outside the
+   * viewport, or an in-flow element outside the document's scrollable area. Never judged inside a
+   * scroll container (scrolling it may reach the control) or for a visually-hidden (sr-only) one.
+   */
+  readonly unreachable: boolean;
+  /** #287: a disclosure summary's state (its `<details>` open); null for every other control. */
+  readonly expanded: boolean | null;
 }
 
 /**
@@ -247,6 +270,47 @@ function readControlFacts(node: Node): ControlFacts {
   // it). A `visible` control per the check above (non-zero box, not display:none) can still be
   // clipped to near-nothing or pulled off-screen by a large negative offset.
   const clippedOffscreen = (rect.width <= 1 && rect.height <= 1) || rect.left <= -1_000 || rect.top <= -1_000;
+  // #272: the open modal(s) — a control outside every one is behind it, however far down it sits.
+  const modals = Array.from(document.querySelectorAll('dialog[open], [aria-modal="true"]')).filter((m) => {
+    const ms = window.getComputedStyle(m as HTMLElement);
+    const mr = (m as HTMLElement).getBoundingClientRect();
+    if (ms.display === "none" || ms.visibility === "hidden" || mr.width <= 0 || mr.height <= 0) return false;
+    if (m.tagName.toLowerCase() !== "dialog") return true;
+    let modal = false;
+    try {
+      modal = m.matches(":modal");
+    } catch {
+      modal = false;
+    }
+    // A non-modal `<dialog open>` blocks the page only when it is drawn as an overlay (fixed, large).
+    return modal || (ms.position === "fixed" && mr.width * mr.height >= 0.25 * window.innerWidth * window.innerHeight);
+  });
+  const outsideModal = modals.length > 0 && !modals.some((m) => m === el || m.contains(el));
+  // #294: wholly outside what scrolling can ever bring into view.
+  let unreachable = false;
+  if (!clippedOffscreen && rect.width > 0 && rect.height > 0) {
+    let fixedBox: DOMRect | null = null;
+    let scroller = false;
+    for (let a: Element | null = el; a !== null && a !== document.documentElement; a = a.parentElement) {
+      const s = window.getComputedStyle(a as HTMLElement);
+      if (s.position === "fixed") {
+        fixedBox = (a as HTMLElement).getBoundingClientRect();
+        break;
+      }
+      if (a !== el && a !== document.body && /(auto|scroll)/.test(`${s.overflowX} ${s.overflowY}`)) scroller = true;
+    }
+    const outside = (r: DOMRect, w: number, h: number, dx: number, dy: number): boolean =>
+      r.right + dx <= 0 || r.bottom + dy <= 0 || r.left + dx >= w || r.top + dy >= h;
+    if (fixedBox !== null) {
+      // A fixed panel never scrolls: off the viewport (itself or the control in it) is unreachable.
+      unreachable =
+        outside(fixedBox, window.innerWidth, window.innerHeight, 0, 0) ||
+        (!scroller && outside(rect, window.innerWidth, window.innerHeight, 0, 0));
+    } else if (!scroller) {
+      const root = document.scrollingElement ?? document.documentElement;
+      unreachable = outside(rect, root.scrollWidth, root.scrollHeight, window.scrollX, window.scrollY);
+    }
+  }
 
   const roleAttr = norm(el.getAttribute("role")).split(" ")[0] ?? "";
   const roleByTag: Record<string, string> = {
@@ -254,6 +318,7 @@ function readControlFacts(node: Node): ControlFacts {
     button: "button",
     select: "combobox",
     textarea: "textbox",
+    summary: "button",
   };
   const roleByInput: Record<string, string> = {
     button: "button",
@@ -425,6 +490,9 @@ function readControlFacts(node: Node): ControlFacts {
     landmark,
     richText,
     clippedOffscreen,
+    outsideModal,
+    unreachable,
+    expanded: tag === "summary" ? (el.parentElement as HTMLDetailsElement | null)?.open === true : null,
   };
 }
 
@@ -444,6 +512,8 @@ function summarize(facts: DescribedFacts): string {
   if (!facts.enabled) bits.push("disabled");
   if (facts.checked === true) bits.push("checked");
   if (facts.checked === false) bits.push("unchecked");
+  if (facts.expanded === true) bits.push("expanded");
+  if (facts.expanded === false) bits.push("collapsed");
   if (facts.value !== null && facts.value !== "") bits.push(`value="${facts.value}"`);
   if (facts.richText) bits.push("rich text");
   if (facts.accept !== null && facts.accept !== "") bits.push(`accept=${facts.accept}`);
@@ -477,6 +547,7 @@ function computeSignature(
       checked: f.checked,
       value: f.value,
       selected: f.selected,
+      ...(f.expanded === null ? {} : { expanded: f.expanded }),
     })),
   });
 }
@@ -502,6 +573,20 @@ function readListItems(els: Element[], roles: string[]): Array<{ list: number; n
     const style = getComputedStyle(el);
     const visible = el.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
     return { list, name, visible };
+  });
+}
+
+/** BROWSER CODE — each candidate's approximate accessible name (aria-label, label, text, placeholder). */
+function readCheapNames(els: Element[]): string[] {
+  const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
+  return els.map((el) => {
+    const labels = (el as unknown as { labels?: NodeListOf<HTMLLabelElement> }).labels;
+    return (
+      norm(el.getAttribute("aria-label")) ||
+      norm(labels?.[0]?.textContent) ||
+      (el.tagName.toLowerCase() === "select" ? "" : norm(el.textContent)) ||
+      norm(el.getAttribute("placeholder"))
+    ).slice(0, 200);
   });
 }
 
@@ -544,12 +629,22 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
   // Bounded: a page with thousands of candidates never turns perception into a crawl.
   let evaluated = 0;
   const maxEvaluated = maxCandidates * 4;
+  // #287: past the cap, a control the goal names is still kept (bounded) — a disclosure below the
+  // first `maxCandidates` controls must never be unreachable. Its name is read cheaply, in one pass.
+  const mentioned = opts?.mentioned;
+  const cheapNames =
+    mentioned !== undefined && handles.length > maxCandidates
+      ? await page.locator(INTERACTIVE_SELECTOR).evaluateAll(readCheapNames).catch(() => null)
+      : null;
+  let pastCap = 0;
 
   for (const [i, handle] of handles.entries()) {
     try {
       if (controls.length >= maxCandidates || evaluated >= maxEvaluated) {
         truncated = true;
-        continue;
+        const name = cheapNames !== null && cheapNames.length === handles.length ? cheapNames[i] : undefined;
+        if (pastCap >= MENTIONED_PAST_CAP || name === undefined || name === "" || mentioned?.(name) !== true) continue;
+        pastCap += 1;
       }
       if (skip[i] === true) {
         truncated = truncated || skipReason[i] === "capped";
@@ -559,6 +654,11 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
       const raw = await handle.evaluate(readControlFacts);
       // Hidden file inputs are the sole exception (see the module doc).
       if (!raw.visible && raw.inputType !== "file") continue;
+      // #272: behind an open modal — never offered (a click there is intercepted by the modal).
+      if (raw.outsideModal) continue;
+      // #294: a control no scroll can bring into view (a closed panel translated off-screen) is not
+      // actionable — never offered (a hidden file input stays: `upload` needs no visible element).
+      if (raw.unreachable && raw.inputType !== "file") continue;
       // Occlusion — the ONE shared predicate (./occlusion.ts), also used by act()'s gate: a control
       // a user cannot click (covered by an overlay, or by an ancestor at its own centre) is not
       // offered. Off-screen controls stay eligible (scroll ops reach them).
@@ -584,6 +684,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         inputType: facts.inputType,
         enabled: facts.enabled,
         ...(facts.options === null ? {} : { options: facts.options }),
+        ...(facts.selected === null ? {} : { selected: facts.selected }),
         summary: summarize(facts),
         ...(facts.value === null || facts.value === "" ? {} : { value: facts.value }),
         form: facts.form,
