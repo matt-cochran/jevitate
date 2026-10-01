@@ -294,6 +294,8 @@ export class PageMonitor {
   readonly #contentTypes = new WeakMap<Request, string>();
   readonly #now: () => number;
   #lastNetworkActivity: number;
+  /** The last main-frame navigation (activity no request filter can discount). */
+  #lastNavigation: number;
   /** Long-lived requests that are not in-flight work, and why. */
   readonly #background = new Map<Request, "stream" | "ignored" | "long-poll">();
   #ignore: (url: string) => boolean = () => false;
@@ -306,6 +308,7 @@ export class PageMonitor {
     this.#page = page;
     this.#now = now;
     this.#lastNetworkActivity = now();
+    this.#lastNavigation = now();
     page.on("request", (r) => {
       const startedAt = this.#now();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.#documentNavStartedAt = startedAt;
@@ -408,8 +411,24 @@ export class PageMonitor {
     // A navigation is activity too (a request abandoned by an unloading document is reported by
     // Chromium as `requestfailed`, which ends it above).
     page.on("framenavigated", (frame) => {
-      if (frame === page.mainFrame()) this.#touch();
+      if (frame === page.mainFrame()) {
+        this.#lastNavigation = this.#now();
+        this.#touch();
+      }
     });
+  }
+
+  /**
+   * The latest network activity, discounting requests `ignore` names (and `--settle-ignore`d ones):
+   * the last start of one still in flight, the last end of a finished one, or a navigation.
+   */
+  #lastActivityExcept(ignore: (r: InflightRequest) => boolean): number {
+    let at = this.#lastNavigation;
+    for (const [r, info] of this.#inflight) {
+      if (this.#background.get(r) !== "ignored" && !ignore(info)) at = Math.max(at, info.startedAt);
+    }
+    for (const c of this.#completed) if (c.ignored !== true && !ignore(c)) at = Math.max(at, c.endedAt);
+    return at;
   }
 
   #touch(): void {
@@ -588,15 +607,21 @@ export class PageMonitor {
     };
   }
 
-  async waitSettled(opts: { quietMs?: number; ceilingMs: number }): Promise<SettleResult> {
+  /**
+   * Waits until the page has settled: no pending request and no network or DOM activity for
+   * `quietMs`, bounded by `ceilingMs`. `ignoreRequest` discounts requests that are not the awaited
+   * work — the page's background polling (#241): neither pending nor activity.
+   */
+  async waitSettled(opts: { quietMs?: number; ceilingMs: number; ignoreRequest?: (r: InflightRequest) => boolean }): Promise<SettleResult> {
     await this.instrument();
+    const ignore = opts.ignoreRequest;
     const quietMs = opts.quietMs ?? SETTLE_QUIET_MS;
     const start = this.#now();
     const remaining = (): number => opts.ceilingMs - (this.#now() - start);
     for (;;) {
       if (remaining() <= 0) return this.#result(false, start);
       const pending = [...this.#inflight.entries()].filter(
-        ([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r),
+        ([r, info]) => !STREAM_TYPES.has(info.resourceType) && !this.#background.has(r) && !(ignore?.(info) ?? false),
       );
       if (pending.length > 0) {
         const oldest = Math.min(...pending.map(([, info]) => info.startedAt));
@@ -633,8 +658,10 @@ export class PageMonitor {
       // before it must still stay quiet for `quietMs` once the action was dispatched, or an effect
       // landing a few hundred ms later would be snapshotted into the NEXT action.
       const actionAt = this.#actionAt ?? Number.NEGATIVE_INFINITY;
-      const quietFor = t - Math.max(this.#lastNetworkActivity, dom.lastMutation, actionAt);
-      if (quietFor >= quietMs && this.pending().length === 0) return this.#result(true, start);
+      const network = ignore === undefined ? this.#lastNetworkActivity : this.#lastActivityExcept(ignore);
+      const quietFor = t - Math.max(network, dom.lastMutation, actionAt);
+      const stillPending = ignore === undefined ? this.pending().length : this.pending().filter((r) => !ignore(r)).length;
+      if (quietFor >= quietMs && stillPending === 0) return this.#result(true, start);
       await this.#sleepOrActivity(Math.min(quietMs - Math.max(0, quietFor), remaining()));
     }
   }

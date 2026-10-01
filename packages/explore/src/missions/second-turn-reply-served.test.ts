@@ -12,7 +12,8 @@ import { ScriptedJudge, withSession } from "../testkit.js";
  * run's OWN previous turn wrote to the chat endpoint too, so a second message's `POST /api/chat` —
  * the LLM call itself, held open while the model thinks — was taken for background traffic: the reply
  * wait saw "no sign of work", gave up after the idle patience and missed the reply. An in-flight
- * first-party write the action started IS activity; the page's background poll is not.
+ * first-party write the action started IS activity; the page's background poll is not — neither
+ * while the reply is awaited nor while a landed reply is settling.
  */
 
 const HTML = `<!doctype html><html><body>
@@ -21,7 +22,10 @@ const HTML = `<!doctype html><html><body>
 <div id="log" role="log"></div>
 <input id="box" aria-label="Message" /><button id="send" type="button">Send</button>
 <script>
-  setInterval(() => fetch("/api/balance").then((r) => r.json()).then((b) => { document.getElementById("bal").textContent = String(b.credits); }).catch(() => {}), 1000);
+  // A background poll that re-renders only on change (as a framework would).
+  const poll = () => fetch("/api/balance").then((r) => r.json()).then((b) => { const el = document.getElementById("bal"); if (el.textContent !== String(b.credits)) el.textContent = String(b.credits); }).catch(() => {});
+  poll();
+  setInterval(poll, 1000);
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   function add(text) { const p = document.createElement("p"); p.textContent = text; log.appendChild(p); }
@@ -104,6 +108,19 @@ describe("#241 × #283 — the next chat turn's own in-flight write is the reply
       expect(sends[0]?.reply).toMatchObject({ received: true });
       expect(sends[1]?.reply).toMatchObject({ received: true });
       expect(sends[1]?.reply?.text).toContain("second answer");
+    },
+    90_000,
+  );
+
+  it(
+    "the page's background poll never holds a landed reply's settle open (the reply is taken once it holds still)",
+    async () => {
+      const r = await run();
+      const first = r.transcript.find((e) => e.op === "send" && e.actOk);
+      expect(first?.reply).toMatchObject({ received: true });
+      // The first reply lands at once: the send's ~3s not-sent check plus the quiet window — never
+      // the 15s settle ceiling a 1s poll used to keep open.
+      expect(first?.reply?.waitedMs).toBeLessThan(10_000);
     },
     90_000,
   );

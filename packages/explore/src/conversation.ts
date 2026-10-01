@@ -374,7 +374,10 @@ export async function waitForReply(
     if (busy !== null || inFlight) lastActivity = Date.now();
     if (isReply(latest) && busy === null) {
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.
-      await monitor.waitSettled({ quietMs, ceilingMs: Math.max(1, Math.min(remaining(), 15_000)) }).catch(() => undefined);
+      // The page's background polling (a balance poll) never holds the reply's settle open (#241).
+      await monitor
+        .waitSettled({ quietMs, ceilingMs: Math.max(1, Math.min(remaining(), 15_000)), ignoreRequest: (r) => background.has(endpointKey(r)) })
+        .catch(() => undefined);
       const againText = await readPageText(page, secrets);
       const again = newTurnText(opts.baseline, againText, sent);
       const stillBusy =
