@@ -200,8 +200,11 @@ describe("#225 — a usability save job", () => {
  * judged (a grounded-judgment `done`, no code proof) is still `inconclusive` (degraded-environment).
  */
 describe("#213 — a code-verified usability job stands on a starved host", () => {
+  // Frozen clock (as in host-health-served.test.ts): with background sampling off, a step counts as
+  // starved only inside STARVATION_WINDOW_MS (15 s) of a sample; on the wall clock a slow, loaded
+  // test host pushed later steps out of the window and `hostHealth.degraded` went false.
   const starved = (): HostHealthSampler =>
-    new HostHealthSampler({ probe: async () => ({ sample: null, overThreshold: null, loadPerCore: 3.5 }), eventLoopLagMs: () => 2, intervalMs: 0, attribute: true, cores: 4 });
+    new HostHealthSampler({ probe: async () => ({ sample: null, overThreshold: null, loadPerCore: 3.5 }), eventLoopLagMs: () => 2, intervalMs: 0, attribute: true, cores: 4, now: () => 0 });
 
   it(
     "--success held: clean (exit 0), whatever the host",
