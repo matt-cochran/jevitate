@@ -157,6 +157,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     successChecks: "a queued goal carries one successAssertion",
     successWhen: QUEUE_NARROW,
     allowVacuousChecks: QUEUE_NARROW,
+    actionDeltas: QUEUE_NARROW,
     secrets: "redaction comes from the target's secret fields",
     fixture: QUEUE_NARROW,
     nowIso: SEAM,

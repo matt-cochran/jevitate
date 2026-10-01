@@ -149,6 +149,7 @@ export function formatMissionHuman(result: unknown): string {
     lines.push(`${tag("REASON")}${str(result.reason)}`);
   }
   for (const l of uxLines(result)) lines.push(l);
+  lines.push(...deltaLines(result));
   const answer = answerLine(result.answer);
   if (answer !== undefined) lines.push(`${tag("ANSWER")}${answer}`);
   // #245: the run's --record-video files.
@@ -159,6 +160,34 @@ export function formatMissionHuman(result: unknown): string {
   const firstFp = [...gating, ...hangs].find((d) => d.fingerprint !== undefined)?.fingerprint;
   lines.push(nextHint(firstFp, resultPath));
   return `${lines.join("\n")}\n`;
+}
+
+/** Most per-step delta lines the human output shows (the latest ones; `--json` has every step). */
+const HUMAN_DELTA_STEPS = 8;
+
+/**
+ * #303 (`--action-deltas`): what each action changed — one short line per step that carries a delta
+ * (the latest few), after a verdict count. Nothing at all when the run recorded none.
+ */
+function deltaLines(result: Record<string, unknown>): string[] {
+  const steps = arr(result.transcript)
+    .filter(isRecord)
+    .filter((e) => isRecord(e.delta));
+  if (steps.length === 0) return [];
+  const verdicts = new Map<string, number>();
+  for (const e of steps) {
+    const v = str((e.delta as Record<string, unknown>).verdict) ?? "?";
+    verdicts.set(v, (verdicts.get(v) ?? 0) + 1);
+  }
+  const out = [`${tag("DELTAS")}${steps.length} action(s): ${[...verdicts].map(([v, n]) => `${n} ${v}`).join(", ")}`];
+  for (const e of steps.slice(-HUMAN_DELTA_STEPS)) {
+    const d = e.delta as Record<string, unknown>;
+    const first = arr(d.changes).filter(isRecord).map((c) => str(c.text)).find((t) => t !== undefined);
+    const what = first ?? arr(d.announcements).map(str).find((t) => t !== undefined) ?? str(d.why) ?? "";
+    const line = `step ${typeof e.step === "number" ? e.step : "?"} ${str(d.action) ?? ""}: ${str(d.verdict) ?? "?"}${what === "" ? "" : ` — ${what}`}`;
+    out.push(`${tag("DELTA")}${line.length > 160 ? `${line.slice(0, 159)}…` : line}`);
+  }
+  return out;
 }
 
 /**

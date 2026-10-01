@@ -319,6 +319,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--action-deltas` | opt-in (#303; --strategy goal or usability): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the no-progress check; adds `delta` to every transcript and Recording step and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
 | `--actor <name=storageState>` | multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, from its own storageState); every other actor is an observer in its OWN fresh context that only runs the --invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |

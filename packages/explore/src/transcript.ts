@@ -4,6 +4,7 @@ import type { Control, Snapshot } from "./snapshot.js";
 import { REDACTION_MASK, redactText, redactUrl } from "./redact.js";
 import type { PageTiming, RequestTiming } from "./timing.js";
 import type { RunAnswer } from "./answer.js";
+import type { ActionDelta } from "./action-delta.js";
 
 /**
  * The transcript's copy of a perception's timing: redacted, and WITHOUT the per-request sample list
@@ -135,6 +136,12 @@ export interface TranscriptEntry {
   readonly href?: string | null;
   /** The acted control's raw `aria-current` attribute, or null. #127. */
   readonly ariaCurrent?: string | null;
+  /**
+   * #303 — what this step's action changed on the page (redacted, bounded), with code's verdict
+   * (`no-change` / `relevant-change` / `inconclusive`). Additive: attached once the next perception
+   * read the page, so it appears in the transcript file from the following step's flush on.
+   */
+  readonly delta?: ActionDelta;
 }
 
 /** What came back after a message was sent. */
@@ -236,6 +243,20 @@ export class TranscriptLog {
     this.#entries.push(entry);
     this.#listener?.(entry, this.#entries);
     return entry;
+  }
+
+  /**
+   * #303: attaches an action's delta to the already-recorded step `step` (redacted again here). The
+   * listener is NOT re-fired (a listener's per-entry side effects must not repeat): the next flush of
+   * `all` carries it.
+   */
+  attachDelta(step: number, delta: ActionDelta): void {
+    const i = step - 1;
+    const e = this.#entries[i];
+    if (e === undefined || e.delta !== undefined) return;
+    const r = (v: string): string => redactText(v, this.#secrets);
+    const clean = JSON.parse(r(JSON.stringify(delta))) as ActionDelta;
+    this.#entries[i] = { ...e, delta: clean };
   }
 
   /** The number of the next step to be recorded. */

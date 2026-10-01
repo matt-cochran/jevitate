@@ -230,6 +230,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         success: many("--success"),
         successWhen: s("--success-when", { enum: ["final", "held"] }),
         allowVacuousChecks: b("--allow-vacuous-checks"),
+        actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
         route: many("--route"),
         scope: s("--scope", { enum: ["app"] }),

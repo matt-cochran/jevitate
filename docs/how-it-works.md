@@ -37,6 +37,54 @@ A model can suggest where to look. It never decides whether the software passed.
    **regression capture** commits a failure as a Recording plus oracle, minimized where it can
    be. **jevitate check** runs Journeys, goals, missions and re-checks as a CI gate.
 
+## Action deltas: what each action changed
+
+**Opt-in** (`--action-deltas` on `explore --strategy goal` and `--strategy usability`; MCP
+`actionDeltas`; check-suite item option `actionDeltas`). Off by default: nothing is captured,
+nothing is added to any prompt or result, and the no-progress check works on the page signature
+alone. On, after every action of the run code records **what changed on the page** (#303) as one
+structured, redacted record that code, Jev and the model all read. Replays (`journey run`,
+`journey demo`, `demo`, `verify-fix`) do not record deltas: they replay a Recording's steps and
+judge them by its assertions; a Recording made with `--action-deltas` carries the deltas of the
+run that made it (`delta` on each step, a measurement, never replayed).
+
+- **Capture.** An accessibility snapshot (Playwright `ariaSnapshot`) right before the action and
+  at the next settled perception, plus one of the target's own form, dialog or region; the
+  announcements the page monitor's observer noted in between (a toast or banner gone before the
+  page settled); the requests the action set off (method, path, status; the page's background
+  polling excluded); and the URL and title. Everything is redacted first (see
+  [safety.md](./safety.md)).
+- **Noise control, code first.** The settled page is snapshotted twice with no action in between
+  (at perception and right before the action, and once per route, after its first action, at
+  least one second apart): nodes that change on their own (a clock, a carousel, a counter, a random
+  id) are volatile for that route and dropped. The rest is ranked by closeness to the action: the
+  target itself, its form / dialog / region, live regions (`status`, `alert`, `log`), dialogs that
+  opened or closed. A big change (a list of 50 rows replaced) is collapsed into one line per
+  container, and the record is capped (12 changes, 160 characters each).
+- **Relevance, Jev advisory.** Changes code could not tie to the action are labelled by Jev:
+  relevant, irrelevant, or "changes on its own". An ignore rule is accepted only for a node code saw
+  change with no action, and is cached per route, so Jev is not asked on every action.
+- **Verdict, code only.** `no-change`: nothing changed after the volatility filter and no request
+  was sent. `relevant-change`: at least one change tied to the action (locality, a navigation, an
+  announcement, or a Jev `relevant` label). `inconclusive`: changes none of which is tied, a request
+  with nothing visible changing, or a partial capture (a canvas, a closed shadow root, a frame, a
+  snapshot timeout).
+- **Use (when on).** `no-change` is the only verdict that counts an action toward the no-progress stop;
+  `relevant-change` is progress; `inconclusive` counts as neither. Before acting, code states the
+  change it expects (the page navigates, the field shows the typed value, the message appears, the
+  checkbox flips) and compares it with the delta after; a mismatch is told to the model. Each
+  delta is attached to its transcript step (`delta`, also in the `--json` result's `transcript`) and
+  Recording step (`delta`, a measurement that is never replayed); the result gains `actionDeltas`
+  (verdict counts, per-action overhead), the human output a `DELTAS` count and a `DELTA` line per
+  recent step, and one bounded line (`effect of click "Save": relevant-change — …`, at most 400
+  characters) goes into the model's step history.
+- **Overhead (when on).** Two accessibility snapshots, one scoped snapshot and a diff per action:
+  measured at about 50–110 ms per action on a small page and 0.35–0.5 s on a 400-row page with 800
+  controls (real Chromium). Each snapshot is bounded at 1.5 s, past which the capture is partial.
+  Once per route, after its first action, the volatility baseline waits up to 1 s (never before an
+  action). Jev's relevance labels (cached per route, at most 8 calls a run) only for changes code
+  could not tie.
+
 ## Who decides what
 
 | Question | Decided by |

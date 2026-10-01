@@ -102,6 +102,27 @@ export interface SettleResult {
 }
 
 /**
+ * #303: what counts as an ANNOUNCEMENT the page made (a toast, a banner, a live region's update) —
+ * noted by the monitor's observer as it happens, so an action's delta still sees one that was gone
+ * before the page settled.
+ */
+export const TRANSIENT_SELECTOR =
+  "[aria-live]:not([aria-live=off]),[role=status],[role=alert],[role=log],[class*=toast],[class*=snackbar],[class*=notification]";
+/** A dialog counts as an announcement only when it is itself ADDED (never for edits inside it). */
+const TRANSIENT_DIALOG_SELECTOR = "[role=dialog],[role=alertdialog],dialog";
+/** Bound on the announcements the page keeps (oldest dropped first). */
+const TRANSIENT_MAX = 50;
+/** Bound (chars) on one announcement's text. */
+const TRANSIENT_TEXT_MAX = 200;
+
+/** One announcement the page made (raw page text — redact before keeping or sending it). */
+export interface TransientNote {
+  readonly t: number;
+  readonly role: string;
+  readonly text: string;
+}
+
+/**
  * In-page instrumentation (serialized; no closures). Idempotent: installed once per document.
  * `__jevitateMonitor.lastMutation` is the wall-clock time of the latest DOM mutation;
  * `docId` identifies the document (a new one after every navigation); `lcp` is the latest
@@ -128,10 +149,45 @@ const INSTRUMENT = `(() => {
     }
     return true;
   };
+  // #303: short-lived announcements (a toast, a banner, a live region's update) are often gone by the
+  // time the page settles and an action's delta is read: the SAME observer notes each one (bounded
+  // ring, raw text stays in the page until read; the reader redacts it before anything keeps it).
+  state.transients = [];
+  const ANNOUNCE = "${TRANSIENT_SELECTOR}";
+  const ADDED = ANNOUNCE + ",${TRANSIENT_DIALOG_SELECTOR}";
+  const announcer = (n) => {
+    const el = n === null ? null : n.nodeType === 1 ? n : n.parentElement;
+    if (el === null || el === undefined || typeof el.closest !== "function") return null;
+    return el.closest(ANNOUNCE);
+  };
+  const noteTransients = (records) => {
+    const seen = new Set();
+    for (const r of records) {
+      let el = null;
+      if (r.type === "characterData") el = announcer(r.target);
+      else if (r.type === "childList") {
+        el = announcer(r.target);
+        if (el === null) for (const n of r.addedNodes) { if (n.nodeType === 1 && n.matches(ADDED)) { el = n; break; } }
+      }
+      if (el === null || seen.has(el)) continue;
+      seen.add(el);
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_MAX});
+      if (text === "") continue;
+      const role = el.getAttribute("role") || (el.tagName === "DIALOG" ? "dialog" : "live");
+      const last = state.transients[state.transients.length - 1];
+      if (last && last.text === text && last.role === role) { last.t = Date.now(); continue; }
+      state.transients.push({ t: Date.now(), role, text });
+      if (state.transients.length > ${TRANSIENT_MAX}) state.transients.splice(0, state.transients.length - ${TRANSIENT_MAX});
+    }
+  };
   const start = () => {
     try {
       new MutationObserver((records) => {
         if (records.some(structural)) state.lastMutation = Date.now();
+        // Only while a run records action deltas (#303, opt-in): off, the observer does no more work.
+        if (window.__jevitateDeltasOn === true) {
+          try { noteTransients(records); } catch (e) { /* never let the note break settling */ }
+        }
       }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     } catch (e) { /* no document yet */ }
   };
@@ -485,6 +541,31 @@ export class PageMonitor {
     })().catch(() => false);
     try {
       return await Promise.race([probe, bound]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * #303: the announcements (toasts, banners, live-region updates) the page made at or after
+   * `sinceMs` (wall clock), oldest first — RAW page text: the caller redacts it before keeping it.
+   * Empty when the page cannot answer within `boundMs`.
+   */
+  async transientsSince(sinceMs: number, boundMs = 1_000): Promise<TransientNote[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<TransientNote[]>((resolve) => {
+      timer = setTimeout(() => resolve([]), Math.max(1, boundMs));
+    });
+    try {
+      return await Promise.race([
+        this.#page
+          .evaluate((since) => {
+            const m = (window as unknown as { __jevitateMonitor?: { transients?: Array<{ t: number; role: string; text: string }> } }).__jevitateMonitor;
+            return (m?.transients ?? []).filter((x) => x.t >= since).map((x) => ({ t: x.t, role: x.role, text: x.text }));
+          }, sinceMs)
+          .catch(() => [] as TransientNote[]),
+        bound,
+      ]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

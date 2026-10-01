@@ -157,6 +157,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
       "downgrade a vacuous --success check to a warning. By default a check satisfied before the run's first action — a page check that held on the seed page and never changed " +
         "(an empty result container), a requestMade/responseStatus matched only by a page-load or polling request — FAILS: it cannot verify the goal",
     )
+    .option(
+      "--action-deltas",
+      "opt-in (#303; --strategy goal or usability): record what each action changed on the page — an accessibility snapshot before and after, announcements, " +
+        "the action's requests — redacted, with a code verdict per step (no-change | relevant-change | inconclusive) used by the no-progress check; " +
+        "adds `delta` to every transcript and Recording step and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one",
+    )
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")
     .option(
       "--route <glob>",
@@ -479,6 +485,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         success: string[];
         successWhen?: string;
         allowVacuousChecks?: boolean;
+        actionDeltas?: boolean;
         feature?: string;
         route: string[];
         scope?: string;
@@ -711,6 +718,14 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             "E_EXPLORE_ARGS",
             `--success, --success-when and --allow-vacuous-checks are supported only with --strategy goal or usability (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`,
           ),
+        );
+        return;
+      }
+      // #303: action deltas are recorded by the goal loop (goal and usability runs) only — refused
+      // elsewhere, never silently ignored.
+      if (o.actionDeltas === true && (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability"))) {
+        emitExplore(
+          fail("E_EXPLORE_ARGS", `--action-deltas is supported only with --strategy goal or usability (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`),
         );
         return;
       }
@@ -1078,6 +1093,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
             ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
             ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+            ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           });
           // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
           // broken run or an unavailable analysis is 2.
@@ -1240,6 +1256,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           successChecks,
           ...(successWhen === undefined ? {} : { successWhen }),
           ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+          ...(o.actionDeltas === true ? { actionDeltas: true } : {}),
           allowlist,
           judge,
           gen,

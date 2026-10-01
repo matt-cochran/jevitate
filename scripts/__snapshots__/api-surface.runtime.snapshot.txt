@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (94 exports)
+# @jevitate/ai-core (98 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -41,6 +41,8 @@
   NoEligibleModelError: class
   OpenRouterGenerationGateway: class
   REDACTION_MASK: const (string)
+  REVEALED_SECRET_SELECTORS: array
+  REVEALED_SECRET_SHAPES: array
   RetryExhaustedError: class
   RetryingGenerationPort: class
   RetryingJudgmentPort: class
@@ -80,10 +82,12 @@
   priceCall: function
   realJevClientCall: function
   redactContext: function
+  redactCredentialShapes: function
   redactText: function
   redactUrl: function
   requireKeys: function
   retryTransient: function
+  revealedSecretsIn: function
   secretForms: function
   selectModel: function
   sumUsage: function
@@ -156,13 +160,14 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (324 exports)
+# @jevitate/explore (343 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
   ANSWER_PAGES_CHARS: const (number)
   ANSWER_VETO_BELOW: const (number)
   API_CREDENTIAL_HEADERS: array
+  ActionDeltas: class
   BoundsTracker: class
   BudgetMonitor: class
   CANARY_ATTRIBUTE: const (string)
@@ -183,6 +188,12 @@
   DEFAULT_VERIFY_REPLAYS: const (number)
   DEFERRED_EFFECT_MAX_MS: const (number)
   DEGRADED_STEP_MAJORITY: const (number)
+  DELTA_HISTORY_GUIDE: const (string)
+  DELTA_JEV_MAX_CALLS: const (number)
+  DELTA_LINE_MAX: const (number)
+  DELTA_MAX_CHANGES: const (number)
+  DELTA_PROMPT_CHARS: const (number)
+  DELTA_SNAPSHOT_TIMEOUT_MS: const (number)
   DEMO_HIGHLIGHT_MS: const (number)
   DEMO_OVERLAY_ATTR: const (string)
   DEMO_OVERLAY_HIDE_STYLE: const (string)
@@ -261,6 +272,7 @@
   STARVED_EVENT_LOOP_LAG_MS: const (number)
   STARVED_LOAD_PER_CORE: const (number)
   STREAMING_CONTENT: object
+  SUMMARY_GROUP_MIN: const (number)
   SafetyPolicy: class
   ScopeUnderivableError: class
   SecretFieldSpecError: class
@@ -269,12 +281,14 @@
   TARGET_FREE_ACTIONS: array
   TARGET_LIVENESS_PROBE_MS: const (number)
   TRANSCRIPT_CONTROL_CAP: const (number)
+  TRANSIENT_SELECTOR: const (string)
   TargetUnresponsiveError: class
   TotpSeedError: class
   TranscriptLog: class
   UNSAVED_WRITE_REASON: const (string)
   UPLOAD_OP_GUIDE: const (string)
   UnauthorizedExploreTargetError: class
+  VOLATILITY_GAP_MS: const (number)
   ValueCapturingGenerationPort: class
   VetoedAnswers: class
   WAIT_OP_MS: const (number)
@@ -301,6 +315,7 @@
   candidateId: function
   capFormText: function
   capMessage: function
+  captureAria: function
   chatReply: function
   checkFieldValue: function
   classifyHang: function
@@ -317,15 +332,20 @@
   defaultLoadPerCore: function
   defectTitle: function
   degradedEnvironmentOutcome: function
+  deltaPromptLine: function
+  deltaRecord: function
   demoOverlayFor: function
   describeAction: function
   describeAssertionSpec: function
+  describeChange: function
   describeCheck: function
+  describeExpected: function
   describeFailure: function
   describeStatus: function
   describeUnreachable: function
   detectForms: function
   detectOverflow: function
+  diffAria: function
   disambiguate: function
   draftForCrash: function
   draftForDefect: function
@@ -337,6 +357,7 @@
   errorPageReason: function
   evaluateNetworkCheck: function
   exactLiterals: function
+  expectedChange: function
   explore: function
   failureLine: function
   fieldKind: function
@@ -397,6 +418,7 @@
   outOfScopeHangNote: function
   p50: function
   pagesContext: function
+  parseAria: function
   parseFirstNumber: function
   parseInterceptor: function
   parseNumbers: function
@@ -411,6 +433,7 @@
   quoteIsOnlyControlNames: function
   recordCoverageHang: function
   recordingStepCount: function
+  redactAriaLine: function
   redactContext: function
   redactControl: function
   redactPageText: function

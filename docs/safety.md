@@ -177,11 +177,26 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   revealed value the run *reports* (a find-out answer, the transcript) is not redacted unless it
   is registered.
 
+- **Action deltas** (#303, opt-in with `--action-deltas`) — what each action changed on the page (an accessibility snapshot
+  before and after, the announcements in between, the action's requests, URL and title) — are
+  redacted **first**: each snapshot line is scrubbed inside the capture, before it is parsed, kept
+  or compared, so no raw value outlives the capture call. Scrubbed: registered secrets, bound
+  secret-field values, the value of any field named like a credential (password, passcode, secret,
+  token, API key, one-time code, OTP, PIN, CVC), the values shown in `type=password` fields and in
+  the secret-marked elements above (learned in memory only, like the pixel mask), and every
+  credential-shaped value. Announcements and request paths get the same scrub. Every delta is then
+  checked by the fail-closed guard before it is stored (transcript, Recording) or sent (the model's
+  step history, Jev's relevance question). The same limit as the pixel mask applies: a secret with
+  no marker, no credential name and no credential shape is not recognised — register it.
+
 **Page text is data, not instructions.** Model prompts carry a prompt-injection guard, and page
 content is passed as untrusted data.
 
 **A model never decides a verdict.** Defects come from hard signals, your success checks, your
-invariants and your log matchers, all evaluated by code. A model's "this looks broken" is recorded
+invariants and your log matchers, all evaluated by code. An action's delta verdict (`no-change`,
+`relevant-change`, `inconclusive`) is code's too: Jev may label a change relevant or irrelevant and
+propose an ignore rule, but a rule is accepted only for a node code saw change with no action, and
+Jev can never turn a non-empty diff into `no-change`. A model's "this looks broken" is recorded
 as advisory and never gates an outcome, heals a step or files a defect. Write and irreversible
 steps are never auto-healed.
 

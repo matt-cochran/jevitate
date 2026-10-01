@@ -110,6 +110,7 @@ import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince, writesStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
+import { ActionDeltas, deltaPromptLine, deltaRecord, type ActionDeltaStats, type DeltaVerdict } from "./action-delta.js";
 
 
 /** The judgment API's refusal of an over-long option list (#192). */
@@ -352,6 +353,15 @@ export interface ExploreConfig {
    * jevitate itself (see `demo-overlay.ts`); absent/false injects nothing. Never changes the run.
    */
   readonly demoOverlay?: boolean;
+  /**
+   * #303 — action deltas (OPT-IN, off by default): after each action, what changed on the page
+   * (code's verdict `no-change` / `relevant-change` / `inconclusive`), attached to the transcript and
+   * the Recording, told to the model, and then the ONLY input that may count an action toward
+   * no-progress. Off (absent / `false`): nothing is captured, nothing is added to any prompt, and
+   * the page signature alone decides no-progress, exactly as before. `jev: true` adds Jev's
+   * advisory relevance labels; `volatilityGapMs` is the route baseline's no-action gap.
+   */
+  readonly actionDeltas?: boolean | { readonly jev?: boolean; readonly volatilityGapMs?: number };
 }
 
 export interface ExploreRun {
@@ -397,6 +407,8 @@ export interface ExploreRun {
   readonly sideEffects: SideEffect[];
   /** Writes past the listed cap (`MAX_SIDE_EFFECTS`), counted — present only when some were. */
   readonly sideEffectsTruncated?: number;
+  /** #303: the run's action deltas — verdict counts and the per-action overhead (absent when off). */
+  readonly actionDeltas?: ActionDeltaStats;
 }
 
 /** The longest single slice (ms) of one job wait: the model re-perceives the page between slices. */
@@ -903,6 +915,20 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   page.on("response", onDocumentResponse);
   // #194: a write to a third-party origin is listed with its full URL and `thirdParty: true`.
   const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
+  /** #303: what each action changed on the page (null when turned off). */
+  const deltas =
+    cfg.actionDeltas === undefined || cfg.actionDeltas === false
+      ? null
+      : new ActionDeltas(page, {
+          secrets,
+          goal: cfg.goal,
+          judge: typeof cfg.actionDeltas === "object" && cfg.actionDeltas.jev === true ? cfg.judge : null,
+          ...(typeof cfg.actionDeltas === "object" && cfg.actionDeltas.volatilityGapMs !== undefined ? { volatilityGapMs: cfg.actionDeltas.volatilityGapMs } : {}),
+          ownWrites: () => turnWrites,
+          ignoreRequest: urlMatcher(cfg.settle?.ignoreRequests),
+        });
+  /** #303: the verdict of the last action's delta, until the no-progress check reads it. */
+  let deltaVerdict: DeltaVerdict | null = null;
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
   const readOnly =
     cfg.readOnly === true
@@ -935,6 +961,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // An input change (type/select/send/upload) makes a repeat send something new — unless it set
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
+    deltas?.acted({ label, recordIndex: recorder.stepCount - 1, step: transcript.nextStep, ...(input === undefined ? {} : { value: input.value }) });
     failedActs.succeeded();
     if (!label.startsWith("type ")) typeNoEffect = null;
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute, clickFromRoute };
@@ -956,6 +983,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   try {
     // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
     await monitorFor(page).instrument();
+    await deltas?.enable();
     effectLog.attach(monitorFor(page));
     // Initial navigation (authorized above).
     page.on("requestfailed", onFirstNavRequestFailed);
@@ -1041,6 +1069,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
       );
       track.lastRecordedTarget = null;
+      // #303: what the previous action changed (code's verdict), attached to its transcript step and
+      // Recording step, and told to the model; this capture is also the next action's baseline.
+      if (deltas !== null) {
+        // A bound secret field's value (a TOTP code, a password code types) is masked in every capture.
+        for (const c of perception.snapshot.controls) if (isBound(c)) deltas.secretField(c.name);
+        const d = await deltas.perceived(hangRoute(snap.url)).catch(() => null);
+        if (d !== null) {
+          deltaVerdict = d.delta.verdict;
+          transcript.attachDelta(d.step, d.delta);
+          recorder.attachDelta(d.recordIndex, deltaRecord(d.delta));
+          history.push(deltaPromptLine(d.delta));
+        }
+      }
 
       // Long-running legitimate work is not a hang (#153): a page that shows an in-progress status
       // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
@@ -1212,7 +1253,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (scrollProgress) noProgress.progress(snap.signature);
       lastChanceTurn = false;
       // #2 — no-progress: the last executed op left the page unchanged N times.
-      if (lastActedOp !== null && !scrollProgress && noProgress.note(lastActedOp, snap.signature)) {
+      // #303: the last action's delta decides when there is one — only `no-change` counts toward the
+      // streak, `inconclusive` holds it; without one the page signature decides, as before.
+      const verdictNow = deltaVerdict;
+      deltaVerdict = null;
+      if (lastActedOp !== null && !scrollProgress && noProgress.noteDelta(lastActedOp, snap.signature, verdictNow)) {
         // Is the APP stuck (not the explorer)? The page is alive, the last page-changing action
         // sent it BACK to a state it had already been in (it changed, then reverted — an action
         // that silently undid itself, like an import that never starts), and it stays there for
@@ -1445,6 +1490,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             ...(isEmptyStatus(status) ? {} : { pageStatus: describeStatus(status) }),
             ...(maxChoices === undefined ? {} : { maxChoices }),
             ...(findOut ? { pageText: visibleText } : {}),
+            ...(deltas === null ? {} : { actionDeltas: true }),
           });
         decision = await decideWith().catch(async (e: unknown) => {
           const refusal = firstLine(e);
@@ -2073,6 +2119,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         );
       }
 
+      // #303: the page right before the action (and, with the perception's capture, the route's
+      // volatility baseline) — the action's delta is read at the next perception.
+      if (deltas !== null) await deltas.beforeAction(hangRoute(snap.url), decision.op, control).catch(() => deltas.discard());
       const at = now();
       const risk = safety.riskOf(control);
       effectLog.mark(transcript.nextStep, control.name || control.summary, risk);
@@ -2736,6 +2785,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   return {
     sideEffects: fired.sideEffects,
     ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
+    ...(deltas === null ? {} : { actionDeltas: deltas.stats() }),
     stop,
     recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? startOrigin, finished.reason),
     transcript: transcript.entries(),
