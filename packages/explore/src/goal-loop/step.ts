@@ -36,6 +36,13 @@ import type { RunContext } from "./context.js";
 /** What a step module tells the loop: go on to the next step, end the run, or fall through. */
 export type Flow = "continue" | "stop" | "next";
 
+/** What one perception produced (the page state the next decision is made on). */
+export interface Perceived {
+  readonly perceiveStartedAt: number;
+  readonly perception: Perception;
+  readonly snap: Snapshot;
+}
+
 /** What one perception produced and the decision made on it. */
 export interface StepInput {
   readonly perceiveStartedAt: number;

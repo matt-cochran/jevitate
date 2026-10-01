@@ -21,7 +21,6 @@ import { type HangConfig, type SettleConfig, type TimingConfig } from "./settle-
 import { decide, type Decision } from "./decide.js";
 import {
   type SecretField,
-  maskSecretFields,
 } from "./secret-fields.js";
 import { type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
@@ -55,11 +54,11 @@ import {
 } from "./status.js";
 import { type SafetyConfig } from "./safety.js";
 import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE } from "./read-only.js";
-import { markTypeFixtures, type TypeFixture } from "./type-fixtures.js";
+import { type TypeFixture } from "./type-fixtures.js";
 import { buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import { requestsStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
-import { deltaPromptLine, deltaQuotableText, deltaRecord, type ActionDeltaStats } from "./action-delta.js";
+import { type ActionDeltaStats } from "./action-delta.js";
 import * as limits from "./goal-loop/limits.js";
 import { createRunContext } from "./goal-loop/context.js";
 import { newStep, type ActStep } from "./goal-loop/step.js";
@@ -98,6 +97,8 @@ import { handleSelectOption } from "./goal-loop/handle-select.js";
 import { handleUpload } from "./goal-loop/handle-upload.js";
 import { handleClick } from "./goal-loop/handle-click.js";
 import { handleFill } from "./goal-loop/handle-fill.js";
+import { perceiveStep } from "./goal-loop/observe.js";
+import { captureDelta } from "./goal-loop/observe.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -465,100 +466,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         break;
       }
 
-      // Shared perception: never decide on an unrendered page (bounded render wait) and never
-      // offer an occluded control (see `perceive`).
-      const perceiveStartedAt = Date.now();
-      const perception = await perceive(ctx.page, ctx.perceiveOpts);
-      ctx.timings.push(perception.timing);
-      // The last click's window closes here: what it wrote is now known (#92).
-      ctx.sideEffects.settle();
-      // #239: a click whose writes all succeeded saved what the run had typed — from here those values
-      // are the app's, and the run has written (a write goal's report may settle it).
-      {
-        const lc = ctx.sideEffects.lastClick();
-        if (lc !== null && lc !== ctx.settledClick) {
-          ctx.settledClick = lc;
-          if (lc.writes.length > 0 && lc.writes.every((w) => w.status !== null && w.status >= 200 && w.status < 300)) {
-            ctx.observed.confirmOwnInputs();
-            ctx.wroteOk = true;
-          }
-        }
-      }
-      // #158 — the action's window closes once the page settled: later writes are the app's own.
-      if (ctx.readOnly?.settled() === true && ctx.readOnly.mode === "read-only") ctx.effectLog.markBackground();
-      // A bound secret field shows the model its placeholder only (#72).
-      const snap = markTypeFixtures(maskSecretFields(perception.snapshot, cfg.secretFields), cfg.typeFixtures);
-      {
-        const m = ctx.track.lastMutation;
-        if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
-      }
-      await ctx.heap.sample(ctx.page, ctx.transcript.nextStep);
-      // Re-observe the PREVIOUS action's effect: patch its postcondition + open
-      // the next page segment if the URL changed (record-before-reobserve).
-      const target = ctx.track.lastRecordedTarget;
-      ctx.recorder.observed(
-        snap.url,
-        ctx.now(),
-        perception.timing,
-        target === null ? undefined : { lastTargetStillPresent: snap.controls.some((c) => JSON.stringify(c.descriptor) === target) },
-      );
-      ctx.track.lastRecordedTarget = null;
-      // #303: what the previous action changed (code's verdict), attached to its transcript step and
-      // Recording step, and told to the model; this capture is also the next action's baseline.
-      if (ctx.deltas !== null) {
-        // A bound secret field's value (a TOTP code, a password code types) is masked in every capture.
-        for (const c of perception.snapshot.controls) if (ctx.isBound(c)) ctx.deltas.secretField(c.name);
-        const d = await ctx.deltas.perceived(hangRoute(snap.url)).catch(() => null);
-        if (d !== null) {
-          ctx.deltaVerdict = d.delta.verdict;
-          // #303 persistence: a write that went through and changed the page is re-checked after a
-          // reload (a GET of the same URL — never a re-post), once, at this safe point (nothing typed
-          // and unsent, no write still in flight, not a read-only run).
-          let delta = d.delta;
-          let reloaded = false;
-          if (
-            ctx.deltas.wroteLasting() &&
-            cfg.readOnly !== true &&
-            ctx.unsent.pending().size === 0 &&
-            ctx.sideEffects.inflight().length === 0 &&
-            /^https?:/i.test(ctx.page.url())
-          ) {
-            const url = ctx.page.url();
-            const ok = await ctx.page
-              .goto(url, { waitUntil: "load", timeout: 15_000 })
-              .then(() => true)
-              .catch(() => false);
-            await monitorFor(ctx.page).waitSettled({ ceilingMs: 10_000 }).catch(() => undefined);
-            const p = ok ? await ctx.deltas.persistence().catch(() => ({ persisted: "inconclusive" as const, why: "the check failed" })) : { persisted: "inconclusive" as const, why: "the reload failed" };
-            delta = { ...delta, persisted: p.persisted, persistedWhy: p.why };
-            if (p.persisted === "no") ctx.notPersisted.push({ step: d.step, action: delta.action, why: p.why });
-            reloaded = true;
-            ctx.recorder.navigate(url, ctx.now());
-            ctx.history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
-          }
-          ctx.transcript.attachDelta(d.step, delta);
-          ctx.recorder.attachDelta(d.recordIndex, deltaRecord(delta));
-          ctx.history.push(deltaPromptLine(delta));
-          // #303 grounding: what the action announced or lastingly showed (a toast gone before the
-          // report) is observed page text a report may quote — redacted, never a field's own value.
-          const quotable = deltaQuotableText(delta);
-          if (quotable !== "") ctx.observed.add(snap.url, quotable);
-          if (reloaded) {
-            ctx.transcript.record({
-              op: "reload",
-              control: null,
-              confidence: null,
-              chosenBy: "strategy",
-              strategy: "persistence-check",
-              actOk: true,
-              reason: `persistence check after ${delta.action}: ${delta.persisted} — ${delta.persistedWhy ?? ""}`,
-              snapshot: snap,
-              timing: perception.timing,
-            });
-            continue;
-          }
-        }
-      }
+      const seen = await perceiveStep(ctx);
+      const { perceiveStartedAt, perception, snap } = seen;
+      const delta = await captureDelta(ctx, seen);
+      if (delta === "continue") continue;
 
       // Long-running legitimate work is not a hang (#153): a page that shows an in-progress status
       // AND acknowledges it (a Cancel control, the pressed control disabled as "Analyzing...", a
