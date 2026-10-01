@@ -70,14 +70,24 @@ export async function captureOptions(
   return { style: styles.join("\n"), mask, ...(maskColor === undefined ? {} : { maskColor }) };
 }
 
-/** Writes one step's PNG at `path`: the viewport, overlay hidden, every layer applied. Throws on failure. */
-export async function captureStepScreenshot(page: Page, path: string, ctx: CaptureContext, layers: readonly CaptureLayer[] = []): Promise<void> {
+/**
+ * Writes one step's PNG at `path`: the viewport (or `clip`, a page-coordinate region — #198's cropped
+ * finding shots), overlay hidden, every layer applied. Throws on failure.
+ */
+export async function captureStepScreenshot(
+  page: Page,
+  path: string,
+  ctx: CaptureContext,
+  layers: readonly CaptureLayer[] = [],
+  clip?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
+): Promise<void> {
   const { style, mask, maskColor } = await captureOptions(page, ctx, layers);
   await page.screenshot({
     path,
     type: "png",
     animations: "disabled",
     style,
+    ...(clip === undefined ? {} : { clip: { ...clip } }),
     ...(mask.length === 0 ? {} : { mask }),
     ...(maskColor === undefined ? {} : { maskColor }),
   });
@@ -608,12 +618,15 @@ export class SecretPixelMask {
 
   /** Draws a capture highlight box around `target`'s first match (display-only). True when shown. */
   async highlight(page: Page, target: TargetDescriptor): Promise<boolean> {
+    return this.highlightLocator(page, descriptorToLocator(page, target));
+  }
+
+  /** #198: the same display-only highlight box around `locator`'s first match (a control or a quoted text). */
+  async highlightLocator(page: Page, locator: Locator): Promise<boolean> {
     try {
       await this.#inject(page.mainFrame());
       return await within(
-        descriptorToLocator(page, target)
-          .first()
-          .evaluate((el, name) => (window as unknown as Record<string, MaskApi | undefined>)[name]?.highlight(el) === true, this.#name, { timeout: 2_000 }),
+        locator.first().evaluate((el, name) => (window as unknown as Record<string, MaskApi | undefined>)[name]?.highlight(el) === true, this.#name, { timeout: 2_000 }),
         "highlighting the failing element",
       );
     } catch {

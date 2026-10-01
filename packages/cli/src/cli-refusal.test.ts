@@ -20,6 +20,7 @@ let dir: string;
 let missing: string;
 let validRecording: string;
 let validScript: string;
+let badProduct: string;
 let suiteOffAllowlist: string;
 let suiteUnknownFingerprint: string;
 
@@ -35,6 +36,9 @@ beforeAll(() => {
       pages: [{ url: "https://shop.test/catalog", steps: [{ step: { kind: "click", target: { role: "link", name: "Widgets" }, expect: { kind: "visible", target: { testId: "list" } } } }] }],
     }),
   );
+  // #198: a product facts file with a negative price and an unknown key.
+  badProduct = join(dir, "product.json");
+  writeFileSync(badProduct, JSON.stringify({ version: 1, plans: [{ name: "Pro", prices: [{ amount: -1, interval: "month" }] }], extra: true }));
   validScript = join(dir, "script.json");
   writeFileSync(validScript, JSON.stringify([{ kind: "click", label: "open menu" }]));
   // A mission whose start URL (the target's own) is off the target's `allow` list, and a verifyFix
@@ -183,6 +187,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
       // #225: usability honours --success — so an unparseable one (or --success-when without one) is refused, never ignored.
       ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--success", "nonsense:x"],
       ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--success-when", "held"],
+      // #198: --product is validated before a browser opens, and refused outside usability.
+      ["--url", URL0, "--strategy", "usability", "--goal", "g", "--app-class", "consumer", "--fake-ai", "--product", badProduct],
+      ["--url", URL0, "--goal", "g", "--success", "urlIncludes:/x", "--fake-ai", "--product", badProduct],
+      ["--url", URL0, "--strategy", "coverage", "--fake-ai", "--polish"],
       // #225: a strategy that does not honour success checks refuses them — never silently ignored.
       ...["coverage", "exploratory", "adversarial"].flatMap((strategy) => [
         ["--url", URL0, "--strategy", strategy, "--fake-ai", "--success", "urlIncludes:/x"],
@@ -236,7 +244,13 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   ui: { exempt: "no file or id input (its --port is covered by the numeric sweep)" },
   ux: {
     base: [validRecording, "--app-class", "consumer", "--fake-ai", "--out", join(dir, "ux")],
-    cases: [[missing, "--app-class", "consumer", "--fake-ai"], [validRecording, "--fake-ai"]],
+    cases: [
+      [missing, "--app-class", "consumer", "--fake-ai"],
+      [validRecording, "--fake-ai"],
+      // #198: a missing or invalid product facts file is refused before any analysis.
+      [validRecording, "--app-class", "consumer", "--fake-ai", "--product", missing],
+      [validRecording, "--app-class", "consumer", "--fake-ai", "--product", badProduct],
+    ],
   },
   "ai status": { exempt: "a status report" },
   "ai setup": { cases: [["bogus"]] },

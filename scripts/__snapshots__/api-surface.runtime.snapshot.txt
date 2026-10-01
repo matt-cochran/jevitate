@@ -905,13 +905,19 @@
   migrateToLatest: function
   openDatabase: function
 
-# @jevitate/ux (87 exports)
+# @jevitate/ux (112 exports)
   APPLIES_QUESTION_ID: const (string)
   CALIBRATED_QUALITY_POLICY: object
   CALIBRATION_KNOWN_APP_CLASSES: array
+  CLAIM_PROMPTS: object
+  CLAIM_RUBRIC: object
+  CLAIM_TYPES: array
+  ClaimPromptsSchema: object
+  ClaimTemplateError: class
   DEFAULT_MAX_FINDINGS_PER_ROUTE: const (number)
   DEFAULT_MIN_CONFIDENCE: const (number)
   DEFAULT_QUALITY_POLICY: object
+  FRICTION_CLAIM_CHOICES: array
   GRADER_FILTER_KAPPA_GATE: const (number)
   GROUNDING_UNNAMED: const (number)
   IMPACT_RANK: object
@@ -921,6 +927,10 @@
   MaxFindingsPerRouteError: class
   MinConfidenceError: class
   MissingAppContextError: class
+  NONE_TARGET: const (string)
+  PRODUCT_FACTS_VERSION: const (number)
+  ProductFactsError: class
+  ProductFactsSchema: object
   PromptAssetError: class
   QUALITY_LABELS: array
   QUALITY_SHOW_ENV: const (string)
@@ -932,6 +942,7 @@
   SIGNAL_RULES: object
   SPECIFICS_INSTRUCTIONS: const (string)
   SignalFindingError: class
+  TEMPLATE_KEYS: array
   UX: const (string)
   UX_EVIDENCE_FILE_VERSION: const (number)
   UX_EVIDENCE_KEYS: array
@@ -943,14 +954,18 @@
   V1_RUBRIC: array
   a11yChecks: function
   adjudicate: function
+  analyzeClaims: function
   applyRubricDescriptions: function
+  boundTargetOptions: function
   buildReport: function
   buildState: function
   calibrationCaveat: function
   calibrationNoteFor: function
+  claimsCaveat: function
   clamp01: function
   combineConfidence: function
   controlKey: function
+  dedupeObjectiveFindings: function
   defaultQualityPolicy: function
   deriveRefs: function
   describeCandidate: function
@@ -968,18 +983,26 @@
   detectUrlMismatches: function
   evaluateFlag: function
   evidenceFromFile: function
+  factsPageFor: function
+  fillClaimTemplate: function
   fillTemplate: function
+  findFactConflicts: function
   generateSpecifics: function
   gradeCandidates: function
+  gradeLabel: function
   gradeQuestion: function
   graderMayFilterByDefault: function
   groundFindings: function
+  journeysFor: function
   judgeScreen: function
   loadRubric: function
   loadV1Rubric: function
   makeFinding: function
   makeSignalFinding: function
+  namesStep: function
   normalizeText: function
+  parseProductFacts: function
+  parseProductFactsText: function
   parseQualityPolicy: function
   parseUxEvidenceFile: function
   persistableScreen: function
@@ -991,5 +1014,7 @@
   resolveMinConfidence: function
   resolveQualityPolicy: function
   round2: function
+  routeMatches: function
   routeOf: function
+  summarizeLedger: function
   withSignalFindings: function

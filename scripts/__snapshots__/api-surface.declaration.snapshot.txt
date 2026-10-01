@@ -1435,7 +1435,7 @@
   SqliteBudgetRepository: class
   SqliteSitePolicyRepository: class
 
-# @jevitate/ux (146 exports)
+# @jevitate/ux (189 exports)
   A11yChecker: interface
   a11yChecks: function
   A11yControlFact: interface
@@ -1445,11 +1445,13 @@
   Adjudication: type-alias
   AnalysisOutcome: type-alias
   AnalysisRequest: interface
+  analyzeClaims: function
   AnalyzedEvidence: interface
   AppContext: interface
   APPLIES_QUESTION_ID: variable
   applyRubricDescriptions: function
   BehaviorSignals: interface
+  boundTargetOptions: function
   buildReport: function
   BuildReportOptions: interface
   buildState: function
@@ -1458,6 +1460,20 @@
   calibrationCaveat: function
   CalibrationNote: interface
   calibrationNoteFor: function
+  CLAIM_PROMPTS: variable
+  CLAIM_RUBRIC: variable
+  CLAIM_TYPES: variable
+  ClaimAnalysisRequest: interface
+  ClaimAnalyzerDeps: interface
+  ClaimLedger: interface
+  ClaimPrompts: type-alias
+  ClaimPromptsSchema: variable
+  ClaimRecord: interface
+  claimsCaveat: function
+  ClaimSource: type-alias
+  ClaimStatus: type-alias
+  ClaimTemplateError: class
+  ClaimType: type-alias
   clamp01: function
   combineConfidence: function
   ConfidenceBasis: interface
@@ -1465,6 +1481,7 @@
   Control: interface
   controlKey: function
   Coverage: interface
+  dedupeObjectiveFindings: function
   DEFAULT_MAX_FINDINGS_PER_ROUTE: variable
   DEFAULT_MIN_CONFIDENCE: variable
   DEFAULT_QUALITY_POLICY: variable
@@ -1486,24 +1503,36 @@
   evaluateFlag: function
   evidenceFromFile: function
   EvidenceRef: interface
+  FactConflict: interface
+  factsPageFor: function
+  fillClaimTemplate: function
   fillTemplate: function
+  findFactConflicts: function
+  FindingClaim: interface
+  FindingScreenshot: interface
   FlagRule: type-alias
+  FRICTION_CLAIM_CHOICES: variable
+  FrictionClaimChoice: type-alias
   FrictionKind: type-alias
   FrictionPoint: interface
   generateSpecifics: function
   GradeCandidate: interface
   gradeCandidates: function
+  gradeLabel: function
   gradeQuestion: function
   GRADER_FILTER_KAPPA_GATE: variable
   graderMayFilterByDefault: function
   groundFindings: function
   GROUNDING_UNNAMED: variable
+  GuardKind: type-alias
+  GuardProbe: interface
   IMPACT_RANK: variable
   JevQuestionSpec: interface
   JevQuestionSpecSchema: other
   JobImpact: type-alias
   JourneyEvidence: interface
   JourneyOutcome: type-alias
+  journeysFor: function
   judgeScreen: function
   loadRubric: other
   loadV1Rubric: other
@@ -1515,14 +1544,24 @@
   MIN_CONFIDENCE_ENV: variable
   MinConfidenceError: class
   MissingAppContextError: class
+  namesStep: function
+  NONE_TARGET: variable
   normalizeText: function
   OccurrenceEvidence: interface
+  parseProductFacts: function
+  parseProductFactsText: function
   parseQualityPolicy: function
   parseUxEvidenceFile: function
   persistableScreen: function
   PersistedScreen: type-alias
   policyFilters: function
   PredictedAttention: interface
+  PRODUCT_FACTS_VERSION: variable
+  ProductFacts: type-alias
+  ProductFactsError: class
+  ProductFactsSchema: variable
+  ProductPage: type-alias
+  ProductPlan: type-alias
   PromptAssetError: class
   QUALITY_LABELS: variable
   QUALITY_SHOW_ENV: variable
@@ -1541,6 +1580,7 @@
   resolveMinConfidence: function
   resolveQualityPolicy: function
   round2: function
+  routeMatches: function
   routeOf: function
   RubricApplicability: interface
   RubricEntry: interface
@@ -1559,9 +1599,12 @@
   SignalStep: interface
   SkippedItem: interface
   SPECIFICS_INSTRUCTIONS: variable
+  summarizeLedger: function
   SuppressedItem: interface
   SuppressionReason: type-alias
   SuppressionSummary: interface
+  TEMPLATE_KEYS: variable
+  TemplateKey: type-alias
   Tier: type-alias
   UX: variable
   UX_EVIDENCE_FILE_VERSION: variable

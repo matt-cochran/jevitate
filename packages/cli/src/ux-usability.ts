@@ -10,7 +10,9 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
 import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
-import { UxAnalyzer, a11yChecks, buildReport, calibrationCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AppContext, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
+import { a11yChecks, analyzeClaims, buildReport, calibrationCaveat, claimsCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AnalysisOutcome, type AppContext, type GuardProbe, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
+import { captureFindingShots, planGuardProbes, runGuardProbes, withProbePage } from "./ux-claim-probe.js";
+import { NO_PRODUCT_FACTS_CAVEAT, loadProductFacts } from "./ux-product.js";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
 import { foldGoalOutcome, type GoalOutcome, type MissionFailure, type MissionOutcome } from "@jevitate/domain";
@@ -139,6 +141,14 @@ export interface RunUsabilityMissionOptions {
   readonly successWhen?: SuccessWhen;
   /** #202 `--allow-vacuous-checks`: a check satisfied before the first action warns instead of failing. */
   readonly allowVacuousChecks?: boolean;
+  /**
+   * #198 `--product <file>`: the product facts (plans/prices, key journeys, each page's intended next
+   * step). Default: `.jevitate/product.json` in the project, when present. Validated before a browser
+   * opens (`ProductFactsError`, E_UX_PRODUCT_INPUT).
+   */
+  readonly product?: string;
+  /** #198 `--polish`: polish each verified finding's recommendation with one generation call (opt-in). */
+  readonly polish?: boolean;
 }
 
 /** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
@@ -291,6 +301,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
   const quality = resolveQualityPolicy(opts.show, opts.env ?? process.env, loadUxShow(opts.configPath), opts.appContext.appClass);
   const maxFindingsPerRoute = resolveMaxFindingsPerRoute(opts.maxFindingsPerRoute, opts.env ?? process.env, loadUxMaxFindingsPerPage(opts.configPath));
   const fixture = opts.fixture === undefined ? undefined : await resolveMissionFixture(opts.fixture);
+  // #198: the product facts are validated before a browser opens (a bad file is a usage error).
+  const product = await loadProductFacts(opts.product);
   // #250/#251: a recorded or screenshotted run's sessions carry the live pixel mask from their first
   // paint; `--screenshots` captures after each step (the Recording path names their folder).
   const runCapture = runCaptureFor({
@@ -542,6 +554,25 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     ];
     // #132: the friction the run walked into — what grounds (or not) each rubric finding.
     const friction = detectFriction(signalCapture, run.outcome);
+    // #198: every destructive control on an analyzed screen is clicked once with its writes blocked
+    // (ux-claim-probe.ts) — the code evidence `destructive-unguarded` claims are verified against.
+    // On a dedicated page in the run's context, after the loop: the run's oracles never see it.
+    // A screen that cannot be redacted means no probes at all (destructive claims: unverifiable).
+    let probes: GuardProbe[] | undefined;
+    try {
+      const plan = planGuardProbes(screens, secrets, opts.target?.safety);
+      probes = [...plan.refused];
+      if (plan.targets.length > 0) {
+        try {
+          probes.push(...(await withProbePage(session.page, (p) => runGuardProbes(p, plan.targets, { allowlist: opts.allowlist, secrets }))));
+        } catch (err) {
+          const why = `the guard probe could not open a page: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
+          probes.push(...plan.targets.map((t): GuardProbe => ({ screenId: t.screen.screenId, route: t.route, control: t.label, controlKey: t.key, status: "failed", detail: why })));
+        }
+      }
+    } catch {
+      probes = undefined;
+    }
     // #134: the evidence sidecar, written through the redaction door BEFORE analysis (so it exists
     // even when analysis fails). Fail-closed: if any screen cannot be redacted, no file is written.
     const evidencePath = join(outDir, `usability-${stamp}.evidence.json`);
@@ -554,6 +585,7 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
         screens: screens.map((ev) => persistableScreen(ev, secrets)),
         signals: signalCapture,
         outcome: run.outcome,
+        ...(probes === undefined ? {} : { probes }),
       };
       await mkdir(outDir, { recursive: true });
       await writeFile(evidencePath, `${JSON.stringify(file, null, 2)}\n`, "utf8");
@@ -561,14 +593,35 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     } catch {
       evidenceWritten = null;
     }
-    const analyzer = new UxAnalyzer({ judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks });
-    const outcome = await analyzer.analyze({
-      screens,
-      rubric: loadV1Rubric(),
-      appContext: opts.appContext,
-      secrets,
-      judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
-    });
+    // #198: findings are claims verified by code (claims.ts) — guard probes, product facts and the
+    // friction the run walked into — categorized and graded by Jev, written from templates.
+    const claimed = await analyzeClaims(
+      {
+        screens,
+        rubric: loadV1Rubric(),
+        appContext: opts.appContext,
+        secrets,
+        judgmentBudget: opts.judgmentBudget ?? DEFAULT_JUDGMENT_BUDGET,
+        friction,
+        steps: signalCapture.steps,
+        signalFindings,
+        ...(probes === undefined ? {} : { probes }),
+        ...(product.facts === undefined ? {} : { facts: product.facts }),
+      },
+      { judge: opts.judge, gen: opts.gen, a11yChecker: a11yChecks, ...(opts.polish === true ? { polish: true } : {}) },
+    );
+    // #198: a cropped, masked screenshot with the cited control boxed, per verified claim finding.
+    let outcome: AnalysisOutcome = claimed;
+    if (claimed.kind === "analyzed" && claimed.findings.some((f) => f.claim !== undefined)) {
+      const byScreen = new Map(screens.map((ev) => [ev.screenId, ev]));
+      const dir = join(outDir, `usability-${stamp}.findings`);
+      try {
+        const findings = await withProbePage(session.page, (p) => captureFindingShots(p, claimed.findings, byScreen, { dir, allowlist: opts.allowlist, secrets }));
+        outcome = { ...claimed, findings };
+      } catch {
+        outcome = claimed; // presentation only: findings without screenshots are still the findings
+      }
+    }
     // #126: a run that stops on a hang is never `clean` — it is reproduced in fresh contexts (same
     // as a goal mission) and mapped through the same hang/intermittent/inconclusive rule.
     let hang: HangFinding | undefined;
@@ -711,7 +764,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       minConfidence,
       quality,
       maxFindingsPerRoute,
-      calibrationCaveats: [calibrationCaveat(opts.appContext.appClass)],
+      ...(product.facts === undefined ? { evidenceCaveats: [NO_PRODUCT_FACTS_CAVEAT] } : {}),
+      calibrationCaveats: [calibrationCaveat(opts.appContext.appClass), claimsCaveat()],
     });
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const reviewed = { ...base, report, reportPath, missionOutcome: runOutcome, exitCode: missionExitCode(runOutcome) };
