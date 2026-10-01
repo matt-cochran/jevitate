@@ -1,7 +1,6 @@
 import { ActionDeltas, deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
-import { Navigate } from "@jevitate/screenplay";
 import type { InvariantSpec, Recording } from "@jevitate/recording";
 import { redactUrl, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
 import {
@@ -15,13 +14,10 @@ import {
 } from "../declared-invariants.js";
 import {
   assertAuthorizedExploreTarget,
-  targetCandidates,
   act,
   buildJudgmentState,
   PROMPT_INJECTION_GUARD,
   type Bounds,
-  type Control,
-  type Snapshot,
   type TranscriptEntry,
   type TranscriptListener,
 } from "../index.js";
@@ -33,12 +29,10 @@ import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
 import { isAuthorizedExploreTarget } from "../authorized-targets.js";
 import type { HostHealthSampler } from "../host-health.js";
 import type { VerifySession } from "../verify-fix.js";
-import { describeFailure, assertSeedReachable, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
+import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type TimingSummary } from "../timing.js";
 import { controlIdentity, stateFingerprint } from "../coverage/fingerprint.js";
-import { Frontier } from "../coverage/frontier.js";
-import { chromeClassifier } from "../coverage/chrome.js";
 import { reachFrontierState } from "../coverage/reach.js";
 import { StalledError } from "../stall-watchdog.js";
 import { isNavControl } from "../coverage/nav.js";
@@ -47,26 +41,24 @@ import {
   type CoverageSufficiency,
   type CoverageSufficiencyThresholds,
 } from "../coverage/sufficiency.js";
-import { seedRedirectReason } from "../seed-redirect.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { type ClippingFinding, type OverflowFinding } from "../overflow.js";
 import {
-  FRONTIER_OPS,
   enqueueFrom,
   extendPath,
   isTimeoutFailure,
   isUnactionableFailure,
   joinReasons,
   pathOf,
-  refusalRisk,
   resolveControl,
   withSeed,
   seedPath as seedPathOf,
 } from "./induction-frontier/helpers.js";
 import { createFrontierContext, type FrontierState } from "./induction-frontier/context.js";
+import { loadSeed } from "./induction-frontier/seed.js";
 
 /**
  * Proof-by-induction (state-coverage) mission — spec §3.3.
@@ -342,124 +334,8 @@ async function runInductionFrontier(
   const ctx: FrontierState = createFrontierContext(params, declared, safety, budget, overlay, deltaLog);
 
   try {
-    ctx.watchdog.during("loading the seed");
-    await ctx.guard(monitorFor(ctx.sessions.page).instrument());
-    safety.attach(monitorFor(ctx.sessions.page));
-    // #128: real network evidence for the FIRST navigation — a refused connection can still
-    // surface as a bare navigation timeout.
-    let firstNavNetError: string | null = null;
-    const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
-      const text = req.failure()?.errorText;
-      if (text !== undefined) firstNavNetError = text;
-    };
-    ctx.sessions.page.on("requestfailed", onFirstNavRequestFailed);
-    try {
-      if (params.startInPlace !== true) {
-        await ctx.guard(assertSeedReachable(ctx.sessions.actor, params.seedUrl));
-        await ctx.guard(ctx.sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
-      }
-    } catch (e) {
-      const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
-      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
-      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-      return ctx.ended("scope-unreachable", {
-        kind: "target-unreachable",
-        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
-      });
-    } finally {
-      ctx.sessions.page.off("requestfailed", onFirstNavRequestFailed);
-    }
-    ctx.snap = await ctx.guard(ctx.takeSnapshot());
-
-    // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most
-    // often) — the run cannot test what it was asked to, so it is never `clean` (#82).
-    const redirect = seedRedirectReason(params.seedUrl, ctx.snap.url);
-    if (redirect !== null) {
-      ctx.transcript.record({
-        op: null,
-        control: null,
-        confidence: null,
-        chosenBy: "strategy",
-        strategy: "seed-load",
-        actOk: false,
-        reason: `${redirect.reason} (inconclusive)`,
-        snapshot: ctx.snap,
-      });
-      return {
-        outcome: "scope-unreachable",
-        coverage: ctx.report(false),
-        recordings: [],
-        transcript: ctx.transcript.entries(),
-        timing: summarizeTimings(ctx.timings),
-        hangs: [...ctx.hangs.values()],
-        failure: { kind: "target-unreachable", message: redirect.reason },
-      };
-    }
-
-    ctx.currentFingerprint = stateFingerprint(ctx.snap);
-    ctx.visited.add(ctx.currentFingerprint);
-    ctx.observe(ctx.snap);
-
-    // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
-    // An unreadable baseline fails closed by default (`onUnreadable: "stop"`): the run stops before
-    // it ever acts against a budget it cannot see.
-    if (budget !== null) {
-      const b = await ctx.guard(budget.baseline(ctx.sessions.page));
-      if (b.crossed) {
-        ctx.transcript.record({
-          op: null,
-          control: null,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: "budget",
-          actOk: false,
-          reason: b.reason ?? "budget observable unreadable at run start",
-          snapshot: ctx.snap,
-        });
-        return {
-          outcome: "budget",
-          coverage: ctx.report(false),
-          recordings: [...ctx.statePaths.values()],
-          transcript: ctx.transcript.entries(),
-          timing: summarizeTimings(ctx.timings),
-          hangs: [...ctx.hangs.values()],
-        };
-      }
-    }
-
-    // A candidate the safety policy refuses is withheld at enqueue time (#186), its refusal recorded once.
-    ctx.withheld = (control: Control, on: Snapshot): boolean =>
-      safety.withholds("click", control, (reason) => {
-        // #213: kept (name + category) to explain a run that took no action.
-        ctx.refusedControls.set(control.name.replace(/\s+/g, " ").trim() || control.role, refusalRisk(reason));
-        ctx.transcript.record({
-          op: null,
-          control,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: "safety-policy",
-          origin: "engine",
-          actOk: false,
-          reason,
-          snapshot: on,
-        });
-      });
-
-    ctx.frontier = new Frontier({
-      order: params.strategy === "exploratory" ? "novelty" : "breadth",
-      classify: chromeClassifier({ chrome: ctx.chrome, inScope: ctx.inScope }),
-    });
-    ctx.frontierRef = ctx.frontier;
-    /** The last transition left the target scope — the next reset is a return after a departure. */
-    ctx.departed = false;
-
-    ctx.seedRecording = { version: "1", site: ctx.site, pages: [] };
-    ctx.statePaths.set(ctx.currentFingerprint, ctx.seedRecording);
-    ctx.seedCandidates = targetCandidates(ctx.snap.controls, { ops: FRONTIER_OPS, enabledOnly: true }).length;
-    enqueueFrom(ctx.frontier, ctx.currentFingerprint, ctx.seedRecording, ctx.snap.controls, (c) => ctx.withheld(c, ctx.snap));
-    // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
-    await ctx.guard(ctx.checkOverflow(ctx.currentFingerprint, ctx.snap.url, withSeed(ctx.seedRecording, params.seedUrl)));
+    const early = await loadSeed(ctx);
+    if (early !== null) return early;
 
     while (!ctx.frontier.isExhausted()) {
       // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
