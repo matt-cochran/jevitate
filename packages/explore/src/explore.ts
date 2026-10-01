@@ -762,6 +762,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    */
   let typeProbe: { key: string; label: string; at: number; background: Set<string>; state: string } | null = null;
   let typeNoEffect: { key: string; count: number } | null = null;
+  /**
+   * #242 × #241: a type credited ONLY with requests to endpoints the page had not been seen requesting
+   * yet (a background poll's FIRST tick can land in any action's window). Held, not trusted: once the
+   * next type into the same field finds those endpoints are the page's background traffic, the
+   * credited type was no effect either and the streak resumes instead of restarting.
+   */
+  let typeCredit: { key: string; count: number; endpoints: readonly string[] } | null = null;
   /** #237: actions the run attempted (any target op or reload, landed or not), and early `blocked`s refused. */
   let actionAttempts = 0;
   let earlyBlocked = 0;
@@ -955,7 +962,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
     failedActs.succeeded();
-    if (!label.startsWith("type ")) typeNoEffect = null;
+    if (!label.startsWith("type ")) {
+      typeNoEffect = null;
+      typeCredit = null;
+    }
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute, clickFromRoute };
     refusedSinceMutation = 0;
     scrollsSinceMutation = 0;
@@ -1370,14 +1380,23 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const p = typeProbe;
         typeProbe = null;
         const sent = requestsStartedSince(monitorFor(page), p.at, p.background);
-        if (sent.length === 0 && stateBesides(snap, p.key) === p.state) {
-          const count: number = typeNoEffect?.key === p.key ? typeNoEffect.count + 1 : 1;
+        const stateSame = stateBesides(snap, p.key) === p.state;
+        if (sent.length === 0 && stateSame) {
+          // A held credit whose endpoints turned out to be background polling: that type changed
+          // nothing either — the streak goes on (it and this one), never restarts.
+          const credit = typeCredit?.key === p.key && typeCredit.endpoints.every((e) => p.background.has(e)) ? typeCredit : null;
+          typeCredit = null;
+          const count: number = credit !== null ? credit.count + 2 : typeNoEffect?.key === p.key ? typeNoEffect.count + 1 : 1;
           typeNoEffect = { key: p.key, count };
           history.push(
             `typing into ${p.label} changed nothing but its own value (no request, nothing else on the page changed) — ` +
               "submit it (its form's button, or Enter) or do something else; typing it again will not help",
           );
-        } else typeNoEffect = null;
+        } else {
+          // Only requests, nothing else on the page: held until the next type tells polling apart.
+          typeCredit = stateSame ? { key: p.key, count: typeNoEffect?.key === p.key ? typeNoEffect.count : 0, endpoints: sent } : null;
+          typeNoEffect = null;
+        }
       }
       unsent.retain(new Set(keys.keys()));
       if (offerBaseline !== null) {
@@ -2552,6 +2571,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           tracker.countAction();
           fillHelper.commit();
           typeNoEffect = null;
+          typeCredit = null;
           history.push(
             `submitted ${quote(control.name || control.summary, 60)} with ${via?.kind === "click" ? `its ${quote(via.control.name, 40)} button` : "Enter"} (typing alone fired nothing) — searched for ${quote(text, 80)}`,
           );
