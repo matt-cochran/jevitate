@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.3.0] – unreleased
+
+### Fixed
+
+- Find-out reports: numbered-list markers (`1.`, `2)`, `**3.**`) no longer count as stated figures, and an inflected claim word ("not subscribed") is said by its quote ("No subscription") (#236).
+- Find-out reports: a list answer may quote its entries one per line when each line is on one observed page, in order; a stitched quote that is not gets a repairable reason, and an identical resubmission is named as a repeat (#234).
+- Find-out reports: "none exists" is a first-class answer for a goal that asks whether something exists — accepted as `not present (pages seen: …)` (`answer.absent`, `answer.searched`) once the run has seen half its top-level navigation (≥ 2 pages), else the run is `inconclusive` (insufficient coverage), never a defect (#238).
+
 ## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one

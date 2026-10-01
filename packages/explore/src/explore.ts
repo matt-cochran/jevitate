@@ -570,6 +570,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const blockedReported = new Set<string>();
   /** #207: the latest report attempt found no answer — the run's end reason then names the pages seen. */
   let lastReportNotFound = false;
+  /** #238: the latest report's "none exists" was below the coverage floor (its reason), else null. */
+  let lastAbsenceUncovered: string | null = null;
   // #229: answers Jev vetoed stay rejected for the rest of the run, however often they are re-reported.
   const vetoes = new VetoedAnswers();
   const replies = new ObservedPages(secrets);
@@ -1154,6 +1156,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         controlNames: snap.controls.filter((c) => isActionOrChromeName(c, chrome)).map((c) => c.name),
         // #229: the content links' text, in page order (a list's entries: "the first item").
         contentLinks: snap.controls.filter((c) => !isActionOrChromeName(c, chrome)).map((c) => c.name),
+        // #238: where the page's navigation leads — the first page's is the absence-answer coverage floor.
+        navLinks: snap.controls
+          .filter((c) => c.role === "link" && (c.landmark === "navigation" || c.landmark === "banner"))
+          .flatMap((c) => (typeof c.href === "string" && c.href !== "" ? [c.href] : [])),
         ...(documentStatus.has(docKey(page.url())) ? { status: documentStatus.get(docKey(page.url()))! } : {}),
       });
       noteReplyText(snap.url, visibleText);
@@ -1496,6 +1502,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
                 secrets,
                 judge: cfg.judge,
                 vetoes,
+                // #238: "none exists" is an answer only on observed pages that cover the app enough.
+                ...(replyPages === null ? { topNav: observed.topNavigation() } : {}),
               }).catch((e: unknown) => ({ accept: false as const, reason: `no answer could be generated: ${firstLine(e)}`, answer: null }));
         if (verdict.accept) {
           const on = replyPages === null ? "the observed pages" : "the reply observed after the send";
@@ -1510,6 +1518,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         reportRejections += 1;
         // #223: an answer that is on the page but does not answer the question is no answer either.
         lastReportNotFound = (verdict.answer === null && verdict.reason === NO_ANSWER_REASON) || verdict.notAnswer === true;
+        lastAbsenceUncovered = verdict.absenceUncovered === true ? verdict.reason : null;
         history.push(`report rejected: ${verdict.reason} — find the answer on the page before reporting`);
         record(false, `report rejected (${reportRejections}/${MAX_REPORT_REJECTIONS}): ${verdict.reason}`, {
           answer: verdict.answer,
@@ -2236,6 +2245,15 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   if (stop === "no-progress" && cfg.hostHealth !== undefined) {
     const judged = await cfg.hostHealth.judge();
     if (judged.starved !== null) degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
+  }
+
+  // #238 — the latest report's answer was "none exists", but the run never covered enough of the app
+  // to establish it: it proved nothing either way — `inconclusive` (insufficient coverage), never a defect.
+  if (lastAbsenceUncovered !== null && answer === undefined && (stop === "no-progress" || stop === "blocked" || stop === "exhausted") && failure === undefined) {
+    failure = { kind: "insufficient-coverage", message: lastAbsenceUncovered };
+    incomplete = lastAbsenceUncovered;
+    stop = "inconclusive";
+    lastReportNotFound = false;
   }
 
   // #207 — a run whose latest report found no answer, and that then stopped for want of progress or
