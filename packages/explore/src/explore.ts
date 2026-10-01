@@ -248,6 +248,12 @@ export interface ExploreConfig {
    */
   readonly successCheckDeferred?: boolean;
   /**
+   * #286: the goal asks the run to report what it found (`goalAsksForReport`) while `--success` checks
+   * judge the rest: a `done` is no ending — the run ends with a grounded `report` — and neither a
+   * `blocked` nor the "already met" signal is turned into "goal already met" (that has no answer).
+   */
+  readonly requireAnswer?: boolean;
+  /**
    * #225: a `done` rejected by `successCheck` ends the run at once when the job is nonetheless judged
    * done on the page (the advisory goal judgment / code-observed save grounding, as without a check) —
    * the failed check is then the result, not a reason to spend the rest of the budget. The outcome
@@ -1420,6 +1426,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         decision.op !== "report" &&
         // #235: an in-run check over nothing (every check is judged after the run) shows nothing held.
         cfg.successCheckDeferred !== true &&
+        // #286: a goal that asks for a report is never "already met" without its answer.
+        cfg.requireAnswer !== true &&
         // #207: a find-out goal is verified by a grounded answer; its `blocked` (after a report
         // attempt on this state found none) never becomes an answerless "goal already met".
         !(findOut && decision.op === "blocked") &&
@@ -1449,6 +1457,20 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
       }
 
+      // #286: the goal asks for a report — `done` is no ending; the answer is (grounded by `report`).
+      if (decision.op === "done" && cfg.requireAnswer === true) {
+        doneRejections += 1;
+        const why = "the goal asks you to report what you found: end with `report` (a grounded answer), not `done`";
+        history.push(`done rejected: ${why}`);
+        record(false, `done rejected (${doneRejections}/${MAX_DONE_REJECTIONS}): ${why}`);
+        if (doneRejections >= MAX_DONE_REJECTIONS) {
+          incomplete = `the model proposed done ${doneRejections} times, but ${why}`;
+          endedOnRejectedDone = true;
+          stop = "done";
+          break;
+        }
+        continue;
+      }
       // `done` is a PROPOSAL (guardrail #4), grounded by `groundGoal`.
       if (decision.op === "done") {
         const { verdict, judgments } = await groundGoal();

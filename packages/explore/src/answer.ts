@@ -980,6 +980,19 @@ export function goalAsksToWrite(goal: string): boolean {
   return WRITE_GOAL.test(goal);
 }
 
+/**
+ * #286: a goal that asks the run to REPORT what it found ("Finish by reporting the price shown",
+ * "report back which…"). With `--success` checks too, the checks holding is not the whole goal: the
+ * run must also end with a grounded answer — a check met by an unrelated page's load-time request
+ * once ended a run `succeeded` with no price reported.
+ */
+const REPORT_GOAL =
+  /\b(?:finish|end|then|and)\s+(?:by\s+)?report(?:ing)?\b|\breport(?:ing)?\s+(?:back\s+)?(?:the|what|which|how|whether|if|its|their|your|who|when|where)\b/i;
+
+export function goalAsksForReport(goal: string): boolean {
+  return REPORT_GOAL.test(goal);
+}
+
 /** #239: why a grounded report cannot settle a write goal before any write of the run succeeded. */
 export const UNSAVED_WRITE_REASON =
   "the goal asks to record / save something, but no write request of this run has succeeded yet (no submit sent a write that answered 2xx) — a report cannot settle it before the change is saved: submit it, then report what the app shows";
