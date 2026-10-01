@@ -27,7 +27,7 @@ import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
 import { AuthProgress, isCredentialField } from "./auth-completion.js";
 import { SaveProgress } from "./save-completion.js";
-import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
+import { CLEARS_FIELD, FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, isPlaceholderOption, matchOption } from "./fill.js";
 import {
   type SecretField,
   boundSecretField,
@@ -2034,6 +2034,19 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       if (op === "select" && control.options !== undefined && control.options.length > 0) {
         // Options-aware select (J-5): the generator sees the real options, and code selects only an
         // option the page actually has — never a guessed value.
+        // #273: never the option already selected (a no-op), never a placeholder ("—", "Select…")
+        // unless the goal asks to clear the field.
+        const current = control.selected ?? null;
+        const clearing = CLEARS_FIELD.test(cfg.goal);
+        const choices = control.options.filter((o) => o !== current && (clearing || !isPlaceholderOption(o)));
+        const untried = (): string => choices.map((o) => quote(o, 60)).join(", ");
+        if (choices.length === 0) {
+          const reason = `no other option to choose in ${control.name || control.summary}${current === null ? "" : ` (${quote(current, 60)} is already selected)`}`;
+          history.push(`select refused: ${reason}`);
+          record(false, reason, { origin: "engine" });
+          lastActedOp = op;
+          continue;
+        }
         let text: string | null;
         try {
           ({ text } = await fillHelper.valueFor({
@@ -2042,7 +2055,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             visibleContext: snap.controls.map((c) => c.summary).join("; "),
             history,
             secrets,
-            options: control.options,
+            options: choices,
           }));
         } catch (e) {
           const reason = `value generation unavailable: ${firstLine(e)}`;
@@ -2051,7 +2064,18 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           lastActedOp = op;
           continue;
         }
-        const option = text === null ? null : matchOption(text, control.options);
+        const named = text === null ? null : matchOption(text, control.options);
+        if (named !== null && !choices.includes(named)) {
+          // The current option (or a placeholder) again: never acted — the page would not change.
+          fillHelper.commit();
+          const why = named === current ? `${quote(named, 60)} is already selected` : `${quote(named, 60)} is a placeholder, not a choice`;
+          const reason = `select refused: ${why} in ${control.name || control.summary} — options not tried: ${untried()}`;
+          history.push(reason);
+          record(false, reason, { origin: "engine", value: named });
+          lastActedOp = op;
+          continue;
+        }
+        const option = named;
         if (option === null) {
           fillHelper.commit();
           const reason = `no valid option chosen for ${control.name} (fail-closed)`;

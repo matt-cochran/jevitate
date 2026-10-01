@@ -43,6 +43,8 @@ export interface Control {
   readonly enabled: boolean;
   /** A native `<select>`'s selectable option labels (what a `select` may choose from). */
   readonly options?: readonly string[];
+  /** A native `<select>`'s currently selected option label (#273: a select of it is a no-op). */
+  readonly selected?: string | null;
   /** Model-facing one-liner (role/name/state). Never a raw secret value. */
   readonly summary: string;
   /**
@@ -646,6 +648,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
         inputType: facts.inputType,
         enabled: facts.enabled,
         ...(facts.options === null ? {} : { options: facts.options }),
+        ...(facts.selected === null ? {} : { selected: facts.selected }),
         summary: summarize(facts),
         ...(facts.value === null || facts.value === "" ? {} : { value: facts.value }),
         form: facts.form,
