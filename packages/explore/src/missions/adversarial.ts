@@ -233,7 +233,9 @@ export type AdversarialStop =
    */
   | "identity-changed"
   /** #296: the page's renderer stopped answering and was closed by the liveness watchdog: `inconclusive`, `failure.kind: "stalled"`. */
-  | "stalled";
+  | "stalled"
+  /** #205: the run's browsers went over the memory ceiling and the governor ended the session: `inconclusive`, `failure.kind: "resource-limit"`. */
+  | "resource-limit";
 
 /**
  * #300 — one time an action switched the signed-in identity (a "Continue as demo" shortcut on a
@@ -1974,7 +1976,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     if (isTargetUnresponsive(failure)) return finish("inconclusive", "target-unresponsive", failure);
     // #296: the page's renderer stopped answering and the liveness watchdog closed it — the run ends
     // `inconclusive` with that typed reason, never `crashed` with an issue attributed to jevitate.
-    if (isPageUnresponsive(failure)) return finish("inconclusive", "stalled", failure);
+    // #205: likewise a session the resource governor ended over the memory ceiling.
+    if (isPageUnresponsive(failure)) return finish("inconclusive", failure.kind === "resource-limit" ? "resource-limit" : "stalled", failure);
     crashHost = await probeHost();
     return finish("crashed", "crashed", failure);
   } finally {

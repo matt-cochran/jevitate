@@ -9,6 +9,21 @@ behaviour changes).
 
 ### Added
 
+- Resource governance for shared machines (#205):
+  - `--max-browsers` caps how many jevitate runs have a browser open at once, across the whole
+    machine. The default is `JEVITATE_MAX_BROWSERS`, else cores/4 within 2..6.
+  - `--max-browser-memory <MiB>` sets a ceiling on a run's browser memory (browser, renderers and
+    helpers). Over it, the run ends `inconclusive` with `failure.kind: "resource-limit"`, naming the
+    measured value and the ceiling. It is never a crash or a finding about the app. The default is
+    `JEVITATE_MAX_BROWSER_MEMORY_MB`, else 4 GiB or half the RAM.
+  - Under host load or memory pressure, new runs take half the cap and settle windows double. On a
+    clearly starved host, a new run refuses with `E_HOST_STARVED` unless `--ignore-host-load`.
+  - Results record all of it in `hostHealth.resources`.
+  - Browsers left behind by a killed jevitate are found by an owner marker and closed before the
+    next browser run, and on demand with the new `jevitate doctor --cleanup`. Only processes
+    jevitate launched are ever signalled.
+  - The MCP tools that launch a browser take `maxBrowsers` and `maxBrowserMemory`.
+    `JEVITATE_RESOURCE_GOVERNANCE=off` turns off the automatic parts. See docs/operations.md.
 - Adversarial `boundary-submit` checks whether a field's input is rendered as markup. It submits
   inert canaries with a per-submission random token: `<i data-jev-canary="T">jevT</i>` and an
   attribute break, `jevT" data-jev-canary="T`, with no script or event handler. It then inspects the

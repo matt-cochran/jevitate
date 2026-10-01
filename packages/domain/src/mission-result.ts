@@ -119,6 +119,26 @@ export const ResultUsageSchema = z.looseObject({
  * glance. Every number is `null` when the platform could not measure it (e.g. no load average on
  * Windows); never a guess.
  */
+/**
+ * #205 — what resource governance did during a run (`hostHealth.resources`): the machine-wide browser
+ * cap and slot, the most severe throttle level (and every change), the memory ceiling and the peak
+ * browser memory measured, and the resource limit that ended the run, if one did.
+ */
+export const ResourceGovernanceSummarySchema = z.looseObject({
+  governance: z.enum(["on", "off"]),
+  maxBrowsers: z.number().int().positive().nullable(),
+  machineSlot: z.looseObject({ index: z.number().int().nonnegative(), waitedMs: z.number().nonnegative() }).nullable(),
+  throttle: z.looseObject({ level: z.enum(["normal", "throttled", "starved"]), reasons: z.array(z.string()), settleFactor: z.number().positive() }),
+  throttleChanges: z.array(z.looseObject({ at: z.string(), level: z.enum(["normal", "throttled", "starved"]), reasons: z.array(z.string()) })),
+  memoryCeilingBytes: z.number().nonnegative().nullable(),
+  peakBrowserMemoryBytes: z.number().nonnegative().nullable(),
+  memoryMeasurement: z.enum(["pss", "rss", "unavailable", "off"]),
+  resourceLimit: z
+    .looseObject({ kind: z.literal("memory"), measuredBytes: z.number().nonnegative(), ceilingBytes: z.number().nonnegative(), metric: z.enum(["pss", "rss"]), message: z.string() })
+    .nullable(),
+});
+export type ResourceGovernanceSummaryRecord = z.infer<typeof ResourceGovernanceSummarySchema>;
+
 export const HostHealthSummarySchema = z.looseObject({
   /** Host samples taken over the run. */
   samples: z.number().int().nonnegative(),
@@ -143,6 +163,8 @@ export const HostHealthSummarySchema = z.looseObject({
   starvation: z.array(z.string()),
   /** `off` when starvation attribution was disabled (`JEVITATE_HOST_STARVATION=off`): sampled, never judged. */
   attribution: z.enum(["on", "off"]),
+  /** #205 — additive: what resource governance did during the run. */
+  resources: ResourceGovernanceSummarySchema.optional(),
 });
 export type HostHealthSummary = z.infer<typeof HostHealthSummarySchema>;
 

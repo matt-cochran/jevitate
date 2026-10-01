@@ -47,6 +47,8 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "ai setup": "interactive secret entry (a hidden-echo stdin prompt for an API key): a key never passes through a model or an MCP argument",
   record: "a HUMAN-driven recording: a person clicks through the app in a headed browser while it records — there is nobody to click over MCP (author_journey is the agent's way to author a Journey)",
   "source trust": "trusting a third-party Journey (bound to its content hash) is a person's decision, like approve_action: MCP can add, pull and run a source, never vouch for it",
+  doctor:
+    "#205: host maintenance for the operator (it signals processes on this machine and clears machine-wide browser slots); the same orphan sweep already runs automatically before every browser-driving MCP tool, and each result reports governance in hostHealth.resources",
 };
 
 type Kind = CliParam["kind"];
@@ -200,8 +202,11 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       real: "--real",
       fakeAi: "--fake-ai",
       extension: "--extension",
+      maxBrowsers: "--max-browsers",
+      maxBrowserMemory: "--max-browser-memory",
     },
     omitted: {
+      "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,
       "--json": OMIT.json,
       "--before": OMIT.hooks,
@@ -231,8 +236,11 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       fixtures: "--fixtures",
       fixtureIdentity: "--fixture-identity",
       extension: "--extension",
+      maxBrowsers: "--max-browsers",
+      maxBrowserMemory: "--max-browser-memory",
     },
     omitted: {
+      "--ignore-host-load": OMIT.hostLoad,
       "--fingerprint": "the positional's alias: MCP takes one 'fingerprint'",
       "--regressions-dir": "MCP names the finding by its result id (never a path); the ledger fallback is the ledger tool's `verify` action",
       "--allow-log-cmd": OMIT.logCmd,

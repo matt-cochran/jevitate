@@ -208,6 +208,14 @@ Every result carries `hostHealth`: `peakLoadPerCore`, `minFreeMemoryBytes`,
 `JEVITATE_HOST_STARVATION=off` keeps the sampling and the summary but never attributes a finding to
 the host (`attribution: "off"`) — for a harness that guarantees a quiet host itself.
 
+`hostHealth.resources` (#205) records what resource governance did during the run: the
+machine-wide browser cap and slot, the most severe throttle level and every change, the memory
+ceiling, and the peak browser memory. A run whose browsers went over the memory ceiling ends
+`inconclusive` with `failure.kind: "resource-limit"`, and `failure.message` names the measured
+value and the ceiling. It is never `crashed` and never a finding about the app; adversarial runs
+report `stop: "resource-limit"`. A run refused on a starved host fails with `E_HOST_STARVED`
+(exit 2) before any browser opens. See [operations](./operations.md#shared-machines-resource-governance).
+
 **Why a frontier run is `insufficient-coverage` — and how to reach `clean`.** Its silence counts only
 when it exercised the target's own controls: at least one in-page control (a button, a field, or a link
 in the page's body), and at most a quarter of its actions failing. "Global navigation" is page chrome —
