@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.3.0] – unreleased
+
+### Fixed
+
+- The repeated-side-effect guard ignores third-party writes and `--settle-ignore`d requests
+  (telemetry and `csp-report` beacons, `m.stripe.com`), so a safe control can be clicked again
+  (#274, #284).
+
 ## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one

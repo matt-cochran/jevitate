@@ -22,7 +22,7 @@ import { hangRoute, probeResponsive, type HangSignal } from "./hang.js";
 import { hostProbe, type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler, HostJudgment } from "./host-health.js";
 import { HANG_PROBE_MS } from "./perceive.js";
-import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
+import { textMatcher, urlMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
 import { AuthProgress, isCredentialField } from "./auth-completion.js";
@@ -704,10 +704,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
   /** Every perception's full timing (with request samples), once each — the run summary's input. */
   const timings: PageTiming[] = [];
-  /** The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. */
   // A write is classified by the shared classifier (#110): a gRPC-web/Connect read is never guarded.
   const isWrite = writeClassifier(cfg.safety?.readRequests === undefined ? {} : { readRequests: cfg.safety.readRequests });
-  const sideEffects = new SideEffectGuard(monitorFor(page), { isWrite, allowlist: cfg.allowlist });
   /** The shared safety policy (#116): session-ending / destructive / paid / denied controls. */
   const safety = new SafetyPolicy(cfg.safety, { goal: cfg.goal });
   /** The writes the run's actions fire (#116: the result's `sideEffects`). */
@@ -720,6 +718,16 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     firstParty.observe(r.url(), r.headers());
   };
   page.on("request", onRequestSeen);
+  /**
+   * The repeated-side-effect guard (#92): a click that fired a write is not blindly re-fired. A
+   * third-party beacon or a `--settle-ignore`d request is never a control's side effect (#274/#284).
+   */
+  const sideEffects = new SideEffectGuard(monitorFor(page), {
+    isWrite,
+    allowlist: cfg.allowlist,
+    firstParty,
+    ignoreRequests: urlMatcher(cfg.settle?.ignoreRequests),
+  });
   // #223: the main document's HTTP status per URL — an answer on a 404 / error page is no answer.
   const documentStatus = new Map<string, number>();
   /** #223: controls repeated across pages (global chrome) — their link text is not page content. */

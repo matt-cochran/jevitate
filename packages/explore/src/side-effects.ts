@@ -26,6 +26,11 @@ import type { ControlRisk } from "./safety.js";
  * A sign-in control ("Log in") is never guarded (repeating a sign-in creates nothing), and a
  * back / start-over click ("Back to sign in") abandons the flow on its route, lifting the guard for
  * the controls clicked there (#110).
+ * Only the APP's writes are guarded (#274, #284): a write to a third-party origin (`FirstPartyOrigins`,
+ * #194 — Stripe.js's `POST https://m.stripe.com/6`, a vendor's `csp-report`, analytics) or one the
+ * target declares background (`--settle-ignore`) is not the control's side effect, so it never makes
+ * a safe control (a menu, a nav link) unclickable a second time. It is still listed in the result's
+ * `sideEffects` (`SideEffectLog`, marked `thirdParty`).
  */
 
 /** The request methods that change server state. */
@@ -109,11 +114,30 @@ export class SideEffectGuard {
 
   /** The run's authorized origins: an off-origin write is named origin + path (#194). */
   readonly #origins: readonly string[];
+  /** Which origins are the app's (#194): a third-party write is never the control's side effect (#274). */
+  readonly #firstParty: FirstPartyOrigins;
+  /** The target's background requests (`--settle-ignore`, #284): never a control's side effect. */
+  readonly #ignored: (url: string) => boolean;
 
-  constructor(monitor: PageMonitor, opts: { readonly isWrite?: WriteClassifier; readonly allowlist?: readonly string[] } = {}) {
+  constructor(
+    monitor: PageMonitor,
+    opts: {
+      readonly isWrite?: WriteClassifier;
+      readonly allowlist?: readonly string[];
+      readonly firstParty?: FirstPartyOrigins;
+      readonly ignoreRequests?: (url: string) => boolean;
+    } = {},
+  ) {
     this.#monitor = monitor;
     this.#isWrite = opts.isWrite ?? writeClassifier();
     this.#origins = opts.allowlist ?? [];
+    this.#firstParty = opts.firstParty ?? new FirstPartyOrigins(this.#origins);
+    this.#ignored = opts.ignoreRequests ?? (() => false);
+  }
+
+  /** Is this request the app's own (#274/#284): first-party and not declared background? */
+  #ours(url: string): boolean {
+    return this.#firstParty.thirdParty(url) === null && !this.#ignored(url);
   }
 
   /** How a request is named (#194): path on an allowed origin, else origin + path. */
@@ -164,14 +188,16 @@ export class SideEffectGuard {
     // #130a: ANY request counts here (a read proves the click did something) — never just a write.
     const inflightAny = this.#monitor.pending().some((r) => r.startedAt >= o.at);
     const done: FiredWrite[] = requests
-      .filter((r: CapturedRequest) => this.#write(r))
+      .filter((r: CapturedRequest) => this.#write(r) && this.#ours(r.url))
       .map((r) => ({
         method: r.method.toUpperCase(),
         path: this.#name(r.url),
         status: r.status,
         rejected: (r.status !== null && r.status >= 400) || (r.status === null && r.failed),
       }));
-    const inflight = this.#monitor.pending().filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }));
+    const inflight = this.#monitor
+      .pending()
+      .filter((r) => r.startedAt >= o.at && this.#write({ ...r, path: pathOf(r.url) }) && this.#ours(r.url));
     const pending: FiredWrite[] = inflight.map((r) => ({ method: r.method.toUpperCase(), path: this.#name(r.url), status: null, rejected: false }));
     this.#lastClick = { requestSent: requests.length > 0 || inflightAny, writes: [...done, ...pending] };
     if (done.length + pending.length === 0) return;
