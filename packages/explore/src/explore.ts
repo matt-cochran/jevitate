@@ -151,6 +151,12 @@ const searchLike = (c: Control): boolean => c.role === "searchbox" || c.inputTyp
 const stateBesides = (snap: Snapshot, key: string): string =>
   JSON.stringify([snap.url, snap.controls.map((c) => (keyOf(c) === key ? `${c.role} ${c.name}` : c.summary))]);
 
+/**
+ * #237: a model `blocked` before the run tried any action is refused (and the model told to explore)
+ * this many times; a model that still gives up ends the run `inconclusive` (insufficient-coverage).
+ */
+export const MAX_EARLY_BLOCKED_REFUSALS = 2;
+
 /** The one "last chance" turn the model gets before a no-progress stop (#172). */
 export const LAST_CHANCE_NOTE =
   "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
@@ -649,6 +655,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    */
   let typeProbe: { key: string; label: string; at: number; background: Set<string>; state: string } | null = null;
   let typeNoEffect: { key: string; count: number } | null = null;
+  /** #237: actions the run attempted (any target op or reload, landed or not), and early `blocked`s refused. */
+  let actionAttempts = 0;
+  let earlyBlocked = 0;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -1611,6 +1620,27 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           statusAfter = "waiting";
           continue;
         }
+        // #237: giving up before trying anything proves nothing about the app. Refused (and the model
+        // told to explore) while the page offers controls; a model that insists ends `inconclusive`.
+        const untried = modelControls.filter((c) => c.enabled);
+        if (actionAttempts === 0 && untried.length > 0) {
+          earlyBlocked += 1;
+          if (earlyBlocked <= MAX_EARLY_BLOCKED_REFUSALS) {
+            const nav = [...untried.filter((c) => (c.landmark ?? null) !== null), ...untried.filter((c) => (c.landmark ?? null) === null)];
+            const names = nav.slice(0, 6).map((c) => quote(c.name || c.summary, 40)).join(", ");
+            const reason = `blocked refused: nothing was tried yet — ${untried.length} control(s) on this page are untried (e.g. ${names}); explore them (the navigation, settings, menus) before giving up`;
+            history.push(reason);
+            record(false, reason, { origin: "engine" });
+            continue;
+          }
+          record(false, "model blocked before trying any action", { origin: "engine" });
+          failure = {
+            kind: "insufficient-coverage",
+            message: `the model gave up before trying any of the page's ${untried.length} controls — too little exploration to conclude the goal cannot be done`,
+          };
+          stop = "inconclusive";
+          break;
+        }
         record(true, "model blocked");
         incomplete = "the model reported the goal cannot be advanced from this page";
         stop = "blocked";
@@ -1727,6 +1757,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       idleSteps = 0;
       quietWaits = 0;
+      actionAttempts += 1;
 
       if (decision.op === "reload") {
         // A reload is a navigation to the same page: recorded as such (replay re-loads the page),
