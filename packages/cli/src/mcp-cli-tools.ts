@@ -61,7 +61,9 @@ export type CliParamKind =
   /** `{width, height}` → `--viewport WxH`. */
   | "viewport"
   /** `name=<storageState>` entries (`--persona`/`--actor`): each path confined as a session. */
-  | "named-sessions";
+  | "named-sessions"
+  /** `<descriptor>=<file>` entries (`--type-fixture`): the file (after the LAST `=`) confined as a read path. */
+  | "bound-paths";
 
 export interface CliParam {
   readonly kind: CliParamKind;
@@ -241,6 +243,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         actor: { kind: "named-sessions", flag: "--actor" },
         fixtures: path("--fixtures"),
         fixture: path("--fixture"),
+        typeFixture: { kind: "bound-paths", flag: "--type-fixture" },
         appClass: s("--app-class"),
         show: s("--show"),
         minConfidence: num("--min-confidence"),
@@ -578,6 +581,7 @@ function paramSchema(p: CliParam): Record<string, unknown> {
     case "string[]":
     case "path[]":
     case "named-sessions":
+    case "bound-paths":
       return { type: "array", items: { type: "string" } };
     case "params":
       return { type: "object", additionalProperties: { type: "string" } };
@@ -658,6 +662,12 @@ function values(name: string, p: CliParam, v: unknown, roots: readonly string[])
         const eq = x.indexOf("=");
         if (eq <= 0) throw new McpArgError(`'${name}[${i}]' must be 'name=<storageState path>'`);
         return `${x.slice(0, eq)}=${confineMcpPath(x.slice(eq + 1), `${name}[${i}]`, roots, { session: true })}`;
+      });
+    case "bound-paths":
+      return asStrings(v, name).map((x, i) => {
+        const eq = x.lastIndexOf("=");
+        if (eq <= 0) throw new McpArgError(`'${name}[${i}]' must be '<descriptor>=<file path>'`);
+        return `${x.slice(0, eq)}=${confineMcpPath(x.slice(eq + 1), `${name}[${i}]`, roots)}`;
       });
     case "params": {
       if (v === null || typeof v !== "object" || Array.isArray(v)) throw new McpArgError(`'${name}' must be an object of string values`);

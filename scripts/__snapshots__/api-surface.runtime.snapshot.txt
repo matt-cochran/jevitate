@@ -156,7 +156,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (318 exports)
+# @jevitate/explore (329 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -225,6 +225,7 @@
   MissionSessions: class
   NOT_REPLAYED: object
   NO_ANSWER_REASON: const (string)
+  NO_DESTRUCTIVE_NOTE: const (string)
   NoProgressDetector: class
   ONLY_GLOBAL_NAVIGATION: const (string)
   OPS: array
@@ -269,6 +270,7 @@
   TargetUnresponsiveError: class
   TotpSeedError: class
   TranscriptLog: class
+  TypeFixtureSpecError: class
   UNSAVED_WRITE_REASON: const (string)
   UPLOAD_OP_GUIDE: const (string)
   UnauthorizedExploreTargetError: class
@@ -279,6 +281,7 @@
   WRITE_METHODS: object
   absenceCoverage: function
   act: function
+  actionName: function
   advisoryTitle: function
   affordedOp: function
   answerNotFoundReason: function
@@ -290,6 +293,7 @@
   autoDecidePostdoc: function
   awaitWrites: function
   boundSecretField: function
+  boundTypeFixture: function
   boundaryValueCandidates: function
   buildCrashReport: function
   buildJudgmentState: function
@@ -336,9 +340,11 @@
   explore: function
   failureLine: function
   fieldKind: function
+  fieldMatches: function
   finishDeclaredRun: function
   goalAdmitsAbsence: function
   goalAsksFor: function
+  goalAsksForAction: function
   goalAsksForChange: function
   goalAsksForReply: function
   goalAsksForReport: function
@@ -361,6 +367,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
@@ -376,6 +383,7 @@
   judgeAnswerFits: function
   judgeGoalCompletion: function
   judgeGoalMet: function
+  markTypeFixtures: function
   maskSecretFields: function
   matchGlob: function
   matchOption: function
@@ -395,6 +403,7 @@
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
+  parseTypeFixtureSpec: function
   pathGlob: function
   pendingEvidence: function
   perceive: function
@@ -462,6 +471,8 @@
   toPath: function
   totp: function
   tryTriage: function
+  typeFixtureContext: function
+  typeFixturePlaceholder: function
   typedPassages: function
   uniqueIdentity: function
   unreadablePageTiming: function

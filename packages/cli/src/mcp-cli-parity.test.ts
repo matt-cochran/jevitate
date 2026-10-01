@@ -50,7 +50,7 @@ const EXCLUDED: Readonly<Record<string, string>> = {
 };
 
 type Kind = CliParam["kind"];
-const REPEATABLE: ReadonlySet<Kind> = new Set<Kind>(["string[]", "path[]", "named-sessions", "params"]);
+const REPEATABLE: ReadonlySet<Kind> = new Set<Kind>(["string[]", "path[]", "named-sessions", "bound-paths", "params"]);
 const OPTIONAL_VALUE: ReadonlySet<Kind> = new Set<Kind>(["optional-path", "optional-session", "screenshots"]);
 
 const program = buildProgram({ profiles: new ProfileManager("/unused-in-parity") });
@@ -277,5 +277,17 @@ describe("#255: the extended hand-written tools cover their command's flags", ()
     const uncovered = cmd.options.map((o) => o.long ?? "").filter((f) => !covered.has(f) && spec.omitted[f] === undefined);
     expect(uncovered, `${tool}: flags of ${spec.path} with no MCP decision`).toEqual([]);
     for (const f of Object.keys(spec.omitted)) expect(cmd.options.some((o) => o.long === f), `${tool}: omitted ${f} is stale`).toBe(true);
+  });
+});
+
+describe("#281: run_exploration's typeFixture confines each bound file like every MCP path", () => {
+  it("passes '<descriptor>=<confined path>' and refuses a file outside the roots", async () => {
+    const { buildCliArgv } = await import("./mcp-cli-tools.js");
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const root = process.cwd();
+    const argv = buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["label=Paste your text=fixtures/import.txt"] }, [root]);
+    expect(argv).toContain(`--type-fixture=label=Paste your text=${root}/fixtures/import.txt`);
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["label=Body=/etc/passwd"] }, [root])).toThrow(/typeFixture\[0\]/);
+    expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", typeFixture: ["no-file"] }, [root])).toThrow(/descriptor>=<file path>/);
   });
 });

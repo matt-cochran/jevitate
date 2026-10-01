@@ -9,6 +9,8 @@ behaviour changes).
 
 ### Added
 
+- `explore --type-fixture '<descriptor>=<file>'` (MCP `typeFixture`) types a file's exact text into
+  a matching field: line breaks kept, never paraphrased or capped (#281).
 - `init` and `ai status` name each key, its provider and its source (env var or
   `~/.jevitate/credentials.json`), and report an env var that overrides a stored key; `--json`
   adds `sources` per feature (#268).

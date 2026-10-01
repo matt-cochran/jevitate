@@ -100,7 +100,8 @@ export function secretFieldSecrets(fields: readonly SecretField[] | undefined): 
 
 const normLabel = (s: string): string => s.replace(/[*:]+\s*$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 
-function matches(m: FieldMatcher, c: Control): boolean {
+/** Does a field matcher (`label=Password`, `testId=body`…) match this control? */
+export function fieldMatches(m: FieldMatcher, c: Control): boolean {
   switch (m.key) {
     case "label": {
       const want = normLabel(m.value);
@@ -121,7 +122,7 @@ function matches(m: FieldMatcher, c: Control): boolean {
 export function boundSecretField(c: Control, fields: readonly SecretField[] | undefined): SecretField | null {
   if (fields === undefined || fields.length === 0) return null;
   if (c.tag !== "input" && c.tag !== "textarea" && c.role !== "textbox") return null;
-  return fields.find((f) => matches(f.matcher, c)) ?? null;
+  return fields.find((f) => fieldMatches(f.matcher, c)) ?? null;
 }
 
 /** The value code types for a binding now (a TOTP code for `atMs`). Never logged, never returned to a model. */

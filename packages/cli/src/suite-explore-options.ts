@@ -190,6 +190,7 @@ export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = 
   jevitateRepo: "a check is a CI gate: findings are reported in JUnit/SARIF/report.md, never filed mid-run",
   repeat: "a check gates each item once by finding identity; track flakes across checks with --baseline",
   minAgreement: "a check gates each item once by finding identity; track flakes across checks with --baseline",
+  typeFixture: "#281: a file typed verbatim into a field is an `explore --type-fixture` binding; a suite goal declares none",
 };
 
 /** Suite key of a generic option (the explore attribute name itself). */

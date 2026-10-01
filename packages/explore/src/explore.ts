@@ -103,6 +103,7 @@ import {
 } from "./status.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
+import { boundTypeFixture, markTypeFixtures, typeFixtureContext, typeFixturePlaceholder, type TypeFixture } from "./type-fixtures.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
@@ -302,6 +303,11 @@ export interface ExploreConfig {
    */
   readonly noDestructiveWrites?: boolean;
   /**
+   * #281: fields bound to a file's exact text (`--type-fixture`): when the loop chooses `type` on a
+   * bound control, code types the text verbatim (no value generator, no cap). See `type-fixtures.ts`.
+   */
+  readonly typeFixtures?: readonly TypeFixture[];
+  /**
    * #202: called as an action (a control op, or a chosen `reload`) is about to be dispatched — at the
    * same point, on the same wall clock (`Date.now`), as the request→step attribution mark
    * (`SideEffectLog.mark`). Requests captured with `startedAt >= at` were sent after it. Observation
@@ -492,6 +498,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     [
       cfg.missionContext,
       secretContext,
+      typeFixtureContext(cfg.typeFixtures),
       cfg.readOnly === true ? READ_ONLY_NOTE : cfg.noDestructiveWrites === true ? NO_DESTRUCTIVE_NOTE : null,
     ]
       .filter((c): c is string => c !== undefined && c !== null && c !== "")
@@ -905,7 +912,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // #158 — the action's window closes once the page settled: later writes are the app's own.
       if (readOnly?.settled() === true && readOnly.mode === "read-only") effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
-      const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
+      const snap = markTypeFixtures(maskSecretFields(perception.snapshot, cfg.secretFields), cfg.typeFixtures);
       {
         const m = track.lastMutation;
         if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
@@ -1947,6 +1954,34 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           history.push(`type failed: ${(r.reason ?? "?").split(value).join(placeholder)}`);
         }
         record(r.ok, r.ok ? `typed ${placeholder} (bound secret, typed by code)` : (r.reason ?? "").split(value).join(placeholder), {
+          value: placeholder,
+        });
+        lastActedOp = decision.op;
+        continue;
+      }
+
+      // #281: a field bound to a type fixture — code types the file's exact text (line breaks kept,
+      // never capped, never generated). The Recording keeps it so a Journey replays it exactly,
+      // unless it holds a registered run secret (then `{ redacted: true }`, like a bound secret).
+      const fixtureBinding = decision.op === "type" ? boundTypeFixture(control, cfg.typeFixtures) : null;
+      if (fixtureBinding !== null) {
+        const value = fixtureBinding.text;
+        const placeholder = typeFixturePlaceholder(fixtureBinding);
+        const holdsSecret = secrets.some((sec) => sec !== "" && value.includes(sec));
+        const r = await act(cfg.actor, { op: "type", control, value });
+        if (r.ok) {
+          recorder.fill(control.descriptor, holdsSecret ? { redacted: true, length: value.length } : value, at);
+          valueLog.typed(control.name || control.summary, value);
+          save.noteTyped(control.name || control.summary, value);
+          observed.noteOwnInput(value);
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value });
+          tracker.countAction();
+          cleared(control);
+          history.push(`typed ${placeholder} into ${control.name} (type fixture, typed verbatim by code)`);
+        } else {
+          history.push(`type failed: ${redactText((r.reason ?? "?").split(value).join(placeholder), secrets)}`);
+        }
+        record(r.ok, r.ok ? `typed ${placeholder} (type fixture, typed verbatim by code)` : redactText((r.reason ?? "").split(value).join(placeholder), secrets), {
           value: placeholder,
         });
         lastActedOp = decision.op;

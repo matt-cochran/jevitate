@@ -105,6 +105,23 @@ jevitate explore --url https://app.example.test/profile --goal "set the last nam
   --success 'reloadThen:valueEquals:[data-testid=last-name]|Litmus'
 ```
 
+## Typing a file's exact text (`--type-fixture`)
+
+A goal that quotes a passage to type has it typed as quoted, but a long text, or one whose line
+breaks matter, is better kept in a file: `--type-fixture '<descriptor>=<file>'` (repeatable, goal
+strategy; the descriptor is `label=`, `testId=`, `type=`, `id=` or `name=`, as for
+`--secret-field`). When the run types into a matching field, code types the file's contents
+verbatim: line breaks kept, never paraphrased, never cut by the generated-text cap. The model sees
+only `«fixture:<file name>»` on the field. The file must exist and be UTF-8 text of at most 256 KiB.
+The Recording keeps the typed text, so a Journey replays it exactly. If the text contains a
+`--secret`, the fill is recorded `{ redacted: true }` instead. Over MCP the argument is
+`typeFixture`, and its file path is confined like every other path argument.
+
+```bash
+jevitate explore --url http://localhost:8088/import --goal "Import this text and analyze it" \
+  --type-fixture 'label=Paste your text=./fixtures/newsletter.txt' --success 'visible:text=Analysis ready'
+```
+
 ## Rich-text editors
 
 A `contenteditable` element (a document editor's prose block) is also offered the `edit_text`

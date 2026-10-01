@@ -255,11 +255,12 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (494 exports)
+# @jevitate/explore (507 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
   ActArgs: interface
+  actionName: function
   ActResult: interface
   AdversarialCoverage: interface
   AdversarialDefect: interface
@@ -295,6 +296,7 @@
   Bounds: interface
   boundSecretField: function
   BoundsTracker: class
+  boundTypeFixture: function
   BudgetActionInfo: interface
   BudgetGuardResult: interface
   BudgetMonitor: class
@@ -412,6 +414,7 @@
   FieldKind: type-alias
   FieldMatcher: interface
   FieldMatcherKey: type-alias
+  fieldMatches: function
   FieldShape: interface
   FieldValueLog: class
   FillHelper: class
@@ -436,6 +439,7 @@
   GOAL_MET_QUESTION: variable
   goalAdmitsAbsence: function
   goalAsksFor: function
+  goalAsksForAction: function
   goalAsksForChange: function
   goalAsksForReply: function
   goalAsksForReport: function
@@ -493,6 +497,7 @@
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
   isAuthorizedExploreTarget: function
+  isDestructiveRequest: function
   isDisclosureControl: function
   isExercisable: function
   isInScope: function
@@ -515,6 +520,7 @@
   LIST_OPTION_CAP: variable
   LivenessAnswer: type-alias
   LivenessProbe: type-alias
+  markTypeFixtures: function
   maskSecretFields: function
   matchGlob: function
   matchOption: function
@@ -540,6 +546,7 @@
   NeverResponseHit: interface
   newIdentityToken: function
   NO_ANSWER_REASON: variable
+  NO_DESTRUCTIVE_NOTE: variable
   NoActionContext: interface
   noActionShortfall: function
   NoProgressDetector: class
@@ -575,6 +582,7 @@
   parseInterceptor: function
   parseNumbers: function
   parseSecretField: function
+  parseTypeFixtureSpec: function
   pathGlob: function
   pendingEvidence: function
   PendingRequestEvidence: interface
@@ -590,6 +598,7 @@
   quoteIsOnlyControlNames: function
   READ_ONLY_NOTE: variable
   ReadOnlyGuard: class
+  ReadOnlyMode: type-alias
   recordCoverageHang: function
   recordingStepCount: function
   redactContext: other
@@ -724,6 +733,10 @@
   Triage: type-alias
   tryTriage: function
   typedPassages: function
+  TypeFixture: interface
+  typeFixtureContext: function
+  typeFixturePlaceholder: function
+  TypeFixtureSpecError: class
   UnauthorizedExploreTargetError: class
   uniqueIdentity: function
   unreadablePageTiming: function
