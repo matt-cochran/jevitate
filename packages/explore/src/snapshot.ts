@@ -135,7 +135,17 @@ export interface SnapshotOptions {
    * snapshot ever holds a secret the page merely displays. Default none.
    */
   readonly secrets?: readonly string[];
+  /**
+   * #278: wall-clock bound (ms) on reading the controls. A page with hundreds of clickable elements
+   * (a heatmap of words) costs a few live queries per control; past the bound the rest are left
+   * unread and the snapshot says so (`truncated`), so one perception never outlasts a mission's
+   * stall watchdog. Default `SNAPSHOT_BUDGET_MS`.
+   */
+  readonly budgetMs?: number;
 }
+
+/** Default bound (ms) on reading a snapshot's controls (#278). */
+export const SNAPSHOT_BUDGET_MS = 30_000;
 
 /** Options kept per long list before only the goal-named ones are (#192). */
 export const LIST_OPTION_CAP = 25;
@@ -544,10 +554,11 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
   // Bounded: a page with thousands of candidates never turns perception into a crawl.
   let evaluated = 0;
   const maxEvaluated = maxCandidates * 4;
+  const deadline = Date.now() + (opts?.budgetMs ?? SNAPSHOT_BUDGET_MS);
 
   for (const [i, handle] of handles.entries()) {
     try {
-      if (controls.length >= maxCandidates || evaluated >= maxEvaluated) {
+      if (controls.length >= maxCandidates || evaluated >= maxEvaluated || Date.now() > deadline) {
         truncated = true;
         continue;
       }
@@ -573,7 +584,7 @@ export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snap
       const facts: DescribedFacts = { ...raw, value };
       // computeDescriptor validates against the live page and throws if nothing
       // resolves uniquely — an un-describable control is dropped, never guessed.
-      const computed = await computeDescriptor(page, handle);
+      const computed = await computeDescriptor(page, handle, { primaryOnly: true });
       const control: Control = {
         index: controls.length,
         descriptor: computed.descriptor,
