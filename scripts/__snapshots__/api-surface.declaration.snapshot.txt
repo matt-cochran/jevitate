@@ -255,7 +255,7 @@
   UnsafeNameError: class
   worstOutcome: function
 
-# @jevitate/explore (495 exports)
+# @jevitate/explore (500 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -285,6 +285,7 @@
   assertSeedReachable: function
   assertTargetAnswering: function
   assessCoverageSufficiency: function
+  attributeCanary: function
   authorJourney: function
   AuthorJourneyRequest: interface
   AuthorJourneyResult: type-alias
@@ -306,6 +307,7 @@
   buildJudgmentState: function
   BuildStateInput: interface
   busyIndicatorOf: function
+  CANARY_ATTRIBUTE: variable
   CandidateAction: type-alias
   candidateId: function
   CapabilityScope: interface
@@ -516,6 +518,8 @@
   LIST_OPTION_CAP: variable
   LivenessAnswer: type-alias
   LivenessProbe: type-alias
+  markupCanary: function
+  MarkupInjection: interface
   maskSecretFields: function
   matchGlob: function
   matchOption: function
@@ -562,6 +566,7 @@
   OverflowElement: interface
   OverflowFinding: interface
   OverflowRect: type-alias
+  OVERSIZE_CHARS: variable
   p50: function
   PAGE_TEXT_GUIDE: variable
   PageFacts: interface

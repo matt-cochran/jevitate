@@ -18,7 +18,9 @@ Most pages are forms, so the run looks for them: fields plus a Save / Submit con
 has no `<form>`). It then tries misuse around submitting:
 
 - a double submit;
-- a submit with boundary or invalid values (empty, edge, long, unicode, invalid);
+- a submit with boundary or invalid values (empty, an inert markup canary, edge, long, an
+  attribute-break canary, unicode with RTL override and zero-width characters, invalid, oversize
+  ~100 KB), one per round, chosen by the field's type (a number or date field never gets text);
 - edit, then Cancel, then Save;
 - a reload with unsaved edits;
 - acting again while the save request is still pending.
@@ -26,6 +28,30 @@ has no `<form>`). It then tries misuse around submitting:
 It also acts once on every other control on the target. Password fields, file inputs,
 log-out controls and visually hidden skip links are never targets, and a toggle pair
 (Collapse/Expand, Show/Hide) is exercised once in each direction, not over and over.
+
+**Markup canary (#301).** To ask "is my input rendered as markup?", the boundary values include
+two inert canaries, each with a fresh random token per submission:
+
+- an HTML-injection canary, `<i data-jev-canary="TOKEN">jevTOKEN</i>`;
+- an attribute-break canary, `jevTOKEN" data-jev-canary="TOKEN`.
+
+They contain no script, no event handler and no `javascript:` URL: nothing in them can execute.
+Detection is DOM inspection only. After each settled step the run looks for an element carrying
+`data-jev-canary="<this run's token>"` in the page and in frames on an `--allow` origin. Right
+after a canary is submitted, it also loads the same in-scope URL again (a plain GET, never a re-sent
+form) and looks again. Such an element exists only when the app parsed the input as markup. A
+canary shown as escaped text is fine and is never reported. A hit is a `markup-injection` defect
+with `markupInjection: {field, payload: "html" | "attribute", submittedOn, renderedOn,
+afterSubmit, afterReload, stored}`. It is `stored` when it survived the reload or showed up later on
+another page, and `reflected` otherwise.
+
+Limits: the canary detects unescaped rendering, nothing more. It never tries to exploit it, and it
+proves nothing about sanitizers that keep `<i>` and `data-*` but strip scripts. It doesn't see
+markup that is rendered in a closed shadow root, in a cross-origin frame, or only on a page the run
+never visits. `verify-fix` cannot re-check a `markup-injection` defect by replay, so it returns
+`inconclusive`; re-run the adversarial mission instead. Canary values go only to the `--allow`
+origins, through the same gated actions as every other value, so the paid/destructive guards and
+budgets apply. The ones the app accepts stay in the app (see [safety](./safety.md)).
 
 **Identity changes (#300).** The run takes a baseline of who it is signed in as right after the
 start page loads, from the session's auth cookies and auth-named `localStorage`/`sessionStorage`

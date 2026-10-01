@@ -77,6 +77,7 @@ import {
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import { AuthRequestLog, clearAuthState, identityChange, readIdentity, type IdentityFingerprint } from "../adversarial/identity.js";
+import { CanaryTokens, canaryPayloadOf, canaryTokenOf, markupFingerprint, renderedCanaries } from "../adversarial/markup-canary.js";
 
 /**
  * runAdversarialMission — a bounded "try to break it" run that KEEPS HUNTING.
@@ -129,12 +130,33 @@ export interface DefectRepro {
   readonly recording?: Recording;
 }
 
+/**
+ * #301 — a field whose submitted input the app rendered as MARKUP: the inert canary
+ * (`<i data-jev-canary=…>` or an attribute break) became a real element/attribute in the page's DOM.
+ */
+export interface MarkupInjection {
+  /** The field's accessible name. */
+  readonly field: string;
+  /** `html`: an injected element; `attribute`: a quoted attribute value broken out of. */
+  readonly payload: "html" | "attribute";
+  /** The (redacted) page the canary was submitted on. */
+  readonly submittedOn: string;
+  /** The (redacted) page it was found rendered as markup on. */
+  readonly renderedOn: string;
+  /** Seen right after the submit settled. */
+  readonly afterSubmit: boolean;
+  /** Seen after the page was loaded again (a GET of the same URL — never a re-sent form). */
+  readonly afterReload: boolean;
+  /** Persisted (seen after a reload, or on a later page): `stored`; else `reflected`. */
+  readonly stored: boolean;
+}
+
 export interface AdversarialDefect {
   /** Stable identity (16 hex): same bug, same fingerprint — across steps and across runs. */
   readonly fingerprint: string;
   /** Every signal fingerprint seen with it (the cascade one broken call fires). */
   readonly related: string[];
-  readonly kind: DefectSignal["kind"] | "invariant";
+  readonly kind: DefectSignal["kind"] | "invariant" | "markup-injection";
   readonly title: string;
   /** Normalized route (path pattern) of the page it was first seen on. */
   readonly route: string;
@@ -146,6 +168,8 @@ export interface AdversarialDefect {
   readonly invariantReason?: string;
   /** For a DECLARED invariant (#86): its id, expression, before/after values, action and evidence. */
   readonly invariant?: InvariantViolation;
+  /** For a `markup-injection` defect (#301): the field, the pages, and stored vs reflected. */
+  readonly markupInjection?: MarkupInjection;
   readonly firstSeenStep: number;
   readonly occurrences: number;
   readonly occurrenceSteps: number[];
@@ -406,6 +430,7 @@ interface StepFinding {
   readonly signals: DefectSignal[];
   readonly invariantReason?: string;
   readonly invariant?: InvariantViolation;
+  readonly markupInjection?: MarkupInjection;
 }
 
 interface MutableDefect extends Omit<StepFinding, "related"> {
@@ -478,6 +503,7 @@ function freeze(d: MutableDefect, segments: readonly (Recording | null)[]): Adve
     signals: d.signals,
     ...(d.invariantReason === undefined ? {} : { invariantReason: d.invariantReason }),
     ...(d.invariant === undefined ? {} : { invariant: d.invariant }),
+    ...(d.markupInjection === undefined ? {} : { markupInjection: d.markupInjection }),
     firstSeenStep: d.firstSeenStep,
     occurrences: d.occurrenceSteps.length,
     occurrenceSteps: [...d.occurrenceSteps],
@@ -572,6 +598,10 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
   };
 
+  /** #301: this run's inert canary tokens, and every one submitted (token → field, page, payload). */
+  const canaries = new CanaryTokens();
+  const submittedCanaries = new Map<string, { readonly field: string; readonly submittedOn: string; readonly payload: "html" | "attribute" }>();
+  const reportedCanaries = new Set<string>();
   /** #300: the identity the run started as (hashes only), read once the seed page settled. */
   let baseline: IdentityFingerprint | null = null;
   const identityChanges: IdentityChange[] = [];
@@ -1006,7 +1036,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       // Guardrail #3: the generation call receives only the redacted hard-signal details (never
       // raw form state) + the URL. A triage failure is data (`unavailable`), never a lost defect.
       const summary =
-        f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.signals.map((s) => s.detail).join("; ");
+        f.kind === "invariant" ? (f.invariantReason ?? f.title) : f.kind === "markup-injection" ? f.title : f.signals.map((s) => s.detail).join("; ");
       const triage = await tryTriage(params.generation, { failureSummary: summary, url: f.url });
       defects.set(f.fingerprint, {
         ...f,
@@ -1254,6 +1284,83 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     let stopFailure: MissionFailure | undefined;
     /** Wall-clock time the first action since the last adjudication fired (#300: auth requests since then). */
     let chainStart: number | null = null;
+    /** #301: canary tokens submitted since the last adjudicated step (checked after it, and after a reload). */
+    const chainCanaries = new Set<string>();
+
+    /**
+     * #301 — after a settled step: is any canary of this run rendered as MARKUP? When this step's
+     * chain submitted one, the page is loaded again (a GET of the same in-scope URL — never a re-sent
+     * form) and checked again: seen after that ⇒ stored, seen only before ⇒ reflected. A canary first
+     * seen on a later page is stored. DOM inspection only — the payload is inert.
+     */
+    const checkCanaries = async (): Promise<"ok" | "reloaded"> => {
+      const submitted = [...chainCanaries];
+      chainCanaries.clear();
+      const authorized = (u: string): boolean => isAuthorizedExploreTarget(u, params.allowlist);
+      const afterSubmit = await renderedCanaries(sessions.page, canaries.prefix, authorized);
+      const submittedOn = redactUrl(sessions.page.url());
+      let afterReload = new Set<string>();
+      let reloadedOn = submittedOn;
+      const reload = submitted.length > 0 && inScope(sessions.page.url());
+      if (reload) {
+        const url = sessions.page.url();
+        await Navigate.to(url).performAs(sessions.actor);
+        recorder.navigate(url, now());
+        lastRecordedTarget = null;
+        await perceiveNow().catch(() => undefined);
+        afterReload = await renderedCanaries(sessions.page, canaries.prefix, authorized);
+        reloadedOn = redactUrl(sessions.page.url());
+      }
+      const found: StepFinding[] = [];
+      for (const token of new Set([...afterSubmit, ...afterReload])) {
+        const sub = submittedCanaries.get(token);
+        if (sub === undefined || reportedCanaries.has(token)) continue;
+        reportedCanaries.add(token);
+        const justSubmitted = submitted.includes(token);
+        const seenAfterSubmit = afterSubmit.has(token);
+        const seenAfterReload = afterReload.has(token);
+        const stored = seenAfterReload || !justSubmitted;
+        const renderedOn = seenAfterSubmit ? submittedOn : reloadedOn;
+        const route = normalizeRoute(sub.submittedOn);
+        const what = sub.payload === "html" ? "unescaped HTML" : "an unescaped attribute value";
+        found.push({
+          fingerprint: markupFingerprint(route, sub.field, sub.payload),
+          related: [markupFingerprint(route, sub.field, sub.payload)],
+          kind: "markup-injection",
+          title: `Input "${sub.field}" rendered as markup (${what}) on ${normalizeRoute(renderedOn)} — ${stored ? "stored" : "reflected"}`,
+          route,
+          url: sub.submittedOn,
+          signals: [],
+          markupInjection: {
+            field: sub.field,
+            payload: sub.payload,
+            submittedOn: sub.submittedOn,
+            renderedOn,
+            afterSubmit: seenAfterSubmit,
+            afterReload: seenAfterReload,
+            stored,
+          },
+        });
+      }
+      if (reload || found.length > 0) {
+        const at = transcript.nextStep;
+        transcript.record({
+          op: null,
+          control: null,
+          confidence: null,
+          chosenBy: "strategy",
+          strategy: "canary-check",
+          actOk: true,
+          reason:
+            found.length === 0
+              ? `inert canary not rendered as markup${reload ? " (checked after submit and after reloading the page)" : ""}`
+              : `defect: ${found.map((f) => f.title).join("; ")}`,
+          snapshot: snap,
+        });
+        if (found.length > 0) await fold(at, found);
+      }
+      return reload ? "reloaded" : "ok";
+    };
 
     /**
      * SOFT augment only (guardrail #4). Jev's "looks broken?" is consulted and recorded in the
@@ -1447,6 +1554,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         isChrome,
         disclosures: { revealed, barren },
         rng: Math.random,
+        canary: () => canaries.next(),
         ...extra,
       });
       let episode = planMisuseEpisode(planning(snap, strategy));
@@ -1641,6 +1749,12 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         safety.mark(transcript.nextStep, s.op, s.control);
         const { result, value } = await execute(s, stepSnap.controls);
         actions += 1;
+        // #301: an inert canary typed into a field is registered (token → field, page, payload).
+        const token = result.ok ? canaryTokenOf(value) : null;
+        if (token !== null && value !== undefined && s.control !== null) {
+          submittedCanaries.set(token, { field: s.control.name || s.control.summary, submittedOn: redactUrl(actedOn), payload: canaryPayloadOf(value) });
+          chainCanaries.add(token);
+        }
         if (result.ok) {
           recordAction(s, value, at, result.submittedVia);
           markFired(firedAt, firedStep);
@@ -1705,6 +1819,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
             ? null
             : identityChange(baseline, await readIdentity(sessions.page), { authRequest: authRequests.since(since) });
         if (switched !== null) {
+          chainCanaries.clear();
           const switchVerdict = await adjudicate(null, { identitySwitched: true });
           const landed = redactUrl(sessions.page.url());
           const actionName = s.control?.name ?? s.op;
@@ -1762,6 +1877,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
           await fold(step, verdict.findings);
           foldAdvisories(step, verdict.advisories);
         }
+        // #301: was a submitted canary rendered as markup (after submit, after reload)?
+        const canaryCheck = await checkCanaries();
         const after = await observeAfter(step, s.control?.name ?? s.op);
         if (after.kind === "stop") {
           stop = after.stop;
@@ -1769,6 +1886,11 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         }
         // The rest of the episode was planned for a page that is gone.
         if (after.kind === "reset") break;
+        if (canaryCheck === "reloaded") {
+          // The canary check loaded the page again: the rest of the episode's plan is stale.
+          observeTarget(snap);
+          break;
+        }
         observeTarget(snap);
         // #193: what did this click reveal? A form that was not there before → remember the control
         // as the way back to it (and, for a disclosure, run this strategy's episode on it now); a
