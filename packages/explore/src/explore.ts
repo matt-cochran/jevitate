@@ -1,5 +1,4 @@
 import type { Actor } from "@jevitate/screenplay";
-import { Navigate } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { type Recording } from "@jevitate/recording";
 import {
@@ -7,8 +6,7 @@ import {
   type StopReason,
 } from "./bounds.js";
 import type { Snapshot } from "./snapshot.js";
-import { monitorFor } from "./page-monitor.js";
-import { summarizeTimings, type TimingSummary } from "./timing.js";
+import { type TimingSummary } from "./timing.js";
 import { type HangSignal } from "./hang.js";
 import { type HostProbe } from "./host-pressure.js";
 import type { HostHealthSampler } from "./host-health.js";
@@ -20,22 +18,18 @@ import { type SideEffect } from "./side-effects.js";
 import { sendable } from "./actions.js";
 import type { Control } from "./snapshot.js";
 import {
-  answerNotFoundReason,
   type RunAnswer,
 } from "./answer.js";
 import {
   type RunOutcome,
 } from "./conversation.js";
-import { emptyRecording } from "./record.js";
 import { ChromeTracker } from "./feature/relevance.js";
-import { redactText, redactUrl } from "./redact.js";
 import { type TranscriptEntry, type TranscriptListener } from "./transcript.js";
 import type { MissionFailure } from "@jevitate/domain";
-import { describeFailure, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget, targetStoppedAnswering, assertSeedReachable } from "./mission-failure.js";
+import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "./mission-failure.js";
 import { type SafetyConfig } from "./safety.js";
-import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE } from "./read-only.js";
 import { type TypeFixture } from "./type-fixtures.js";
-import { buildCrashReport, type CrashReport } from "./crash-report.js";
+import { type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
 import { type ActionDeltaStats } from "./action-delta.js";
 import * as limits from "./goal-loop/limits.js";
@@ -44,13 +38,9 @@ import { newStep, type ActStep } from "./goal-loop/step.js";
 import { handleReport } from "./goal-loop/handle-report.js";
 import {
   FirstNavigationFailedSentinel,
-  firstLine,
-  incompleteReason,
   isActionOrChromeName as actionOrChromeName,
   keyOf,
   quote,
-  safeUrl,
-  withCause,
 } from "./goal-loop/helpers.js";
 import { handleDone } from "./goal-loop/handle-done.js";
 import { handleBlocked } from "./goal-loop/handle-blocked.js";
@@ -72,6 +62,8 @@ import { checkSettled } from "./goal-loop/settled-checks.js";
 import { checkProgress } from "./goal-loop/progress.js";
 import { viewPage } from "./goal-loop/page-view.js";
 import { decideStep } from "./goal-loop/decide-step.js";
+import { finishRun } from "./goal-loop/finish.js";
+import { openRun } from "./goal-loop/start.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -384,54 +376,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const ctx = await createRunContext(cfg);
 
   try {
-    // The page monitor observes network + DOM from BEFORE the first navigation (the settle rule).
-    await monitorFor(ctx.page).instrument();
-    await ctx.deltas?.enable();
-    ctx.effectLog.attach(monitorFor(ctx.page));
-    // Initial navigation (authorized above).
-    ctx.page.on("requestfailed", ctx.onFirstNavRequestFailed);
-    try {
-      // #293: an anchored run starts on the live page its Journey prefix left — never a fresh load.
-      if (cfg.startInPlace !== true) {
-        await assertSeedReachable(cfg.actor, cfg.startUrl);
-        await Navigate.to(cfg.startUrl).performAs(cfg.actor);
-      }
-    } catch (e) {
-      const message = firstLine(e);
-      if (!isUnreachableTarget(message) && !isUnreachableTarget(ctx.firstNavNetError ?? "")) throw e;
-      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-      // a configuration problem (a bad URL, the target not running). `inconclusive`, not `crashed`;
-      // no crash report is built for it, so no issue is ever drafted from it.
-      ctx.firstNavFailed = true;
-      ctx.stop = "inconclusive";
-      const cause = describeUnreachable(message, ctx.firstNavNetError);
-      ctx.failure = { kind: "target-unreachable", message: `target unreachable (${cause})` };
-      // #213: a bare load TIMEOUT (no network error) on a starved host is the host, not the target —
-      // unless a fresh request for the page gets no response at all either (#230: the app is down).
-      if (cause === "timed out before any response" && cfg.hostHealth !== undefined) {
-        const judged = await cfg.hostHealth.judge();
-        if (judged.starved !== null && (await targetStoppedAnswering({ pageUrl: cfg.startUrl }).catch(() => null)) === null) {
-          const detail = `the start page did not load in time (${cause})`;
-          cfg.hostHealth.markDegraded({ finding: "page-load-timeout", detail, step: 0 }, judged.starved);
-          ctx.failure = {
-            kind: "degraded-environment",
-            message: `environment-degraded page load (${detail}) while the host was starved: ${judged.starved} — not an app or access finding`,
-          };
-        }
-      }
-    } finally {
-      ctx.page.off("requestfailed", ctx.onFirstNavRequestFailed);
-    }
-    if (ctx.firstNavFailed) throw new FirstNavigationFailedSentinel();
-    ctx.recorder.navigate(cfg.startUrl, ctx.now());
-    // #158 — from here on, a read-only run's write requests never leave the browser.
-    if (ctx.readOnly !== null) {
-      await ctx.readOnly.arm(ctx.page);
-      if (ctx.readOnly.mode === "read-only") {
-        ctx.effectLog.markBackground();
-        ctx.history.push(READ_ONLY_NOTE);
-      } else ctx.history.push(NO_DESTRUCTIVE_NOTE);
-    }
+    await openRun(ctx);
 
     for (;;) {
       if (!ctx.tracker.mayDecide()) {
@@ -592,80 +537,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // point the first navigation failed — the sentinel only unwound the loop, nothing more to do.
   }
 
-  // #230: a no-progress stop on an app that stopped answering is `target-unresponsive` — before the
-  // host is blamed for it (#203).
-  if (ctx.stop === "no-progress") {
-    const unresponsive = await targetStoppedAnswering(ctx.livenessOf()).catch(() => null);
-    if (unresponsive !== null) {
-      ctx.failure = { kind: "target-unresponsive", message: unresponsive };
-      ctx.stop = "inconclusive";
-    }
-  }
-
-  // #203: a no-progress stop met while the host was starved is the host, not the app.
-  if (ctx.stop === "no-progress" && cfg.hostHealth !== undefined) {
-    const judged = await cfg.hostHealth.judge();
-    if (judged.starved !== null) ctx.degradedStop("no-progress", "the last actions left the page unchanged", judged.starved);
-  }
-
-  // #238 — the latest report's answer was "none exists", but the run never covered enough of the app
-  // to establish it: it proved nothing either way — `inconclusive` (insufficient coverage), never a defect.
-  if (ctx.lastAbsenceUncovered !== null && ctx.answer === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked" || ctx.stop === "exhausted") && ctx.failure === undefined) {
-    ctx.failure = { kind: "insufficient-coverage", message: ctx.lastAbsenceUncovered };
-    ctx.incomplete = ctx.lastAbsenceUncovered;
-    ctx.stop = "inconclusive";
-    ctx.lastReportNotFound = false;
-  }
-
-  // #207 — a run whose latest report found no answer, and that then stopped for want of progress or
-  // gave up, ends saying so and what it searched — not a generic "no progress" / "blocked".
-  if (ctx.lastReportNotFound && ctx.answer === undefined && (ctx.stop === "no-progress" || ctx.stop === "blocked") && ctx.failure === undefined) {
-    ctx.incomplete = answerNotFoundReason(ctx.observed.pages());
-  }
-
-  await ctx.readOnly?.disarm();
-  ctx.page.off("request", ctx.onRequestSeen);
-  ctx.page.off("response", ctx.onDocumentResponse);
-  const finished = ctx.recorder.tryFinish({ intent: cfg.goal });
-  const cause = ctx.blockingCause();
-  const finalOutcome: RunOutcome =
-    ctx.stop === "done" && ctx.outcome !== null && finished.ok
-      ? ctx.outcome
-      : { status: "incomplete", reason: withCause(incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker), ctx.stop, cause) };
-  if (!finished.ok) {
-    // The Recording itself failed its fail-closed checks (schema / a surviving secret). It is not
-    // written; the run is reported crashed so this can never read as a pass.
-    ctx.failure = ctx.failure ?? { kind: "exception", message: `recording rejected: ${finished.reason}` };
-    ctx.stop = "crashed";
-  }
-  const fired = ctx.effectLog.entries();
-  ctx.effectLog.close();
-  if (ctx.overlay !== null) {
-    const banner = finalOutcome.status === "completed" ? `jevitate · done — ${ctx.stop}` : `jevitate · ${ctx.stop} — ${finalOutcome.reason}`;
-    await ctx.overlay.finish(banner, finalOutcome.status === "completed", ctx.page);
-  }
-  return {
-    sideEffects: fired.sideEffects,
-    ...(fired.truncated > 0 ? { sideEffectsTruncated: fired.truncated } : {}),
-    ...(ctx.deltas === null ? {} : { actionDeltas: { ...ctx.deltas.stats(), ...(ctx.notPersisted.length === 0 ? {} : { notPersisted: ctx.notPersisted }) } }),
-    stop: ctx.stop,
-    recording: finished.ok ? finished.recording : emptyRecording(cfg.site ?? ctx.startOrigin, finished.reason),
-    transcript: ctx.transcript.entries(),
-    finalUrl: redactText(redactUrl(safeUrl(ctx.page)), ctx.secrets),
-    decisions: ctx.tracker.decisions,
-    actions: ctx.tracker.actions,
-    ...(ctx.failure === undefined ? {} : { failure: ctx.failure }),
-    heap: ctx.heap.samples(),
-    timing: summarizeTimings(ctx.timings),
-    ...(ctx.hang === undefined ? {} : { hang: ctx.hang }),
-    outcome: finalOutcome,
-    ...(ctx.answer !== undefined && finalOutcome.status === "completed" ? { answer: ctx.answer } : {}),
-    ...(cause === null ? {} : { blockingCause: cause }),
-    ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
-    ...(ctx.stop === "crashed" && ctx.failure !== undefined
-      ? { crash: buildCrashReport(ctx.failure, ctx.crashWatch.signals(), ctx.heap.samples(), { host: await ctx.probeHost() }) }
-      : {}),
-  };
+  return finishRun(ctx);
 }
 
 
