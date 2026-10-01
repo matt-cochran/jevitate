@@ -126,3 +126,43 @@ export function openOverlayName(): string | null {
   const kind = norm(top.getAttribute("role")) || top.tagName.toLowerCase();
   return label === "" ? kind : `${kind} "${label.slice(0, 80)}"`;
 }
+
+/** The slice of the page monitor the request helpers read. */
+export interface RequestLog {
+  completedSince(sinceMs: number): ReadonlyArray<{ readonly url: string; readonly method: string; readonly startedAt: number }>;
+  pending(): ReadonlyArray<{ readonly url: string; readonly method: string; readonly startedAt: number }>;
+}
+
+/** How far back a request counts as the page's own background traffic (a poll it already ran). */
+export const BACKGROUND_WINDOW_MS = 60_000;
+
+function endpointKey(r: { readonly url: string; readonly method: string }): string {
+  try {
+    const u = new URL(r.url);
+    return `${r.method.toUpperCase()} ${u.origin}${u.pathname}`;
+  } catch {
+    return `${r.method.toUpperCase()} ${r.url}`;
+  }
+}
+
+/**
+ * The endpoints the page was already requesting before `at` (a balance poll, a heartbeat) — their
+ * later requests are the page's background traffic, never the effect of an action taken at `at`.
+ */
+export function backgroundEndpoints(log: RequestLog, at: number): Set<string> {
+  const out = new Set<string>();
+  for (const r of log.completedSince(at - BACKGROUND_WINDOW_MS)) if (r.startedAt < at) out.add(endpointKey(r));
+  for (const r of log.pending()) if (r.startedAt < at) out.add(endpointKey(r));
+  return out;
+}
+
+/** Requests started at or after `at` to an endpoint not in `background`: what the action set off. */
+export function requestsStartedSince(log: RequestLog, at: number, background: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (const r of [...log.completedSince(at), ...log.pending()]) {
+    if (r.startedAt < at) continue;
+    const k = endpointKey(r);
+    if (!background.has(k)) out.push(k);
+  }
+  return out;
+}

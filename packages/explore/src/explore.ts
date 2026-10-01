@@ -103,7 +103,7 @@ import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
-import { FailedActionStreak, openOverlayName } from "./stuck-actions.js";
+import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
 
 
@@ -139,6 +139,18 @@ export const MAX_QUIET_WAITS = 3;
  * scroll up/down loop) a moved scroll counts as an unchanged step again.
  */
 export const MAX_MOVING_SCROLLS = 12;
+/**
+ * #242: consecutive `type`s into one (non-message) field that changed nothing but its own value —
+ * no request, no other change on the page — before the run stops as stuck.
+ */
+export const MAX_TYPE_NO_EFFECT = 3;
+/** #242: a search-like field (searches on Enter): its type is submitted once retyping fired nothing. */
+const SEARCH_LIKE = /\bsearch\b|⌘\s?k|ctrl\s?\+\s?k|\bfind\b|\bfilter\b/i;
+const searchLike = (c: Control): boolean => c.role === "searchbox" || c.inputType === "search" || SEARCH_LIKE.test(c.name);
+/** #242: the page's state with one field's own value left out (its typed text is not progress). */
+const stateBesides = (snap: Snapshot, key: string): string =>
+  JSON.stringify([snap.url, snap.controls.map((c) => (keyOf(c) === key ? `${c.role} ${c.name}` : c.summary))]);
+
 /** The one "last chance" turn the model gets before a no-progress stop (#172). */
 export const LAST_CHANCE_NOTE =
   "no progress: the last steps left the page unchanged and you have seen the whole page — act on a visible control, report the answer, or say done/blocked now";
@@ -630,6 +642,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * page signature did meanwhile (a failed click that scrolls the page can flicker it).
    */
   const failedActs = new FailedActionStreak();
+  /**
+   * #242: the last plain `type` into a form field, judged at the next perception — did anything
+   * besides that field's own value change (a request, another control)? — and how many such types in
+   * a row into the same field changed nothing else.
+   */
+  let typeProbe: { key: string; label: string; at: number; background: Set<string>; state: string } | null = null;
+  let typeNoEffect: { key: string; count: number } | null = null;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -796,6 +815,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // the same value again (#123): the guard compares the values.
     if (!label.startsWith("click ")) sideEffects.inputChanged(input?.field, input?.value);
     failedActs.succeeded();
+    if (!label.startsWith("type ")) typeNoEffect = null;
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
@@ -1161,6 +1181,20 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       }
       prevSignature = snap.signature;
       const keys = new Map<string, Control>(snap.controls.map((c) => [keyOf(c), c]));
+      // #242: what the last plain `type` did besides setting its own field's value.
+      if (typeProbe !== null) {
+        const p = typeProbe;
+        typeProbe = null;
+        const sent = requestsStartedSince(monitorFor(page), p.at, p.background);
+        if (sent.length === 0 && stateBesides(snap, p.key) === p.state) {
+          const count: number = typeNoEffect?.key === p.key ? typeNoEffect.count + 1 : 1;
+          typeNoEffect = { key: p.key, count };
+          history.push(
+            `typing into ${p.label} changed nothing but its own value (no request, nothing else on the page changed) — ` +
+              "submit it (its form's button, or Enter) or do something else; typing it again will not help",
+          );
+        } else typeNoEffect = null;
+      }
       unsent.retain(new Set(keys.keys()));
       if (offerBaseline !== null) {
         const before = offerBaseline;
@@ -2147,9 +2181,45 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (decision.op === "type" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
           text = capMessage(text, FORM_TEXT_MAX_CHARS);
         }
-        const r = await act(cfg.actor, { op: decision.op, control, value: text });
+        // #242: retyping a field whose last type(s) changed nothing else — a search-like field is
+        // submitted this time (it searches on Enter); any other field ends the run once it is stuck.
+        const retypes = decision.op === "type" && typeNoEffect?.key === keyOf(control) ? typeNoEffect.count : 0;
+        if (retypes >= MAX_TYPE_NO_EFFECT) {
+          const reason = `stuck: typed into ${quote(control.name || control.summary, 60)} ${retypes} times in a row: nothing changed but its own value (no request, nothing else on the page)`;
+          record(false, reason, { origin: "engine" });
+          incomplete = reason;
+          stop = "no-progress";
+          break;
+        }
+        const submitSearch = retypes >= 1 && searchLike(control);
+        const typedAt = now();
+        const typedBackground = decision.op === "type" ? backgroundEndpoints(monitorFor(page), typedAt) : new Set<string>();
+        const typedState = stateBesides(snap, keyOf(control));
+        const r = submitSearch
+          ? await act(cfg.actor, { op: "send", control, value: text, candidates: snap.controls })
+          : await act(cfg.actor, { op: decision.op, control, value: text });
+        if (r.ok && submitSearch) {
+          recorder.fill(control.descriptor, text, at);
+          const via = r.submittedVia;
+          if (via !== undefined && via.kind === "click") recorder.click(via.control.descriptor, now());
+          else recorder.press("Enter", control.descriptor, now());
+          valueLog.typed(control.name || control.summary, text);
+          valueLog.submitted();
+          noteMutation(`type ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: text });
+          tracker.countAction();
+          fillHelper.commit();
+          typeNoEffect = null;
+          history.push(
+            `submitted ${quote(control.name || control.summary, 60)} with ${via?.kind === "click" ? `its ${quote(via.control.name, 40)} button` : "Enter"} (typing alone fired nothing) — searched for ${quote(text, 80)}`,
+          );
+          cleared(control);
+          record(true, "typed and submitted (typing alone fired nothing)", { value: text });
+          lastActedOp = decision.op;
+          continue;
+        }
         if (r.ok) {
           if (decision.op === "type") {
+            typeProbe = { key: keyOf(control), label: quote(control.name || control.summary, 60), at: typedAt, background: typedBackground, state: typedState };
             // A form field (not a message composer) is submitted with its form's own button; retyping
             // it is a correction, not the chat anti-pattern — so only composers are tracked.
             recorder.fill(control.descriptor, text, at);
