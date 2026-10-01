@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.3.0] – unreleased
+
+### Added
+
+- `init` and `ai status` name each key, its provider and its source (env var or
+  `~/.jevitate/credentials.json`), and report an env var that overrides a stored key; `--json`
+  adds `sources` per feature (#268).
+- `ai setup <feature> --replace` and `init --replace-keys` replace a stored key (#268).
+- Keys are checked with the provider by a live, non-billable auth call: `valid`, `invalid`,
+  `unreachable` or `missing`, plus a flag for a key that looks like another provider's.
+  `ai setup` checks a key before storing it; `ai status` exits 2 on a bad key. `--no-verify`
+  skips the check (#291).
+- Screenshots and videos also mask secrets the app reveals during the run: elements marked as
+  secret (`data-jevitate-mask`, `data-secret`, one-time-code, secret/token/api-key test ids and
+  labels) and credential-shaped values. Limits in docs/safety.md (#298).
+
+### Fixed
+
+- Key entry is masked with `•`, and its instructions stay on screen (#269).
+- A multi-run (`--persona`/`--repeat`) forwards a bare `--screenshots`/`--record-video` to each
+  run instead of writing to `./true` (#290).
+- `explore --hang-replays <n>` no longer crashes (#275).
+- `visible:<d>` holds when at least one of several matching elements is visible, instead of
+  crashing on a strict-mode violation (#299).
+- Typing into a textarea keeps the value's newlines (#285).
+- A model-invented sign-up email or username is unique per run, so a repeated sign-up goal does
+  not collide with an earlier run's account (#271).
+
 ## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one
