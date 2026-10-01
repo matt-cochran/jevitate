@@ -23,6 +23,12 @@ behaviour changes).
 - Built-in skill `jevitate-test-campaign`: how to plan and run a whole-release test campaign
   (job catalog, discovery runs, journey-anchored missions, full-stack evidence, verify-fix and
   regressions, triage by exit code, budgets, CI suites and the release gate) (#292).
+- `--extension <dir>` (repeatable) loads an unpacked browser extension on every browser-driving
+  command, and MCP tools take an `extension` array. The extension's `chrome-extension://<id>`
+  pages (side panel, popup, options) are allowed and navigable, for example
+  `--url chrome-extension://<id>/sidepanel.html`, and the agent acts on their DOM. Recordings
+  record each extension's `{id, name, version}`. verify-fix refuses a different build with exit 64.
+  Headless runs use Playwright's full Chromium in new-headless mode. See docs/extensions.md (#256).
 
 ### Changed
 

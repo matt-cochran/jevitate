@@ -118,6 +118,8 @@ const path = (flag: string, extra: Partial<CliParam> = {}): CliParam => ({ kind:
 const session = (flag: string): CliParam => ({ kind: "session", flag });
 const pos = (kind: CliParamKind = "string", extra: Partial<CliParam> = {}): CliParam => ({ kind, positional: true, required: true, ...extra });
 const EMULATION = { viewport: { kind: "viewport", flag: "--viewport" } as CliParam, device: s("--device") };
+/** #256: unpacked browser extensions to load — confined like every path argument (a directory with manifest.json). */
+const EXTENSION = { extension: { kind: "path[]", flag: "--extension" } as CliParam };
 const DEMO_SHOW = { headed: b("--headed"), slowMo: n("--slow-mo") };
 const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
@@ -141,7 +143,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "With approve: true, applies the reviewed draft (shows the diff; refused with E_JOURNEY_ANNOTATIONS_STALE if the Journey changed since the draft) — the same proposal/approval semantics as the CLI. Drafting needs real or fakeAi.",
     command: {
       path: "journey annotate",
-      params: { id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), screenshots: { kind: "screenshots", flag: "--screenshots" }, ...ENVIRONMENT, ...EMULATION, ...AI },
+      params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), screenshots: { kind: "screenshots", flag: "--screenshots" }, ...ENVIRONMENT, ...EMULATION, ...AI },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
@@ -153,6 +155,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "journey demo",
       params: {
         id: pos(),
+        ...EXTENSION,
         video: path("--video"),
         guide: path("--guide"),
         pace: n("--pace"),
@@ -182,7 +185,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate demo \"<aspect>\"` / `demo create` (#249): explore a NAMED, non-production environment (env, required) toward the aspect, checked by success (required), minimize the path (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide). Nothing is promoted until approve_demo. Needs real or fakeAi.",
     command: {
       path: "demo create",
-      params: {
+      params: { ...EXTENSION,
         aspect: pos(),
         env: s("--env"),
         success: s("--success"),
@@ -208,7 +211,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1).",
     command: {
       path: "demo approve",
-      params: { id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), ...EMULATION, ...DEMO_SHOW },
+      params: { ...EXTENSION, id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), ...EMULATION, ...DEMO_SHOW },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
@@ -219,7 +222,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'.",
     command: {
       path: "explore",
-      params: {
+      params: { ...EXTENSION,
         url: s("--url"),
         allow: many("--allow"),
         strategy: s("--strategy", { enum: ["goal", "coverage", "exploratory", "adversarial", "usability"] }),
@@ -304,7 +307,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate explore-author-journey`: explore url toward goal (checked by success) several takes, and author an UNPROMOTED Journey from the verified path (promote_journey makes it runnable). Needs real or fakeAi.",
     command: {
       path: "explore-author-journey",
-      params: {
+      params: { ...EXTENSION,
         url: s("--url"),
         goal: s("--goal"),
         success: s("--success"),
@@ -326,7 +329,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding.",
     command: {
       path: "check",
-      params: {
+      params: { ...EXTENSION,
         suite: path("--suite", { required: true }),
         out: path("--out"),
         jsonOut: path("--json-out"),
@@ -372,7 +375,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       list: { path: "ledger list", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
       verify: {
         path: "ledger verify",
-        params: { fingerprints: { kind: "string[]", positional: true }, ticket: s("--ticket"), replays: n("--replays"), storageState: session("--storage-state") },
+        params: { ...EXTENSION, fingerprints: { kind: "string[]", positional: true }, ticket: s("--ticket"), replays: n("--replays"), storageState: session("--storage-state") },
         omitted: { "--dir": OMIT.storeDir, "--allow-log-cmd": OMIT.logCmd, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
@@ -384,6 +387,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "load run",
       params: {
         journeyId: pos(),
+        ...EXTENSION,
         authorizedOrigin: many("--authorized-origin"),
         concurrency: n("--concurrency"),
         iterations: n("--iterations"),
@@ -407,7 +411,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate mission run --once`: drain the missions queue_exploration queued (each through its strategy's runner; results where get_mission_result reads them), then return the drain report. Model-driven missions need real or fakeAi (others stay queued, reported as skipped).",
     command: {
       path: "mission run",
-      params: { ...AI },
+      params: { ...EXTENSION, ...AI },
       omitted: {
         "--once": "the default: MCP drains what is queued once and returns",
         "--watch": OMIT.watch,
@@ -478,7 +482,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     actions: {
       capture: {
         path: "regression capture",
-        params: {
+        params: { ...EXTENSION,
           from: path("--from", { required: true }),
           id: s("--id", { required: true }),
           result: path("--result"),
@@ -495,7 +499,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       },
       run: {
         path: "regression run",
-        params: { id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
+        params: { ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
         omitted: { "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
@@ -521,7 +525,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       remove: { path: "source remove", params: { name: pos() }, omitted: JSON_FLAG },
       run: {
         path: "source run",
-        params: { name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
+        params: { ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
         omitted: { ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },

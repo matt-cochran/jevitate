@@ -996,7 +996,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (75 exports)
+# @jevitate/playwright (89 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1032,10 +1032,20 @@
   defaultLinuxSignalDeps: variable
   defaultMaxContexts: function
   defaultWin32SignalDeps: variable
+  describeExtensions: function
   emulationContextOptions: function
   EmulationSpec: interface
   errnoCode: function
   explainLaunchFailure: function
+  EXTENSION_ID: variable
+  ExtensionDirError: class
+  extensionIdentity: function
+  ExtensionIdentity: interface
+  extensionIdForKey: function
+  extensionIdForPath: function
+  extensionLaunchArgs: function
+  ExtensionLoadError: class
+  extensionOrigin: function
   HostSignalDeps: interface
   knownDeviceNames: function
   LinuxResourceSignals: class
@@ -1060,14 +1070,18 @@
   PressureThresholds: type-alias
   probeReachable: function
   ReachabilityDeps: interface
+  readUnpackedExtension: function
+  readUnpackedExtensions: function
   ResolvedEmulation: interface
   resolveEmulation: function
   resolveLaunchArgs: function
   ResourceSample: interface
   ResourceSignalError: class
   ResourceSignals: interface
+  sameExtensionBuild: function
   sharedBrowserPool: function
   UnknownDeviceError: class
+  UnpackedExtension: interface
   ViewportSize: interface
   Win32ResourceSignals: class
   Win32SignalDeps: interface
@@ -1116,7 +1130,7 @@
   Stability: type-alias
   validateCandidates: function
 
-# @jevitate/recording (133 exports)
+# @jevitate/recording (134 exports)
   ACTION_OPS: variable
   ActionOp: type-alias
   ACTOR_NAME_RE: variable
@@ -1211,6 +1225,7 @@
   RecordedStep: interface
   Recording: interface
   RecordingEmulation: interface
+  RecordingExtension: interface
   RecordingFixture: interface
   RecordingSchema: variable
   RecordingStore: interface

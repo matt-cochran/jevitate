@@ -21,6 +21,8 @@ full flag list, or see the generated [CLI reference](./cli.md).
 - [Authenticated and stateful apps](./authentication.md): storage state, bound secrets, TOTP,
   sequential runs.
 - [Fixtures](./fixtures.md): known state before every run and every replay.
+- [Browser extensions](./extensions.md): load an unpacked extension (`--extension`) and drive its
+  side panel, popup or options page.
 - [Repeats, personas and actors](./multi-run.md): vote across runs, diff roles, check cross-tenant
   isolation.
 

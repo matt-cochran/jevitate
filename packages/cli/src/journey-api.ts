@@ -3,7 +3,7 @@ import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { logsDirFor } from "./project-dir.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
@@ -160,6 +160,8 @@ export async function runJourneyProgrammatically(
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
   const journey = applyJourneyEnvironment(stored, opts.environment);
   const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
+  // #256: a Journey recorded with extensions replays only under that same build (ExtensionMismatchError, exit 64).
+  if ((journey.recording.extensions ?? []).length > 0) assertSameExtensionBuild(journey.recording.extensions, opts.browser, `journey '${opts.id}'`);
 
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.

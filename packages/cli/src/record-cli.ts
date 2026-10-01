@@ -2,7 +2,9 @@ import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ok, fail } from "./envelope.js";
 import { runRecording, resolveRecordAllowlist } from "./record-api.js";
-import { type CliDeps, emitJson } from "./cli-shared.js";
+import { type CliDeps, emitJson, extensionArg } from "./cli-shared.js";
+import { allowWithExtensions, assertExtensionTargetLoaded } from "./browser-run-options.js";
+import type { UnpackedExtension } from "@jevitate/playwright";
 
 /** Registers `jevitate record` (record-by-demonstration). */
 export function registerRecordCommands(program: Command, deps: CliDeps): void {
@@ -23,6 +25,12 @@ export function registerRecordCommands(program: Command, deps: CliDeps): void {
       (v, prev: string[]) => [...prev, v],
       [] as string[],
     )
+    .option(
+      "--extension <dir>",
+      "load this unpacked browser extension (repeatable; a directory with manifest.json); its chrome-extension://<id> origin is allowed",
+      extensionArg,
+      [] as UnpackedExtension[],
+    )
     .option("--headless", "run headless (default: headed — a record session is a live demonstration)", false)
     .option("--out <dir>", "directory to write the emitted Recording (default: .jevitate/logs/<date> in the project, else ~/.jevitate/logs/<date>)")
     .option("--json", "emit a JSON envelope")
@@ -33,6 +41,7 @@ export function registerRecordCommands(program: Command, deps: CliDeps): void {
         retro?: string;
         allow: string[];
         headless?: boolean;
+        extension: UnpackedExtension[];
         out?: string;
         json?: boolean;
       }>();
@@ -41,7 +50,15 @@ export function registerRecordCommands(program: Command, deps: CliDeps): void {
         emitJson(program, fail("E_RECORD_ARGS", "--url is required"));
         return;
       }
-      const allowlist = resolveRecordAllowlist(o.url, o.allow);
+      const browser = o.extension.length === 0 ? undefined : { extensions: o.extension };
+      try {
+        assertExtensionTargetLoaded(o.url, browser);
+      } catch (err) {
+        emitJson(program, fail("E_RECORD_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      // #256: a loaded extension's chrome-extension://<id> origin is allowed too (only those ids).
+      const allowlist = allowWithExtensions(o.url, resolveRecordAllowlist(o.url, o.allow), browser);
 
       try {
         const result = await runRecording({
@@ -51,6 +68,7 @@ export function registerRecordCommands(program: Command, deps: CliDeps): void {
           retro: o.retro,
           outDir: o.out,
           headless: o.headless ?? false,
+          ...(browser === undefined ? {} : { extensions: browser.extensions }),
           browserPortFactory: deps.record?.browserPortFactory,
           recorderFactory: deps.record?.recorderFactory,
           waitForStop: deps.record?.waitForStop,

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Jevitate Fixture Extension",
+  "version": "1.2.3",
+  "description": "#256 test fixture: a side panel and a popup whose button writes to chrome.storage.",
+  "background": { "service_worker": "sw.js" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_popup": "popup.html" },
+  "permissions": ["storage", "sidePanel"]
+}

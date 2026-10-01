@@ -5,6 +5,7 @@ import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ok, fail } from "./envelope.js";
 import { positiveIntArg } from "./cli-args.js";
 import { runAuthorJourney, parseAssertionSpec, resolveExploreAllowlist } from "./explore-api.js";
+import { allowWithExtensions } from "./browser-run-options.js";
 import {
   type CliDeps,
   resolveJourneysDir,
@@ -84,7 +85,8 @@ export function registerAuthorJourneyCommands(program: Command, deps: CliDeps): 
         emitJson(program, fail("E_EXPLORE_ASSERTION", String(err instanceof Error ? err.message : err)));
         return;
       }
-      const allowlist = resolveExploreAllowlist(o.url, o.allow);
+      // #256: loaded extensions' chrome-extension://<id> origins are allowed too (only those ids).
+      const allowlist = allowWithExtensions(o.url, resolveExploreAllowlist(o.url, o.allow), browserLaunchFromFlags(o));
       const bounds: Record<string, number> = {};
       if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
       if (o.maxDecisions !== undefined) bounds.maxDecisions = Number(o.maxDecisions);

@@ -88,6 +88,8 @@ mid-edit, and acts while a save is still pending. It prints the outcome (`clean`
 - `--fake-ai` swaps the mission's advisory model calls for deterministic stand-ins. Nothing it
   reports depends on them.
 - Logged-in app? Add `--storage-state auth.json` ([authentication](./docs/authentication.md)).
+- Part of the flow runs in a browser extension (side panel, popup)? Add `--extension <dir>`
+  ([browser extensions](./docs/extensions.md)).
 
 With keys, a **goal-directed run** reaches an end state, and code checks it:
 

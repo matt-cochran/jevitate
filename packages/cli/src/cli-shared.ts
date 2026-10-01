@@ -5,7 +5,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import { userInfo } from "node:os";
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import type { ProfileManager } from "@jevitate/daemon";
 import { type PlannedStep } from "@jevitate/domain";
 import { openDatabase, migrateToLatest, SqliteSitePolicyRepository } from "@jevitate/storage-sqlite";
@@ -32,7 +32,7 @@ import {
   type UsageSink,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, readUnpackedExtension, type UnpackedExtension } from "@jevitate/playwright";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { UnsafeNameError, assertSafeName } from "@jevitate/domain";
 import { fail, type JsonEnvelope } from "./envelope.js";
@@ -255,6 +255,27 @@ export interface BrowserLaunchFlags {
   browserExecutable?: string;
   browserChannel?: string;
   browserArg: string[];
+  /** #256: `--extension <dir>` (repeatable), each already read and checked by `extensionArg`. */
+  extension?: readonly UnpackedExtension[];
+}
+
+/**
+ * #256: the `--extension <dir>` argParser — reads and checks the unpacked extension NOW (a directory
+ * with a valid manifest.json), so a bad directory is a usage error (exit 64) on every command before
+ * anything runs. The same directory twice is kept once; two directories with one id are refused.
+ */
+export function extensionArg(value: string, prev: readonly UnpackedExtension[] | undefined): UnpackedExtension[] {
+  const before = prev ?? [];
+  let ext: UnpackedExtension;
+  try {
+    ext = readUnpackedExtension(value);
+  } catch (err) {
+    throw new InvalidArgumentError(err instanceof Error ? err.message : String(err));
+  }
+  const dup = before.find((e) => e.id === ext.id);
+  if (dup === undefined) return [...before, ext];
+  if (dup.dir === ext.dir) return [...before];
+  throw new InvalidArgumentError(`two extension directories have the same extension id ${ext.id}: ${dup.dir} and ${ext.dir}`);
 }
 
 /**
@@ -271,6 +292,12 @@ export function withBrowserLaunchFlags(cmd: Command): Command {
       "extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage",
       (v, prev: string[]) => [...prev, v],
       [] as string[],
+    )
+    .option(
+      "--extension <dir>",
+      "load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless",
+      extensionArg,
+      [] as UnpackedExtension[],
     );
 }
 
@@ -280,6 +307,7 @@ export function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOpti
     ...(o.browserExecutable !== undefined ? { executablePath: o.browserExecutable } : {}),
     ...(o.browserChannel !== undefined ? { channel: o.browserChannel } : {}),
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
+    ...(o.extension !== undefined && o.extension.length > 0 ? { extensions: [...o.extension] } : {}),
   };
   return Object.keys(launch).length > 0 ? launch : undefined;
 }
