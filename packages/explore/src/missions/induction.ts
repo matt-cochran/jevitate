@@ -2,7 +2,7 @@ import { ActionDeltas, PageDeltas, deltaStatsOf, type ActionDelta, type ActionDe
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import { Navigate } from "@jevitate/screenplay";
-import type { InvariantSpec, PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
+import type { InvariantSpec, Recording } from "@jevitate/recording";
 import { redactUrl, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
 import {
   InvariantDefectLog,
@@ -19,14 +19,12 @@ import {
   targetCandidates,
   TranscriptLog,
   act,
-  toPath,
   resolveBounds,
   buildJudgmentState,
   PROMPT_INJECTION_GUARD,
   type Bounds,
   type Control,
   type Snapshot,
-  type TargetOp,
   type TranscriptEntry,
   type TranscriptListener,
 } from "../index.js";
@@ -42,7 +40,7 @@ import type { VerifySession } from "../verify-fix.js";
 import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
 import { monitorFor } from "../page-monitor.js";
 import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
-import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
+import { controlIdentity, stateFingerprint } from "../coverage/fingerprint.js";
 import { Frontier } from "../coverage/frontier.js";
 import { chromeClassifier } from "../coverage/chrome.js";
 import { reachFrontierState } from "../coverage/reach.js";
@@ -63,24 +61,19 @@ import type { SafetyConfig } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type ClippingFinding, type OverflowFinding } from "../overflow.js";
-
-/** A failed act whose reason names a timeout, or a target this gate refused as not actionable
- *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
-/** A failure that is a timeout (#203) — retried once before it counts (#213). */
-function isTimeoutFailure(reason: string | undefined): boolean {
-  return /timeout/i.test(reason ?? "");
-}
-
-/** A safety refusal's category from its reason (`… (destructive); pass …`, `… matches --deny …`). */
-function refusalRisk(reason: string): string {
-  if (/matches --deny/.test(reason)) return "denied";
-  return /\((session-end|destructive|paid)\)/.exec(reason)?.[1] ?? "refused";
-}
-
-function isUnactionableFailure(reason: string | undefined): boolean {
-  if (reason === undefined) return false;
-  return /timeout|not actionable|no longer present/i.test(reason);
-}
+import {
+  FRONTIER_OPS,
+  enqueueFrom,
+  extendPath,
+  isTimeoutFailure,
+  isUnactionableFailure,
+  joinReasons,
+  pathOf,
+  refusalRisk,
+  resolveControl,
+  withSeed,
+  seedPath as seedPathOf,
+} from "./induction-frontier/helpers.js";
 
 /**
  * Proof-by-induction (state-coverage) mission — spec §3.3.
@@ -297,104 +290,10 @@ export interface InductionMissionParams {
   };
 }
 
-/**
- * Which ops the frontier enqueues for a control. RULING (deviation from the
- * plan's literal `type`/`select` inclusion): the coverage fingerprint is a
- * function of url-template + control role/name/enabled — a control's VALUE is
- * deliberately excluded. `type`/`select` only mutate a value, so they can never
- * expand the state frontier; enqueuing them would only burn the action budget
- * against guardrail #2 (bounded). Clicks (navigations / control toggles) are
- * the only fingerprint-affecting transitions, so the frontier enqueues the
- * controls whose SHARED afforded op (`affordedOp`, ./actions.ts) is `click`.
- */
-const FRONTIER_OPS: ReadonlySet<TargetOp> = new Set<TargetOp>(["click"]);
-
-function enqueueFrom(
-  frontier: Frontier,
-  fingerprint: string,
-  pathPrefix: Recording,
-  controls: readonly Control[],
-  withheld: (control: Control) => boolean,
-): void {
-  // A disabled control can never be acted on — never enqueue it; nor one the safety policy refuses (#186).
-  for (const { control } of targetCandidates(controls, { ops: FRONTIER_OPS, enabledOnly: true })) {
-    if (withheld(control)) continue;
-    frontier.push({ key: actionKey(fingerprint, control, "click"), fromFingerprint: fingerprint, pathPrefix, control, op: "click" });
-  }
-}
-
-/**
- * Re-resolves a frontier item's control in the CURRENT snapshot by its stable
- * identity (role + name + enabled) — the `index` is snapshot-local and useless
- * across re-snapshots. A control that has vanished returns null and the item is
- * dropped, never guessed at (fail-closed).
- */
-function resolveControl(snap: Snapshot, want: Control): Control | null {
-  return (
-    snap.controls.find((c) => c.role === want.role && c.name === want.name && c.enabled === want.enabled) ?? null
-  );
-}
-
-/**
- * Immutable "append one executed step to a replayable path", mirroring
- * `RunRecorder`'s discipline: a step whose action changed the URL gets a
- * `urlIncludes` postcondition (and opens the next page segment); one that did
- * not keeps a `visible` postcondition on its target. Returns a NEW Recording.
- */
-function extendPath(
-  prefix: Recording,
-  op: FrontierOp,
-  descriptor: TargetDescriptor,
-  value: string | null,
-  afterUrl: string,
-): Recording {
-  const pages: PageSegment[] = prefix.pages.map((p) => ({ ...p, steps: [...p.steps] }));
-  let current = pages[pages.length - 1];
-  if (current === undefined) {
-    current = { url: "/", steps: [] };
-    pages.push(current);
-  }
-  const target: TargetDescriptor = { ...descriptor };
-  let step: Step;
-  if (op === "click") {
-    step = { kind: "click", target, expect: { kind: "visible", target } };
-  } else if (op === "type") {
-    step = { kind: "fill", target, value: { redacted: false, value: value ?? "" }, expect: { kind: "visible", target } };
-  } else {
-    step = { kind: "select", target, value: { redacted: false, value: value ?? "" }, expect: { kind: "visible", target } };
-  }
-  const recorded: RecordedStep = { step };
-  current.steps.push(recorded);
-
-  const path = toPath(afterUrl);
-  if (path !== current.url) {
-    step.expect = { kind: "urlIncludes", text: path };
-    pages.push({ url: path, steps: [] });
-  }
-  return { version: prefix.version, site: prefix.site, pages };
-}
-
-/** A frontier path as a replayable Recording: the seed navigate, then the path's non-empty pages. */
-function withSeed(branch: Recording, seedUrl: string): Recording {
-  const seed = seedPath(seedUrl);
-  return {
-    ...branch,
-    pages: [
-      { url: seed, steps: [{ step: { kind: "navigate", url: seed, expect: { kind: "urlIncludes", text: seed } } }] },
-      ...branch.pages.filter((p) => p.steps.length > 0),
-    ],
-  };
-}
-
 /** The seed's path WITH its query (`/workspace?inquiry=…`) — `toPath` drops the query, and a seed that
  *  needs it replays to a different page (#114). Sensitive query values stay masked. */
 export function seedPath(seedUrl: string): string {
-  try {
-    const u = new URL(seedUrl);
-    return redactUrl(`${u.pathname || "/"}${u.search}`);
-  } catch {
-    return toPath(seedUrl);
-  }
+  return seedPathOf(seedUrl);
 }
 
 export async function runInductionMission(params: InductionMissionParams): Promise<InductionRunResult> {
@@ -1129,15 +1028,3 @@ async function runInductionFrontier(
   }
 }
 
-/** Joins the non-empty parts of a transcript reason. */
-function joinReasons(parts: ReadonlyArray<string | undefined>): string {
-  return parts.filter((p): p is string => p !== undefined && p !== "").join("; ");
-}
-
-function pathOf(url: string): string {
-  try {
-    return new URL(url).pathname;
-  } catch {
-    return url;
-  }
-}
