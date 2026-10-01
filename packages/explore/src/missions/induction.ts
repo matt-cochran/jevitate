@@ -1,86 +1,65 @@
-import { ActionDeltas, PageDeltas, deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
+/**
+ * runInductionMission — the public surface (types, seedPath) and the frontier's driver. Module map
+ * (#232): the frontier's state and phases live in ./induction-frontier/ as functions of a
+ * FrontierContext:
+ *
+ *   context.ts         FrontierContext (every former closure variable + the run's inputs) + createFrontierContext
+ *   seed.ts            loadSeed: first navigation, seed state, budget baseline, the seed's enqueue
+ *   reach.ts           reachItem: reset and replay to a queued item's state
+ *   act.ts             actOnItem: re-resolve, safety gate, act (one timeout retry), a failed act
+ *   settle.ts          settleTransition: new state, delta, transition, invariants, post-settle budget
+ *   hang-departure.ts  handleHangOrDeparture: an in-scope hang (reset) or a departure (never expanded)
+ *   judge.ts           judgeState: overflow, advisory defect judgment, enqueue
+ *   transition.ts      Acted / Settled: a transition's former per-iteration locals
+ *   helpers.ts         pure helpers (failure classes, enqueue rule, replayable paths)
+ */
+import { deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
-import { Navigate } from "@jevitate/screenplay";
-import type { InvariantSpec, PageSegment, RecordedStep, Recording, Step, TargetDescriptor } from "@jevitate/recording";
-import { redactUrl, type Answer, type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
+import type { InvariantSpec, Recording } from "@jevitate/recording";
+import { type GenerationPort, type JudgmentPort } from "@jevitate/ai-core";
 import {
   InvariantDefectLog,
   finishDeclaredRun,
   type DeclaredRun,
   InvariantMonitor,
-  recordingStepCount,
   type InvariantDefect,
   type InvariantReport,
 } from "../declared-invariants.js";
 import {
   assertAuthorizedExploreTarget,
-  perceive,
-  targetCandidates,
-  TranscriptLog,
-  act,
-  toPath,
-  resolveBounds,
-  buildJudgmentState,
-  PROMPT_INJECTION_GUARD,
   type Bounds,
-  type Control,
-  type Snapshot,
-  type TargetOp,
   type TranscriptEntry,
   type TranscriptListener,
 } from "../index.js";
-import { contentHash, type MissionFailure } from "@jevitate/domain";
+import { type MissionFailure } from "@jevitate/domain";
 import type { SettleConfig, TimingConfig } from "../settle-config.js";
-import type { ActResult } from "../act.js";
-import { outOfScopeHangNote, type HangSignal } from "../hang.js";
-import { recordCoverageHang, type HangFinding } from "../hang-repro.js";
-import { isAuthorizedExploreTarget } from "../authorized-targets.js";
+import { type HangFinding } from "../hang-repro.js";
 import type { HostHealthSampler } from "../host-health.js";
-import { MissionSessions } from "../mission-session.js";
 import type { VerifySession } from "../verify-fix.js";
-import { CrashWatch, describeFailure, assertSeedReachable, describeUnreachable, isPageUnresponsive, isTargetUnresponsive, isUnreachableTarget } from "../mission-failure.js";
-import { monitorFor } from "../page-monitor.js";
-import { summarizeTimings, type PageTiming, type TimingSummary } from "../timing.js";
-import { actionKey, controlIdentity, stateFingerprint, type FrontierOp } from "../coverage/fingerprint.js";
-import { Frontier } from "../coverage/frontier.js";
-import { chromeClassifier } from "../coverage/chrome.js";
-import { reachFrontierState } from "../coverage/reach.js";
-import { ChromeTracker } from "../feature/relevance.js";
-import { StallWatchdog, StalledError } from "../stall-watchdog.js";
-import { isNavControl } from "../coverage/nav.js";
+import { describeFailure, isPageUnresponsive, isTargetUnresponsive } from "../mission-failure.js";
+import { summarizeTimings, type TimingSummary } from "../timing.js";
+import { StalledError } from "../stall-watchdog.js";
 import { demoOverlayFor, type DemoOverlay } from "../demo-overlay.js";
 import {
-  assessCoverageSufficiency,
-  resolveCoverageSufficiencyThresholds,
   type CoverageSufficiency,
   type CoverageSufficiencyThresholds,
 } from "../coverage/sufficiency.js";
-import { seedRedirectReason } from "../seed-redirect.js";
-import { scopeGlobs, scopePredicate } from "../adversarial/scope.js";
 import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
-import { clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type ClippingFinding, type OverflowFinding } from "../overflow.js";
-
-/** A failed act whose reason names a timeout, or a target this gate refused as not actionable
- *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
-/** A failure that is a timeout (#203) — retried once before it counts (#213). */
-function isTimeoutFailure(reason: string | undefined): boolean {
-  return /timeout/i.test(reason ?? "");
-}
-
-/** A safety refusal's category from its reason (`… (destructive); pass …`, `… matches --deny …`). */
-function refusalRisk(reason: string): string {
-  if (/matches --deny/.test(reason)) return "denied";
-  return /\((session-end|destructive|paid)\)/.exec(reason)?.[1] ?? "refused";
-}
-
-function isUnactionableFailure(reason: string | undefined): boolean {
-  if (reason === undefined) return false;
-  return /timeout|not actionable|no longer present/i.test(reason);
-}
+import { type ClippingFinding, type OverflowFinding } from "../overflow.js";
+import {
+  seedPath as seedPathOf,
+} from "./induction-frontier/helpers.js";
+import { createFrontierContext, type FrontierState } from "./induction-frontier/context.js";
+import { loadSeed } from "./induction-frontier/seed.js";
+import { judgeState } from "./induction-frontier/judge.js";
+import { handleHangOrDeparture } from "./induction-frontier/hang-departure.js";
+import { settleTransition } from "./induction-frontier/settle.js";
+import { actOnItem } from "./induction-frontier/act.js";
+import { reachItem } from "./induction-frontier/reach.js";
 
 /**
  * Proof-by-induction (state-coverage) mission — spec §3.3.
@@ -297,104 +276,10 @@ export interface InductionMissionParams {
   };
 }
 
-/**
- * Which ops the frontier enqueues for a control. RULING (deviation from the
- * plan's literal `type`/`select` inclusion): the coverage fingerprint is a
- * function of url-template + control role/name/enabled — a control's VALUE is
- * deliberately excluded. `type`/`select` only mutate a value, so they can never
- * expand the state frontier; enqueuing them would only burn the action budget
- * against guardrail #2 (bounded). Clicks (navigations / control toggles) are
- * the only fingerprint-affecting transitions, so the frontier enqueues the
- * controls whose SHARED afforded op (`affordedOp`, ./actions.ts) is `click`.
- */
-const FRONTIER_OPS: ReadonlySet<TargetOp> = new Set<TargetOp>(["click"]);
-
-function enqueueFrom(
-  frontier: Frontier,
-  fingerprint: string,
-  pathPrefix: Recording,
-  controls: readonly Control[],
-  withheld: (control: Control) => boolean,
-): void {
-  // A disabled control can never be acted on — never enqueue it; nor one the safety policy refuses (#186).
-  for (const { control } of targetCandidates(controls, { ops: FRONTIER_OPS, enabledOnly: true })) {
-    if (withheld(control)) continue;
-    frontier.push({ key: actionKey(fingerprint, control, "click"), fromFingerprint: fingerprint, pathPrefix, control, op: "click" });
-  }
-}
-
-/**
- * Re-resolves a frontier item's control in the CURRENT snapshot by its stable
- * identity (role + name + enabled) — the `index` is snapshot-local and useless
- * across re-snapshots. A control that has vanished returns null and the item is
- * dropped, never guessed at (fail-closed).
- */
-function resolveControl(snap: Snapshot, want: Control): Control | null {
-  return (
-    snap.controls.find((c) => c.role === want.role && c.name === want.name && c.enabled === want.enabled) ?? null
-  );
-}
-
-/**
- * Immutable "append one executed step to a replayable path", mirroring
- * `RunRecorder`'s discipline: a step whose action changed the URL gets a
- * `urlIncludes` postcondition (and opens the next page segment); one that did
- * not keeps a `visible` postcondition on its target. Returns a NEW Recording.
- */
-function extendPath(
-  prefix: Recording,
-  op: FrontierOp,
-  descriptor: TargetDescriptor,
-  value: string | null,
-  afterUrl: string,
-): Recording {
-  const pages: PageSegment[] = prefix.pages.map((p) => ({ ...p, steps: [...p.steps] }));
-  let current = pages[pages.length - 1];
-  if (current === undefined) {
-    current = { url: "/", steps: [] };
-    pages.push(current);
-  }
-  const target: TargetDescriptor = { ...descriptor };
-  let step: Step;
-  if (op === "click") {
-    step = { kind: "click", target, expect: { kind: "visible", target } };
-  } else if (op === "type") {
-    step = { kind: "fill", target, value: { redacted: false, value: value ?? "" }, expect: { kind: "visible", target } };
-  } else {
-    step = { kind: "select", target, value: { redacted: false, value: value ?? "" }, expect: { kind: "visible", target } };
-  }
-  const recorded: RecordedStep = { step };
-  current.steps.push(recorded);
-
-  const path = toPath(afterUrl);
-  if (path !== current.url) {
-    step.expect = { kind: "urlIncludes", text: path };
-    pages.push({ url: path, steps: [] });
-  }
-  return { version: prefix.version, site: prefix.site, pages };
-}
-
-/** A frontier path as a replayable Recording: the seed navigate, then the path's non-empty pages. */
-function withSeed(branch: Recording, seedUrl: string): Recording {
-  const seed = seedPath(seedUrl);
-  return {
-    ...branch,
-    pages: [
-      { url: seed, steps: [{ step: { kind: "navigate", url: seed, expect: { kind: "urlIncludes", text: seed } } }] },
-      ...branch.pages.filter((p) => p.steps.length > 0),
-    ],
-  };
-}
-
 /** The seed's path WITH its query (`/workspace?inquiry=…`) — `toPath` drops the query, and a seed that
  *  needs it replays to a different page (#114). Sensitive query values stay masked. */
 export function seedPath(seedUrl: string): string {
-  try {
-    const u = new URL(seedUrl);
-    return redactUrl(`${u.pathname || "/"}${u.search}`);
-  } catch {
-    return toPath(seedUrl);
-  }
+  return seedPathOf(seedUrl);
 }
 
 export async function runInductionMission(params: InductionMissionParams): Promise<InductionRunResult> {
@@ -447,697 +332,96 @@ async function runInductionFrontier(
   overlay: DemoOverlay | null = null,
   deltaLog: Array<{ delta: ActionDelta; action: string }> | null = null,
 ): Promise<InductionRunResult> {
-  /** #303 (opt-in): the action-delta tracker, following the session's current page. */
-  const pageDeltas = deltaLog === null ? null : new PageDeltas({ secrets: params.secrets ?? [], goal: "map every reachable state" });
-  const bounds = resolveBounds(params.bounds);
-  const maxDepth = params.maxDepth ?? 10;
-  const site = new URL(params.seedUrl).origin;
-  // Shared perception (render wait + occlusion): a state is never fingerprinted from a blank,
-  // still-rendering frame — including right after a reset-and-replay.
-  const sessions = new MissionSessions({ page: params.page, actor: params.actor }, params.openFreshSession);
-  const hangs = new Map<string, HangFinding>();
-  /** The hang the latest perception saw (a holder: it is set inside the perception closure). */
-  const seenHang: { last: HangSignal | null } = { last: null };
-  let lastTiming: PageTiming | undefined;
-  /** Every perception's full timing (with request samples), once each — the run summary's input. */
-  const timings: PageTiming[] = [];
-  const takeSnapshot = async (): Promise<Snapshot> => {
-    const p = await perceive(sessions.page, {
-      maxCandidates: bounds.maxCandidates,
-      ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
-      ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
-      ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
-      ...(params.timingConfig === undefined ? {} : { timingConfig: params.timingConfig }),
-    });
-    lastTiming = p.timing;
-    seenHang.last = p.hang;
-    timings.push(p.timing);
-    return p.snapshot;
-  };
-  // No-progress watchdog (#114): every recorded step kicks it; every await on the page is guarded by
-  // it, so a wait that never ends stops the run (`stalled`) instead of idling until it is killed.
-  const watchdog = new StallWatchdog(params.stallTimeoutMs);
-  const guard = <T>(work: Promise<T>): Promise<T> => watchdog.guard(work);
-  const transcript = new TranscriptLog([], (entry, all) => {
-    watchdog.kick("choosing the next frontier action");
-    params.onTranscriptEntry?.(entry, all);
-  });
-  const strategyLabel = params.strategy === "exploratory" ? "exploratory-frontier" : "coverage-frontier";
-  let crashWatch = new CrashWatch(sessions.page);
-  declared?.monitor.attach(sessions.page);
-  sessions.onReset((page) => {
-    crashWatch = new CrashWatch(page);
-    declared?.monitor.attach(page);
-  });
-  const visited = new Set<string>();
-  const statePaths = new Map<string, Recording>();
-  const defects: DefectRecord[] = [];
-  // Horizontal-overflow (#149): one defect per distinct fingerprint (route + element) — a wide table
-  // seen across many visited states is still ONE finding, never a defect per occurrence.
-  const seenOverflow = new Set<string>();
-  const checkOverflow = async (stateFp: string, url: string, recording: Recording): Promise<void> => {
-    const vp = sessions.page.viewportSize();
-    if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return;
-    const finding = await detectOverflow(sessions.page, {
-      viewport: vp ?? { width: 1280, height: 720 },
-      ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
-      ...(params.overflow?.toleranceCss === undefined ? {} : { toleranceCss: params.overflow.toleranceCss }),
-      ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
-      ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
-    });
-    if (finding !== null && !seenOverflow.has(finding.fingerprint)) {
-      seenOverflow.add(finding.fingerprint);
-      defects.push({
-        fingerprint: finding.fingerprint,
-        kind: "horizontal-overflow",
-        stateFingerprint: stateFp,
-        url,
-        reason: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
-        recording,
-        overflow: finding,
-      });
-    }
-    // #302: text cut off vertically — one defect per element (route + element), like overflow.
-    const clipped = await detectClipping(sessions.page, {
-      viewport: vp ?? { width: 1280, height: 720 },
-      ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
-      ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
-      ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
-    });
-    for (const c of clipped) {
-      if (seenOverflow.has(c.fingerprint)) continue;
-      seenOverflow.add(c.fingerprint);
-      defects.push({ fingerprint: c.fingerprint, kind: "vertical-clipping", stateFingerprint: stateFp, url, reason: clippingSummary(c), recording, clipping: c });
-    }
-  };
-  let transitionsExercised = 0;
-  let actions = 0;
-  /** #293: actions spent re-replaying the Journey prefix on resets (counted against `maxActions`). */
-  let restartSpend = 0;
-  let failedActions = 0;
-  let timedOutActions = 0;
-  /** #213: what explains a run that took no action — the seed's candidates, safety refusals, dropped chrome. */
-  let seedCandidates = 0;
-  const refusedControls = new Map<string, string>();
-  let frontierRef: Frontier | undefined;
-  let nonNavActionsExercised = 0;
-  /** #209: exercised links to another page — global navigation only if chrome (see `report`). */
-  const crossPageLinks: Control[] = [];
-  const sufficiencyThresholds = resolveCoverageSufficiencyThresholds(params.sufficiencyThresholds);
-
-  // Scope containment (#89, reusing #64's implementation): the frontier is scoped to the seed's
-  // own route (and everything under it) plus the caller's `--route` globs. A transition landing
-  // outside it is recorded as a departure but never expanded — never enqueued, never counted as
-  // coverage — so the run stays prioritized on its target instead of wandering the whole app.
-  const routeGlobs = scopeGlobs(params.seedUrl, params.routeGlobs);
-  const inScope = scopePredicate(params.allowlist, routeGlobs);
-  // Global chrome (#115): controls repeated unchanged across pathnames, besides nav/header/footer
-  // landmarks and links out of scope, are tried only once the target's own controls are exhausted.
-  const chrome = new ChromeTracker();
-  const observe = (s: Snapshot): void => chrome.observe(pathOf(s.url), s.controls);
-  const departures: CoverageScopeDeparture[] = [];
-  const MAX_LISTED_DEPARTURES = 50;
-  let outOfScopeTransitions = 0;
-
-  const report = (frontierExhausted: boolean): CoverageReport => ({
-    statesVisited: visited.size,
-    transitionsExercised,
-    frontierExhausted,
-    defects,
-    failedActions,
-    timedOutActions,
-    sufficiency: assessCoverageSufficiency(
-      {
-        actions,
-        failedActions,
-        // #209: a link to another page counts as global navigation only when it is page CHROME — in a
-        // `<nav>`/`<header>`/`<footer>` landmark, or repeated on 2+ pages (judged over the whole run,
-        // so a header link met before its second page still counts as chrome). A link in the page's
-        // own body (a small app whose pages link to each other in their content) is in-page coverage.
-        nonNavActionsExercised: nonNavActionsExercised + crossPageLinks.filter((c) => (c.landmark ?? null) === null && !chrome.isChrome(c)).length,
-        timedOutActions,
-        noAction: {
-          seedCandidates,
-          refused: [...refusedControls].map(([name, risk]) => ({ name, risk })),
-          outOfScopeChrome: frontierRef?.droppedLeavingChrome ?? 0,
-        },
-      },
-      sufficiencyThresholds,
-    ),
-    scope: { routeGlobs, outOfScopeTransitions, departures: departures.slice(0, MAX_LISTED_DEPARTURES) },
-  });
-
-  const ended = (outcome: "scope-unreachable" | "stalled", failure: MissionFailure): InductionRunResult => ({
-    outcome,
-    failure,
-    coverage: report(false),
-    recordings: [...statePaths.values()],
-    transcript: transcript.entries(),
-    timing: summarizeTimings(timings),
-    hangs: [...hangs.values()],
-  });
+  const ctx: FrontierState = createFrontierContext(params, declared, safety, budget, overlay, deltaLog);
 
   try {
-    watchdog.during("loading the seed");
-    await guard(monitorFor(sessions.page).instrument());
-    safety.attach(monitorFor(sessions.page));
-    // #128: real network evidence for the FIRST navigation — a refused connection can still
-    // surface as a bare navigation timeout.
-    let firstNavNetError: string | null = null;
-    const onFirstNavRequestFailed = (req: { failure(): { errorText: string } | null }): void => {
-      const text = req.failure()?.errorText;
-      if (text !== undefined) firstNavNetError = text;
-    };
-    sessions.page.on("requestfailed", onFirstNavRequestFailed);
-    try {
-      if (params.startInPlace !== true) {
-        await guard(assertSeedReachable(sessions.actor, params.seedUrl));
-        await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
-      }
-    } catch (e) {
-      const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
-      if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
-      // The seed itself could not be loaded: never a defect in the app, never a bug in jevitate —
-      // a configuration problem. `inconclusive`, never `crashed`; no crash report/issue drafted.
-      return ended("scope-unreachable", {
-        kind: "target-unreachable",
-        message: `target unreachable (${describeUnreachable(message, firstNavNetError)})`,
-      });
-    } finally {
-      sessions.page.off("requestfailed", onFirstNavRequestFailed);
-    }
-    let snap = await guard(takeSnapshot());
+    const early = await loadSeed(ctx);
+    if (early !== null) return early;
 
-    // The seed redirected elsewhere (a lost `--storage-state` session bounced to a login page, most
-    // often) — the run cannot test what it was asked to, so it is never `clean` (#82).
-    const redirect = seedRedirectReason(params.seedUrl, snap.url);
-    if (redirect !== null) {
-      transcript.record({
-        op: null,
-        control: null,
-        confidence: null,
-        chosenBy: "strategy",
-        strategy: "seed-load",
-        actOk: false,
-        reason: `${redirect.reason} (inconclusive)`,
-        snapshot: snap,
-      });
-      return {
-        outcome: "scope-unreachable",
-        coverage: report(false),
-        recordings: [],
-        transcript: transcript.entries(),
-        timing: summarizeTimings(timings),
-        hangs: [...hangs.values()],
-        failure: { kind: "target-unreachable", message: redirect.reason },
-      };
-    }
-
-    let currentFingerprint = stateFingerprint(snap);
-    visited.add(currentFingerprint);
-    observe(snap);
-
-    // #150 — a budget's baseline is read once, on the seed's settled snapshot, before any action.
-    // An unreadable baseline fails closed by default (`onUnreadable: "stop"`): the run stops before
-    // it ever acts against a budget it cannot see.
-    if (budget !== null) {
-      const b = await guard(budget.baseline(sessions.page));
-      if (b.crossed) {
-        transcript.record({
-          op: null,
-          control: null,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: "budget",
-          actOk: false,
-          reason: b.reason ?? "budget observable unreadable at run start",
-          snapshot: snap,
-        });
-        return {
-          outcome: "budget",
-          coverage: report(false),
-          recordings: [...statePaths.values()],
-          transcript: transcript.entries(),
-          timing: summarizeTimings(timings),
-          hangs: [...hangs.values()],
-        };
-      }
-    }
-
-    // A candidate the safety policy refuses is withheld at enqueue time (#186), its refusal recorded once.
-    const withheld = (control: Control, on: Snapshot): boolean =>
-      safety.withholds("click", control, (reason) => {
-        // #213: kept (name + category) to explain a run that took no action.
-        refusedControls.set(control.name.replace(/\s+/g, " ").trim() || control.role, refusalRisk(reason));
-        transcript.record({
-          op: null,
-          control,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: "safety-policy",
-          origin: "engine",
-          actOk: false,
-          reason,
-          snapshot: on,
-        });
-      });
-
-    const frontier = new Frontier({
-      order: params.strategy === "exploratory" ? "novelty" : "breadth",
-      classify: chromeClassifier({ chrome, inScope }),
-    });
-    frontierRef = frontier;
-    /** The last transition left the target scope — the next reset is a return after a departure. */
-    let departed = false;
-
-    const seedRecording: Recording = { version: "1", site, pages: [] };
-    statePaths.set(currentFingerprint, seedRecording);
-    seedCandidates = targetCandidates(snap.controls, { ops: FRONTIER_OPS, enabledOnly: true }).length;
-    enqueueFrom(frontier, currentFingerprint, seedRecording, snap.controls, (c) => withheld(c, snap));
-    // #149: checked on the seed page too — a defect that only shows up on first paint, never revisited.
-    await guard(checkOverflow(currentFingerprint, snap.url, withSeed(seedRecording, params.seedUrl)));
-
-    while (!frontier.isExhausted()) {
+    while (!ctx.frontier.isExhausted()) {
       // Hard cap (guardrail #2): checked BEFORE spending — never guess one more step.
-      if (actions + restartSpend >= bounds.maxActions) {
+      if (ctx.actions + ctx.restartSpend >= ctx.bounds.maxActions) {
         return {
           outcome: "cap",
-          coverage: report(false),
-          recordings: [...statePaths.values()],
-          transcript: transcript.entries(),
-          timing: summarizeTimings(timings),
-          hangs: [...hangs.values()],
+          coverage: ctx.report(false),
+          recordings: [...ctx.statePaths.values()],
+          transcript: ctx.transcript.entries(),
+          timing: summarizeTimings(ctx.timings),
+          hangs: [...ctx.hangs.values()],
         };
       }
 
-      const item = frontier.popPreferring(currentFingerprint);
+      const item = ctx.frontier.popPreferring(ctx.currentFingerprint);
       if (item === undefined) break;
 
       const depth = item.pathPrefix.pages.reduce((n, p) => n + p.steps.length, 0);
-      if (depth >= maxDepth) continue; // bounded exploration depth
+      if (depth >= ctx.maxDepth) continue; // bounded exploration depth
 
-      if (item.fromFingerprint !== currentFingerprint) {
-        watchdog.during(departed ? "returning to the seed after a departure" : "resetting to a queued state");
-        const reached = await guard(
-          reachFrontierState({
-            actor: sessions.actor,
-            seedUrl: params.seedUrl,
-            ...(params.restartAtStart === undefined
-              ? {}
-              : {
-                  reachSeed: async (): Promise<boolean> => {
-                    restartSpend += params.restartCost ?? 0;
-                    return params.restartAtStart!(sessions.actor);
-                  },
-                }),
-            item,
-            snapshotNow: takeSnapshot,
-            homeUrl: params.seedUrl,
-            currentUrl: () => sessions.page.url(),
-            ...(params.reachTimeoutMs === undefined ? {} : { timeoutMs: params.reachTimeoutMs }),
-          }),
-        );
-        if (!reached.ok) {
-          if (reached.reason === "stale") {
-            // Stale — dropped, never guessed at; so is every other item replaying the same path (#114).
-            frontier.dropState(item.fromFingerprint);
-            currentFingerprint = "";
-            continue;
-          }
-          // The seed is gone (a lost session) or stopped answering: no queued item is reachable —
-          // a typed stop, never an idle grind through every queued item's reset (#114).
-          return ended("scope-unreachable", {
-            kind: "target-unreachable",
-            message: `could not return to the seed${departed ? " after a departure" : ""} (${reached.detail ?? reached.reason})`,
-          });
-        }
-        snap = reached.snapshot;
-        observe(snap);
-        currentFingerprint = item.fromFingerprint;
-        departed = false;
+      if (item.fromFingerprint !== ctx.currentFingerprint) {
+        const reached = await reachItem(ctx, item);
+        if (reached === "continue") continue;
+        if (reached !== "next") return reached;
       }
 
-      const liveControl = resolveControl(snap, item.control);
-      if (liveControl === null) continue; // control vanished between snapshots — dropped
+      const acted = await actOnItem(ctx, item);
+      if (acted === "continue") continue;
 
-      // The shared safety policy (#116): never clicked, never retried (blacklisted), recorded once.
-      const unsafe = safety.gate(item.op, liveControl);
-      if (unsafe !== null) {
-        frontier.blacklist(controlIdentity(liveControl));
-        if (unsafe.first) {
-          transcript.record({
-            op: null,
-            control: liveControl,
-            confidence: null,
-            chosenBy: "strategy",
-            strategy: "safety-policy",
-            origin: "engine",
-            actOk: false,
-            reason: unsafe.reason,
-            snapshot: snap,
-          });
-        }
-        continue;
-      }
-      // #245: the demo overlay says what is about to happen and highlights the target (display only).
-      if (overlay !== null) {
-        await overlay.announce(
-          sessions.page,
-          {
-            step: transcript.nextStep,
-            strategy: "coverage",
-            op: item.op,
-            target: liveControl.name || liveControl.summary,
-            why: "map every reachable state of the app",
-          },
-          liveControl,
-        );
-      }
-      const actedOn = snap.url;
-      watchdog.during(`acting on "${liveControl.name || item.op}"`);
-      if (declared !== null) await guard(declared.monitor.before(sessions.actor));
-      safety.mark(transcript.nextStep, item.op, liveControl);
-      const actOnce = (): Promise<ActResult> =>
-        guard(
-          act(sessions.actor, {
-            op: item.op,
-            control: liveControl,
-            value: item.op === "click" ? null : "",
-          }),
-        );
-      // #303 (opt-in): the page right before the action.
-      let armed: ActionDeltas | null = null;
-      if (pageDeltas !== null) {
-        const dl = await pageDeltas.on(sessions.page);
-        const route = pathOf(sessions.page.url());
-        await dl.perceived(route).catch(() => null);
-        try {
-          await dl.beforeAction(route, item.op, liveControl);
-          armed = dl;
-        } catch {
-          dl.discard();
-        }
-      }
-      let result = await actOnce();
-      // #213: a single timeout on a working control (a slow moment on a loaded host) is retried once
-      // before it counts as a failed action — one blip must not make the run inconclusive.
-      if (!result.ok && isTimeoutFailure(result.reason)) result = await actOnce();
-      actions += 1;
-      frontier.recordAttempt();
-      const decidedOn = snap;
-    // Each perception's timing is reported once (a failed act re-uses the same snapshot).
-    const decidedOnTiming = lastTiming;
-    lastTiming = undefined;
-      if (!result.ok) {
-        failedActions += 1;
-        if (isTimeoutFailure(result.reason)) timedOutActions += 1;
-        // A control that failed with a timeout (or was refused as not actionable — a clipped/
-        // offscreen skip link, an occluded target) is never re-chosen for the rest of the run
-        // (#75): every OTHER state that re-offers the same control identity drops it at `push`.
-        if (isUnactionableFailure(result.reason)) frontier.blacklist(controlIdentity(liveControl));
-        transcript.record({
-          op: item.op,
-          control: liveControl,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: strategyLabel,
-          actOk: false,
-          ...(result.reason === undefined ? {} : { reason: result.reason }),
-          snapshot: decidedOn,
-        ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
-        });
-        continue;
-      }
+      const settled = await settleTransition(ctx, item, acted);
+      if ("outcome" in settled) return settled;
 
-      frontier.markExercised(controlIdentity(liveControl));
-      if (!isNavControl(liveControl, decidedOn.url)) nonNavActionsExercised += 1;
-      else crossPageLinks.push(liveControl);
+      const left = await handleHangOrDeparture(ctx, item, acted, settled);
+      if (left === "continue") continue;
+      if (left !== "next") return left;
 
-      snap = await guard(takeSnapshot());
-      observe(snap);
-      // #303 (opt-in): what the action changed — on its transcript step (recorded next).
-      if (armed !== null && deltaLog !== null) {
-        armed.acted({ label: `${item.op} ${liveControl.name}`.trim(), recordIndex: 0, step: transcript.nextStep });
-        const d = await armed.perceived(pathOf(sessions.page.url())).catch(() => null);
-        if (d !== null) {
-          deltaLog.push({ delta: d.delta, action: d.delta.action });
-          transcript.attachDelta(transcript.nextStep, d.delta);
-        }
-        armed = null;
-      }
-      const newFingerprint = stateFingerprint(snap);
-      // #160: a toggle exercised once in each direction is dropped for the rest of the run instead
-      // of oscillating forever (the same fix as the feature mission's frontier, which shares this
-      // class).
-      frontier.noteTransition(item.fromFingerprint, liveControl, newFingerprint);
-      const branch = extendPath(item.pathPrefix, item.op, liveControl.descriptor, null, snap.url);
-      transitionsExercised += 1;
-      if (declared !== null && seenHang.last === null) {
-        // Declared invariants (#86): judged on the settled state the action produced; the finding
-        // replays this path from the seed (the frontier's reach navigates there first).
-        const path = withSeed(branch, params.seedUrl);
-        const checked = await guard(declared.monitor.after(sessions.actor, { op: item.op, control: liveControl.name, url: actedOn }));
-        declared.lastRepro = { recordingStepIndex: recordingStepCount(path) - 1, recording: path };
-        for (const v of checked.violations) declared.log.add(v, declared.lastRepro);
-      }
-
-      // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
-      if (budget !== null && seenHang.last === null) {
-        const b = await guard(budget.afterSettle(sessions.page, transitionsExercised));
-        if (b.crossed) {
-          transcript.record({
-            op: item.op,
-            control: liveControl,
-            confidence: null,
-            chosenBy: "strategy",
-            strategy: "budget",
-            actOk: true,
-            reason: b.reason ?? "mission budget crossed",
-            snapshot: snap,
-          });
-          return {
-            outcome: "budget",
-            coverage: report(false),
-            recordings: [...statePaths.values()],
-            transcript: transcript.entries(),
-            timing: summarizeTimings(timings),
-            hangs: [...hangs.values()],
-          };
-        }
-      }
-
-      // A hang: record it (reproduced from the path that led here), reset to a known state and keep
-      // exploring the rest of the frontier. The hung state is never expanded. Only IN-SCOPE pages
-      // are hang-checked (#193): a page reached only by a departure is outside the target, so —
-      // like every other out-of-scope page — it is never judged; its hang signal is noted on the
-      // departure below as advisory, never a finding, and never part of the mission outcome.
-      const hang = seenHang.last;
-      if (hang !== null && inScope(snap.url)) {
-        transcript.record({
-          op: item.op,
-          control: liveControl,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: strategyLabel,
-          actOk: true,
-          reason: `hang (${hang.kind}): ${hang.detail}`,
-          snapshot: decidedOn,
-          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
-        });
-        watchdog.suspend(); // the reproduction is bounded on its own (fresh contexts, bounded replays)
-        const recorded = await recordCoverageHang({
-          hang,
-          // The path starts at the seed (the frontier's reach navigates there first): prepend it.
-          recording: withSeed(branch, params.seedUrl),
-          steps: transcript.entries(),
-          found: hangs,
-          ...(params.safety === undefined ? {} : { safety: params.safety }),
-          ...(params.openFreshSession === undefined ? {} : { openSession: params.openFreshSession }),
-          ...(params.hangReplays === undefined ? {} : { attempts: params.hangReplays }),
-          ...(params.hostHealth === undefined ? {} : { hostHealth: params.hostHealth }),
-          // #230: an app that stopped answering ends the run target-unresponsive, never a hang finding.
-          liveness: { pageUrl: sessions.page.url(), authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist) },
-          // Re-detected with the SAME perception bounds the mission used.
-          perceive: {
-            ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
-            ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
-          },
-        });
-        watchdog.kick("resetting after a hang");
-        if (!(await guard(sessions.reset(hang)))) {
-          return {
-            outcome: "hang",
-            // #203: the page that could not be reset from was hung on a starved host — not an app hang.
-            ...(recorded === "degraded"
-              ? { failure: { kind: "degraded-environment", message: `the page stopped responding (${hang.kind}) while the host was starved, and no fresh session could replace it` } }
-              : {}),
-            coverage: report(false),
-            recordings: [...statePaths.values()],
-            transcript: transcript.entries(),
-            timing: summarizeTimings(timings),
-            hangs: [...hangs.values()],
-          };
-        }
-        await guard(monitorFor(sessions.page).instrument());
-        safety.attach(monitorFor(sessions.page));
-        currentFingerprint = ""; // the next item is reached afresh from the seed
-        continue;
-      }
-
-      // Scope containment (#89, reusing #64's scope model): a transition that landed outside the
-      // target is recorded (a departure) but never expanded — its controls are never enqueued, and
-      // it is never judged, so the frontier stays prioritized on the in-scope target instead of
-      // wandering into the rest of the app. The next frontier pop (necessarily sourced from an
-      // in-scope state, since only those are ever enqueued) resets and replays back into scope.
-      if (!inScope(snap.url)) {
-        outOfScopeTransitions += 1;
-        const landed = redactUrl(snap.url);
-        departures.push({ fromFingerprint: currentFingerprint, url: landed, action: liveControl.name || item.op });
-        transcript.record({
-          op: item.op,
-          control: liveControl,
-          confidence: null,
-          chosenBy: "strategy",
-          strategy: strategyLabel,
-          actOk: true,
-          reason: joinReasons([
-            `left the target scope (landed on ${landed}); not expanded`,
-            hang === null ? undefined : outOfScopeHangNote(hang),
-          ]),
-          snapshot: decidedOn,
-          ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
-        });
-        currentFingerprint = newFingerprint;
-        departed = true;
-        if (hang !== null) {
-          // The page still looked hung: leave it for a fresh one when the mission can open one (the
-          // next item's reach re-navigates to the seed either way). Never a finding, never a stop.
-          await guard(sessions.reset(hang));
-          await guard(monitorFor(sessions.page).instrument());
-          safety.attach(monitorFor(sessions.page));
-          currentFingerprint = "";
-        }
-        continue;
-      }
-
-      // Horizontal-overflow hard signal (#149) — pure DOM geometry, never a Jev judgment.
-      await guard(checkOverflow(newFingerprint, snap.url, withSeed(branch, params.seedUrl)));
-
-      // Advisory-only Jev defect judgment (guardrail #4). State is redacted first
-      // (guardrail #3, via buildJudgmentState) and carries the prompt-injection
-      // guard (guardrail #5). The verdict NEVER gates termination or expansion — so an
-      // unavailable judgment is a missing advisory, recorded, and the run goes on.
-      let isDefect: Answer | undefined;
-      let judgmentNote: string | undefined;
-      try {
-        const answers = await guard(params.judgment.systemOne({
-          state: buildJudgmentState({
-            goal: "state coverage",
-            url: snap.url,
-            controls: [PROMPT_INJECTION_GUARD, ...snap.controls.map((c) => c.summary)],
-            history: [],
-          }),
-          questions: { isDefect: { kind: "noul" } },
-        }));
-        isDefect = answers.isDefect;
-      } catch (e) {
-        if (e instanceof StalledError) throw e;
-        judgmentNote = `advisory judgment unavailable: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
-      }
-      const flagged = isDefect?.kind === "noul" && isDefect.value;
-      transcript.record({
-        op: item.op,
-        control: liveControl,
-        confidence: null,
-        chosenBy: "strategy",
-        strategy: strategyLabel,
-        actOk: true,
-        snapshot: decidedOn,
-        ...(decidedOnTiming === undefined ? {} : { timing: decidedOnTiming }),
-        ...(judgmentNote === undefined ? {} : { reason: judgmentNote }),
-        ...(isDefect?.kind === "noul"
-          ? { judgments: { isDefect: { value: isDefect.value, probability: isDefect.probability } } }
-          : {}),
-      });
-      if (flagged) {
-        defects.push({
-          fingerprint: contentHash(`judgment-flagged-state|${newFingerprint}`).slice(0, 16),
-          kind: "judgment-flagged-state",
-          stateFingerprint: newFingerprint,
-          url: snap.url,
-          reason: "judgment flagged defect",
-          recording: branch,
-          advisory: true,
-        });
-        currentFingerprint = newFingerprint;
-        continue; // recorded, but a flagged state is never expanded
-      }
-
-      if (!visited.has(newFingerprint)) {
-        visited.add(newFingerprint);
-        statePaths.set(newFingerprint, branch);
-        enqueueFrom(frontier, newFingerprint, branch, snap.controls, (c) => withheld(c, snap));
-      }
-      currentFingerprint = newFingerprint;
+      const judged = await judgeState(ctx, item, acted, settled);
+      if (judged === "continue") continue;
     }
 
     // #203: states did not run out — the frontier was drained by actions that timed out (each one
     // blacklisted its control). At least as many timed-out actions as exercised transitions means the
     // frontier ended on timeouts, so "exhausted" would claim coverage the run never had.
-    if (timedOutActions > 0 && timedOutActions >= transitionsExercised) {
+    if (ctx.timedOutActions > 0 && ctx.timedOutActions >= ctx.transitionsExercised) {
       return {
         outcome: "insufficient-coverage",
         failure: {
           kind: "insufficient-coverage",
-          message: `the frontier ended because ${timedOutActions} action(s) timed out even after a retry (vs ${transitionsExercised} transition(s) exercised, ${visited.size} state(s) visited), not because its states ran out — a slow app or a loaded host can time out a working control: re-run it, or raise the click timeout with JEVITATE_CLICK_TIMEOUT_MS`,
+          message: `the frontier ended because ${ctx.timedOutActions} action(s) timed out even after a retry (vs ${ctx.transitionsExercised} transition(s) exercised, ${ctx.visited.size} state(s) visited), not because its states ran out — a slow app or a loaded host can time out a working control: re-run it, or raise the click timeout with JEVITATE_CLICK_TIMEOUT_MS`,
         },
-        coverage: report(true),
-        recordings: [...statePaths.values()],
-        transcript: transcript.entries(),
-        timing: summarizeTimings(timings),
-        hangs: [...hangs.values()],
+        coverage: ctx.report(true),
+        recordings: [...ctx.statePaths.values()],
+        transcript: ctx.transcript.entries(),
+        timing: summarizeTimings(ctx.timings),
+        hangs: [...ctx.hangs.values()],
       };
     }
     return {
       outcome: "exhausted",
-      coverage: report(true),
-      recordings: [...statePaths.values()],
-      transcript: transcript.entries(),
-      timing: summarizeTimings(timings),
-      hangs: [...hangs.values()],
+      coverage: ctx.report(true),
+      recordings: [...ctx.statePaths.values()],
+      transcript: ctx.transcript.entries(),
+      timing: summarizeTimings(ctx.timings),
+      hangs: [...ctx.hangs.values()],
     };
   } catch (e) {
     // The watchdog fired (#114): a typed `stalled` stop with everything found so far, never an idle run.
-    if (e instanceof StalledError) return ended("stalled", { kind: "stalled", message: e.reason });
+    if (e instanceof StalledError) return ctx.ended("stalled", { kind: "stalled", message: e.reason });
     // Engine failure: a typed `crashed` result with every state path and transcript step so far —
     // unless the app stopped answering navigation (#226, a frozen backend): `scope-unreachable`
     // (inconclusive) with the typed `target-unresponsive` reason, never `crashed`.
-    const failure = describeFailure(e, crashWatch.signals());
+    const failure = describeFailure(e, ctx.crashWatch.signals());
     return {
       // #296: a page whose renderer stopped answering (closed by the liveness watchdog) is `stalled`.
       outcome: isTargetUnresponsive(failure) ? "scope-unreachable" : isPageUnresponsive(failure) ? "stalled" : "crashed",
       failure,
-      coverage: report(false),
-      recordings: [...statePaths.values()],
-      transcript: transcript.entries(),
-      timing: summarizeTimings(timings),
-      hangs: [...hangs.values()],
+      coverage: ctx.report(false),
+      recordings: [...ctx.statePaths.values()],
+      transcript: ctx.transcript.entries(),
+      timing: summarizeTimings(ctx.timings),
+      hangs: [...ctx.hangs.values()],
     };
   } finally {
-    watchdog.stop();
-    await sessions.closeOwned();
+    ctx.watchdog.stop();
+    await ctx.sessions.closeOwned();
   }
 }
 
-/** Joins the non-empty parts of a transcript reason. */
-function joinReasons(parts: ReadonlyArray<string | undefined>): string {
-  return parts.filter((p): p is string => p !== undefined && p !== "").join("; ");
-}
-
-function pathOf(url: string): string {
-  try {
-    return new URL(url).pathname;
-  } catch {
-    return url;
-  }
-}
