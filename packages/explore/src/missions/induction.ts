@@ -203,6 +203,13 @@ export interface InductionMissionParams {
    *  coverage loop drives ops directly and authors no synthetic fill text. */
   readonly generation?: GenerationPort;
   readonly seedUrl: string;
+  /**
+   * #293 journey-anchored exploration: the page is ALREADY at `seedUrl`'s state (a Journey prefix was
+   * replayed into this session), so the first navigation is skipped and the frontier starts from the
+   * live page. A reset back to a queued state still re-navigates to `seedUrl` (in-page state such as a
+   * half-filled form is not restored by a reset).
+   */
+  readonly startInPlace?: boolean;
   readonly allowlist: readonly string[];
   readonly bounds?: Partial<Bounds>;
   readonly maxDepth?: number;
@@ -557,8 +564,10 @@ async function runInductionFrontier(
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
-      await guard(assertSeedReachable(sessions.actor, params.seedUrl));
-      await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
+      if (params.startInPlace !== true) {
+        await guard(assertSeedReachable(sessions.actor, params.seedUrl));
+        await guard(sessions.actor.attemptsTo(Navigate.to(params.seedUrl)));
+      }
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
       if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;

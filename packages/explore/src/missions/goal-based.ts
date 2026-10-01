@@ -528,8 +528,11 @@ async function adjudicatedRun(
   // #158 — a find-out goal is READ-ONLY unless its text asks for a change or `--allow-writes`:
   // independent code refuses write flows and aborts write requests; the model is told.
   const readOnly = !hasChecks && cfg.safety?.allowWrites !== true && !goalAsksForChange(cfg.goal);
+  let attempts = 0;
   const runOnce = (): Promise<ExploreRun> => {
     // A retried run (#126) starts over from the seed: nothing the first attempt saw carries over.
+    // #293: only the first attempt starts in place (on the anchored page); a retry loads the seed.
+    const startInPlace = cfg.startInPlace === true && attempts++ === 0;
     settledSteps = 0;
     heldAtStep = null;
     sawNotHolding = false;
@@ -539,6 +542,7 @@ async function adjudicatedRun(
     firstActionAt = null;
     return explore({
       ...cfg,
+      startInPlace,
       readOnly,
       missionContext: `${cfg.missionBrief === undefined ? "" : `${cfg.missionBrief}; `}${
         hasChecks

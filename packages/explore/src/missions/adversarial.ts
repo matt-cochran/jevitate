@@ -299,6 +299,12 @@ export interface AdversarialMissionParams {
   readonly judgment: JudgmentPort;
   readonly generation: GenerationPort;
   readonly seedUrl: string;
+  /**
+   * #293 journey-anchored exploration: the page is ALREADY at `seedUrl`'s state (a Journey prefix was
+   * replayed into this session), so the first navigation is skipped and the mission starts on the
+   * live page. A later reset (after a hang or an identity change) still re-navigates to `seedUrl`.
+   */
+  readonly startInPlace?: boolean;
   readonly allowlist: readonly string[];
   /** The strategies, cycled in order until a budget runs out. */
   readonly strategies: readonly MisuseStrategy[];
@@ -1075,8 +1081,10 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
-      await assertSeedReachable(sessions.actor, params.seedUrl);
-      await Navigate.to(params.seedUrl).performAs(sessions.actor);
+      if (params.startInPlace !== true) {
+        await assertSeedReachable(sessions.actor, params.seedUrl);
+        await Navigate.to(params.seedUrl).performAs(sessions.actor);
+      }
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
       if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;

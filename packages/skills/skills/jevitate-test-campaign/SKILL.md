@@ -55,24 +55,44 @@ jevitate explore-author-journey --url <start-url> --goal "<outcome only>" --succ
 ## 4. Journey-anchored missions (where most defects are)
 
 Defects cluster mid-flow: a verification step, a checkout, a half-finished build. Start missions
-from a Journey's key intermediate states, not the landing page:
+from a promoted Journey's key intermediate states, not the landing page. The Journey's prefix is
+replayed in the mission's OWN browser context (page, form contents and session kept), then the
+mission takes over on the live page:
 
 ```bash
-REPLAY="jevitate journey run <prefix-id> --env <env> --json"   # a promoted Journey ending at the anchor
-jevitate explore --strategy adversarial --url <url of the anchor step> --storage-state <persona-file> --allow-shell-hooks --before "$REPLAY" --after "<restore command>" --max-actions 60 --evidence-video --real --json
+jevitate journey anchors <journey-id> --json   # the named states worth exploring from, with suggested probes
+jevitate explore --from-journey <journey-id> --at-step <anchor|n> --param <k=v> --env <env> --strategy adversarial --storage-state <persona-file> --max-actions 60 --evidence-video --real --json
 ```
 
-- The `--before` hook replays the Journey up to the anchor (it builds server-side state; in-page
-  state such as a half-filled form does not carry over). `--fixtures <file>` (HTTP setup and
-  restore steps) is the cheaper way when the state can be created through the API.
+- `--at-step` takes an anchor name (from `metadata.anchors`) or a 1-based step number. Only the
+  prefix's own `--param`s are required. `--strategy` may be goal, coverage, exploratory,
+  adversarial or usability (`--feature`, `--repeat`, `--persona` and `--actor` are refused).
+- A prefix that no longer replays ends the run `inconclusive` with `failure.kind: "journey-stale"`
+  (exit 2): the Journey drifted. Fix or re-author it; never fall back to a bare `--url`.
+- Results and findings carry `branch: {journeyId, step, anchor}`: the exact point they came from.
+- `verify-fix` and regressions replay a finding's own Recording from the anchor's URL; the Journey
+  prefix is not replayed there. A finding that needs the in-page state (a half-filled form) is
+  re-proved by re-running the same anchored mission.
 - `--strategy adversarial` attacks the anchor: replaying a one-time code, swapping a tenant id
-  mid-flow, a double submit at checkout, an expired share link, skipping a step-up.
-  `--strategy exploratory` follows newly revealed controls from there. `--strategy usability
-  --goal "<job>" --app-class <class>` critiques the job (`jevitate-ux-review`).
-- `--persona <name=storageState>` (repeatable) runs the same mission per role and diffs them; a 403
-  for one and 200 for another is a candidate authorization finding.
+  mid-flow, a double submit at checkout, an expired share link, skipping a step-up (the anchor's
+  `probes` list what to try). `--strategy exploratory` follows newly revealed controls from there.
+  `--strategy usability --goal "<job>" --app-class <class>` critiques the job (`jevitate-ux-review`).
+- `--persona <name=storageState>` (repeatable, without `--from-journey`) runs the same mission per
+  role and diffs them; a 403 for one and 200 for another is a candidate authorization finding.
 - `--invariants <file>` turns app rules ("Saved means stored") into code-decided defects. Lint
   them first: `jevitate invariants validate <files...> --url <url>`.
+
+Sweep many anchors with a campaign (template below): discovery replays each job's whole Journey (a
+stale one skips its missions), then every anchored mission runs in order with the spec's
+`fixtures` restore around each run, and ONE deduped report comes back (each defect lists the
+Journey steps it branched from):
+
+```bash
+jevitate campaign run .jevitate/campaign/campaign.json --real --json
+```
+
+An invalid spec is refused with every problem listed (exit 64). Shell `before`/`after` restore
+hooks in the spec run only with `--allow-shell-hooks`, and only when the human asked for them.
 
 ## 5. A small untargeted pass, plus non-journey attacks
 
@@ -95,7 +115,8 @@ defect) or `--screenshots`, and link the files from the issue.
 session or check and rerun) · `3` hang · `4` intermittent · `64` refused, nothing ran. Report the
 outcome you got. Never round it up.
 
-1. Collect: `jevitate report --target <origin> --since <campaign-start> --json` dedupes every run
+1. Collect: a campaign's own `campaign.md` is already one deduped list; across campaigns and
+   ad-hoc runs, `jevitate report --target <origin> --since <campaign-start> --json` dedupes every run
    into one defect list. Keep one register (template below) tagged by layer and severity.
 2. Fix: frontend fixes under the hot-reload dev server, rechecked at once; backend fixes batched
    into one rebuild.
@@ -129,7 +150,7 @@ build; and no `inconclusive` run was counted as a pass. Anything short of that, 
 
 ## Templates
 
-Job spec (one per job, `.jevitate/campaign/jobs.json`):
+Job spec (one per job, `.jevitate/campaign/jobs.json`) — the catalog you plan from:
 
 ```json
 [{
@@ -140,9 +161,32 @@ Job spec (one per job, `.jevitate/campaign/jobs.json`):
   "success": ["textIncludes:role=table|Pending", "responseStatus:POST /api/invites=2xx"],
   "preconditions": ["an org with a free seat"],
   "mutates": true,
-  "order": 3,
-  "anchors": [{ "step": 4, "url": "/settings/team/invite", "attacks": ["double submit", "invite into another org id"] }]
+  "order": 3
 }]
+```
+
+Anchors live on the promoted Journey itself (`metadata.anchors`, listed by `jevitate journey anchors <id>`):
+
+```json
+"anchors": [{ "name": "invite-form", "step": 4, "description": "the filled invite form", "probes": ["double submit", "invite into another org id"] }]
+```
+
+Campaign spec (`.jevitate/campaign/campaign.json`, for `jevitate campaign run`):
+
+```json
+{
+  "version": 1,
+  "name": "release-candidate",
+  "env": "staging",
+  "fixtures": "restore.json",
+  "maxRuns": 40,
+  "maxActions": 60,
+  "jobs": [
+    { "id": "invite-teammate", "journey": "invite-teammate", "storageState": "~/.jevitate/sessions/admin.json",
+      "params": { "email": "new@example.test" }, "anchors": ["invite-form"], "strategies": ["adversarial", "exploratory"] },
+    { "id": "checkout", "journey": "checkout", "anchors": ["payment", 6], "strategies": ["adversarial"], "maxActions": 40 }
+  ]
+}
 ```
 
 Issue register (one row per deduped finding, `.jevitate/campaign/register.md`):

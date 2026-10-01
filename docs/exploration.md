@@ -2,6 +2,16 @@
 
 How exploring missions stay in scope, what counts as coverage, how hangs are detected and confirmed, and what Jevitate measures about page timing.
 
+## Starting from a Journey step
+
+Every strategy except `--feature` can start from a promoted Journey instead of a bare URL:
+`jevitate explore --from-journey <id> --at-step <anchor|n> --strategy <s>` replays the Journey's
+prefix in the mission's own browser context (page, form contents and session kept), and the mission
+starts on the live page — its scope is that page's route, as if it were `--url`. A prefix that no
+longer replays ends the run `inconclusive` (`failure.kind: "journey-stale"`, exit 2). Results carry
+`branch: { journeyId, step, anchor? }`. See [Explore from a Journey step](./journeys.md#explore-from-a-journey-step-anchors-and-campaigns)
+for anchors, campaigns and the known limits.
+
 ## Adversarial scope, form misuse and coverage
 
 An adversarial run is **scoped to its target**: the start URL's route and everything

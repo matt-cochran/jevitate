@@ -158,6 +158,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "journey find": { exempt: "a search: no match is an empty result" },
   "journey run": { base: ["nope"], cases: [["nope"], ["nope", "--storage-state", missing]] },
   "journey promote": { cases: [["nope"]] },
+  // #293: an unknown Journey (or an id that tries to leave the store) is refused.
+  "journey anchors": { cases: [["nope"], ["../x"]] },
+  // #293: a missing/unreadable spec, and a campaign with no model gateway.
+  "campaign run": { cases: [[missing, "--fake-ai"], [missing]] },
   "journey annotate": {
     base: ["nope", "--fake-ai"],
     cases: [["nope", "--fake-ai"], ["nope", "--fake-ai", "--storage-state", missing], ["nope", "--approve"], ["nope", "--approve", "--fake-ai"]],
@@ -190,6 +194,10 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
         ["--url", URL0, "--strategy", strategy, "--fake-ai", "--allow-vacuous-checks"],
       ]),
       ["--url", URL0, "--feature", "home", "--success", "urlIncludes:/x"],
+      // #293: journey-anchored flags — an unknown Journey, a lone --at-step, --url with --from-journey.
+      ["--from-journey", "nope", "--at-step", "2", "--fake-ai"],
+      ["--at-step", "2", "--fake-ai"],
+      ["--from-journey", "nope", "--at-step", "2", "--url", URL0, "--fake-ai"],
     ],
   },
   "verify-fix": { base: ["--result", missing, "--fingerprint", FP], cases: [["--result", missing, "--fingerprint", FP], []] },

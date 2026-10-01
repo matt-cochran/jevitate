@@ -19,6 +19,7 @@ import { serverLogFromTargetConfig } from "./mission-queue-runner.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { type EngineInfo } from "./engine.js";
 import { applyJourneyEnvironment, isEnvironmentError, resolveJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
+import { resolveJourneyPrefix, type JourneyPrefix } from "./journey-prefix.js";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
 import { CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
 import { parseScreenshotsArg } from "./run-screenshots.js";
@@ -151,6 +152,8 @@ export interface PreparedTarget {
   readonly secretFields: readonly SecretField[];
   /** The target's fixtures file (the suite's, else targets.json's), validated at preflight (#170). */
   readonly fixturesFile?: string;
+  /** #293: each journey-anchored mission item's Journey prefix, resolved (and refused) at preflight. */
+  readonly prefixes?: ReadonlyMap<SuiteMission, JourneyPrefix>;
 }
 
 /** What an item's fixture lifecycle is built from: its fixtures file and hooks, authenticated like its session. */
@@ -374,7 +377,41 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     }
   }
   const sweep = t.missions.length === 0 && t.goals.length === 0 && invariants !== undefined ? [invariantSweep()] : [];
+  const prefixes = new Map<SuiteMission, JourneyPrefix>();
   for (const m of [...t.missions, ...sweep]) {
+    // #293: a journey-anchored mission — its Journey, step, params and environment, refused now if
+    // unusable; it starts where the prefix lands, which (with every origin the prefix may visit)
+    // must be on the target's allowlist.
+    if (m.fromJourney !== undefined && m.atStep !== undefined) {
+      let prefix: JourneyPrefix;
+      try {
+        const env = resolveJourneyEnvironment({
+          ...(m.env === undefined ? {} : { env: m.env }),
+          ...(m.baseUrl === undefined ? {} : { baseUrl: m.baseUrl }),
+          ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }),
+          targets: opts.targetsConfig ?? {},
+        });
+        const session = sessionOf(t, m.storageState) ?? (m.storageState === null ? undefined : env?.storageState);
+        prefix = await resolveJourneyPrefix({
+          dir: t.journeysDir ?? opts.journeysDir,
+          id: m.fromJourney,
+          atStep: m.atStep,
+          params: { ...(m.params ?? {}) },
+          ...(env === undefined ? {} : { environment: env }),
+          ...(session === undefined ? {} : { storageState: session }),
+          ...(opts.sitePolicyDbPath === undefined ? {} : { dbPath: opts.sitePolicyDbPath }),
+        });
+      } catch (e) {
+        throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${errorMessage(e)}`);
+      }
+      const off = [new URL(prefix.startUrl).origin, ...prefix.allowedOrigins].filter((o) => !allowlist.includes(o));
+      if (off.length > 0) throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: Journey ${m.fromJourney} runs on ${off.join(", ")}, which is not on the target's allowlist`);
+      if (prefix.secrets.length > 0 && (m.strategy === "coverage" || m.strategy === "exploratory")) {
+        throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: Journey ${m.fromJourney} types a secret param before its anchor; strategy ${m.strategy} cannot redact it`);
+      }
+      prefixes.set(m, prefix);
+      continue;
+    }
     const missionUrl = m.url ?? t.url;
     if (!allowlist.includes(new URL(missionUrl).origin)) {
       throw new CheckPreflightError(`target ${t.name}: mission ${m.name}: ${missionUrl} is not on the target's allowlist`);
@@ -480,6 +517,7 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     config,
     secretFields,
     ...(fixturesFile === undefined ? {} : { fixturesFile }),
+    ...(prefixes.size === 0 ? {} : { prefixes }),
   };
 }
 

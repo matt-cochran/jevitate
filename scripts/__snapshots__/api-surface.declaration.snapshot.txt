@@ -159,7 +159,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (94 exports)
+# @jevitate/domain (96 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -229,6 +229,8 @@
   RESULT_GOAL_OUTCOMES: variable
   RESULT_MISSION_OUTCOMES: variable
   RESULT_STRATEGIES: variable
+  ResultBranch: type-alias
+  ResultBranchSchema: variable
   ResultDefect: type-alias
   ResultDefectSchema: variable
   ResultEngineSchema: variable
@@ -759,7 +761,7 @@
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (42 exports)
+# @jevitate/findings (43 exports)
   CaseStatus: type-alias
   classify: function
   consolidate: function
@@ -786,6 +788,7 @@
   requestIdentity: function
   routeTemplate: function
   RUN_MODES: variable
+  RunBranch: interface
   runFromMissionResult: function
   runFromUxReport: function
   runIdOf: function
@@ -889,7 +892,10 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (30 exports)
+# @jevitate/journey (46 exports)
+  ANCHOR_NAME_RE: variable
+  ANCHORED_STRATEGIES: variable
+  AnchoredStrategy: type-alias
   AnnotationChange: interface
   AnnotationDraft: type-alias
   AnnotationDraftMismatchError: class
@@ -897,6 +903,9 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  CAMPAIGN_LIMITS: variable
+  CampaignSpec: type-alias
+  CampaignSpecSchema: variable
   deriveParamSchema: function
   describeStep: function
   FlatJourneyStep: interface
@@ -906,15 +915,25 @@
   intentCoverage: function
   IntentCoverage: interface
   Journey: interface
+  JourneyAnchor: interface
+  JourneyAnchorListing: interface
+  journeyBranchPoint: function
+  JourneyBranchPoint: interface
   JourneyMetadata: interface
   JourneyParameter: interface
   JourneyPrecondition: interface
+  journeyPrefix: function
   JourneyRegistry: class
   JourneySchema: variable
+  journeyStepCount: function
+  JourneyStepError: class
   JourneyStore: interface
   JourneySuccessCriterion: interface
+  listJourneyAnchors: function
   ParamSchema: interface
   ParamValidationError: class
+  prefixLandingPath: function
+  resolveJourneyStep: function
   SECRET_PARAM_NAME_RE: variable
   secretParamNames: function
   secretParamValues: function

@@ -137,6 +137,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
+    name: "journey_anchors",
+    description:
+      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep.",
+    command: { path: "journey anchors", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
     name: "annotate_journey",
     description:
       "`jevitate journey annotate <id>` (#246): replay the Journey and DRAFT each step's objective/expected result (and a missing goal/success criteria) into a reviewable draft — the Journey itself is never written. " +
@@ -224,6 +230,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "explore",
       params: { ...EXTENSION,
         url: s("--url"),
+        // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
+        fromJourney: s("--from-journey"),
+        atStep: s("--at-step"),
+        params: { kind: "params", flag: "--param" },
+        ...ENVIRONMENT,
         allow: many("--allow"),
         strategy: s("--strategy", { enum: ["goal", "coverage", "exploratory", "adversarial", "usability"] }),
         goal: s("--goal"),
@@ -298,7 +309,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         "--hang-replay-writes": OMIT.hangWrites,
         "--issue-repo": OMIT.filingRepo,
         "--jevitate-repo": OMIT.filingRepo,
+        "--journeys-dir": OMIT.storeDir,
       },
+    },
+  },
+  {
+    name: "run_campaign",
+    description:
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. Needs real or fakeAi.",
+    command: {
+      path: "campaign run",
+      params: { spec: pos("path"), out: path("--out"), ...AI },
+      omitted: { "--journeys-dir": OMIT.storeDir, "--allow-shell-hooks": OMIT.hooks, ...JSON_FLAG },
     },
   },
   {

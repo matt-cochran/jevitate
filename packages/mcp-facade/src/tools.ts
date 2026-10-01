@@ -11,6 +11,8 @@ export const ALLOWED_TOOLS = [
   "diff_runs", "baselines", "ledger", "run_load_test", "prune_logs", "run_queued_missions",
   "mission_targets", "profiles", "recordings", "regressions", "site_policy", "sources",
   "ux_review", "validate_invariants", "get_ai_status",
+  // #293 — journey-anchored exploration: a Journey's anchors, and a campaign of anchored missions.
+  "journey_anchors", "run_campaign",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [

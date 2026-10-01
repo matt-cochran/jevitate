@@ -50,6 +50,12 @@ mission and reading the result honestly.
 - Adversarial: `jevitate explore --strategy adversarial --url <authorized-url> --fake-ai --json`.
 - Coverage: `jevitate explore --strategy coverage --url <authorized-url> --real --json`.
 - Feature: `jevitate explore --feature checkout --route "/cart/**" --url <authorized-url> --json`.
+- From deep inside a flow (#293): `jevitate explore --from-journey <promoted-journey-id> --at-step
+  <anchor|n> [--param k=v] [--env <env>] --strategy adversarial --real --json` replays the Journey
+  up to that step in the mission's own browser (form contents kept), then explores from there.
+  `jevitate journey anchors <id>` lists the named steps. A Journey that no longer replays ends the
+  run `inconclusive` (`failure.kind: "journey-stale"`). Many anchors at once: `jevitate campaign run
+  <spec.json>` (see `jevitate-test-campaign`).
 - Behind a login: `--storage-state <file>` (a Playwright storageState path; `--save-storage-state
   <file>` writes the rotated one back). Pass real secrets with `--secret env:VAR` or
   `--secret-field 'label=Password=env:APP_PASSWORD'` so they stay out of every model call. Never
@@ -69,6 +75,8 @@ mission and reading the result honestly.
 - `run_exploration({ url, strategy?, goal?, success?, ... })` runs `explore` directly, with every
   strategy including `usability`, and returns the typed result. Arguments are the flags in
   camelCase.
+- Journey-anchored: `run_exploration({ fromJourney, atStep, params?, env?, strategy, ... })`;
+  `journey_anchors({ id })` lists a Journey's anchors; `run_campaign({ spec })` runs a campaign.
 - For a PROMOTED mission target, queue instead: `queue_exploration({ target, strategy, goal?,
   successAssertion?, feature?, route?, recordVideo?, evidenceVideo?, screenshots?, persona? })`
   returns a `missionId` right away without running it. `run_queued_missions` (or

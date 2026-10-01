@@ -55,6 +55,21 @@
     - flags=--dir <dir> required=true mandatory=false negate=false variadic=false default=[] description=results dir to look run ids up in (repeatable)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
+# campaign
+  description: journey-anchored test campaigns (#293): many anchored missions, one deduped report
+
+# campaign run
+  description: run a campaign spec (JSON): replay each job's promoted Journey (discovery), then run its anchored missions in order — explore --from-journey <journey> --at-step <anchor> --strategy <s> — with the spec's --fixtures restore around every run, and write ONE deduped report (campaign.json + campaign.md). An invalid spec is refused with every problem listed (exit 64)
+  arguments:
+    - name=spec required=true variadic=false default=null
+  options:
+    - flags=--allow-shell-hooks required=false mandatory=false negate=false variadic=false default=false description=opt in to running the spec's before/after operator hooks around every run (never model-chosen)
+    - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
+    - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
+    - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>)
+    - flags=--real required=false mandatory=false negate=false variadic=false default=false description=use live Jev + OpenRouter gateways for the missions (requires keys)
+
 # check
   description: CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
   options:
@@ -158,6 +173,8 @@
     - flags=--allow-writes required=false mandatory=false negate=false variadic=false default=null description=let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow (checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change
     - flags=--api-prefix <path> required=true mandatory=false negate=false variadic=false default=[] description=a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/
     - flags=--app-class <class> required=true mandatory=false negate=false variadic=false default=null description=app class for UX calibration (required for --strategy usability), e.g. consumer|admin|internal
+    - flags=--at-step <n|name> required=true mandatory=false negate=false variadic=false default=null description=with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`)
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
     - flags=--before <cmd> required=true mandatory=false negate=false variadic=false default=null description=operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret}
     - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
     - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
@@ -165,6 +182,7 @@
     - flags=--check-overflow required=false mandatory=false negate=false variadic=false default=null description=check the horizontal-overflow hard signal (#149) even at a desktop (>=1024px) viewport — --strategy coverage/exploratory (a defect), adversarial (a defect) or usability (a signal finding). On by default whenever --viewport/--device emulates a viewport narrower than 1024px
     - flags=--deny <pattern> required=true mandatory=false negate=false variadic=false default=[] description=a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default
     - flags=--device <name> required=true mandatory=false negate=false variadic=false default=null description=emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport)
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
     - flags=--evidence-video required=false mandatory=false negate=false variadic=false default=null description=per defect: replay its minimal repro with captions + the failing step marked, record a masked clip and before/at screenshots (defects[].evidence; linked from drafts)
     - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
     - flags=--fake-ai required=false mandatory=false negate=false variadic=false default=false description=use deterministic fake gateways (pipeline smoke only)
@@ -172,6 +190,7 @@
     - flags=--file-issues required=false mandatory=false negate=false variadic=false default=null description=file findings as issues (needs a repo: --issue-repo or ~/.jevitate/filing.json); default: drafts only
     - flags=--fixture <path> required=true mandatory=false negate=false variadic=false default=null description=local file the upload op attaches to a file input (goal and usability strategies); must exist
     - flags=--fixtures <file> required=true mandatory=false negate=false variadic=false default=null description=mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>}
+    - flags=--from-journey <id> required=true mandatory=false negate=false variadic=false default=null description=journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed in the mission's own browser context (page, form contents and session kept; fail-closed, never self-healed; --env/--base-url apply), then the mission starts on the live page. A replay that stops before the anchor ends the run inconclusive (failure.kind journey-stale, exit 2). Strategies: goal, coverage, exploratory, adversarial, usability
     - flags=--goal <text> required=true mandatory=false negate=false variadic=false default=null description=natural-language goal / job (required for --strategy goal and usability)
     - flags=--hang-replay-writes required=false mandatory=false negate=false variadic=false default=null description=let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed)
     - flags=--hang-replays <n> required=true mandatory=false negate=false variadic=false default=null description=fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed)
@@ -183,6 +202,7 @@
     - flags=--issue-repo <owner/name> required=true mandatory=false negate=false variadic=false default=null description=the system-under-test repo findings for THIS target are filed to
     - flags=--jevitate-repo <owner/name> required=true mandatory=false negate=false variadic=false default=null description=where jevitate engine findings are filed (default matt-cochran/jevitate)
     - flags=--job-wait-ms <ms> required=true mandatory=false negate=false variadic=false default=null description=goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it
+    - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit the JSON envelope (default: a human summary)
     - flags=--log-correlation-header <name> required=true mandatory=false negate=false variadic=false default=[] description=another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204)
     - flags=--log-defect <level|/regex/> required=true mandatory=false negate=false variadic=false default=[] description=backend log lines matching this (repeatable) become a server-log defect: a level (error|warn|info|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s)
@@ -202,6 +222,7 @@
     - flags=--no-require-form-submit required=false mandatory=false negate=true variadic=false default=null description=adversarial: do not require a submitted form for a clean result (default: required when the target has a form)
     - flags=--out <dir> required=true mandatory=false negate=false variadic=false default=null description=directory to write the emitted Recording
     - flags=--paid <pattern> required=true mandatory=false negate=false variadic=false default=[] description=an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze|Draft|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it
+    - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required
     - flags=--persona <name=storageState> required=true mandatory=false negate=false variadic=false default=[] description=run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome
     - flags=--personas <file> required=true mandatory=false negate=false variadic=false default=null description=personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState"}]}
     - flags=--read-rpc <glob> required=true mandatory=false negate=false variadic=false default=[] description=a POST request that only READS (repeatable): an RPC-method glob (Estimate*, pkg.Service/Preview*) or a path glob (/api/search*). gRPC-web/Connect Get*/List*/Search*/Find*/Watch*/Stream*/Count*/Describe*/Read* methods are reads already. Reads are never guarded or reported as duplicate writes
@@ -358,6 +379,14 @@
 
 # journey
   description: manage and run promoted Journeys (regression-test replays)
+
+# journey anchors
+  description: list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
 
 # journey annotate
   description: draft each step's objective/expected result (and the goal/success criteria when missing) by replaying the Journey; writes a reviewable draft, never the Journey — `--approve` applies a reviewed draft (human gate)

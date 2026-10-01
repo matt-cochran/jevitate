@@ -34,6 +34,28 @@ export interface JourneyMetadata {
   successCriteria?: JourneySuccessCriterion[];
   /** Its inputs (`--param` names), with secrets marked for redaction. */
   parameters?: JourneyParameter[];
+  /**
+   * #293 — named states worth exploring from. `jevitate explore --from-journey <id> --at-step <name>`
+   * replays the Journey up to the anchor's step in one browser context and hands the live page to a
+   * mission. Additive: a Journey without anchors validates and runs exactly as before, and nothing
+   * here changes a replay.
+   */
+  anchors?: JourneyAnchor[];
+}
+
+/**
+ * A Journey anchor (#293): the state reached after `step` top-level steps, by name, with the
+ * adversarial probes worth trying there (text for people and missions; never executed as code).
+ */
+export interface JourneyAnchor {
+  /** Its name (`--at-step <name>`): a safe word, never all digits (a number names a step). */
+  name: string;
+  /** The state AFTER this many top-level steps — 1-based, counted the way `--at-step <n>` counts. */
+  step: number;
+  /** What this state is, in words. */
+  description?: string;
+  /** Suggested adversarial probes at this state (e.g. "double submit", "swap the tenant id"). */
+  probes?: string[];
 }
 
 /** A precondition (#246): what must hold before the Journey starts, linked to how it is set up. */
@@ -86,6 +108,16 @@ const JourneyParameterSchema = z.object({
   secret: z.boolean().optional(),
 }).strict();
 
+/** An anchor name: a safe word that is never all digits (`--at-step 3` is a step number). */
+export const ANCHOR_NAME_RE = /^(?![0-9]+$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+const JourneyAnchorSchema = z.object({
+  name: z.string().max(100).regex(ANCHOR_NAME_RE, "anchor name: letters, digits, . _ - (not all digits)"),
+  step: z.number().int().min(1),
+  description: z.string().max(2000).optional(),
+  probes: z.array(z.string().min(1).max(500)).max(20).optional(),
+}).strict();
+
 const SecretRefSchema = z.object({
   manager: z.string(), key: z.string(), origin: z.string(), field: z.string(),
 }).strict();
@@ -120,6 +152,23 @@ export const JourneySchema: ZodType<Journey> = z.object({
       .max(100)
       .refine((ps) => new Set(ps.map((p) => p.name)).size === ps.length, { message: "parameters: duplicate name" })
       .optional(),
+    anchors: z
+      .array(JourneyAnchorSchema)
+      .max(50)
+      .refine((as) => new Set(as.map((a) => a.name)).size === as.length, { message: "anchors: duplicate name" })
+      .optional(),
   }).strict(),
   recording: RecordingSchema,
+}).superRefine((j, ctx) => {
+  // #293: an anchor names a state the Journey reaches — its step must be one of the Journey's own.
+  const steps = j.recording.pages.reduce((n, p) => n + p.steps.length, 0);
+  (j.metadata.anchors ?? []).forEach((a, i) => {
+    if (a.step > steps) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["metadata", "anchors", i, "step"],
+        message: `anchor ${JSON.stringify(a.name)}: step ${a.step} is past the Journey's last step (${steps})`,
+      });
+    }
+  });
 });

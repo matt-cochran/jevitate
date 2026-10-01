@@ -82,6 +82,10 @@ import {
   withEmulationFlags,
   emulationFromFlags,
   emitCommandResult,
+  collectParam,
+  environmentSeams,
+  resolveDbPath,
+  resolveJourneysDir,
   stallTimeoutMs,
   EXPLORE_STRATEGIES,
   EXPLORE_OUTCOME_HELP,
@@ -89,13 +93,25 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 import { allowWithExtensions, assertExtensionTargetLoaded, multiWindowWarning } from "./browser-run-options.js";
+import { ParamValidationError } from "@jevitate/journey";
+import { SiteGateRefusedError } from "@jevitate/runtime";
+import { JourneyRequiresAuthError, UnknownJourneyError } from "./journey-api.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags } from "./environments.js";
+import {
+  ANCHORED_STRATEGIES,
+  JourneyPrefixArgsError,
+  JourneyPrefixStaleError,
+  journeyStaleResult,
+  resolveJourneyPrefix,
+  type JourneyPrefix,
+} from "./journey-prefix.js";
 
 /**
  * Registers `jevitate explore` (every strategy: goal, coverage, exploratory, adversarial, usability, feature, multi-run).
  * `buildProgram` builds a fresh program for each run of a multi-run (#141/#143).
  */
 export function registerExploreCommands(program: Command, deps: CliDeps, buildProgram: (deps: CliDeps) => Command): void {
-  withScreenshotsFlag(withEmulationFlags(
+  withEnvironmentFlags(withScreenshotsFlag(withEmulationFlags(
     withFixtureFlags(
       withDemoFlags(
         withBrowserLaunchFlags(
@@ -106,8 +122,18 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         { recordVideo: true, overlay: true },
       ),
     ),
-  ))
+  )))
     .option("--url <url>", "target URL (must be an authorized origin)")
+    .option(
+      "--from-journey <id>",
+      "journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed " +
+        "in the mission's own browser context (page, form contents and session kept; fail-closed, never self-healed; --env/--base-url apply), " +
+        "then the mission starts on the live page. A replay that stops before the anchor ends the run inconclusive (failure.kind journey-stale, exit 2). " +
+        "Strategies: goal, coverage, exploratory, adversarial, usability",
+    )
+    .option("--at-step <n|name>", "with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`)")
+    .option("--param <kv>", "with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required", collectParam, {} as Record<string, string>)
+    .option("--journeys-dir <path>", "with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option(
       "--strategy <name>",
       "exploration strategy: goal (default) | coverage | exploratory | adversarial | usability (UX review: ranked, cited findings)",
@@ -510,7 +536,11 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         ignoreOverflow: string[];
         json?: boolean;
         evidenceVideo?: boolean;
-      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags & ScreenshotsFlags>();
+        fromJourney?: string;
+        atStep?: string;
+        param: Record<string, string>;
+        journeysDir?: string;
+      } & BrowserLaunchFlags & DemoFlags & FixtureFlags & EmulationFlags & ScreenshotsFlags & EnvironmentFlags>();
       // #210: one output rule for every strategy — the envelope with --json, a human summary without.
       const emitExplore = (envelope: JsonEnvelope<unknown>, exitCode?: number, human: (data: unknown) => string = formatMissionHuman): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "explore", human, ...(exitCode === undefined ? {} : { exitCode }) });
@@ -534,11 +564,81 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         }
       }
       const strategy = o.strategy ?? "goal";
+      // #293 journey-anchored exploration: the Journey, step, params and environment are resolved (and
+      // refused, exit 64) before anything else — the start URL every later check uses is where the
+      // Journey's prefix lands.
+      let journeyPrefix: JourneyPrefix | undefined;
+      const anchoredFlags = [o.fromJourney, o.atStep, o.journeysDir, o.env, o.baseUrl].some((v) => v !== undefined);
+      if (anchoredFlags || Object.keys(o.param).length > 0) {
+        const refuse = (message: string): void => emitExplore(fail("E_EXPLORE_ARGS", message));
+        if (o.fromJourney === undefined || o.atStep === undefined) {
+          refuse("--from-journey and --at-step go together (and --param, --env, --base-url and --journeys-dir need them)");
+          return;
+        }
+        if (o.url !== undefined) {
+          refuse("--url cannot be combined with --from-journey: the mission starts where the Journey's prefix leaves the page");
+          return;
+        }
+        if (o.feature !== undefined || !(ANCHORED_STRATEGIES as readonly string[]).includes(strategy)) {
+          refuse(`--from-journey supports --strategy ${ANCHORED_STRATEGIES.join(", ")} (not --feature)`);
+          return;
+        }
+        if (wantsMultiRun(o) || o.actor.length > 0) {
+          refuse("--from-journey runs one anchored mission: --repeat, --persona, --personas and --actor are not supported with it (a campaign runs several)");
+          return;
+        }
+        try {
+          const environment = environmentFromFlags(
+            { ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) },
+            environmentSeams(deps),
+          );
+          // The environment's own session applies when --storage-state names none (as `journey run`).
+          if (o.storageState === undefined && environment?.storageState !== undefined) o.storageState = environment.storageState;
+          journeyPrefix = await resolveJourneyPrefix({
+            dir: resolveJourneysDir(deps, o.journeysDir),
+            id: o.fromJourney,
+            atStep: o.atStep,
+            params: o.param,
+            ...(environment === undefined ? {} : { environment }),
+            ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
+            dbPath: resolveDbPath(deps),
+          });
+        } catch (err) {
+          if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
+          else if (err instanceof UnknownJourneyError) emitExplore(fail("E_UNKNOWN_JOURNEY", err.message));
+          else if (err instanceof ParamValidationError) emitExplore(fail("E_INVALID_PARAMS", err.message));
+          else if (err instanceof JourneyRequiresAuthError) emitExplore(fail("E_JOURNEY_REQUIRES_AUTH", err.message));
+          else emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+          return;
+        }
+        // The prefix types its secret params into the page the mission perceives: they are redacted like
+        // --secret. Coverage/exploratory carry no redaction set, so a prefix with secrets refuses them.
+        if (journeyPrefix.secrets.length > 0 && (strategy === "coverage" || strategy === "exploratory")) {
+          refuse(`journey '${o.fromJourney}' types a secret param before step ${journeyPrefix.branch.step}: --strategy ${strategy} cannot redact it — use goal, adversarial or usability`);
+          return;
+        }
+        o.url = journeyPrefix.startUrl;
+        // Default allowlist: the origins the Journey's steps may be on (the environment's), not just the landing's.
+        if (o.allow.length === 0) o.allow = [...journeyPrefix.allowedOrigins];
+      }
+      const withPrefix = journeyPrefix === undefined ? {} : { journeyPrefix };
+      /** #293: a prefix that no longer replays, or a site policy that refused it — typed, handled once for every strategy. */
+      const emitJourneyFailure = (err: unknown): boolean => {
+        if (err instanceof JourneyPrefixStaleError) {
+          emitExplore(ok(withEngine(journeyStaleResult(err, strategy))), EXIT_CODES.inconclusive);
+          return true;
+        }
+        if (err instanceof SiteGateRefusedError) {
+          emitExplore(fail(err.code, err.message));
+          return true;
+        }
+        return false;
+      };
       // #195: `--secret env:VAR` is resolved from the environment before anything runs (fail closed).
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
         if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
-        o.secret = resolved.secrets;
+        o.secret = [...resolved.secrets, ...(journeyPrefix?.secrets ?? [])];
       } catch (err) {
         if (!(err instanceof SecretArgError)) throw err;
         emitExplore(fail("E_EXPLORE_ARGS", err.message));
@@ -899,10 +999,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
             ...withServerLog,
+            ...withPrefix,
           });
           // Typed verdict → exit code (0 clean · 1 defects · 2 crashed; see exit-codes.ts).
           emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
+          if (emitJourneyFailure(err)) return;
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof ScopeUnderivableError) {
@@ -980,11 +1082,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(o.saveStorageState !== undefined ? { saveStorageState: o.saveStorageState } : {}),
             ...withInvariants,
             ...withServerLog,
+            ...withPrefix,
           });
           // The typed verdict gates CI: 0 clean · 1 defects found (a failing check) · 2 the run
           // itself broke (inconclusive/crashed) — see exit-codes.ts.
           emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
+          if (emitJourneyFailure(err)) return;
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof ScopeUnderivableError) {
@@ -1078,11 +1182,13 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             ...(uxSuccessChecks.length === 0 ? {} : { successChecks: uxSuccessChecks }),
             ...(o.successWhen === "held" || o.successWhen === "final" ? { successWhen: o.successWhen } : {}),
             ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+            ...withPrefix,
           });
           // UX findings are advisory (0); a failed --success check (#225) is 1, as on a goal run; a
           // broken run or an unavailable analysis is 2.
           emitExplore(ok(await withEvidence(result)), result.exitCode);
         } catch (err) {
+          if (emitJourneyFailure(err)) return;
           if (err instanceof UnauthorizedExploreTargetError) {
             emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
           } else if (err instanceof ScopeUnderivableError) {
@@ -1263,10 +1369,12 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...runInvariants,
           ...withServerLog,
           ...(fx === undefined ? {} : { fixtures: fx }),
+          ...withPrefix,
         });
         // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
         emitExplore(ok(await withEvidence(result)), result.exitCode);
       } catch (err) {
+        if (emitJourneyFailure(err)) return;
         if (err instanceof UnauthorizedExploreTargetError) {
           emitExplore(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
         } else if (err instanceof FixtureNotFoundError) {
