@@ -1,3 +1,21 @@
+/**
+ * runAdversarialMission — the public surface (types, defaults) and the hunt's driver. Module map
+ * (#232): the hunt's state and phases live in ./adversarial-hunt/ as functions of a HuntContext:
+ *
+ *   context.ts      HuntContext (every former closure variable, names unchanged) + createHuntContext
+ *   finish.ts       installFinish: the AdversarialOutcome (segments, coverage, findings)
+ *   sessions.ts     installSessions: perception, hang recording, restart / reset / identity restore
+ *   oracle.ts       installOracle: verdicts, adjudication (hard signals + invariants), folding
+ *   seed.ts         loadSeed: first navigation, seed checks, step 1's adjudication, budget baseline
+ *   start.ts        startHunt: the loop state and step closures (canary check, execute, observe-after …)
+ *   turn.ts         planTurn: a strategy plans its episode (or an idle turn is adjudicated)
+ *   episode.ts      runEpisode: an episode's queue of steps (EpisodeState), each fired through act()
+ *   step-gate.ts    refuseMisuseStep: the no-ops before a step fires (gone, disabled, refused, budget)
+ *   settle-step.ts  settleMisuseStep: delta, identity switch, verdict, canaries, reveal, budget
+ *   helpers.ts      pure helpers (finding shapes, freezing, live page reads)
+ *
+ * The misuse strategies themselves (each probe family) are planned in ../adversarial/.
+ */
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";

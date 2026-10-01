@@ -243,6 +243,12 @@ behaviour changes).
   (a 1 s poll kept each reply waiting the 15 s ceiling); a `--settle-ignore`d beacon is never an
   action's effect or a sign that a busy app is working (#241, #283, #284, #288).
 
+### Internal
+
+- The exploration loops are split into a run-state object plus one module per phase / action
+  handler: the goal loop (`explore.ts` → `goal-loop/`), the adversarial hunt (`adversarial-hunt/`)
+  and the coverage frontier (`induction-frontier/`). Move-only — no behaviour change (#232).
+
 ## [0.2.0] – 2026-09-29
 
 A backlog sweep across every mission type, then three dogfood passes that turned it into one

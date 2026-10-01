@@ -1,3 +1,18 @@
+/**
+ * runInductionMission — the public surface (types, seedPath) and the frontier's driver. Module map
+ * (#232): the frontier's state and phases live in ./induction-frontier/ as functions of a
+ * FrontierContext:
+ *
+ *   context.ts         FrontierContext (every former closure variable + the run's inputs) + createFrontierContext
+ *   seed.ts            loadSeed: first navigation, seed state, budget baseline, the seed's enqueue
+ *   reach.ts           reachItem: reset and replay to a queued item's state
+ *   act.ts             actOnItem: re-resolve, safety gate, act (one timeout retry), a failed act
+ *   settle.ts          settleTransition: new state, delta, transition, invariants, post-settle budget
+ *   hang-departure.ts  handleHangOrDeparture: an in-scope hang (reset) or a departure (never expanded)
+ *   judge.ts           judgeState: overflow, advisory defect judgment, enqueue
+ *   transition.ts      Acted / Settled: a transition's former per-iteration locals
+ *   helpers.ts         pure helpers (failure classes, enqueue rule, replayable paths)
+ */
 import { deltaStatsOf, type ActionDelta, type ActionDeltaStats } from "../action-delta.js";
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
