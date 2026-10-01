@@ -37,6 +37,38 @@ export interface ServerLogOptions {
   /** Already-parsed `--log-ignore` matchers (#169 item 3): known-noise lines excluded from
    *  correlation and the defect oracle. */
   readonly logIgnore?: readonly LogIgnoreMatcher[];
+  /** #282: already-parsed `--log-scope` matchers: only matching lines are attributed to the run. */
+  readonly logScope?: readonly LogIgnoreMatcher[];
+  /** #204: extra correlation-id headers (`--log-correlation-header`, lower-case). */
+  readonly correlationHeaders?: readonly string[];
+  /** #204: compiled `--log-id-pattern`s (how an id is written in the operator's log format). */
+  readonly idPatterns?: readonly RegExp[];
+}
+
+/**
+ * The `openServerLogRuntime` options every strategy shares, from its `ServerLogOptions` (#142,
+ * #169, #204, #282) — the caller adds its own `secrets` and transcript listener.
+ */
+export function serverLogRuntimeOptions(o: ServerLogOptions | undefined): {
+  sources: readonly LogSourceSpec[];
+  logDefect: readonly LogDefectMatcher[];
+  quietOk: readonly string[];
+  logIgnore: readonly LogIgnoreMatcher[];
+  logScope: readonly LogIgnoreMatcher[];
+  correlationHeaders: readonly string[];
+  idPatterns: readonly RegExp[];
+  drainMs?: number;
+} {
+  return {
+    sources: o?.sources ?? [],
+    logDefect: o?.logDefect ?? [],
+    quietOk: o?.quietOk ?? [],
+    logIgnore: o?.logIgnore ?? [],
+    logScope: o?.logScope ?? [],
+    correlationHeaders: o?.correlationHeaders ?? [],
+    idPatterns: o?.idPatterns ?? [],
+    ...(o?.drainMs === undefined ? {} : { drainMs: o.drainMs }),
+  };
 }
 
 export function serverLogResult(runtimeResult: { summary: ServerLogsSummary; defects: ServerLogDefect[] } | undefined): {

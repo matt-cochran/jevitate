@@ -12,6 +12,10 @@ behaviour changes).
 - Declared invariants can read a request's JSON payload (`network.request`) and compare lists in
   order (`sameList(a, b)`), so "what was saved is what reloads" can be declared. Credential-named
   keys are never read (#295).
+- Backend-log lines are matched to the exact request by trace or correlation id (`traceparent`,
+  `x-request-id`, …; `--log-correlation-header`, `--log-id-pattern`), and a `blocked` reason names
+  it: `caused by: … on POST /x (409)` (#204).
+- `--log-scope` attributes only matching backend-log lines to the run, for runs sharing one log (#282).
 
 ### Fixed
 

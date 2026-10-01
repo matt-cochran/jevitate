@@ -58,6 +58,7 @@ import {
   persistStorageState,
   browserVersionOf,
   type MissionTarget,
+  serverLogRuntimeOptions,
 } from "./explore-shared.js";
 
 /**
@@ -255,14 +256,12 @@ export async function runAdversarialCliMission(
     }),
   });
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    quietOk: opts.serverLog?.quietOk ?? [],
-    logIgnore: opts.serverLog?.logIgnore ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets: opts.secrets ?? [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(session.page, entry);
     health.noteStep(entry);

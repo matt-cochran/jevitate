@@ -171,7 +171,7 @@ boolean, and a number is a JSON number.
 | --- | --- | --- |
 | Safety | `deny`, `paid`, `allowDestructive`, `allowWrites`, `allowWrite`, `readRpc`, `hangReplayWrites` | every goal and mission |
 | Settle and timing | `settleIgnore`, `longPollMs`, `apiPrefix`, `ignoreNoProgress` | every goal and mission |
-| Backend logs (#142) | `logSource`, `logDefect`, `logQuietOk`, `logIgnore`, `allowLogCmd`, `serverLogDrainMs` | every goal and mission |
+| Backend logs (#142) | `logSource`, `logDefect`, `logQuietOk`, `logIgnore`, `logScope`, `logCorrelationHeader`, `logIdPattern`, `allowLogCmd`, `serverLogDrainMs` | every goal and mission |
 | Sessions | `storageState` (a path, or `null` to start without the target's session), `saveStorageState`, `persona`, `personas` | every goal and mission |
 | Multi-actor (#147) | `actor` (`<name>=<storageState>`; the first is the primary) | goals |
 | Fixtures (#144) | `fixtures`, `before`, `after`, `allowShellHooks`, `hookTimeoutMs` | goals (the target's `fixtures` also wraps Journeys) |

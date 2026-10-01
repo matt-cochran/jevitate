@@ -56,6 +56,7 @@ import {
   persistStorageState,
   type MissionTarget,
   declaredResult,
+  serverLogRuntimeOptions,
 } from "./explore-shared.js";
 
 /**
@@ -264,14 +265,12 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    quietOk: opts.serverLog?.quietOk ?? [],
-    logIgnore: opts.serverLog?.logIgnore ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets: [],
     onTranscriptEntry: journal.onTranscriptEntry,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   const onTranscriptEntry = (entry: TranscriptEntry, all: readonly TranscriptEntry[]): void => {
     capture.noteEntry(session.page, entry);
     health.noteStep(entry);

@@ -23,7 +23,8 @@ import { parseSecretField, secretFieldSecrets, type SecretField } from "@jevitat
 import { runWithMissionKillListener } from "./kill-signal.js";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { parseLogSourceSpecs } from "./log-sources.js";
-import { parseLogDefectSpecs, parseLogIgnoreSpecs } from "./log-correlation.js";
+import { parseLogDefectSpecs, parseLogIgnoreSpecs, parseLogScopeSpecs } from "./log-correlation.js";
+import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 
@@ -368,6 +369,9 @@ export function serverLogFromTargetConfig(targets: Readonly<Record<string, Targe
     allowLogCmd,
     quietOk: config.logQuietOk ?? [],
     logIgnore: parseLogIgnoreSpecs(config.logIgnore ?? []),
+    logScope: parseLogScopeSpecs(config.logScope ?? []),
+    correlationHeaders: parseCorrelationHeaders(config.logCorrelationHeaders ?? []),
+    idPatterns: parseLogIdPatterns(config.logIdPatterns ?? []),
   };
 }
 

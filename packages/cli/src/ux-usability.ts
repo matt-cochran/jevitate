@@ -23,6 +23,7 @@ import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevi
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
 import { currentEngineInfo, type EngineInfo } from "./engine.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogsSummary } from "./log-correlation.js";
+import { serverLogRuntimeOptions } from "./explore-shared.js";
 import { assertSaveStorageStateOutsideProject, currentUrlSafe, persistStorageState, serverLogResult, type MissionTarget, type ServerLogOptions } from "./explore-api.js";
 import type { TargetConfig } from "./target-config.js";
 import { transcriptPathFor } from "./transcript-file.js";
@@ -382,12 +383,12 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
   const serverLog = openServerLogRuntime({
-    sources: opts.serverLog?.sources ?? [],
-    logDefect: opts.serverLog?.logDefect ?? [],
-    ...(opts.serverLog?.drainMs === undefined ? {} : { drainMs: opts.serverLog.drainMs }),
+    ...serverLogRuntimeOptions(opts.serverLog),
     secrets,
     onTranscriptEntry: journalListener,
   });
+  // #204: every request's correlation ids, from before the first navigation.
+  serverLog?.observe(session.page);
   // #159/#245: persisted and closed once — early (before the result is written) when recording video.
   const closeSession = closeOnce(async () => {
     await persistStorageState(session, opts.saveStorageState, snapshotter);

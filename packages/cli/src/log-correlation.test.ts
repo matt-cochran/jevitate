@@ -3,7 +3,7 @@ import { mkdtemp, appendFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptEntry } from "@jevitate/explore";
-import { openServerLogRuntime } from "./log-correlation.js";
+import { openServerLogRuntime, parseLogScopeSpecs } from "./log-correlation.js";
 import { parseLogDefectSpec, parseLogIgnoreSpec } from "./log-lines.js";
 import type { LogSourceSpec } from "./log-sources.js";
 
@@ -184,4 +184,41 @@ describe("process-based --log-source stopped at mission end (#199)", () => {
     expect(result.summary.oracleOk).toBe(false);
     expect(result.summary.oracleReason).toContain("failed to open or read a line");
   }, 10_000);
+});
+
+describe("--log-scope (#282): only this run's lines are attributed when runs share a log", () => {
+  it(
+    "attributes lines matching the scope; the rest count as ignoredLines and never become defects; verify-fix keeps the scope",
+    async () => {
+      const { file, spec } = await openTailedFile();
+      const rt = openServerLogRuntime({
+        sources: [spec],
+        logDefect: [parseLogDefectSpec("error")],
+        logScope: parseLogScopeSpecs(["/tenant=(acme|acme-eu)\\b/"]),
+        secrets: [],
+        drainMs: 700,
+      });
+      await sleep(300);
+      const e = entry("http://x.test/orders");
+      rt?.onTranscriptEntry(e, [e]);
+      await appendFile(file, "ERROR tenant=acme order total mismatch\n");
+      await appendFile(file, "ERROR tenant=globex payment declined\n"); // a concurrent run's tenant
+      await appendFile(file, "WARN tenant=globex slow\n");
+
+      const result = await rt!.finish([e]);
+      expect(result.summary.ignoredLines).toBe(2);
+      expect(result.summary.correlation).toMatchObject({ outOfScopeLines: 2, foreignLines: 0, idMatchedLines: 0 });
+      expect(result.summary.byLevel).toEqual({ error: 1 });
+      expect(result.defects).toHaveLength(1);
+      expect(result.defects[0]?.message).toContain("order total mismatch");
+      expect(result.defects[0]?.serverLog.scope).toEqual(["/tenant=(acme|acme-eu)\\b/"]);
+      expect(JSON.stringify(result.transcript)).not.toContain("globex");
+    },
+    15_000,
+  );
+
+  it("refuses a bad --log-scope naming the flag", () => {
+    expect(() => parseLogScopeSpecs(["/(/"])).toThrow(/--log-scope: invalid regex/);
+    expect(() => parseLogScopeSpecs([""])).toThrow(/--log-scope: empty pattern/);
+  });
 });
