@@ -438,7 +438,8 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         requireFormSubmit: boolean;
         fileIssues?: boolean;
         issueRepo?: string;
-        hangReplays?: string;
+        /** Parsed by commander's `nonNegativeIntArg` (#275: a number, not a string). */
+        hangReplays?: number;
         settleIgnore: string[];
         apiPrefix: string[];
         longPollMs?: string;
@@ -585,12 +586,9 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
         emitExplore(fail("E_EXPLORE_ARGS", "--job-wait-ms must be a positive integer"));
         return;
       }
-      // #154: refused BEFORE any browser opens. 0 is valid: "don't replay" — a hang is then
+      // #154: refused BEFORE any browser opens — `nonNegativeIntArg` already rejects a bad value at
+      // parse time (#275: the value is a number here). 0 is valid: "don't replay" — a hang is then
       // reported unconfirmed (inconclusive), never replayed and never a crash.
-      if (o.hangReplays !== undefined && !/^\d+$/.test(o.hangReplays.trim())) {
-        emitExplore(fail("E_EXPLORE_ARGS", `--hang-replays must be a non-negative integer (0 = don't replay; the hang is reported unconfirmed), got "${o.hangReplays}"`));
-        return;
-      }
       try {
         validateDenyPatterns(o.deny);
         validateDenyPatterns(o.paid, "--paid");
@@ -935,7 +933,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
             secrets: o.secret.length > 0 ? o.secret : undefined,
             ...(runFiling === undefined ? {} : { filing: runFiling }),
             issueFiler,
-            ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
+            ...(o.hangReplays === undefined ? {} : { hangReplays: o.hangReplays }),
             strategies: CLI_ADVERSARIAL_STRATEGIES,
             judgment: advJudge,
             generation: advGen,
@@ -1227,7 +1225,7 @@ export function registerExploreCommands(program: Command, deps: CliDeps, buildPr
           ...(actors === null ? {} : { actors }),
           ...(runFiling === undefined ? {} : { filing: runFiling }),
           issueFiler,
-          ...(o.hangReplays === undefined ? {} : { hangReplays: Number(o.hangReplays) }),
+          ...(o.hangReplays === undefined ? {} : { hangReplays: o.hangReplays }),
           conversation,
           ...runInvariants,
           ...withServerLog,
