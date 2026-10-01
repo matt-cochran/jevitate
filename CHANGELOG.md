@@ -20,6 +20,9 @@ behaviour changes).
 - Screenshots and videos also mask secrets the app reveals during the run: elements marked as
   secret (`data-jevitate-mask`, `data-secret`, one-time-code, secret/token/api-key test ids and
   labels) and credential-shaped values. Limits in docs/safety.md (#298).
+- Built-in skill `jevitate-test-campaign`: how to plan and run a whole-release test campaign
+  (job catalog, discovery runs, journey-anchored missions, full-stack evidence, verify-fix and
+  regressions, triage by exit code, budgets, CI suites and the release gate) (#292).
 
 ### Fixed
 
