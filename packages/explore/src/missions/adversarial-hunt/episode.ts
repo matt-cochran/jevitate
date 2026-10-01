@@ -40,25 +40,38 @@ export interface Turn {
   readonly stepTiming: PageTiming | undefined;
 }
 
+/** An episode's own state (#232): the episode's local variables, one field each, names unchanged. */
+export interface EpisodeState {
+  stepSnap: Snapshot;
+  stepTiming: PageTiming | undefined;
+  queue: MisuseStep[];
+  /** Whether `stepSnap` was re-perceived after an earlier step of this episode. */
+  refreshed: boolean;
+  /** Whether an earlier step of this episode acted without settling (the page may have moved on). */
+  pendingEarlier: boolean;
+}
+
 /** Runs one planned episode (a queue: a disclosure that reveals a form is followed by its own episode, #193). */
 export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, turn: Turn): Promise<void> {
+  const ep = {} as EpisodeState;
   const { ran, planning, episode } = turn;
-  let { stepSnap, stepTiming } = turn;
+  ep.stepSnap = turn.stepSnap;
+  ep.stepTiming = turn.stepTiming;
   // A queue, not a fixed list: a disclosure that reveals a form is followed, in the same turn,
   // by this strategy's own episode on the revealed form (#193).
-  const queue: MisuseStep[] = [...episode.steps];
+  ep.queue = [...episode.steps];
   /** Whether `stepSnap` was re-perceived after an earlier step of this episode. */
-  let refreshed = false;
+  ep.refreshed = false;
   /** Whether an earlier step of this episode acted without settling (the page may have moved on). */
-  let pendingEarlier = false;
-  while (queue.length > 0) {
-    const s = queue.shift() as MisuseStep;
+  ep.pendingEarlier = false;
+  while (ep.queue.length > 0) {
+    const s = ep.queue.shift() as MisuseStep;
     if (ctx.actions + ctx.restartSpend >= ctx.bounds.maxActions) break;
     // An earlier step of this episode removed this step's control (a Cancel closed the dialog
     // the Save lived in): the rest of the episode was planned for a state that is gone. It ends
     // here, without spending an action — never a failed act that reads as a broken control.
     const gone = s.control;
-    if (refreshed && gone !== null && !stepSnap.controls.some((c) => controlKey(c) === controlKey(gone))) {
+    if (ep.refreshed && gone !== null && !ep.stepSnap.controls.some((c) => controlKey(c) === controlKey(gone))) {
       ctx.transcript.record({
         op: null,
         control: gone,
@@ -67,10 +80,10 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
         strategy: ran,
         actOk: false,
         reason: joinReasons([s.note, "no longer on the page after the previous step — episode ends"]),
-        snapshot: stepSnap,
-        ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+        snapshot: ep.stepSnap,
+        ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
       });
-      stepTiming = undefined;
+      ep.stepTiming = undefined;
       break;
     }
     // A click on a control that is disabled RIGHT NOW is never attempted: it can never mutate
@@ -84,11 +97,11 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
       const again = ctx.disabledNow.has(id);
       ctx.disabledNow.add(id);
       if (again) {
-        stepTiming = undefined;
+        ep.stepTiming = undefined;
         break;
       }
       // #155/#193: a submit that could not be attempted is recorded with WHY — never silently.
-      if (s.submitsForm !== undefined) ctx.cov.blocked(stepSnap.url, s.submitsForm, "the submit control is disabled", "disabled");
+      if (s.submitsForm !== undefined) ctx.cov.blocked(ep.stepSnap.url, s.submitsForm, "the submit control is disabled", "disabled");
       ctx.transcript.record({
         op: null,
         control: s.control,
@@ -97,10 +110,10 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
         strategy: ran,
         actOk: false,
         reason: joinReasons([s.note, "target disabled — no-op, choosing another action"]),
-        snapshot: stepSnap,
-        ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+        snapshot: ep.stepSnap,
+        ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
       });
-      stepTiming = undefined;
+      ep.stepTiming = undefined;
       break;
     }
     if (s.op === "click" && s.control !== null) ctx.disabledNow.delete(controlIdentity(s.control));
@@ -115,10 +128,10 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
         strategy: ran,
         actOk: false,
         reason: joinReasons([s.note, "this control switched the signed-in identity earlier in the run — not acted on again"]),
-        snapshot: stepSnap,
-        ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+        snapshot: ep.stepSnap,
+        ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
       });
-      stepTiming = undefined;
+      ep.stepTiming = undefined;
       break;
     }
     // The shared safety policy (#116): a paid / session-ending / destructive / --deny'd control is
@@ -127,9 +140,9 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     if (unsafe !== null) {
       if (s.control !== null) {
         ctx.refusedIds.add(controlIdentity(s.control));
-        ctx.cov.refused(stepSnap.url, s.control, unsafe.risk);
+        ctx.cov.refused(ep.stepSnap.url, s.control, unsafe.risk);
       }
-      if (s.submitsForm !== undefined) ctx.cov.blocked(stepSnap.url, s.submitsForm, unsafe.reason, "denied");
+      if (s.submitsForm !== undefined) ctx.cov.blocked(ep.stepSnap.url, s.submitsForm, unsafe.reason, "denied");
       ctx.transcript.record({
         op: null,
         control: s.control,
@@ -138,10 +151,10 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
         strategy: ran,
         actOk: false,
         reason: joinReasons([s.note, unsafe.reason]),
-        snapshot: stepSnap,
-        ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+        snapshot: ep.stepSnap,
+        ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
       });
-      stepTiming = undefined;
+      ep.stepTiming = undefined;
       break;
     }
     // #150 — mission spend budget, pre-action: a paid control (#116) whose declared cost estimate
@@ -159,10 +172,10 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
           strategy: ran,
           actOk: false,
           reason: joinReasons([s.note, g.reason]),
-          snapshot: stepSnap,
-          ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+          snapshot: ep.stepSnap,
+          ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
         });
-        stepTiming = undefined;
+        ep.stepTiming = undefined;
         ctx.stop = "budget";
         break;
       }
@@ -174,7 +187,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
       await overlay.announce(
         ctx.sessions.page,
         { step: ctx.transcript.nextStep, strategy: `adversarial · ${ran}`, op: s.op, target: s.control === null ? null : s.control.name || s.control.summary, why: s.note },
-        pendingEarlier ? null : s.control,
+        ep.pendingEarlier ? null : s.control,
       );
     }
     // Declared invariants (#86): snapshot BEFORE the action(s) the next adjudication judges.
@@ -185,7 +198,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     }
     // #303 (opt-in): the page right before a settled action (a racing, unsettled one gets none).
     ctx.deltaArmed = null;
-    if (ctx.pageDeltas !== null && s.settle && !pendingEarlier) {
+    if (ctx.pageDeltas !== null && s.settle && !ep.pendingEarlier) {
       const dl = await ctx.pageDeltas.on(ctx.sessions.page);
       const route = normalizeRoute(redactUrl(ctx.sessions.page.url()));
       await dl.perceived(route).catch(() => null);
@@ -201,7 +214,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     if (ctx.chainStart === null) ctx.chainStart = firedAt;
     const firedStep = ctx.transcript.nextStep;
     ctx.safety.mark(ctx.transcript.nextStep, s.op, s.control);
-    const { result, value } = await ctx.execute(s, stepSnap.controls);
+    const { result, value } = await ctx.execute(s, ep.stepSnap.controls);
     ctx.actions += 1;
     if (ctx.deltaArmed !== null) {
       if (result.ok) ctx.deltaArmed.acted({ label: `${s.op} ${s.control?.name ?? ""}`.trim(), recordIndex: 0, step: ctx.transcript.nextStep, ...(value === undefined ? {} : { value }) });
@@ -220,15 +233,15 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
       ctx.recordAction(s, value, at, result.submittedVia);
       ctx.markFired(firedAt, firedStep);
     }
-    if (result.ok) ctx.cov.acted(stepSnap.url, s.control);
+    if (result.ok) ctx.cov.acted(ep.stepSnap.url, s.control);
     // #155 — a submit click counts as submitted only when it actually sent a request (a write
     // or a navigation); one the browser blocked with native validation never reached the
     // server, so it is recorded `blocked` instead (with the browser's own message, when known).
     if (result.ok && s.submitsForm !== undefined) {
       if (submitRequestSent(monitorFor(ctx.sessions.page), at)) {
-        ctx.cov.submitted(stepSnap.url, s.submitsForm);
+        ctx.cov.submitted(ep.stepSnap.url, s.submitsForm);
       } else {
-        ctx.cov.blocked(stepSnap.url, s.submitsForm, await nativeValidationMessage(ctx.sessions.page));
+        ctx.cov.blocked(ep.stepSnap.url, s.submitsForm, await nativeValidationMessage(ctx.sessions.page));
       }
     }
     if (ran === "visit-route" && s.control !== null) ctx.visitedLinks.add(s.control.name);
@@ -238,7 +251,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     // Only when the step acted on the state it was planned on (#193): a control an earlier,
     // unsettled step of THIS episode just removed (a second Save after the first one closed
     // its dialog) is not unactionable — it is simply gone, and the form stays plannable.
-    if (!result.ok && s.control !== null && !pendingEarlier && isUnactionableFailure(result.reason)) {
+    if (!result.ok && s.control !== null && !ep.pendingEarlier && isUnactionableFailure(result.reason)) {
       ctx.unactionable.add(controlIdentity(s.control));
     }
     ctx.last =
@@ -259,16 +272,16 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
       chosenBy: "strategy" as const,
       strategy: ran,
       actOk: result.ok,
-      snapshot: stepSnap,
-      ...(stepTiming === undefined ? {} : { timing: stepTiming }),
+      snapshot: ep.stepSnap,
+      ...(ep.stepTiming === undefined ? {} : { timing: ep.stepTiming }),
       ...(s.redacted === true ? { redacted: true } : {}),
     };
-    stepTiming = undefined;
+    ep.stepTiming = undefined;
     const step = ctx.transcript.nextStep;
     if (!s.settle) {
       // The next step fires at once, without waiting for this one to settle (that is the misuse).
       ctx.transcript.record({ ...entry, ...(reason === undefined ? {} : { reason }) });
-      pendingEarlier = pendingEarlier || result.ok;
+      ep.pendingEarlier = ep.pendingEarlier || result.ok;
       continue;
     }
     // #303 (opt-in): what this settled action changed — on its transcript step, and kept as
@@ -339,7 +352,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
       break;
     }
     const verdict = await ctx.adjudicate({ op: s.op, control: s.control?.name ?? null, url: actedOn, step });
-    const soft = verdict === null ? await ctx.softJudgment(stepSnap) : {};
+    const soft = verdict === null ? await ctx.softJudgment(ep.stepSnap) : {};
     const full = verdict === null ? joinReasons([reason, soft.note]) : joinReasons([reason, verdict.reason]);
     ctx.transcript.record({
       ...entry,
@@ -370,7 +383,7 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
     // disclosure that showed no form is never re-opened "to look for a form".
     if (result.ok && s.op === "click" && s.control !== null) {
       const id = controlIdentity(s.control);
-      const before = new Set(detectForms(stepSnap.controls, ctx.inScope).map((f) => f.key));
+      const before = new Set(detectForms(ep.stepSnap.controls, ctx.inScope).map((f) => f.key));
       const appeared = detectForms(ctx.snap.controls, ctx.inScope)
         .map((f) => f.key)
         .filter((k) => !before.has(k));
@@ -380,14 +393,14 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
         if (s.discloses === true && ran !== "exercise-controls" && FORM_STRATEGY.has(ran)) {
           // Same round as the disclosure's own turn (its counter was already advanced).
           const follow = planMisuseEpisode(planning(ctx.snap, ran, { disclose: false, round: (ctx.rounds.get(ran) ?? 1) - 1 }));
-          if (follow !== null) queue.push(...follow.steps);
+          if (follow !== null) ep.queue.push(...follow.steps);
         }
       } else if (s.discloses === true && !ctx.revealed.has(id)) {
         ctx.barren.add(id);
       }
     }
-    refreshed = true;
-    pendingEarlier = false;
+    ep.refreshed = true;
+    ep.pendingEarlier = false;
     // #150 — post-settle: a crossed budget stops the mission cleanly, before its next action.
     if (ctx.budget !== null) {
       const b = await ctx.budget.afterSettle(ctx.sessions.page, step);
@@ -406,8 +419,8 @@ export async function runEpisode(ctx: HuntState, overlay: DemoOverlay | null, tu
         break;
       }
     }
-    stepSnap = ctx.snap;
-    stepTiming = ctx.snapTiming;
+    ep.stepSnap = ctx.snap;
+    ep.stepTiming = ctx.snapTiming;
     ctx.snapTiming = undefined;
   }
 }
