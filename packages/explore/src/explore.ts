@@ -24,7 +24,6 @@ import { capFormText, chatReply, matchOption } from "./fill.js";
 import { CLEARS_FIELD, isPlaceholderOption } from "./select-choice.js";
 import {
   type SecretField,
-  boundSecretField,
   maskSecretFields,
 } from "./secret-fields.js";
 import { act, parseInterceptor } from "./act.js";
@@ -52,8 +51,7 @@ import {
   type RunOutcome,
 } from "./conversation.js";
 import { emptyRecording } from "./record.js";
-import { planTextEdit, readEditableText } from "./rich-text.js";
-import { describeTextEdit } from "@jevitate/interpreter";
+import { readEditableText } from "./rich-text.js";
 import { ChromeTracker } from "./feature/relevance.js";
 import { redactText, redactUrl } from "./redact.js";
 import { type TranscriptEntry, type TranscriptListener } from "./transcript.js";
@@ -111,6 +109,7 @@ import { handleReload } from "./goal-loop/handle-reload.js";
 import { beginAction } from "./goal-loop/act-gate.js";
 import { refuseAction } from "./goal-loop/act-gate.js";
 import { handleCodeTypedField } from "./goal-loop/handle-code-typed.js";
+import { handleEditText } from "./goal-loop/handle-edit-text.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -1098,36 +1097,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       // An edit INSIDE rich text (#148): the generator proposes an anchored edit, code validates it
       // (see ./rich-text.ts) and the shared page function performs it — never a whole retype.
       if (decision.op === "edit_text") {
-        const planned =
-          boundSecretField(control, cfg.secretFields) !== null
-            ? { refused: "a bound secret field is never edited as rich text" }
-            : await readEditableText(ctx.page, control).then((currentText) =>
-                currentText === null
-                  ? { refused: "the element's text could not be read" }
-                  : planTextEdit(cfg.gen, { goal: cfg.goal, control, currentText, history: ctx.history, secrets: ctx.secrets }),
-              ).catch((e: unknown) => ({ refused: `edit generation unavailable: ${firstLine(e)}` }));
-        if ("refused" in planned) {
-          ctx.history.push(`edit in ${control.name || control.summary} refused: ${planned.refused}`);
-          record(false, planned.refused, { origin: "engine" });
-        } else {
-          const r = await act(cfg.actor, { op: "edit_text", control, edit: planned.edit });
-          const what = describeTextEdit(planned.edit);
-          if (r.ok) {
-            ctx.recorder.editText(control.descriptor, planned.edit, at);
-            ctx.noteMutation(`edit ${control.name}`, control.descriptor, snap.signature, at);
-            ctx.tracker.countAction();
-            ctx.history.push(`${what} in ${control.summary.slice(0, 80)}`);
-            ctx.cleared(control);
-          } else {
-            ctx.history.push(`edit failed: ${ctx.failNote(r.reason, control)}`);
-          }
-          record(r.ok, r.ok ? what : ctx.failNote(r.reason, control), planned.edit.value === undefined ? {} : { value: planned.edit.value });
-          if (!r.ok && (await ctx.noteFailedAct(control, r.reason))) {
-            ctx.lastActedOp = decision.op;
-            break;
-          }
-        }
-        ctx.lastActedOp = decision.op;
+        const flow = await handleEditText(ctx, acting);
+        if (flow === "stop") break;
         continue;
       }
 
