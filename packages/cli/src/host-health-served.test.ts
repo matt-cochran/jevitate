@@ -47,8 +47,16 @@ afterAll(async () => {
 });
 
 const GB = 1024 ** 3;
+/**
+ * The fake host's clock is frozen. With background sampling off (`intervalMs: 0`) the sampler only
+ * samples at start, at `judge()` and at the end, and a step counts as starved only when a starved
+ * sample lies inside `STARVATION_WINDOW_MS` (15 s) of NOW. On the wall clock, a run that took longer
+ * than 15 s on a loaded test host (browser launch + click-timeout steps) left its later steps outside
+ * the window — counted healthy — so "every step starved" failed under load ~20+. Time is part of the
+ * fake host: the window is judged on it, never on how fast the real machine ran the test.
+ */
 const fakeHost = (host: HostPressure): HostHealthSampler =>
-  new HostHealthSampler({ probe: async () => host, eventLoopLagMs: () => 2, intervalMs: 0, attribute: true, cores: 4 });
+  new HostHealthSampler({ probe: async () => host, eventLoopLagMs: () => 2, intervalMs: 0, attribute: true, cores: 4, now: () => 0 });
 const STARVED: HostPressure = { sample: { memAvailableBytes: 6 * GB, source: "test" }, overThreshold: null, loadPerCore: 3.5 };
 const CALM: HostPressure = { sample: { memAvailableBytes: 6 * GB, source: "test" }, overThreshold: null, loadPerCore: 0.3 };
 
