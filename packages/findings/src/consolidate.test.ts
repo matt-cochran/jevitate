@@ -267,3 +267,22 @@ describe("consolidate (#139)", () => {
     expect(runFromMissionResult("/r/unknown-x.result.json", { missionOutcome: "clean", exitCode: 0, result: {} })).toBeNull();
   });
 });
+
+describe("#293: journey-anchored runs", () => {
+  it("a run's branch point is read, kept per run, and listed once per Journey step on the deduped defect", () => {
+    const a = adversarial("2026-10-01T10-00-00-000Z", [http503("fp503")], { branch: { journeyId: "order", step: 3, anchor: "review", stepLabel: "click Next" } });
+    const b = adversarial("2026-10-01T11-00-00-000Z", [http503("fp503")], { branch: { journeyId: "order", step: 2 } });
+    const c = adversarial("2026-10-01T12-00-00-000Z", [http503("fp503")], { branch: { journeyId: "order", step: 3, anchor: "review" } });
+    const plain = adversarial("2026-10-01T13-00-00-000Z", [http503("fp503")]);
+    expect(a.branch).toEqual({ journeyId: "order", step: 3, anchor: "review" });
+    expect(plain.branch).toBeUndefined();
+    const [d] = consolidate([a, b, c, plain]);
+    expect(d?.runCount).toBe(4);
+    expect(d?.branches).toEqual([
+      { journeyId: "order", step: 2 },
+      { journeyId: "order", step: 3, anchor: "review" },
+    ]);
+    expect(d?.modes[0]?.runs.map((r) => r.branch?.step)).toEqual([3, 2, 3, undefined]);
+    expect(consolidate([plain])[0]?.branches).toBeUndefined();
+  });
+});

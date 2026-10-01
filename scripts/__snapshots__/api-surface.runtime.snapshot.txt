@@ -101,7 +101,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (54 exports)
+# @jevitate/domain (55 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEGRADED_FINDINGS: array
@@ -121,6 +121,7 @@
   RESULT_MISSION_OUTCOMES: array
   RESULT_STRATEGIES: array
   ResourceGovernanceSummarySchema: object
+  ResultBranchSchema: object
   ResultDefectSchema: object
   ResultEngineSchema: object
   ResultHangSchema: object
@@ -578,23 +579,38 @@
   stylesOf: function
   textIncludesCI: function
 
-# @jevitate/journey (17 exports)
+# @jevitate/journey (32 exports)
+  ANCHORED_STRATEGIES: array
+  ANCHOR_NAME_RE: object
   AnnotationDraftMismatchError: class
   AnnotationDraftSchema: object
   AnnotationDraftStepSchema: object
+  CAMPAIGN_LIMITS: object
+  CampaignSpecSchema: object
   FsJourneyStore: class
   JourneyRegistry: class
   JourneySchema: object
+  JourneyStepError: class
   ParamValidationError: class
   SECRET_PARAM_NAME_RE: object
+  SWEEP_MODES: array
   applyAnnotationDraft: function
   deriveParamSchema: function
   describeStep: function
   flatJourneySteps: function
   formatAnnotationChanges: function
   intentCoverage: function
+  isSweepMode: function
+  journeyBranchPoint: function
+  journeyPrefix: function
+  journeyStepCount: function
+  listJourneyAnchors: function
+  prefixLandingPath: function
+  resolveJourneyStep: function
   secretParamNames: function
   secretParamValues: function
+  splitBudget: function
+  sweepStops: function
   validateParams: function
 
 # @jevitate/load (8 exports)

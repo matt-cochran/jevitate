@@ -20,6 +20,8 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, advisoryDefects, type AdvisoryServerLogDefect } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import { Http5xxOracle, type HostHealthSampler, type Http5xxDefect } from "@jevitate/explore";
 import type { EnvironmentDegraded, HostHealthSummary } from "@jevitate/domain";
@@ -156,6 +158,11 @@ export interface RunUsabilityMissionOptions {
    * and those guard claims are reported unverifiable.
    */
   readonly probeGuards?: boolean;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session before the review, which then starts
+   * on the live page it left — never a fresh navigation. `url` is only the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
 }
 
 /** Usability reads only a spec's `budget` (#150) — never its `invariants`/`capture` (#86/#147, not supported here). */
@@ -175,6 +182,8 @@ export interface RunUsabilityMissionResult {
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
   readonly environmentDegraded: EnvironmentDegraded[];
+  /** #293: the Journey step a journey-anchored review branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
   /** The result schema's version (#195): the common fields are filled the same way by every strategy. */
   readonly schemaVersion: typeof MISSION_RESULT_SCHEMA_VERSION;
   readonly strategy: "usability";
@@ -414,6 +423,8 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored review first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     // #150 — usability's own budget wiring: a plain `InvariantMonitor` reads a budget's declared
     // observables (the same #86/#135 read/auth/redaction machinery), but this mission folds NO
@@ -446,7 +457,9 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       gen: opts.gen,
       goal: opts.job,
       allowlist: opts.allowlist,
-      startUrl: opts.url,
+      startUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
       bounds: opts.bounds,
       secrets: opts.secrets,
       site: origin,
@@ -734,10 +747,11 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
       schemaVersion: MISSION_RESULT_SCHEMA_VERSION,
       strategy: "usability" as const,
       target: {
-        seedUrl: opts.url,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      ...branchFields(start),
       recordingPaths: [journal.recordingPath],
       ...videos,
       ...shotFields,

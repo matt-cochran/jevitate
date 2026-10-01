@@ -38,6 +38,8 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import {
   applyServerLogOutcome,
@@ -132,6 +134,11 @@ export interface RunCoverageMissionOptions {
   readonly emulation?: EmulationSpec;
   /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
   readonly overflow?: OverflowFlags;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session before the frontier, which then
+   * starts on the live page it left (never a fresh navigation). `url` is only the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
 }
 
 /**
@@ -202,6 +209,8 @@ export interface RunCoverageMissionResult {
   readonly serverLogs?: ServerLogsSummary;
   /** @deprecated since 0.2.0 (#195) — the `server-log` subset of `defects`; removed in the next minor. */
   readonly serverLogDefects?: ServerLogDefect[];
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
 }
 
 export async function runCoverageMission(opts: RunCoverageMissionOptions): Promise<RunCoverageMissionResult> {
@@ -284,6 +293,8 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored run first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("coverage-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const result = await runInductionMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
@@ -294,7 +305,10 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       actor,
       judgment: opts.judge,
       generation: opts.gen,
-      seedUrl: opts.url,
+      seedUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a return to a queued state re-replays the Journey prefix (counted against --max-actions).
+      ...(start.restart ?? {}),
       allowlist: opts.allowlist,
       bounds: opts.bounds,
       onTranscriptEntry,
@@ -377,10 +391,11 @@ export async function runCoverageMission(opts: RunCoverageMissionOptions): Promi
       hangs: result.hangs,
       recording: null,
       target: {
-        seedUrl: opts.url,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      ...branchFields(start),
       timing: result.timing,
       strategy: opts.strategy ?? "coverage",
       // #213: the SCOPE line (#224's field) — the start route plus any --route/--scope app globs.

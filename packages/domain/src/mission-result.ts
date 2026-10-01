@@ -43,6 +43,10 @@ import { GOAL_OUTCOMES, MISSION_OUTCOMES, foldGoalOutcome } from "./mission-outc
  *  - `defects[].evidence` — #250, additive (schemaVersion 1): an `--evidence-video` run's per-defect
  *    captioned repro clip (`videoPath`) and key screenshots (`screenshots`: before and at the failing
  *    step), or why it has none (`skipped`).
+ *  - `branch` — #293, additive (schemaVersion 1): a journey-anchored run's branch point — the
+ *    promoted Journey whose prefix was replayed in the run's own browser context (`journeyId`), how
+ *    many of its top-level steps ran (`step`, 1-based) and the anchor that named them (`anchor`).
+ *    Every finding of the run branched from there. Absent on a run started from a bare URL.
  *
  * Everything else on a result is strategy-specific (a goal run's `checks`/`answer`, a coverage run's
  * `coverage`, an adversarial run's `advisories`/`scope`, a usability run's `report`): the schema lets
@@ -103,6 +107,15 @@ export const ResultTargetSchema = z.looseObject({
   allowlist: z.array(z.string()),
   storageStatePath: z.string().optional(),
 });
+
+/** #293: where a journey-anchored run branched off its Journey. */
+export const ResultBranchSchema = z.looseObject({
+  journeyId: z.string().min(1),
+  step: z.number().int().positive(),
+  anchor: z.string().min(1).optional(),
+  stepLabel: z.string().optional(),
+});
+export type ResultBranch = z.infer<typeof ResultBranchSchema>;
 
 export const ResultEngineSchema = z.object({ version: z.string(), commit: z.string(), builtAt: z.string() });
 
@@ -213,6 +226,8 @@ export const MissionResultSchema = z
     screenshotPaths: z.array(z.string().min(1)).optional(),
     screenshotIndex: z.string().min(1).optional(),
     screenshotsSkipped: z.array(z.looseObject({ step: z.number().int(), reason: z.string() })).optional(),
+    /** #293 — additive: the Journey step a journey-anchored run branched from (absent otherwise). */
+    branch: ResultBranchSchema.optional(),
   })
   .refine((r) => (r.strategy === "goal") === (r.goalOutcome !== undefined), {
     message: "goalOutcome is present on every goal result and on no other",
@@ -262,4 +277,6 @@ export interface MissionResultCore {
   /** #251: the run's `--screenshots` images and contact sheet (absent without the flag). */
   readonly screenshotPaths?: readonly string[];
   readonly screenshotIndex?: string;
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: { readonly journeyId: string; readonly step: number; readonly anchor?: string; readonly stepLabel?: string };
 }

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, journeyStepCount, listJourneyAnchors } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type JudgmentPort, type GenerationPort } from "@jevitate/ai-core";
 import { safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeExploreSelfHealer } from "./self-heal-adapter.js";
@@ -43,7 +43,7 @@ import {
   buildExploreGateways,
 } from "./cli-shared.js";
 
-/** Registers `jevitate journey`: `list|find|run|promote|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|promote|anchors|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -326,6 +326,39 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
         } else {
           emitJson(program, fail("E_JOURNEY_PROMOTE", String(err instanceof Error ? err.message : err)));
         }
+      }
+    });
+
+  // #293 — the named states worth exploring from (`explore --from-journey <id> --at-step <name>`).
+  journey
+    .command("anchors <id>")
+    .description("list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes")
+    .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const { dir, json } = this.opts<{ dir?: string; json?: boolean }>();
+      try {
+        const found = await new JourneyRegistry(new FsJourneyStore(resolveJourneysDir(deps, dir))).get(id);
+        if (found === null) {
+          emitJson(program, fail("E_UNKNOWN_JOURNEY", `unknown journey '${id}'`));
+          return;
+        }
+        const data = { journeyId: found.metadata.id, promoted: found.metadata.promoted, steps: journeyStepCount(found), anchors: listJourneyAnchors(found) };
+        if (json) {
+          emitJson(program, ok(data));
+        } else {
+          const out = program.configureOutput().writeOut;
+          if (data.anchors.length === 0) {
+            out?.(`journey '${data.journeyId}' declares no anchors — branch off a step number instead (--at-step 1..${data.steps}), or add metadata.anchors\n`);
+          }
+          for (const a of data.anchors) {
+            out?.(`${a.name}\tstep ${a.step}\tafter: ${a.afterStep}${a.description === undefined ? "" : `\t${a.description}`}${a.probes.length === 0 ? "" : `\tprobes: ${a.probes.join("; ")}`}\n`);
+          }
+          if (!data.promoted) out?.(`note: journey '${data.journeyId}' is not promoted — missions branch only off promoted Journeys\n`);
+          process.exitCode = 0;
+        }
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_ANCHORS_ARGS", String(err instanceof Error ? err.message : err)));
       }
     });
 

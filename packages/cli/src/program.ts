@@ -29,6 +29,7 @@ import { registerJourneyCommands } from "./journey-cli.js";
 import { registerSourceCommands } from "./source-cli.js";
 import { registerLoadCommands } from "./load-cli.js";
 import { registerExploreCommands } from "./explore-cli.js";
+import { registerCampaignCommands } from "./campaign-cli.js";
 import { registerVerifyFixCommands } from "./verify-fix-cli.js";
 import { registerAuthorJourneyCommands } from "./author-journey-cli.js";
 import { registerDemoCommands } from "./demo-aspect-cli.js";
@@ -70,6 +71,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerSourceCommands(program, deps);
   registerLoadCommands(program, deps);
   registerExploreCommands(program, deps, buildProgram);
+  registerCampaignCommands(program, deps, buildProgram); // #293: journey-anchored campaigns
   registerVerifyFixCommands(program, deps);
 
   // `ledger add|verify|list` (#195 part 6): the repro material verify-fix needs, kept by fingerprint.

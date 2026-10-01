@@ -70,7 +70,25 @@ function itemBrowser(base: BrowserRunOptions | undefined, x: SuiteExploreOptions
   return Object.keys(demo).length === 0 ? base : { ...base, ...demo };
 }
 
+/**
+ * #293: a journey-anchored mission item runs between the target's fixture setup and restore (as a
+ * Journey item does), so one stop point's side effects never leak into the next of a sweep.
+ */
 export async function execute(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
+  const anchored = item.kind === "mission" && item.mission !== undefined && item.t.prefixes?.has(item.mission) === true;
+  if (!anchored || item.t.fixturesFile === undefined) return executeItem(item, ctx, remaining);
+  const session = item.setup?.storageState;
+  const fx = fixturesFor(targetFixtures(item.t, session), item.t.prefixes!.get(item.mission!)!.startUrl);
+  if (fx === undefined) return executeItem(item, ctx, remaining);
+  try {
+    await fx.setup();
+    return await executeItem(item, ctx, remaining);
+  } finally {
+    await fx.restore();
+  }
+}
+
+async function executeItem(item: Planned, ctx: ExecContext, remaining: number | undefined): Promise<Executed> {
   const { opts, runners } = ctx;
   const t = item.t.target;
   const stamp: Stamp = {
@@ -252,7 +270,12 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
 
   if (item.kind === "mission" && item.mission !== undefined) {
     const m = item.mission;
-    const url = m.url ?? t.url;
+    // #293: a journey-anchored mission replays its Journey's prefix first and starts where it lands.
+    const prefix = item.t.prefixes?.get(m);
+    const withPrefix = prefix === undefined ? {} : { journeyPrefix: prefix };
+    // The prefix types its secret params into the page the mission perceives: redacted like the item's own.
+    const anchoredSecrets = prefix === undefined || prefix.secrets.length === 0 ? withSecrets : { secrets: [...(setup?.secrets ?? []), ...prefix.secrets] };
+    const url = prefix?.startUrl ?? m.url ?? t.url;
     const b = bounds(m.maxActions, m.maxDecisions, remaining);
     if (m.strategy === "feature") {
       const r = await runners.feature({
@@ -289,6 +312,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         ...withStall,
         ...withOverflow,
         ...(m.routes === undefined && x.scope === undefined ? {} : { routeGlobs: [...(m.routes ?? []), ...(x.scope === "app" ? ["/**"] : [])] }),
+        ...withPrefix,
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.missionOutcome, r as unknown as Json);
@@ -308,10 +332,11 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
         usage,
         ...(b === undefined ? {} : { bounds: b }),
         ...(m.routes === undefined ? {} : { routeGlobs: [...m.routes] }),
-        ...withSecrets,
+        ...anchoredSecrets,
         ...withHangReplays,
         ...withOverflow,
         ...(setup?.coverageThresholds === undefined ? {} : { coverageThresholds: setup.coverageThresholds }),
+        ...withPrefix,
       });
       stampResultFile(r.resultPath, stamp);
       return missionExecuted(r.resultPath, r.outcome, r as unknown as Json);
@@ -327,7 +352,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
       appContext: { appClass: m.appClass ?? "", job: m.goal ?? "" },
       allowlist: item.t.allowlist,
       ...withSecretFields,
-      ...withSecrets,
+      ...anchoredSecrets,
       ...withFixture,
       ...withConversation,
       ...withOverflow,
@@ -345,6 +370,7 @@ export async function execute(item: Planned, ctx: ExecContext, remaining: number
       gen,
       usage,
       bounds: b,
+      ...withPrefix,
     });
     const actions = actionsOf({ transcriptPath: r.transcriptPath });
     // #213: the item points at the PERSISTED result (which carries the UX report), never at the

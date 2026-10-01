@@ -47,6 +47,10 @@ function defectSection(d: ConsolidatedDefect, status?: string): string[] {
       (m) => `  - ${m.mode}: ${m.occurrences} occurrence(s) in ${m.runs.length} run(s) — ${m.runs.map((r) => `\`${r.runId}\` ×${r.occurrences}`).join(", ")}`,
     ),
   ];
+  // #293: the Journey steps the anchored runs that found it branched from.
+  if (d.branches !== undefined && d.branches.length > 0) {
+    lines.push(`- branched from: ${d.branches.map((b) => `journey \`${b.journeyId}\` step ${b.step}${b.anchor === undefined ? "" : ` (anchor \`${b.anchor}\`)`}`).join(", ")}`);
+  }
   if (d.evidence.length > 0) lines.push("- evidence:", ...d.evidence.slice(0, 8).map(evidenceLine));
   if (d.reproduce !== undefined) lines.push(`- reproduce: \`${d.reproduce}\``);
   lines.push("");

@@ -194,6 +194,13 @@ export interface ExploreConfig {
   /** Authorized origins; the start URL and every observed URL must be on it. */
   readonly allowlist: readonly string[];
   readonly startUrl: string;
+  /**
+   * #293 journey-anchored exploration: the page is ALREADY at the start state (a Journey's prefix was
+   * replayed into this session — page, form contents, session kept), so the first navigation to
+   * `startUrl` is skipped. The Recording still begins with a navigate to `startUrl` (where a replay
+   * of a finding starts). Default: navigate.
+   */
+  readonly startInPlace?: boolean;
   readonly bounds?: Partial<Bounds>;
   /**
    * #271: the token a model-invented email / username gains so it is unique to this run (a sign-up
@@ -989,8 +996,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // Initial navigation (authorized above).
     page.on("requestfailed", onFirstNavRequestFailed);
     try {
-      await assertSeedReachable(cfg.actor, cfg.startUrl);
-      await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+      // #293: an anchored run starts on the live page its Journey prefix left — never a fresh load.
+      if (cfg.startInPlace !== true) {
+        await assertSeedReachable(cfg.actor, cfg.startUrl);
+        await Navigate.to(cfg.startUrl).performAs(cfg.actor);
+      }
     } catch (e) {
       const message = firstLine(e);
       if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;

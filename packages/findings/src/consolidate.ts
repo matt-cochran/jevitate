@@ -1,4 +1,4 @@
-import type { EvidenceRef, FindingObservation, RunRecord } from "./extract.js";
+import type { EvidenceRef, FindingObservation, RunBranch, RunRecord } from "./extract.js";
 import type { FindingCategory, FindingIdentity, RunMode, Severity } from "./identity.js";
 
 /**
@@ -15,6 +15,8 @@ export interface DefectRun {
   readonly occurrences: number;
   readonly startedAt?: string;
   readonly targetBuild?: string;
+  /** #293: the Journey step this run branched from (a journey-anchored run). */
+  readonly branch?: RunBranch;
 }
 
 export interface DefectMode {
@@ -45,6 +47,11 @@ export interface ConsolidatedDefect {
   readonly reproduce?: string;
   /** Some run saw it come and go (a hang reproduced k/N, verify-fix intermittent). */
   readonly intermittent: boolean;
+  /**
+   * #293: the distinct Journey steps the journey-anchored runs that found it branched from (by
+   * journey, then step). Absent when no such run found it.
+   */
+  readonly branches?: readonly RunBranch[];
 }
 
 interface Member {
@@ -136,6 +143,7 @@ function toDefect(group: readonly Member[]): ConsolidatedDefect {
       occurrences: (prev?.occurrences ?? 0) + obs.occurrences,
       ...(run.startedAt === undefined ? {} : { startedAt: run.startedAt }),
       ...(run.targetBuild === undefined ? {} : { targetBuild: run.targetBuild }),
+      ...(run.branch === undefined ? {} : { branch: run.branch }),
     });
     modes.set(run.mode, runsOfMode);
   }
@@ -150,6 +158,9 @@ function toDefect(group: readonly Member[]): ConsolidatedDefect {
   const evidence = sorted.flatMap(({ run, obs }) => obs.evidence.map((e) => ({ ...e, runId: run.runId }))).slice(0, 20);
   const reproduce = sorted.find((m) => m.obs.reproduce !== undefined)?.obs.reproduce;
   const fingerprints = [...new Set(group.flatMap((m) => m.obs.related))].sort();
+  const branches = new Map<string, RunBranch>();
+  for (const { run } of group) if (run.branch !== undefined) branches.set(`${run.branch.journeyId}#${run.branch.step}#${run.branch.anchor ?? ""}`, run.branch);
+  const branchList = [...branches.values()].sort((a, b) => a.journeyId.localeCompare(b.journeyId) || a.step - b.step || (a.anchor ?? "").localeCompare(b.anchor ?? ""));
   return {
     key,
     keys,
@@ -166,5 +177,6 @@ function toDefect(group: readonly Member[]): ConsolidatedDefect {
     evidence,
     ...(reproduce === undefined ? {} : { reproduce }),
     intermittent: group.some((m) => m.obs.intermittent === true),
+    ...(branchList.length === 0 ? {} : { branches: branchList }),
   };
 }

@@ -37,6 +37,8 @@ import { MissionJournal, artifactStamp, closeQuietly, resultPathFor, writeMissio
 import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.js";
 import { missionExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import {
   applyServerLogOutcome,
@@ -155,6 +157,11 @@ export interface RunAdversarialCliMissionOptions {
   readonly emulation?: EmulationSpec;
   /** Horizontal-overflow hard signal (#149, CLI `--check-overflow` / `--ignore-overflow`). */
   readonly overflow?: OverflowFlags;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session before the mission, which then starts
+   * on the live page it left (never a fresh navigation). `seedUrl` is only the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
 }
 
 export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & {
@@ -193,6 +200,8 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
   readonly environmentDegraded: EnvironmentDegraded[];
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
 };
 
 /**
@@ -274,6 +283,8 @@ export async function runAdversarialCliMission(
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored run first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.seedUrl, opts.allowlist, opts.browser);
     const actor = CastActor.named("adversarial-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const outcome = await runAdversarialMission({
       hostHealth: health,
@@ -286,7 +297,10 @@ export async function runAdversarialCliMission(
       actor,
       judgment: opts.judgment,
       generation: opts.generation,
-      seedUrl: opts.seedUrl,
+      seedUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a reset re-replays the Journey prefix (counted against --max-actions), never just the URL.
+      ...(start.restart ?? {}),
       allowlist: opts.allowlist,
       strategies: opts.strategies,
       ...(opts.routeGlobs === undefined ? {} : { routeGlobs: opts.routeGlobs }),
@@ -361,10 +375,11 @@ export async function runAdversarialCliMission(
       // What `verify-fix` needs to replay a defect later: where, which origins, which session file
       // (the storageState PATH only — its cookies never enter an artifact).
       target: {
-        seedUrl: opts.seedUrl,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(opts.storageState !== undefined ? { storageStatePath: resolvePath(opts.storageState) } : {}),
       },
+      ...branchFields(start),
       engine,
       ...(opts.invariants === undefined ? {} : { invariantSpec: opts.invariants }),
       ...(runUsage === undefined ? {} : { usage: runUsage.snapshot() }),

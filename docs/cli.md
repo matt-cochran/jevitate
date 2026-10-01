@@ -14,6 +14,7 @@ Autonomous browser testing that turns discovered bugs into deterministic regress
 
 - [`ai`](#ai): check or configure the model gateway credentials jevitate's AI features need
 - [`baseline`](#baseline): named baselines for `diff`, `report --baseline` and `check --baseline`
+- [`campaign`](#campaign): journey-anchored test campaigns (#293): many anchored missions, one deduped report
 - [`check`](#check): CI regression gate: run a suite of Journeys, invariants, goals and missions within a budget; JUnit + SARIF + JSON
 - [`demo`](#demo): demo one aspect of an app from a one-line request: explore → clean path → Journey → annotate → a DRAFT narrated demo; `demo approve <id>` promotes and renders the final one
 - [`diff`](#diff): classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline)
@@ -165,6 +166,39 @@ snapshot runs (result files, run ids, check records or other tags) as a named ba
 | --- | --- | --- | --- | --- | --- |
 | `--dir <dir>` | results dir to look run ids up in (repeatable) | `[]` |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+
+## campaign
+
+```
+jevitate campaign [command]
+```
+
+journey-anchored test campaigns (#293): many anchored missions, one deduped report
+
+### campaign run
+
+```
+jevitate campaign run [options] <spec>
+```
+
+run a campaign spec (JSON): replay each job's promoted Journey (discovery), then run its anchored missions in order — explore --from-journey <journey> --at-step <anchor> --strategy <s> — with the spec's --fixtures restore around every run, and write ONE deduped report (campaign.json + campaign.md). An invalid spec is refused with every problem listed (exit 64)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `spec` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--allow-shell-hooks` | opt in to running the spec's before/after operator hooks around every run (never model-chosen) | `false` |  |  |  |
+| `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
+| `--journeys-dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
+| `--out <dir>` | the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>) |  |  |  |  |
+| `--real` | use live Jev + OpenRouter gateways for the missions (requires keys) | `false` |  |  |  |
 
 ## check
 
@@ -357,6 +391,8 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--allow-writes` | let a find-out goal (no --success check, ended by report) change the app. By default it is read-only: controls that start a write flow (checkout, upgrade, create, save, submit…) are refused and the write requests an action fires are blocked, unless the goal itself asks for a change |  |  |  |  |
 | `--api-prefix <path>` | a path prefix whose requests are the app's API in the timing summary (repeatable), e.g. /api/ | `[]` |  |  |  |
 | `--app-class <class>` | app class for UX calibration (required for --strategy usability), e.g. consumer\|admin\|internal |  |  |  |  |
+| `--at-step <n|name|all|anchors>` | with --from-journey: the step to branch off — a 1-based top-level step number or an anchor name (`jevitate journey anchors <id>`); `all` sweeps every step and `anchors` every anchor: each a fresh session (restored by --fixtures), --max-actions/--max-decisions split evenly per stop, one deduped report |  |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
@@ -364,6 +400,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--check-overflow` | check the horizontal-overflow (#149) and vertical-clipping (#302: text cut off by a fixed-height box or above the page top) hard signals even at a desktop (>=1024px) viewport — --strategy coverage/exploratory (a defect), adversarial (a defect) or usability (a signal finding). On by default whenever --viewport/--device emulates a viewport narrower than 1024px |  |  |  |  |
 | `--deny <pattern>` | a control no mission may click (repeatable): an accessible-name regex (/Archive/i or Archive) or a descriptor role=button;name=Archive. Session-ending (Sign out), destructive (Delete, Revoke, Rotate) and paid (Buy, Run simulation, Generate, Send invite) controls are refused by default | `[]` |  |  |  |
 | `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
 | `--evidence-video` | per defect: replay its minimal repro with captions + the failing step marked, record a masked clip and before/at screenshots (defects[].evidence; linked from drafts) |  |  |  |  |
 | `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
 | `--fake-ai` | use deterministic fake gateways (pipeline smoke only) | `false` |  |  |  |
@@ -372,6 +409,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--fixture <path>` | local file the upload op attaches to a file input (goal and usability strategies); must exist |  |  |  |  |
 | `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
 | `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--from-journey <id>` | journey-anchored exploration (#293): start from a PROMOTED Journey instead of --url — its first --at-step steps are replayed in the mission's own browser context (page, form contents and session kept; fail-closed, never self-healed; --env/--base-url apply), then the mission starts on the live page. A replay that stops before the anchor ends the run inconclusive (failure.kind journey-stale, exit 2). Strategies: goal, coverage, exploratory, adversarial, usability |  |  |  |  |
 | `--goal <text>` | natural-language goal / job (required for --strategy goal and usability) |  |  |  |  |
 | `--hang-replay-writes` | let hang replays re-send a paid/destructive write the run sent (default: such a hang is reported inconclusive, never replayed) |  |  |  |  |
 | `--hang-replays <n>` | fresh-context replays that confirm a hang (default 2; 0 = don't replay, the hang is reported unconfirmed) |  |  |  |  |
@@ -384,6 +422,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--issue-repo <owner/name>` | the system-under-test repo findings for THIS target are filed to |  |  |  |  |
 | `--jevitate-repo <owner/name>` | where jevitate engine findings are filed (default matt-cochran/jevitate) |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
+| `--journeys-dir <path>` | with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--log-correlation-header <name>` | another request/response header that carries a correlation id (repeatable; built in: traceparent, x-request-id, x-correlation-id, request-id, x-amzn-trace-id, x-b3-traceid, x-cloud-trace-context). A log line carrying a request's id is attached to that exact request and the step that sent it, not by time (#204) | `[]` |  |  |  |
 | `--log-defect <level|/regex/>` | backend log lines matching this (repeatable) become a server-log defect: a level (error\|warn\|info\|debug, matched as level>=this) or a /regex/flags/ over the raw line. Its fingerprint is the normalized message (ids/numbers/uuids/timestamps stripped) plus the correlated route; verify-fix re-checks it by re-tailing the same --log-source(s) | `[]` |  |  |  |
@@ -405,6 +444,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--no-require-form-submit` | adversarial: do not require a submitted form for a clean result (default: required when the target has a form) |  |  |  |  |
 | `--out <dir>` | directory to write the emitted Recording |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable; same syntax as --deny), e.g. /^(Analyze\|Draft\|Improve)\b/i: treated like the built-in paid vocabulary — the budget guard sees it, hang replays never repeat it, and a goal that asks for it may still click it | `[]` |  |  |  |
+| `--param <kv>` | with --from-journey: a Journey param as key=value (repeatable); only the prefix's own params are required | `{}` |  |  |  |
 | `--persona <name=storageState>` | run the same mission once per persona (repeatable), serially, each from its own storageState, and diff them (#143): requests, statuses (a 403 vs 200 is a candidate RBAC finding), controls, outcome | `[]` |  |  |  |
 | `--personas <file>` | personas JSON: {"<name>": "<storageState>"} or {"personas": [{"name", "storageState"}]} |  |  |  |  |
 | `--polish` | (--strategy usability) polish each verified UX finding's recommendation with one generation call (opt-in; the default prose is built from templates) |  |  |  |  |
@@ -702,6 +742,27 @@ jevitate journey [command]
 ```
 
 manage and run promoted Journeys (regression-test replays)
+
+### journey anchors
+
+```
+jevitate journey anchors [options] <id>
+```
+
+list a Journey's anchors (#293): named steps to branch a mission off with `explore --from-journey <id> --at-step <name>`, and their suggested probes
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--dir <path>` | journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
 
 ### journey annotate
 
@@ -1459,6 +1520,7 @@ jevitate regression capture [options]
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
 | `--result <file>` | mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay |  |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist |  |  |  |  |
@@ -1495,6 +1557,7 @@ jevitate regression run [options] <id>
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -1838,6 +1901,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a finding found from a Journey branch point — its replays go through the same prefix; a secret param (never persisted with the result) must be given again; redacted like --secret | `{}` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--regressions-dir <path>` | regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions) |  |  |  |  |
 | `--replays <n>` | fresh-context replays that confirm a fix (default 3) |  |  |  |  |

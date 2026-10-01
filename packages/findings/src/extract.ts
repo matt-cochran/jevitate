@@ -97,6 +97,25 @@ export interface RunRecord {
   readonly usage?: Readonly<Record<string, unknown>>;
   /** What the run could observe (#171); absent on older records (then only its mode and target compare). */
   readonly scope?: RunScope;
+  /** #293: the Journey step a journey-anchored run branched from — every finding of the run came from there. */
+  readonly branch?: RunBranch;
+}
+
+/** #293: where a journey-anchored run branched off a promoted Journey. */
+export interface RunBranch {
+  readonly journeyId: string;
+  /** Top-level steps replayed before the mission (1-based). */
+  readonly step: number;
+  readonly anchor?: string;
+}
+
+function branchOf(v: unknown): RunBranch | undefined {
+  if (!isRecord(v)) return undefined;
+  const journeyId = str(v.journeyId);
+  const step = num(v.step);
+  if (journeyId === undefined || step === undefined) return undefined;
+  const anchor = str(v.anchor);
+  return { journeyId, step, ...(anchor === undefined ? {} : { anchor }) };
 }
 
 type Json = Record<string, unknown>;
@@ -600,6 +619,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
   const startedAt = str(result.startedAt) ?? stampToIso(runId);
   const origin = originOf(str(target?.seedUrl)) ?? originOf(str(result.site));
   const scope = missionScope(mode, result);
+  const branch = branchOf(result.branch);
   return {
     runId,
     mode,
@@ -614,6 +634,7 @@ export function runFromMissionResult(path: string, raw: unknown): RunRecord | nu
     ...(str(result.targetBuild) === undefined ? {} : { targetBuild: str(result.targetBuild) }),
     ...(isRecord(result.usage) ? { usage: result.usage } : {}),
     ...(scope === undefined ? {} : { scope }),
+    ...(branch === undefined ? {} : { branch }),
   };
 }
 

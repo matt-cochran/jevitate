@@ -103,6 +103,8 @@ export const OMIT = {
   hangWrites: "re-sending a paid/destructive write is the operator's call (targets.json safety.hangReplayWrites)",
   filingRepo: "where findings are filed (a GitHub repo, under the operator's identity) is the operator's filing config (~/.jevitate/filing.json)",
   watch: "a watch loop never returns: MCP drains once (call again to drain more)",
+  branchParams:
+    "#293: a branch-point finding replays through its Journey prefix with the params its result recorded (non-secret ones); a secret param is re-supplied by the operator on the CLI, never sent as an MCP argument",
   tou: "accepting a third-party source's Terms of Use is a person's decision (like approve_action): MCP can add, pull and run a source, never accept for them",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
@@ -146,6 +148,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     name: "promote_journey",
     description: "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey).",
     command: { path: "journey promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_anchors",
+    description:
+      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep.",
+    command: { path: "journey anchors", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
   },
   {
     name: "annotate_journey",
@@ -237,6 +245,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "explore",
       params: { ...EXTENSION,
         url: s("--url"),
+        // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
+        fromJourney: s("--from-journey"),
+        atStep: s("--at-step"),
+        params: { kind: "params", flag: "--param" },
+        ...ENVIRONMENT,
         allow: many("--allow"),
         strategy: s("--strategy", { enum: ["goal", "coverage", "exploratory", "adversarial", "usability"] }),
         goal: s("--goal"),
@@ -316,7 +329,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         "--hang-replay-writes": OMIT.hangWrites,
         "--issue-repo": OMIT.filingRepo,
         "--jevitate-repo": OMIT.filingRepo,
+        "--journeys-dir": OMIT.storeDir,
       },
+    },
+  },
+  {
+    name: "run_campaign",
+    description:
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. Needs real or fakeAi.",
+    command: {
+      path: "campaign run",
+      params: { spec: pos("path"), out: path("--out"), ...AI },
+      omitted: { "--journeys-dir": OMIT.storeDir, "--allow-shell-hooks": OMIT.hooks, ...JSON_FLAG },
     },
   },
   {
@@ -514,12 +538,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
           ...EMULATION,
           ...DEMO_SHOW,
         },
-        omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
       run: {
         path: "regression run",
         params: { ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
-        omitted: { "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },

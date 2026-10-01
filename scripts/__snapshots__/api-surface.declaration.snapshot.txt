@@ -159,7 +159,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (96 exports)
+# @jevitate/domain (98 exports)
   assertInsideRoot: function
   assertSafeName: function
   attributeCrash: function
@@ -231,6 +231,8 @@
   RESULT_GOAL_OUTCOMES: variable
   RESULT_MISSION_OUTCOMES: variable
   RESULT_STRATEGIES: variable
+  ResultBranch: type-alias
+  ResultBranchSchema: variable
   ResultDefect: type-alias
   ResultDefectSchema: variable
   ResultEngineSchema: variable
@@ -780,7 +782,7 @@
   WithheldWrite: interface
   WRITE_METHODS: variable
 
-# @jevitate/findings (42 exports)
+# @jevitate/findings (43 exports)
   CaseStatus: type-alias
   classify: function
   consolidate: function
@@ -807,6 +809,7 @@
   requestIdentity: function
   routeTemplate: function
   RUN_MODES: variable
+  RunBranch: interface
   runFromMissionResult: function
   runFromUxReport: function
   runIdOf: function
@@ -910,7 +913,10 @@
   VisualAssertion: other
   VisualVerdict: other
 
-# @jevitate/journey (30 exports)
+# @jevitate/journey (51 exports)
+  ANCHOR_NAME_RE: variable
+  ANCHORED_STRATEGIES: variable
+  AnchoredStrategy: type-alias
   AnnotationChange: interface
   AnnotationDraft: type-alias
   AnnotationDraftMismatchError: class
@@ -918,6 +924,9 @@
   AnnotationDraftStep: type-alias
   AnnotationDraftStepSchema: variable
   applyAnnotationDraft: function
+  CAMPAIGN_LIMITS: variable
+  CampaignSpec: type-alias
+  CampaignSpecSchema: variable
   deriveParamSchema: function
   describeStep: function
   FlatJourneyStep: interface
@@ -926,20 +935,35 @@
   FsJourneyStore: class
   intentCoverage: function
   IntentCoverage: interface
+  isSweepMode: function
   Journey: interface
+  JourneyAnchor: interface
+  JourneyAnchorListing: interface
+  journeyBranchPoint: function
+  JourneyBranchPoint: interface
   JourneyMetadata: interface
   JourneyParameter: interface
   JourneyPrecondition: interface
+  journeyPrefix: function
   JourneyRegistry: class
   JourneySchema: variable
+  journeyStepCount: function
+  JourneyStepError: class
   JourneyStore: interface
   JourneySuccessCriterion: interface
+  listJourneyAnchors: function
   ParamSchema: interface
   ParamValidationError: class
+  prefixLandingPath: function
+  resolveJourneyStep: function
   SECRET_PARAM_NAME_RE: variable
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
+  splitBudget: function
+  SWEEP_MODES: variable
+  SweepMode: type-alias
+  sweepStops: function
   validateParams: function
 
 # @jevitate/load (16 exports)

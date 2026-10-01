@@ -24,6 +24,27 @@ behaviour changes).
     jevitate launched are ever signalled.
   - The MCP tools that launch a browser take `maxBrowsers` and `maxBrowserMemory`.
     `JEVITATE_RESOURCE_GOVERNANCE=off` turns off the automatic parts. See docs/operations.md.
+- Journey-anchored exploration: `explore --from-journey <id> --at-step <n|anchor>` replays a
+  promoted Journey's first steps in the mission's own browser context (page, form contents and
+  session kept; fail-closed, never self-healed; `--param`, `--env`/`--base-url` apply), then starts
+  the goal, coverage, exploratory, adversarial or usability mission on the live page. A prefix that
+  no longer replays ends the run `inconclusive` with `failure.kind: "journey-stale"` (exit 2).
+  Results and findings record `branch: {journeyId, step, anchor}` (additive, schemaVersion 1), and
+  `report` lists each defect's branch points. `--at-step all|anchors` sweeps every step (or
+  anchor), each in a fresh session restored by `--fixtures`, `--max-actions` split per step, one
+  deduped report. Resets inside an anchored mission re-replay the prefix (counted against
+  `--max-actions`). `verify-fix` and `regression capture|run` replay a branch-point finding
+  through its prefix (`--param` re-supplies secret params); a stale prefix is a typed
+  `inconclusive` (#293).
+- Journey anchors: an optional, validated `metadata.anchors` (`{name, step, description?,
+  probes?}`) names states worth exploring from; `journey anchors <id>` lists them, and `--at-step`
+  takes an anchor name (#293).
+- `campaign run <spec.json>`: a bounded list of jobs (Journey, anchors, strategies, budgets) run as
+  discovery, then anchored missions in order with the spec's `--fixtures` restore around every run,
+  and one deduped report (`campaign.json`, `campaign.md`). An invalid spec is refused with every
+  problem listed (exit 64). MCP `journey_anchors` and `run_campaign`; `run_exploration` and
+  check-suite mission items take `fromJourney`/`atStep`/`params`/`env`/`baseUrl`. The
+  `jevitate-test-campaign` skill now uses them (#293).
 - Adversarial `boundary-submit` checks whether a field's input is rendered as markup. It submits
   inert canaries with a per-submission random token: `<i data-jev-canary="T">jevT</i>` and an
   attribute break, `jevT" data-jev-canary="T`, with no script or event handler. It then inspects the

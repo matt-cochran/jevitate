@@ -301,6 +301,22 @@ export interface AdversarialMissionParams {
   readonly judgment: JudgmentPort;
   readonly generation: GenerationPort;
   readonly seedUrl: string;
+  /**
+   * #293 journey-anchored exploration: the page is ALREADY at `seedUrl`'s state (a Journey prefix was
+   * replayed into this session), so the first navigation is skipped and the mission starts on the
+   * live page. A later reset (after a hang or an identity change) still re-navigates to `seedUrl`.
+   */
+  readonly startInPlace?: boolean;
+  /**
+   * #293: how the mission gets back to its start state on a reset (after a hang, an identity change),
+   * instead of re-navigating to `seedUrl` — a journey-anchored run re-replays its Journey prefix, so
+   * in-page state (a half-filled form) is restored too. Resolves `false` when it could not (a stale
+   * prefix): the run then cannot go on (`scope-unreachable`). Each call costs `restartCost` actions
+   * from `maxActions`.
+   */
+  readonly restartAtStart?: (actor: Actor) => Promise<boolean>;
+  /** #293: the actions one `restartAtStart` costs against `maxActions` (the prefix's step count). Default 0. */
+  readonly restartCost?: number;
   readonly allowlist: readonly string[];
   /** The strategies, cycled in order until a budget runs out. */
   readonly strategies: readonly MisuseStrategy[];
@@ -752,6 +768,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * perceived start page, or why the run cannot go on (the start page hangs, or does not stay in
    * scope — e.g. the session was lost and it redirects to a login page).
    */
+  /** #293: actions spent re-replaying the Journey prefix on resets (counted against `maxActions`). */
+  let restartSpend = 0;
   const restartAtSeed = async (): Promise<
     { ok: true; snapshot: Snapshot; timing: PageTiming } | { ok: false; stop: AdversarialStop }
   > => {
@@ -759,7 +777,13 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     safety.attach(monitorFor(sessions.page));
     recorder = new RunRecorder(site, undefined, secrets);
     segments.push(recorder);
-    await Navigate.to(params.seedUrl).performAs(sessions.actor);
+    if (params.restartAtStart !== undefined) {
+      // #293: back through the Journey prefix (bounded: it spends the action budget).
+      restartSpend += params.restartCost ?? 0;
+      if (!(await params.restartAtStart(sessions.actor))) return { ok: false, stop: "scope-unreachable" };
+    } else {
+      await Navigate.to(params.seedUrl).performAs(sessions.actor);
+    }
     recorder.navigate(params.seedUrl, now());
     const back = await perceiveNow();
     recorder.observed(back.snapshot.url, now(), back.timing);
@@ -1094,8 +1118,10 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     };
     sessions.page.on("requestfailed", onFirstNavRequestFailed);
     try {
-      await assertSeedReachable(sessions.actor, params.seedUrl);
-      await Navigate.to(params.seedUrl).performAs(sessions.actor);
+      if (params.startInPlace !== true) {
+        await assertSeedReachable(sessions.actor, params.seedUrl);
+        await Navigate.to(params.seedUrl).performAs(sessions.actor);
+      }
     } catch (e) {
       const message = e instanceof Error ? (e.message.split("\n")[0] ?? e.message) : String(e);
       if (!isUnreachableTarget(message) && !isUnreachableTarget(firstNavNetError ?? "")) throw e;
@@ -1532,7 +1558,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
         stop = "step-budget";
         break;
       }
-      if (actions >= bounds.maxActions) {
+      if (actions + restartSpend >= bounds.maxActions) {
         stop = "action-budget";
         break;
       }
@@ -1633,7 +1659,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       let pendingEarlier = false;
       while (queue.length > 0) {
         const s = queue.shift() as MisuseStep;
-        if (actions >= bounds.maxActions) break;
+        if (actions + restartSpend >= bounds.maxActions) break;
         // An earlier step of this episode removed this step's control (a Cancel closed the dialog
         // the Save lived in): the rest of the episode was planned for a state that is gone. It ends
         // here, without spending an action — never a failed act that reads as a broken control.

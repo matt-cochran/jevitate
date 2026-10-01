@@ -1,3 +1,4 @@
+import { BranchReplayInputError, anchoredRecording, prefixFromBranch, prefixedOpener, recordedBranchOf, type JourneyPrefix, type PrefixFromBranchOptions, type RecordedBranch } from "./journey-prefix.js";
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
 import { existsSync } from "node:fs";
@@ -56,6 +57,13 @@ export const VERIFY_FIX_EXIT_CODES: Readonly<Record<VerifyFixVerdict, number>> =
 export interface RunVerifyFixOptions {
   /** Path of the mission's `<stem>.result.json`. */
   readonly resultPath: string;
+  /**
+   * #293: a finding a journey-anchored run found (its result's `branch`) is replayed THROUGH the same
+   * Journey prefix — every replay session replays it first, and the finding's Recording starts on
+   * the live anchor page (its leading navigate becomes an assertion). These are the prefix's secret
+   * `--param`s (never persisted) and the site-policy database / environment seams it runs under.
+   */
+  readonly journeyPrefix?: PrefixFromBranchOptions;
   /** The defect (or hang) fingerprint to verify. */
   readonly fingerprint: string;
   /** Overrides the storageState recorded with the mission (CLI `--storage-state`). */
@@ -119,6 +127,10 @@ export interface VerifyFixEvidence {
 
 export interface VerifyFixReport extends VerifyFixResult {
   readonly exitCode: number;
+  /** #293: the Journey step the finding branched from, when its replays went through that prefix. */
+  readonly branch?: RecordedBranch;
+  /** #293: why the replays proved nothing — `journey-stale` when the prefix no longer replays. */
+  readonly failure?: { readonly kind: "journey-stale"; readonly message: string };
   readonly title?: string;
   /** The fixture every replay started from (#140/#144): the mission's identity and this run's setup/restore log. */
   readonly fixtures?: FixtureRecord & { readonly missionIdentity: string };
@@ -377,8 +389,21 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
     ...(target.hangs === undefined ? {} : { hangConfig: target.hangs }),
   };
-  const recording = finding.recording ?? mission.recording;
-  if (recording === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  const found = finding.recording ?? mission.recording;
+  if (found === null) throw new VerifyFixInputError(`finding ${finding.fingerprint} has no Recording to replay`);
+  // #293: a finding from a branch point replays through its Journey prefix (resolved now, refused if
+  // its secret params are not given again), on the live anchor page — never from the anchor URL.
+  const branch = recordedBranchOf((raw as { result?: unknown } | null)?.result);
+  let prefix: JourneyPrefix | undefined;
+  if (branch !== undefined) {
+    try {
+      prefix = await prefixFromBranch(branch, { ...(opts.journeyPrefix ?? {}), ...(storageState === undefined ? {} : { storageState }) });
+    } catch (e) {
+      if (e instanceof BranchReplayInputError) throw new VerifyFixInputError(e.message);
+      throw e;
+    }
+  }
+  const recording = prefix === undefined ? found : anchoredRecording(found);
   // #256: replay only under the extension build the finding was recorded with (none ⇔ none).
   try {
     assertSameExtensionBuild(recording.extensions, opts.browser, `finding ${finding.fingerprint}`);
@@ -460,10 +485,13 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     const actor = CastActor.named("verify-fix").whoCan(new BrowseTheWeb(session, [...mission.target.allowlist]));
     return { page: session.page, actor, close: () => session.close() };
   };
+  // #293: every replay session first goes back through the finding's Journey prefix.
+  const prefixed = prefix === undefined ? undefined : prefixedOpener(openSession, prefix, mission.target.allowlist, opts.browser);
+  const branchOpen = prefixed?.open ?? openSession;
   // Each replay restores the mission's fixture state first; a failed setup makes that replay
   // "could not open a session" — no evidence, so never `fixed`.
   const replaySession =
-    fx === undefined ? openSession : fixtureReplayOpener(openSession, fx, recording.fixture?.outputs ?? mission.fixtures?.outputs ?? {});
+    fx === undefined ? branchOpen : fixtureReplayOpener(branchOpen, fx, recording.fixture?.outputs ?? mission.fixtures?.outputs ?? {});
   let result: VerifyFixResult;
   try {
     // A `server-log` defect (#142) is re-checked by REPLAYING and re-tailing the SAME log sources —
@@ -516,6 +544,11 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   } finally {
     await fx?.restore();
   }
+  // #293: a prefix that no longer replays proved nothing: a typed inconclusive, never `fixed`.
+  const stale = prefixed?.stale();
+  if (stale !== undefined) {
+    result = { ...result, verdict: "inconclusive", reason: `journey-stale: ${stale.message}` };
+  }
   // #250/#251: the captioned "after" replay (video and/or screenshots), paired with the run's own clip.
   let evidence: VerifyFixEvidence | undefined;
   let shotFields: Partial<ScreenshotsResult> = {};
@@ -534,7 +567,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         ? { text: "After the fix: the defect no longer reproduces", ok: true }
         : { text: `After: ${result.verdict === "still-reproduces" ? "still reproduces" : result.verdict}`, ok: false };
     const after: DefectEvidence =
-      fx !== undefined || observers.length > 0
+      prefix !== undefined
+        ? { screenshots: [], skipped: "a finding from a Journey branch point: the after-clip replay does not replay the prefix" }
+        : fx !== undefined || observers.length > 0
         ? { screenshots: [], skipped: fx !== undefined ? "the run used mission fixtures: the after-clip replay does not restore them" : "a cross-actor defect: no after-clip replay" }
         : await replayWithEvidence({
             recording,
@@ -566,6 +601,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   return {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
+    ...(branch === undefined ? {} : { branch }),
+    ...(stale === undefined ? {} : { failure: { kind: "journey-stale" as const, message: stale.message } }),
     ...(evidence === undefined ? {} : { evidence }),
     ...shotFields,
     ...(finding.title === undefined ? {} : { title: finding.title }),

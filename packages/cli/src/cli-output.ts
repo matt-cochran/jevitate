@@ -139,6 +139,11 @@ export function formatMissionHuman(result: unknown): string {
   } else if (own !== undefined && own !== outcome) lines.push(`${tag("OUTCOME")}${own}`);
   const scope = scopeLine(result.scope);
   if (scope !== undefined) lines.push(`${tag("SCOPE")}${scope}`);
+  // #293: where a journey-anchored run branched off its Journey.
+  if (isRecord(result.branch) && str(result.branch.journeyId) !== undefined) {
+    const b = result.branch;
+    lines.push(`${tag("BRANCH")}journey ${str(b.journeyId)} after step ${String(b.step)}${str(b.anchor) === undefined ? "" : ` (anchor ${str(b.anchor)})`}`);
+  }
   // #213: the --storage-state session was not honoured (the run started on a sign-in page).
   if (isRecord(result.sessionLost) && str(result.sessionLost.reason) !== undefined) lines.push(`${tag("WARNING")}${str(result.sessionLost.reason)}`);
   for (const d of defects) lines.push(defectLine("DEFECT", d), ...evidenceLines(d));

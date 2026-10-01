@@ -23,6 +23,8 @@ import { MISSION_RESULT_SCHEMA_VERSION, unifiedDefects } from "./result-schema.j
 import { applyHttp5xxGoalOutcome, describeHttp5xx, http5xxGoalReason } from "./http-5xx-outcome.js";
 import { goalExitCode } from "./mission-exit.js";
 import { launchArmed } from "./launch-armed.js";
+import { branchFields, startFromJourney, type JourneyPrefix } from "./journey-prefix.js";
+import type { JourneyBranchPoint } from "@jevitate/journey";
 import { finishHostHealth } from "./host-health-run.js";
 import { openServerLogRuntime, type ServerLogDefect, type ServerLogEvidence, type ServerLogRuntimeResult, type ServerLogsSummary, type TranscriptEntryWithLogs } from "./log-correlation.js";
 import { fixtureReplayOpener, recordingFixture, type MissionFixtureResult, type MissionFixtures } from "./mission-fixtures.js";
@@ -157,6 +159,12 @@ export interface RunExplorationOptions {
    * opened only when a declared cross-actor check needs it, never driven by the model.
    */
   readonly actors?: MissionActors;
+  /**
+   * #293 `--from-journey`/`--at-step`: replayed into the session (after fixture setup) before the
+   * goal loop, which then starts on the live page it left — never a fresh navigation. `url` is only
+   * the expected landing.
+   */
+  readonly journeyPrefix?: JourneyPrefix;
 }
 
 export interface RunExplorationResult {
@@ -255,6 +263,8 @@ export interface RunExplorationResult {
   readonly hostHealth: HostHealthSummary;
   /** Findings met while the host was starved (#203) — advisory, never a defect/hang, never failing the run. */
   readonly environmentDegraded: EnvironmentDegraded[];
+  /** #293: the Journey step a journey-anchored run branched from (absent on a bare-URL run). */
+  readonly branch?: JourneyBranchPoint;
 }
 
 /** Outcomes that already mean the run itself broke or hung — a server-log finding never downgrades
@@ -461,6 +471,8 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
     await closeQuietly(session);
   });
   try {
+    // #293: a journey-anchored run first replays its Journey's prefix into this very session.
+    const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
@@ -480,7 +492,10 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       gen: opts.gen,
       goal: opts.goal,
       allowlist: opts.allowlist,
-      startUrl: opts.url,
+      startUrl: start.url,
+      ...(start.branch === undefined ? {} : { startInPlace: true }),
+      // #293: a retried run re-replays the Journey prefix instead of loading the anchor URL.
+      ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
       ...(opts.successAssertion === undefined ? {} : { successAssertion: opts.successAssertion }),
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
@@ -585,11 +600,12 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
       exitCode: goalExitCode(goalOutcome),
       resultPath,
       target: {
-        seedUrl: opts.url,
+        seedUrl: start.url,
         allowlist: [...opts.allowlist],
         ...(primaryState !== undefined ? { storageStatePath: resolvePath(primaryState) } : {}),
         ...(opts.actors === undefined ? {} : { actors: persistedActors(opts.actors) }),
       },
+      ...branchFields(start),
       recording,
       hangs: mission.hang === undefined ? [] : [mission.hang],
       ...(mission.intermittentHangs === undefined ? {} : { intermittentHangs: mission.intermittentHangs }),
