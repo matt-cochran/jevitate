@@ -144,7 +144,7 @@ describe("fill — one field, one value (#71)", () => {
 
 describe("#273 — select placeholders and loosely spelled options", () => {
   it("recognises placeholder options, and nothing else", async () => {
-    const { isPlaceholderOption } = await import("./fill.js");
+    const { isPlaceholderOption } = await import("./select-choice.js");
     for (const p of ["—", "--", "…", "", "Select…", "-- Choose one --", "Please select"]) expect(isPlaceholderOption(p)).toBe(true);
     for (const o of ["Under $10k", "$10k–$100k", "None", "Selected items only"]) expect(isPlaceholderOption(o)).toBe(false);
   });

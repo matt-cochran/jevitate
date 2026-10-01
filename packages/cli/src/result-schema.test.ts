@@ -154,6 +154,17 @@ function always(value: string): JudgmentPort {
   };
 }
 
+/** Answers the first decision with `first`, every later one with `then`. */
+function sequence(first: string, then: string): JudgmentPort {
+  let n = 0;
+  return {
+    async systemOne() {
+      n += 1;
+      return { action: { kind: "choice", value: n === 1 ? first : then, confidence: 0.9 } };
+    },
+  };
+}
+
 const url = (): string => `${origin}/settings`;
 const out = async (name: string): Promise<string> => mkdtemp(join(dir, `${name}-`));
 
@@ -190,7 +201,8 @@ describe("#217 — a goal result's missionOutcome is canonical; its own ending i
     ["succeeded", clickThenDone, "textIncludes:[data-testid=status]|saved", "clean", "done"],
     // The model keeps saying done; code rejects it each time: failed, and the loop's stop is `done`.
     ["failed", () => always("done"), "textIncludes:[data-testid=status]|never", "defects-found", "done"],
-    ["blocked", () => always("blocked"), "textIncludes:[data-testid=status]|never", "defects-found", "blocked"],
+    // #237: the model tries something first — a `blocked` before any action is refused as unexplored.
+    ["blocked", () => sequence("click:0", "blocked"), "textIncludes:[data-testid=status]|never", "defects-found", "blocked"],
     ["exhausted", () => always("click:0"), "textIncludes:[data-testid=status]|never", "defects-found", "exhausted", 1],
   ];
   for (const [goalOutcome, judge, check, missionOutcome, stop, maxActions] of endings) {

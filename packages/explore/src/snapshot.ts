@@ -172,7 +172,7 @@ const INTERACTIVE_SELECTOR = [
 ].join(",");
 
 /** #287: controls the goal names that are still kept past `maxCandidates` (never crowded out). */
-export const MENTIONED_PAST_CAP = 10;
+const MENTIONED_PAST_CAP = 10;
 
 /** Raw per-control facts gathered in-page (safe values only). */
 interface ControlFacts {

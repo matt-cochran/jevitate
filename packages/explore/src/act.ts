@@ -198,7 +198,7 @@ function isClippedOrPulledOffscreen(el: Element): boolean {
  * the occlusion probe can hit-test it (#272). A visually-hidden (sr-only / skip-link) element is left
  * alone: it is never where a user clicks.
  */
-export function scrollIntoViewForProbe(node: Node): void {
+function scrollIntoViewForProbe(node: Node): void {
   const el = node as Element;
   const r = (el as HTMLElement).getBoundingClientRect();
   if ((r.width <= 1 && r.height <= 1) || r.left <= -1_000 || r.top <= -1_000) return;
@@ -212,7 +212,7 @@ export function scrollIntoViewForProbe(node: Node): void {
  * BROWSER CODE — the element's box lies wholly outside the viewport (#294). A visually-hidden
  * (sr-only / skip-link) element is never judged here (see `isHiddenSamePageAnchor` / the label path).
  */
-export function outsideViewport(node: Node): boolean {
+function outsideViewport(node: Node): boolean {
   const r = (node as HTMLElement).getBoundingClientRect();
   if ((r.width <= 1 && r.height <= 1) || r.left <= -1_000 || r.top <= -1_000) return false;
   return r.right <= 0 || r.bottom <= 0 || r.left >= window.innerWidth || r.top >= window.innerHeight;

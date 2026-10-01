@@ -27,7 +27,8 @@ import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
 import { AuthProgress, isCredentialField } from "./auth-completion.js";
 import { SaveProgress } from "./save-completion.js";
-import { CLEARS_FIELD, FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, isPlaceholderOption, matchOption } from "./fill.js";
+import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
+import { CLEARS_FIELD, isPlaceholderOption } from "./select-choice.js";
 import {
   type SecretField,
   boundSecretField,
@@ -143,7 +144,7 @@ export const MAX_MOVING_SCROLLS = 12;
  * #242: consecutive `type`s into one (non-message) field that changed nothing but its own value —
  * no request, no other change on the page — before the run stops as stuck.
  */
-export const MAX_TYPE_NO_EFFECT = 3;
+const MAX_TYPE_NO_EFFECT = 3;
 /** #242: a search-like field (searches on Enter): its type is submitted once retyping fired nothing. */
 const SEARCH_LIKE = /\bsearch\b|⌘\s?k|ctrl\s?\+\s?k|\bfind\b|\bfilter\b/i;
 const searchLike = (c: Control): boolean => c.role === "searchbox" || c.inputType === "search" || SEARCH_LIKE.test(c.name);
@@ -155,7 +156,7 @@ const stateBesides = (snap: Snapshot, key: string): string =>
  * #237: a model `blocked` before the run tried any action is refused (and the model told to explore)
  * this many times; a model that still gives up ends the run `inconclusive` (insufficient-coverage).
  */
-export const MAX_EARLY_BLOCKED_REFUSALS = 2;
+const MAX_EARLY_BLOCKED_REFUSALS = 2;
 
 /** The one "last chance" turn the model gets before a no-progress stop (#172). */
 export const LAST_CHANCE_NOTE =
