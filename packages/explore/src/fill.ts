@@ -458,6 +458,29 @@ export function matchOption(text: string, options: readonly string[]): string | 
  * emphasis/heading marks dropped, and — when over the cap — cut at the last sentence end that fits
  * (else the last word). Independent code: the cap holds whatever the model returned.
  */
+/**
+ * Bounds a typed free-text form value (#285). A single-line field gets `capMessage` (whitespace
+ * collapsed). A multi-line field (`textarea`) keeps its line breaks — a pasted list or CSV is one item
+ * per line, and joining the lines with spaces types a different value than the one generated: only
+ * runs of spaces/tabs inside a line collapse, blank-line runs shrink to one, markdown marks drop, and
+ * an over-cap value is cut at the last whole line that fits (else as `capMessage`).
+ */
+export function capFormText(text: string, maxChars: number, multiline: boolean): string {
+  if (!multiline) return capMessage(text, maxChars);
+  const lines = text
+    .replace(/\r\n?/g, "\n")
+    .replace(/^#+[ \t]*/gm, "")
+    .replace(/\*\*|__/g, "")
+    .split("\n")
+    .map((l) => l.replace(/[^\S\n]+/g, " ").trim());
+  const kept = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (kept.length <= maxChars) return kept;
+  const head = kept.slice(0, maxChars);
+  const line = head.lastIndexOf("\n");
+  if (line >= maxChars / 3) return head.slice(0, line).trimEnd();
+  return capMessage(head, maxChars);
+}
+
 export function capMessage(text: string, maxChars: number): string {
   const flat = text
     .replace(/^#+\s*/gm, "")

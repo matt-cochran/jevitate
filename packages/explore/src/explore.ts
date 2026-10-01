@@ -27,7 +27,7 @@ import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
 import { AuthProgress, isCredentialField } from "./auth-completion.js";
 import { SaveProgress } from "./save-completion.js";
-import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
+import { FieldValueLog, FillHelper, capFormText, chatReply, goalListsSeveral, matchOption } from "./fill.js";
 import {
   type SecretField,
   boundSecretField,
@@ -2075,7 +2075,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         // Free-text form values are bounded too (dogfood: 2–3k-char markdown essays in "Rationale").
         if (decision.op === "type" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
-          text = capMessage(text, FORM_TEXT_MAX_CHARS);
+          text = capFormText(text, FORM_TEXT_MAX_CHARS, control.tag === "textarea");
         }
         const r = await act(cfg.actor, { op: decision.op, control, value: text });
         if (r.ok) {
