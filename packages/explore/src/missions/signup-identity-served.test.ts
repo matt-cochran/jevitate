@@ -103,3 +103,16 @@ describe("per-run unique identity for model-invented emails/usernames (#271)", (
     240_000,
   );
 });
+
+describe("identity values the model did not invent are typed as given (#271)", () => {
+  const field = { tag: "input", inputType: "email" } as const;
+  it("a registered secret, or a value shown in the page's controls or the history, is not rewritten", async () => {
+    const gen = (text: string) => new FakeGenerationGateway({ "form.value": { text } });
+    const secret = await new FillHelper(gen("ada@corp.test")).valueFor({ fieldLabel: "Email", goal: "Sign in", visibleContext: "", field, secrets: ["ada@corp.test"] });
+    expect(secret.text).toBe("ada@corp.test");
+    const shown = await new FillHelper(gen("demo@acme.test")).valueFor({ fieldLabel: "Email", goal: "Sign in", visibleContext: 'textbox "Email" placeholder demo@acme.test', field });
+    expect(shown.text).toBe("demo@acme.test");
+    const history = await new FillHelper(gen("kim@acme.test")).valueFor({ fieldLabel: "Email", goal: "Sign in", visibleContext: "", field, history: ["the page says: use kim@acme.test"] });
+    expect(history.text).toBe("kim@acme.test");
+  });
+});

@@ -471,10 +471,22 @@ export class FillHelper {
     this.#calls += 1;
     const res = await this.gen.generate("form.value", input);
     const generated = res.output.text;
-    // #271: a model-invented identity becomes unique to this run (never a goal-stated one, above).
+    // #271: a model-INVENTED identity becomes unique to this run. Never a goal-stated one (above), a
+    // registered secret (the user's own identity, typed redacted), or a value the model copied from
+    // what it was shown (the goal, the page's controls, the run's history — e.g. a demo account).
     const identity = field === undefined ? null : identityKind(input.fieldLabel, field);
+    const copied = (v: string): boolean => {
+      const t = v.trim().toLowerCase();
+      return (
+        secrets.some((sec) => sec.trim() !== "" && v.includes(sec)) ||
+        [input.goal, input.visibleContext, ...input.history].some((c) => c.toLowerCase().includes(t))
+      );
+    };
     const text =
-      generated !== null && identity !== null && checkFieldValue(generated, field!, input.fieldLabel, input.goal) === null
+      generated !== null &&
+      identity !== null &&
+      checkFieldValue(generated, field!, input.fieldLabel, input.goal) === null &&
+      !copied(generated)
         ? uniqueIdentity(generated, identity, this.#identityToken)
         : generated;
     if (field !== undefined && text !== null) {
