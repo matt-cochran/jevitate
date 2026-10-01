@@ -14,6 +14,9 @@ import { ScriptedJudge, withSession, type ScriptedStep } from "../testkit.js";
  * everywhere else too: `requestMade` saw only FINISHED requests ("no POST request matched … (31
  * requests captured)"), a `wait` reported "nothing is pending", and `blocked` went through — a false
  * `blocked` while the app was working.
+ *
+ * The field goal asks to "finish by reporting what happens", so (#286) its checks alone never meet it:
+ * the run ends with a grounded `report` of what the page shows.
  */
 
 const RPC = "/simuli.intelligence.IntelligenceService/ProductIntelligenceSprint";
@@ -68,7 +71,16 @@ beforeEach(() => {
   rpcs = 0;
 });
 
-async function run(steps: ScriptedStep[], jobWaitMs?: number, finished = false): Promise<GoalBasedResult> {
+const REPORT_GOAL = "Pressure-test the bet by running the simulation. Finish by reporting what happens after you start it.";
+/** The grounded answer a `report` gives, quoting the page's own state line. */
+const answer = (state: string) => ({ answer: state, claims: [{ claim: `The page says ${state}`, quote: state }] });
+
+async function run(
+  steps: ScriptedStep[],
+  jobWaitMs?: number,
+  finished = false,
+  { goal = REPORT_GOAL, state = "Simulation finished" }: { goal?: string; state?: string } = {},
+): Promise<GoalBasedResult> {
   return withSession(
     "long-pending-rpc-",
     async (session) => {
@@ -76,8 +88,8 @@ async function run(steps: ScriptedStep[], jobWaitMs?: number, finished = false):
       return runGoalBasedMission({
         actor,
         judge: new ScriptedJudge(steps),
-        gen: new FakeGenerationGateway(),
-        goal: "Pressure-test the bet by running the simulation. Finish by reporting what happens after you start it.",
+        gen: new FakeGenerationGateway({ "goal.answer": answer(state) }),
+        goal,
         allowlist: [origin],
         startUrl: `${origin}/decisions/demo`,
         successChecks: [{ kind: "requestMade", method: "POST", pathGlob: RPC }],
@@ -102,12 +114,13 @@ describe("a long-pending in-flight unary RPC (#283)", () => {
     async () => {
       holdMs = 5_000;
       // Controls: [0] Run the simulation →.
-      const result = await run([{ op: "click", target: "0" }, { op: "wait" }, { op: "done" }]);
+      const result = await run([{ op: "click", target: "0" }, { op: "wait" }, { op: "report" }]);
       expect(rpcs).toBe(1);
       const waited = notes(result).find((n) => n.startsWith("waited"));
       expect(waited).toContain(`POST ${RPC} (sent by an earlier click)`);
       expect(waited).not.toMatch(/nothing is pending/);
       expect(result.checks[0]).toMatchObject({ passed: true });
+      expect(result.run.answer?.text).toBe("Simulation finished");
       expect(result.outcome).toBe("succeeded");
     },
     90_000,
@@ -117,10 +130,27 @@ describe("a long-pending in-flight unary RPC (#283)", () => {
     "while it is still in flight, requestMade matches the request once SENT: a premature `blocked` ends as the met goal",
     async () => {
       holdMs = null;
-      const result = await run([{ op: "click", target: "0" }, { op: "blocked" }]);
+      // A goal without "finish by reporting": #286 never turns a report goal's `blocked` into "already met".
+      const result = await run([{ op: "click", target: "0" }, { op: "blocked" }], undefined, false, {
+        goal: "Pressure-test the bet by running the simulation.",
+      });
       expect(rpcs).toBe(1);
       expect(result.checks[0]).toMatchObject({ passed: true });
       expect(result.checks[0]?.detail).toContain("sent and still awaiting a response");
+      expect(result.outcome).toBe("succeeded");
+    },
+    90_000,
+  );
+
+  it(
+    "the report goal, still in flight: requestMade matches the SENT request and the grounded report of the running job meets it",
+    async () => {
+      holdMs = null;
+      const result = await run([{ op: "click", target: "0" }, { op: "report" }], undefined, false, { state: "Simulation running" });
+      expect(rpcs).toBe(1);
+      expect(result.checks[0]).toMatchObject({ passed: true });
+      expect(result.checks[0]?.detail).toContain("sent and still awaiting a response");
+      expect(result.run.answer?.text).toBe("Simulation running");
       expect(result.outcome).toBe("succeeded");
     },
     90_000,
