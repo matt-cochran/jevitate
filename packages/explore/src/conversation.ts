@@ -317,6 +317,15 @@ export async function waitForReply(
     readonly ceilingMs?: number;
     readonly quietMs?: number;
     readonly pollMs?: number;
+    /**
+     * When the message was sent (ms), and the endpoints the page was already requesting before it
+     * (`backgroundEndpoints` at the send, without the run's own earlier writes). Given, a request the
+     * send started counts as its work however long ago that was — a later `wait` on the same turn
+     * still sees the send's own write in flight (#241 × #283). Omitted: requests started from
+     * `SEND_REQUEST_SLACK_MS` before this wait, against the endpoints requested before then.
+     */
+    readonly sentAt?: number;
+    readonly background?: ReadonlySet<string>;
   },
 ): Promise<ReplyResult> {
   const idleMs = opts.timeoutMs ?? REPLY_WAIT_MS;
@@ -331,7 +340,8 @@ export async function waitForReply(
   const remaining = (): number => ceilingMs - (Date.now() - started);
   // #241: endpoints the page was already requesting before the send (a balance poll) are background
   // traffic — their requests never count as the reply being worked on.
-  const background = backgroundEndpoints(monitor, started - SEND_REQUEST_SLACK_MS);
+  const since = opts.sentAt ?? started - SEND_REQUEST_SLACK_MS;
+  const background = opts.background ?? backgroundEndpoints(monitor, since);
   let lastActivity = started;
   /** The new text as last read, and since when it has held still (a streaming reply keeps growing). */
   let latest = "";
@@ -357,7 +367,10 @@ export async function waitForReply(
       (pendingStatusShown(opts.baseline, text) ? "pending status" : null);
     // The send's own work still in flight (the LLM call, a job it started) — not an unrelated
     // long-poll the page had open before the message was sent.
-    const inFlight = monitor.pending().some((r) => r.startedAt >= started - SEND_REQUEST_SLACK_MS && !background.has(endpointKey(r)));
+    // #283: a write held open past the long-poll threshold is demoted to background for SETTLING
+    // only — the send's own request is still its work until it ends (a slow LLM turn).
+    const unfinished = [...monitor.pending(), ...monitor.background().filter((r) => r.why === "long-poll")];
+    const inFlight = unfinished.some((r) => r.startedAt >= since && !background.has(endpointKey(r)));
     if (busy !== null || inFlight) lastActivity = Date.now();
     if (isReply(latest) && busy === null) {
       // Streaming replies keep mutating: wait for the page to settle, then confirm it held still.

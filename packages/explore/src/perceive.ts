@@ -244,7 +244,8 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
         stuckBusy = busy;
         const now = await page.evaluate(visibleBusyIndicator).catch(() => null);
         busyWait = {
-          requestsCompleted: monitor.completedSince(busySince).filter((r) => r.resourceType !== "document").length,
+          // A `--settle-ignore`d beacon is no sign of the app working on the job (#284).
+          requestsCompleted: monitor.completedSince(busySince).filter((r) => r.resourceType !== "document" && r.ignored !== true).length,
           indicatorChanged: now !== null && now !== busy,
         };
       }

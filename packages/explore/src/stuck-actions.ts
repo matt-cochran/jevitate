@@ -129,8 +129,18 @@ export function openOverlayName(): string | null {
 
 /** The slice of the page monitor the request helpers read. */
 export interface RequestLog {
-  completedSince(sinceMs: number): ReadonlyArray<{ readonly url: string; readonly method: string; readonly startedAt: number }>;
-  pending(): ReadonlyArray<{ readonly url: string; readonly method: string; readonly startedAt: number }>;
+  completedSince(sinceMs: number): ReadonlyArray<LoggedRequest>;
+  pending(): ReadonlyArray<LoggedRequest>;
+}
+
+/** One request as the request helpers read it. */
+interface LoggedRequest {
+  readonly url: string;
+  readonly method: string;
+  readonly startedAt: number;
+  readonly requestContentType?: string;
+  /** A `--settle-ignore`d request (telemetry, a beacon) — never an action's effect (#284). */
+  readonly ignored?: true;
 }
 
 /** How far back a request counts as the page's own background traffic (a poll it already ran). */
@@ -149,18 +159,45 @@ export function endpointKey(r: { readonly url: string; readonly method: string }
  * The endpoints the page was already requesting before `at` (a balance poll, a heartbeat) — their
  * later requests are the page's background traffic, never the effect of an action taken at `at`.
  */
-export function backgroundEndpoints(log: RequestLog, at: number): Set<string> {
+export function backgroundEndpoints(log: RequestLog, at: number, ownWrites: ReadonlySet<string> = new Set()): Set<string> {
   const out = new Set<string>();
   for (const r of log.completedSince(at - BACKGROUND_WINDOW_MS)) if (r.startedAt < at) out.add(endpointKey(r));
   for (const r of log.pending()) if (r.startedAt < at) out.add(endpointKey(r));
+  // A write the run's own earlier action sent (the previous chat turn's POST) is not the page polling:
+  // the same endpoint written again is this action's own work (#241 × #283).
+  for (const k of ownWrites) out.delete(k);
   return out;
+}
+
+/**
+ * The endpoints of the WRITES (by `isWrite`) started at or after `at` — what an action itself sent.
+ * Remembered by the run so a later action writing to the same endpoint is never mistaken for
+ * background traffic (`backgroundEndpoints`'s `ownWrites`).
+ */
+export function writesStartedSince(
+  log: RequestLog,
+  at: number,
+  isWrite: (r: { readonly method: string; readonly path: string; readonly contentType: string | null }) => boolean,
+): string[] {
+  const out = new Set<string>();
+  for (const r of [...log.completedSince(at), ...log.pending()]) {
+    if (r.startedAt < at || r.ignored === true) continue;
+    let path: string;
+    try {
+      path = new URL(r.url).pathname;
+    } catch {
+      path = r.url.split(/[?#]/)[0] ?? r.url;
+    }
+    if (isWrite({ method: r.method, path, contentType: r.requestContentType ?? null })) out.add(endpointKey(r));
+  }
+  return [...out];
 }
 
 /** Requests started at or after `at` to an endpoint not in `background`: what the action set off. */
 export function requestsStartedSince(log: RequestLog, at: number, background: ReadonlySet<string>): string[] {
   const out: string[] = [];
   for (const r of [...log.completedSince(at), ...log.pending()]) {
-    if (r.startedAt < at) continue;
+    if (r.startedAt < at || r.ignored === true) continue;
     const k = endpointKey(r);
     if (!background.has(k)) out.push(k);
   }

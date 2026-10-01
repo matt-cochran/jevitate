@@ -108,7 +108,7 @@ import { SafetyPolicy, type SafetyConfig } from "./safety.js";
 import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
-import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince } from "./stuck-actions.js";
+import { FailedActionStreak, backgroundEndpoints, openOverlayName, requestsStartedSince, writesStartedSince } from "./stuck-actions.js";
 import type { HeapSample } from "@jevitate/domain";
 
 
@@ -695,7 +695,12 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** The last message sent got no reply yet (a slow LLM turn): `wait`s are patience, bounded. */
   let awaitingReply = false;
   /** The page text before the last message, and the message — to keep listening for its reply. */
-  let lastTurn: { baseline: string; sent: string } | null = null;
+  let lastTurn: { baseline: string; sent: string; sentAt: number; background: ReadonlySet<string> } | null = null;
+  /**
+   * #241 × #283: endpoints the run's own conversation turns wrote to (the chat's POST). Never the
+   * page's background polling: the next turn's write to the same endpoint is that turn's own work.
+   */
+  const turnWrites = new Set<string>();
   let lastPath: string | null = null;
   // #188 — an add-another flow (the goal lists several items) comes back to a state it already went
   // through (the second item's one-time dialog, identical to the first's). The model is reminded of
@@ -2260,7 +2265,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (op === "send") {
           const baseline = await readPageText(page, secrets);
           const before = new Set(keys.keys());
-          const sendBackground = backgroundEndpoints(monitorFor(page), at);
+          const sendBackground = backgroundEndpoints(monitorFor(page), at, turnWrites);
           const r = await act(cfg.actor, { op: "send", control, value: message, candidates: snap.controls });
           if (!r.ok) {
             history.push(`send failed: ${r.reason ?? "?"}`);
@@ -2295,10 +2300,14 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           preSend ??= baseline;
           // The reply wait counts from the send: the check above already waited part of it.
           const checkedMs = now() - checkedFrom;
+          // The send's own writes (started by now: the not-sent check above settled) — never background.
+          for (const k of writesStartedSince(monitorFor(page), at, isWrite)) if (!sendBackground.has(k)) turnWrites.add(k);
           const listened = await waitForReply(page, {
             secrets,
             baseline,
             sent: message,
+            sentAt: at,
+            background: sendBackground,
             timeoutMs: Math.max(1, replyWaitMs - checkedMs),
             ceilingMs: Math.max(1, replyCeilingMs - checkedMs),
           });
@@ -2309,7 +2318,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           }
           awaitingReply = !reply.received;
           busyWaitedMs = reply.waitedMs;
-          lastTurn = { baseline, sent: message };
+          lastTurn = { baseline, sent: message, sentAt: at, background: sendBackground };
           offerBaseline = before;
           history.push(
             `sent ${quote(message)} via ${via?.kind === "click" ? `"${via.control.name}"` : "Enter"} → ` +
@@ -2580,14 +2589,26 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
             message = submits ? pendingTexts.join("\n") : control.name;
             conversation.sent.push(message);
             preSend ??= baseline;
-            reply = await waitForReply(page, { secrets, baseline, sent: message, timeoutMs: replyWaitMs, ceilingMs: replyCeilingMs });
+            // The endpoints requested before the click (computed after it: only requests started
+            // before `at` count) — the turn's own write is its work, never background (#241 × #283).
+            const turnBackground = backgroundEndpoints(monitorFor(page), at, turnWrites);
+            for (const k of writesStartedSince(monitorFor(page), at, isWrite)) if (!turnBackground.has(k)) turnWrites.add(k);
+            reply = await waitForReply(page, {
+              secrets,
+              baseline,
+              sent: message,
+              sentAt: at,
+              background: turnBackground,
+              timeoutMs: replyWaitMs,
+              ceilingMs: replyCeilingMs,
+            });
             if (reply.received) {
               conversation.latestReply = reply.text;
               replies.add(snap.url, reply.text);
             }
             awaitingReply = !reply.received;
             busyWaitedMs = reply.waitedMs;
-            lastTurn = { baseline, sent: message };
+            lastTurn = { baseline, sent: message, sentAt: at, background: turnBackground };
             offerBaseline = new Set(keys.keys());
             history.push(
               `clicked ${control.name}${quickReply ? " (a quick reply)" : ""} → ` +

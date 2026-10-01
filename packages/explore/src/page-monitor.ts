@@ -87,6 +87,8 @@ export interface CompletedRequest extends InflightRequest {
    * clean finish.
    */
   readonly abortedAfterResponse?: boolean;
+  /** A `--settle-ignore`d request (telemetry, a beacon): the target's background traffic, never its work. */
+  readonly ignored?: true;
 }
 
 export interface SettleResult {
@@ -367,6 +369,7 @@ export class PageMonitor {
           abortedAfterResponse,
           endedAt,
           durationMs: Math.max(0, endedAt - started.startedAt),
+          ...(ignored ? { ignored: true as const } : {}),
         });
         for (const c of this.#captures) {
           c.ended(r, {
