@@ -31,7 +31,7 @@ import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "../cras
 import type { HeapSample } from "@jevitate/domain";
 import { RunRecorder, emptyRecording } from "../record.js";
 import { isAdvisoryConsoleError, PageSignalCollector, type DefectSignal } from "../adversarial/defect-oracle.js";
-import { detectOverflow, shouldCheckOverflow } from "../overflow.js";
+import { clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow } from "../overflow.js";
 import {
   advisoryTitle,
   defectTitle,
@@ -836,9 +836,26 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
    * alongside the console/network signals; dedup across occurrences is the same fingerprint-keyed
    * `fold()` every other hard signal already goes through.
    */
-  const overflowSignal = async (): Promise<DefectSignal | null> => {
+  const overflowSignals = async (): Promise<DefectSignal[]> => {
     const vp = sessions.page.viewportSize();
-    if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return null;
+    if (!shouldCheckOverflow(vp?.width, params.overflow?.checkOverflow ?? false)) return [];
+    // #302: text cut off vertically, under the same gate — one signal per element.
+    const clipped = (
+      await detectClipping(sessions.page, {
+        viewport: vp ?? { width: 1280, height: 720 },
+        ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
+        ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
+        ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
+      })
+    ).map((c): DefectSignal => ({
+      kind: "vertical-clipping",
+      detail: clippingSummary(c),
+      clippedPx: c.clippedPx,
+      cause: c.cause,
+      route: c.route,
+      url: c.url,
+      descriptor: c.element.descriptor,
+    }));
     const finding = await detectOverflow(sessions.page, {
       viewport: vp ?? { width: 1280, height: 720 },
       ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
@@ -846,8 +863,8 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
       ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
     });
-    if (finding === null) return null;
-    return {
+    if (finding === null) return clipped;
+    const horizontal: DefectSignal = {
       kind: "horizontal-overflow",
       detail: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
       overflowPx: finding.overflowPx,
@@ -855,6 +872,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
       url: finding.url,
       descriptor: finding.element.descriptor,
     };
+    return [horizontal, ...clipped];
   };
 
   /** A declared-invariant violation (#86) as a step finding. */
@@ -891,8 +909,7 @@ async function runAdversarialHunt(params: AdversarialMissionParams, overlay: Dem
     // A same-tick console/response event gets one loop tick to land before draining.
     await sessions.page.waitForTimeout(10);
     const hardSignals = collector.drain();
-    const overflow = await overflowSignal();
-    if (overflow !== null) hardSignals.push(overflow);
+    hardSignals.push(...(await overflowSignals()));
     const url = redactUrl(sessions.page.url());
     const route = normalizeRoute(url);
     const findings: StepFinding[] = [];

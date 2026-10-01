@@ -61,7 +61,7 @@ import { MissionSafety } from "../mission-safety.js";
 import type { SafetyConfig } from "../safety.js";
 import type { SideEffect } from "../side-effects.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
-import { detectOverflow, shouldCheckOverflow, type OverflowFinding } from "../overflow.js";
+import { clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type ClippingFinding, type OverflowFinding } from "../overflow.js";
 
 /** A failed act whose reason names a timeout, or a target this gate refused as not actionable
  *  (a visually-hidden skip link, an occluded target) — never re-chosen for the rest of the run. */
@@ -108,7 +108,7 @@ export interface DefectRecord {
    * `judgment-flagged-state`, keyed by the state's fingerprint.
    */
   readonly fingerprint: string;
-  readonly kind: "horizontal-overflow" | "judgment-flagged-state";
+  readonly kind: "horizontal-overflow" | "vertical-clipping" | "judgment-flagged-state";
   readonly stateFingerprint: string;
   readonly url: string;
   readonly reason: string;
@@ -116,6 +116,8 @@ export interface DefectRecord {
   readonly recording: Recording;
   /** Present for a horizontal-overflow hard signal (#149): the structured finding `reason` summarizes. */
   readonly overflow?: OverflowFinding;
+  /** Present for a vertical-clipping hard signal (#302): the element whose text is cut off. */
+  readonly clipping?: ClippingFinding;
   /**
    * #214: `true` on a `judgment-flagged-state` — a model's opinion alone, never an independent oracle's
    * verdict (guardrail #4). Reported (with its repro Recording, so `verify-fix` can replay it) but it
@@ -256,7 +258,8 @@ export interface InductionMissionParams {
    * Horizontal-overflow hard signal (#149): checked after every settled state (and on the seed
    * page) and, when it fires, recorded as a `DefectRecord` — a hard defect, never a Jev judgment
    * (guardrail #4). Runs by default only when the emulated viewport is narrower than 1024px, or
-   * always when `checkOverflow` is set (CLI `--check-overflow`).
+   * always when `checkOverflow` is set (CLI `--check-overflow`). The vertical-clipping signal (#302:
+   * text cut off by a fixed-height box, or above the page top) runs alongside it, under the same gate.
    */
   readonly overflow?: {
     readonly checkOverflow?: boolean;
@@ -467,17 +470,30 @@ async function runInductionFrontier(
       ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
       ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
     });
-    if (finding === null || seenOverflow.has(finding.fingerprint)) return;
-    seenOverflow.add(finding.fingerprint);
-    defects.push({
-      fingerprint: finding.fingerprint,
-      kind: "horizontal-overflow",
-      stateFingerprint: stateFp,
-      url,
-      reason: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
-      recording,
-      overflow: finding,
+    if (finding !== null && !seenOverflow.has(finding.fingerprint)) {
+      seenOverflow.add(finding.fingerprint);
+      defects.push({
+        fingerprint: finding.fingerprint,
+        kind: "horizontal-overflow",
+        stateFingerprint: stateFp,
+        url,
+        reason: `horizontal-overflow: ${finding.element.descriptor} overflows the ${finding.viewport.width}px viewport by ${finding.overflowPx}px at ${finding.route}`,
+        recording,
+        overflow: finding,
+      });
+    }
+    // #302: text cut off vertically — one defect per element (route + element), like overflow.
+    const clipped = await detectClipping(sessions.page, {
+      viewport: vp ?? { width: 1280, height: 720 },
+      ...(params.overflow?.device === undefined ? {} : { device: params.overflow.device }),
+      ...(params.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: params.overflow.ignoreSelectors }),
+      ...(params.overflow?.secrets === undefined ? {} : { secrets: params.overflow.secrets }),
     });
+    for (const c of clipped) {
+      if (seenOverflow.has(c.fingerprint)) continue;
+      seenOverflow.add(c.fingerprint);
+      defects.push({ fingerprint: c.fingerprint, kind: "vertical-clipping", stateFingerprint: stateFp, url, reason: clippingSummary(c), recording, clipping: c });
+    }
   };
   let transitionsExercised = 0;
   let actions = 0;

@@ -9,7 +9,7 @@ import { runCaptureFor, type ScreenshotsSpec } from "./run-screenshots.js";
 import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import type { InvariantSpec } from "@jevitate/recording";
-import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
+import { explore, runGoalBasedMission, type GoalBasedResult, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type ExploreConfig, assertAuthorizedExploreTarget, resolveMissionFixture, reproduceHang, hangFinding, hangOutcome, InvariantMonitor, BudgetMonitor, type Bounds, type TimingSummary, type RunAnswer, type RunOutcome, type SecretField, type HangFinding, type VerifySession, type SideEffect, type TranscriptEntry, type BudgetTrajectory, secretFieldSecrets, clippingSummary, detectClipping, detectOverflow, shouldCheckOverflow, type CrashReport } from "@jevitate/explore";
 import { UxAnalyzer, a11yChecks, buildReport, calibrationCaveat, detectFriction, detectSignals, groundFindings, loadV1Rubric, persistableScreen, resolveMinConfidence, resolveMaxFindingsPerRoute, resolveQualityPolicy, withSignalFindings, makeSignalFinding, type AppContext, type SignalOptions, type UxEvidenceFile, type ScreenRef, type UxEvidence, type UxFinding, type UxReport } from "@jevitate/ux";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { loadUxMaxFindingsPerPage, loadUxMinConfidence, loadUxMinConfidenceByAppClass, loadUxShow } from "./ux-config.js";
@@ -476,6 +476,36 @@ export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Pro
                     requests: [],
                     detail: `scrollWidth exceeds innerWidth by ${overflow.overflowPx}px at a ${overflow.viewport.width}x${overflow.viewport.height} viewport`,
                   },
+                }),
+              );
+            }
+            // #302: text cut off vertically (a fixed-height box, or above the page top) — one finding per element.
+            const clipped = await detectClipping(session.page, {
+              viewport: vp ?? { width: 1280, height: 720 },
+              ...(opts.emulation?.device === undefined ? {} : { device: opts.emulation.device }),
+              ...(opts.overflow?.ignoreSelectors === undefined ? {} : { ignoreSelectors: opts.overflow.ignoreSelectors }),
+              secrets,
+            });
+            for (const c of clipped) {
+              if (seenOverflow.has(c.fingerprint)) continue;
+              seenOverflow.add(c.fingerprint);
+              overflowFindings.push(
+                makeSignalFinding({
+                  kind: "vertical-clipping",
+                  confidence: 0.9,
+                  url: ev.url,
+                  screenId: ev.screenId,
+                  observation:
+                    c.cause === "overflow-hidden"
+                      ? `${c.element.descriptor} cuts off its text by ${c.clippedPx}px on ${c.route}: the content is taller than the box and overflow is hidden.`
+                      : `${c.element.descriptor} is cut off ${c.clippedPx}px above the top of the page on ${c.route}.`,
+                  userImpact: "Part of the text is cut off and no scroll position shows it: a user on this device cannot read it.",
+                  recommendation:
+                    c.cause === "overflow-hidden"
+                      ? `Let ${c.element.descriptor} grow with its content (min-height instead of height), make it scrollable, or truncate on purpose with line-clamp at ${c.viewport.width}px.`
+                      : `Give the container of ${c.element.descriptor} room for its wrapped content (no fixed height, or no wrapping) at ${c.viewport.width}px.`,
+                  controls: [c.element.descriptor],
+                  evidence: { kind: "vertical-clipping", steps: [history.length], requests: [], detail: clippingSummary(c) },
                 }),
               );
             }

@@ -109,6 +109,7 @@ function replayOptionsFrom(
     after: o.after ?? environment.hooks?.after,
     allowShellHooks: o.allowShellHooks,
     hookTimeoutMs: o.hookTimeoutMs,
+    fixtureIdentity: o.fixtureIdentity,
   };
   const storageState = o.storageState ?? environment.storageState;
   if (storageState !== undefined && !existsSync(storageState)) throw new DemoAspectArgsError(`storage state not found: ${storageState}`);

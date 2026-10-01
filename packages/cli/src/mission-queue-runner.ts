@@ -274,6 +274,8 @@ interface QueuedAuth {
   readonly saveStorageState?: string;
   readonly secretFields: readonly SecretField[];
   readonly fixtures?: string;
+  /** #243: the origin's personas — what a fixture step's `auth.identity` binds to. */
+  readonly personas?: TargetConfig["personas"];
 }
 
 /**
@@ -320,6 +322,7 @@ function queuedAuth(
       ...(p.storageState === undefined ? {} : { storageState: p.storageState }),
       secretFields,
       ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
+      ...(config.personas === undefined ? {} : { personas: config.personas }),
     };
   }
   const fromRecord = target.storageState !== undefined;
@@ -336,6 +339,7 @@ function queuedAuth(
     ...(saveStorageState === undefined ? {} : { saveStorageState }),
     secretFields,
     ...(config.fixtures === undefined ? {} : { fixtures: config.fixtures }),
+    ...(config.personas === undefined ? {} : { personas: config.personas }),
   };
 }
 
@@ -501,6 +505,8 @@ export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMiss
         secretFields: auth.secretFields,
         secrets: secretFieldSecrets(auth.secretFields),
         ...(auth.fixtures === undefined ? {} : { targetFixtures: auth.fixtures }),
+        // #243: a fixture step's `auth.identity` binds to the origin's targets.json persona of that name.
+        ...(auth.personas === undefined ? {} : { personas: auth.personas }),
       },
     );
     let goal = mission.goal!;

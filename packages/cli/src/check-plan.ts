@@ -296,6 +296,7 @@ function itemSetup(
       ...(x.after === undefined ? {} : { after: x.after }),
       ...(x.allowShellHooks === undefined ? {} : { allowShellHooks: x.allowShellHooks }),
       ...(x.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: String(x.hookTimeoutMs) }),
+      ...(x.fixtureIdentity === undefined ? {} : { fixtureIdentity: x.fixtureIdentity }),
     };
     fixtures = { allowlist: p.allowlist, flags, ...(storageState === undefined ? {} : { storageState }), secretFields };
     // Validated now (the spec, and every ${setup.x} the goal uses), before anything runs.

@@ -40,6 +40,20 @@ behaviour changes).
   `--url chrome-extension://<id>/sidepanel.html`, and the agent acts on their DOM. Recordings
   record each extension's `{id, name, version}`. verify-fix refuses a different build with exit 64.
   Headless runs use Playwright's full Chromium in new-headless mode. See docs/extensions.md (#256).
+- Fixture identities: a fixture step's `auth` can name an `identity` (`"identity": "owner"`), bound
+  by `--fixture-identity <name>=<storageState>` (MCP `fixtureIdentity`, suite goal items) or the
+  origin's targets.json persona. The fixture mints as that identity while the mission runs as its
+  own session or cold, for example an owner-minted invite opened by a cold recipient. Unbound
+  identities are refused before any request. Replays re-mint as the same identities. `--url` accepts
+  a root-relative `${setup.*}` path right after the origin (`http://host${setup.link}`). See
+  docs/fixtures.md (#243).
+- A vertical-clipping signal: viewport runs flag text cut off by a fixed-height `overflow: hidden`
+  box, or spilled above the page top (a wrapped chip in a 56px header). It runs with the
+  horizontal-overflow signal under the same gate and is reported the same way: a `vertical-clipping`
+  defect in coverage, exploratory and adversarial runs, and a signal finding in the usability
+  review, one per element. Intentional truncation (`line-clamp`, ellipsis) and sr-only, collapsed
+  or scrollable boxes are not reported. `--ignore-overflow` excludes other cases. See
+  docs/exploration.md (#302).
 
 ### Changed
 

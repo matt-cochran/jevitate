@@ -156,7 +156,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (335 exports)
+# @jevitate/explore (337 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -310,6 +310,7 @@
   classifyHang: function
   classifyRequest: function
   clickTimeoutMs: function
+  clippingSummary: function
   controlFields: function
   controlKey: function
   controlRisk: function
@@ -328,6 +329,7 @@
   describeFailure: function
   describeStatus: function
   describeUnreachable: function
+  detectClipping: function
   detectForms: function
   detectOverflow: function
   disambiguate: function

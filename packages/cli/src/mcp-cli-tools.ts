@@ -125,6 +125,8 @@ const EXTENSION = { extension: { kind: "path[]", flag: "--extension" } as CliPar
 const DEMO_SHOW = { headed: b("--headed"), slowMo: n("--slow-mo") };
 const ENVIRONMENT = { env: s("--env"), baseUrl: s("--base-url") };
 const AI = { real: b("--real"), fakeAi: b("--fake-ai") };
+/** #243: `name=<storageState>` identities a fixture step authenticates as — each path confined as a session. */
+const FIXTURE_IDENTITY: CliParam = { kind: "named-sessions", flag: "--fixture-identity" };
 
 // ── The tools ─────────────────────────────────────────────────────────────────────────────────
 export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
@@ -145,7 +147,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "With approve: true, applies the reviewed draft (shows the diff; refused with E_JOURNEY_ANNOTATIONS_STALE if the Journey changed since the draft) — the same proposal/approval semantics as the CLI. Drafting needs real or fakeAi.",
     command: {
       path: "journey annotate",
-      params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), screenshots: { kind: "screenshots", flag: "--screenshots" }, ...ENVIRONMENT, ...EMULATION, ...AI },
+      params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, screenshots: { kind: "screenshots", flag: "--screenshots" }, ...ENVIRONMENT, ...EMULATION, ...AI },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
@@ -164,6 +166,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         params: { kind: "params", flag: "--param" },
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
         screenshots: { kind: "screenshots", flag: "--screenshots" },
         ...ENVIRONMENT,
         ...EMULATION,
@@ -200,6 +203,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         pace: n("--pace"),
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
         ...EMULATION,
         ...DEMO_SHOW,
         ...AI,
@@ -213,7 +217,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1).",
     command: {
       path: "demo approve",
-      params: { ...EXTENSION, id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), ...EMULATION, ...DEMO_SHOW },
+      params: { ...EXTENSION, id: pos(), out: path("--out"), pace: n("--pace"), storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, ...EMULATION, ...DEMO_SHOW },
       omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
@@ -245,6 +249,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         personas: path("--personas"),
         actor: { kind: "named-sessions", flag: "--actor" },
         fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
         fixture: path("--fixture"),
         typeFixture: { kind: "bound-paths", flag: "--type-fixture" },
         appClass: s("--app-class"),
@@ -495,6 +500,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
           force: b("--force"),
           storageState: session("--storage-state"),
           fixtures: path("--fixtures"),
+          fixtureIdentity: FIXTURE_IDENTITY,
           ...EMULATION,
           ...DEMO_SHOW,
         },

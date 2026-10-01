@@ -232,3 +232,32 @@ narrower than 1024px. It is reported as a defect in coverage, exploratory and ad
 and as a signal finding in the usability review. `--check-overflow` turns it on at any width, and
 `--ignore-overflow <selector>` excludes intentional cases. It is pure DOM geometry, never a model
 judgment.
+
+A **vertical-clipping** hard signal (#302) runs alongside it, under the same gate, and is reported
+the same way: a defect in coverage, exploratory and adversarial runs, and a signal finding in the
+usability review. It flags text that no scroll position shows, in two cases:
+
+- **`overflow-hidden`**: text falls outside its nearest `overflow: hidden`/`clip` box because the box
+  is shorter than its content (`scrollHeight > clientHeight`), for example a fixed-height card. The
+  finding names the box.
+- **`above-page-top`**: text spilled out of a too-short container above the top of the page, for
+  example a `flex-wrap` chip centred in a 56px header that wraps to four lines at 375px. The finding
+  names the text's element.
+
+Each finding has the element's descriptor, the clipped distance (`clippedPx`) and a fingerprint of
+route and element. One element is one finding however many states show it, up to 10 per page
+state.
+
+What it does **not** report, by design:
+
+- **Intentional truncation.** Text under `line-clamp`/`-webkit-line-clamp` or
+  `text-overflow: ellipsis` is ignored, not reported as advisory. The app chose to truncate and
+  shows that it did. A "read more" box that truncates with a plain fixed height and
+  `overflow: hidden` is reported; exclude it with `--ignore-overflow <selector>`.
+- Visually hidden text: an sr-only box (1px or less, `clip`/`clip-path`), a collapsed box (zero
+  height), text that is `visibility: hidden`, `display: none` or `opacity: 0`, and a skip link that
+  sits entirely above the page.
+- Scrollable boxes (`overflow: auto`/`scroll`) and the page root. A scroll-locked `<body>` is not a
+  clipped box.
+- Text covered by a later sibling, such as a sticky nav overlapping a spilled line. That is
+  occlusion, not clipping.

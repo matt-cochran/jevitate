@@ -94,6 +94,8 @@ function files(): { state: string; state2: string; upload: string; personas: str
   writeFileSync(personas, JSON.stringify({ admin: "alice.json", viewer: "bob.json" }));
   const log = join(dir, "app.log");
   writeFileSync(log, "");
+  // #243: a fixture step that authenticates as the named identity `owner`
+  writeFileSync(join(dir, "owner-fixtures.json"), JSON.stringify({ setup: [{ method: "POST", url: "/api/invites", auth: { from: "cookies", identity: "owner" } }] }));
   return { state, state2, upload, personas, log };
 }
 
@@ -146,6 +148,8 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     allowShellHooks: { kind: "goal", set: true, with: { before: "true" } },
     // a hook outliving the timeout fails the setup: the runner is never reached
     hookTimeoutMs: { kind: "goal", set: 50, with: { before: "sleep 1", allowShellHooks: true } },
+    // #243: without it the fixture's `auth.identity: "owner"` is unbound — refused before the runner
+    fixtureIdentity: { kind: "goal", set: ["owner=alice.json"], with: { fixtures: "owner-fixtures.json" } },
     allowVacuousChecks: { kind: "goal", set: true },
     // #245: demo mode reaches the runner's `browser` option
     headed: { kind: "coverage", set: true },

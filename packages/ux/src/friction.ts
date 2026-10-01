@@ -50,6 +50,7 @@ export const SIGNAL_IMPACT: Readonly<Record<SignalKind, JobImpact>> = {
   "inert-control": "confused",
   "url-mismatch": "confused",
   "horizontal-overflow": "confused",
+  "vertical-clipping": "confused",
 };
 
 const IMPACT_SEVERITY: Readonly<Record<JobImpact, UxFinding["severity"]>> = { blocked: "major", slowed: "minor", confused: "minor", cosmetic: "info" };

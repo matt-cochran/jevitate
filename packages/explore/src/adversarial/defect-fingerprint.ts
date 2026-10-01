@@ -99,6 +99,8 @@ export function signalKey(signal: DefectSignal): string {
     case "horizontal-overflow":
       // `route`/`descriptor` are already the finding's own (redacted, route-templated) values.
       return `horizontal-overflow|${signal.route}|${signal.descriptor}`;
+    case "vertical-clipping":
+      return `vertical-clipping|${signal.route}|${signal.descriptor}`;
   }
 }
 
@@ -142,6 +144,7 @@ const PRIORITY: Readonly<Record<DefectSignal["kind"], number>> = {
   // Lowest: a real, independently-detected defect, but a crash/network signal co-occurring on the
   // same step is the more actionable primary (#149).
   "horizontal-overflow": 4,
+  "vertical-clipping": 5,
 };
 
 /** One step's hard signals as ONE defect: its primary signal plus every signal's fingerprint. */
@@ -196,5 +199,7 @@ export function defectTitle(signal: DefectSignal): string {
       return `Uncaught page error on ${normalizeRoute(signal.pageUrl ?? "")}: ${messageClass(signal.detail).slice(0, 80)}`;
     case "horizontal-overflow":
       return `Horizontal overflow on ${signal.route}: ${signal.descriptor} (${signal.overflowPx}px)`;
+    case "vertical-clipping":
+      return `Text cut off on ${signal.route}: ${signal.descriptor} (${signal.clippedPx}px${signal.cause === "above-page-top" ? " above the page top" : ""})`;
   }
 }
