@@ -7,241 +7,223 @@ behaviour changes).
 
 ## [0.3.0] – unreleased
 
-### Added
+0.3.0 lets a mission start from inside a promoted Journey (`--from-journey`/`--at-step`, Journey
+anchors, `campaign run`), records what each action changed (`--action-deltas`), loads unpacked
+browser extensions, and governs browser count and memory on shared machines. UX findings are now
+claims verified by code, and API keys are verified live with their provider. Many goal-loop,
+grounding, network, hang and guard fixes make runs end with a truthful outcome instead of a false
+defect, a crash or a 15 s hang.
 
-- Resource governance for shared machines (#205):
-  - `--max-browsers` caps how many jevitate runs have a browser open at once, across the whole
-    machine. The default is `JEVITATE_MAX_BROWSERS`, else cores/4 within 2..6.
-  - `--max-browser-memory <MiB>` sets a ceiling on a run's browser memory (browser, renderers and
-    helpers). Over it, the run ends `inconclusive` with `failure.kind: "resource-limit"`, naming the
-    measured value and the ceiling. It is never a crash or a finding about the app. The default is
-    `JEVITATE_MAX_BROWSER_MEMORY_MB`, else 4 GiB or half the RAM.
-  - Under host load or memory pressure, new runs take half the cap and settle windows double. On a
-    clearly starved host, a new run refuses with `E_HOST_STARVED` unless `--ignore-host-load`.
-  - Results record all of it in `hostHealth.resources`.
-  - Browsers left behind by a killed jevitate are found by an owner marker and closed before the
-    next browser run, and on demand with the new `jevitate doctor --cleanup`. Only processes
-    jevitate launched are ever signalled.
-  - The MCP tools that launch a browser take `maxBrowsers` and `maxBrowserMemory`.
-    `JEVITATE_RESOURCE_GOVERNANCE=off` turns off the automatic parts. See docs/operations.md.
-- Journey-anchored exploration: `explore --from-journey <id> --at-step <n|anchor>` replays a
-  promoted Journey's first steps in the mission's own browser context (page, form contents and
-  session kept; fail-closed, never self-healed; `--param`, `--env`/`--base-url` apply), then starts
-  the goal, coverage, exploratory, adversarial or usability mission on the live page. A prefix that
-  no longer replays ends the run `inconclusive` with `failure.kind: "journey-stale"` (exit 2).
-  Results and findings record `branch: {journeyId, step, anchor}` (additive, schemaVersion 1), and
-  `report` lists each defect's branch points. `--at-step all|anchors` sweeps every step (or
-  anchor), each in a fresh session restored by `--fixtures`, `--max-actions` split per step, one
-  deduped report. Resets inside an anchored mission re-replay the prefix (counted against
-  `--max-actions`). `verify-fix` and `regression capture|run` replay a branch-point finding
-  through its prefix (`--param` re-supplies secret params); a stale prefix is a typed
-  `inconclusive` (#293).
-- Journey anchors: an optional, validated `metadata.anchors` (`{name, step, description?,
-  probes?}`) names states worth exploring from; `journey anchors <id>` lists them, and `--at-step`
-  takes an anchor name (#293).
-- `campaign run <spec.json>`: a bounded list of jobs (Journey, anchors, strategies, budgets) run as
-  discovery, then anchored missions in order with the spec's `--fixtures` restore around every run,
-  and one deduped report (`campaign.json`, `campaign.md`). An invalid spec is refused with every
-  problem listed (exit 64). MCP `journey_anchors` and `run_campaign`; `run_exploration` and
-  check-suite mission items take `fromJourney`/`atStep`/`params`/`env`/`baseUrl`. The
-  `jevitate-test-campaign` skill now uses them (#293).
-- `--action-deltas` (opt-in; MCP `actionDeltas`, check-suite option `actionDeltas`; goal and
-  usability runs): after each action, code records what changed on the page
-  (accessibility snapshot before/after, announcements in between, the action's requests, URL and
-  title), redacted first, with volatile nodes learned per route and dropped, changes ranked by
-  closeness to the action and big changes summarised. Code's verdict per action is `no-change`,
-  `relevant-change` or `inconclusive`; only `no-change` counts toward a no-progress stop. Deltas
-  are attached to transcript and Recording steps (`delta`, additive), counted in the result
-  (`actionDeltas`) and the human output, and summarised in the model's step history; the expected
-  change is compared with the delta. Jev labels are advisory, and its ignore rules are accepted only
-  for nodes seen changing on their own. Off by default; on, about 50–110 ms per action on a small
-  page, 0.35–0.5 s on a 400-row page (#303).
-- `--action-deltas` also on `journey run`, `journey annotate`, `journey demo` and `verify-fix`
-  (MCP `actionDeltas` on `run_journey`, `annotate_journey`, `demo_journey`, `verify_fix`) and on
-  adversarial and coverage runs: replays compare each step's delta with the Recording's (evidence
-  only), annotate drafts expected results from deltas, demo adds an "observed" caption line,
-  adversarial defects carry their action's delta and coverage lists no-effect actions. Goal runs
-  re-check a write's changes after a reload (`persisted: yes | no | inconclusive`; never a re-post),
-  and a report may quote a toast that vanished before it (#303).
-- Adversarial `boundary-submit` checks whether a field's input is rendered as markup. It submits
-  inert canaries with a per-submission random token: `<i data-jev-canary="T">jevT</i>` and an
-  attribute break, `jevT" data-jev-canary="T`, with no script or event handler. It then inspects the
-  DOM after submit and after reloading the page. A hit is a `markup-injection` defect, `stored` or
-  `reflected`; text that stays escaped is not a defect. Boundary values also gain an oversize
-  (~100 KB) value and RTL-override and zero-width characters (#301).
-- `explore --type-fixture '<descriptor>=<file>'` (MCP `typeFixture`) types a file's exact text into
-  a matching field: line breaks kept, never paraphrased or capped (#281).
-- `init` and `ai status` name each key, its provider and its source (env var or
-  `~/.jevitate/credentials.json`), and report an env var that overrides a stored key; `--json`
-  adds `sources` per feature (#268).
-- `ai setup <feature> --replace` and `init --replace-keys` replace a stored key (#268).
-- Keys are checked with the provider by a live, non-billable auth call: `valid`, `invalid`,
-  `unreachable` or `missing`, plus a flag for a key that looks like another provider's.
-  `ai setup` checks a key before storing it; `ai status` exits 2 on a bad key. `--no-verify`
-  skips the check (#291).
-- Runs that use the live AI (`explore --real`, `check`, `journey … --real`, `demo`, `ux`) check
-  their keys once at startup and stop with `E_AI_SETUP_REQUIRED` (exit 64) when a provider
-  rejects one. `JEVITATE_NO_KEY_VERIFY=1` skips the check (#291).
-- Screenshots and videos also mask secrets the app reveals during the run: elements marked as
-  secret (`data-jevitate-mask`, `data-secret`, one-time-code, secret/token/api-key test ids and
-  labels) and credential-shaped values. Limits in docs/safety.md (#298).
-- Built-in skill `jevitate-test-campaign`: how to plan and run a whole-release test campaign
-  (job catalog, discovery runs, journey-anchored missions, full-stack evidence, verify-fix and
-  regressions, triage by exit code, budgets, CI suites and the release gate) (#292).
-- `--extension <dir>` (repeatable) loads an unpacked browser extension on every browser-driving
-  command, and MCP tools take an `extension` array. The extension's `chrome-extension://<id>`
-  pages (side panel, popup, options) are allowed and navigable, for example
-  `--url chrome-extension://<id>/sidepanel.html`, and the agent acts on their DOM. Recordings
-  record each extension's `{id, name, version}`. verify-fix refuses a different build with exit 64.
-  Headless runs use Playwright's full Chromium in new-headless mode. See docs/extensions.md (#256).
-- Fixture identities: a fixture step's `auth` can name an `identity` (`"identity": "owner"`), bound
-  by `--fixture-identity <name>=<storageState>` (MCP `fixtureIdentity`, suite goal items) or the
-  origin's targets.json persona. The fixture mints as that identity while the mission runs as its
-  own session or cold, for example an owner-minted invite opened by a cold recipient. Unbound
-  identities are refused before any request. Replays re-mint as the same identities. `--url` accepts
-  a root-relative `${setup.*}` path right after the origin (`http://host${setup.link}`). See
-  docs/fixtures.md (#243).
-- A vertical-clipping signal: viewport runs flag text cut off by a fixed-height `overflow: hidden`
-  box, or spilled above the page top (a wrapped chip in a 56px header). It runs with the
-  horizontal-overflow signal under the same gate and is reported the same way: a `vertical-clipping`
-  defect in coverage, exploratory and adversarial runs, and a signal finding in the usability
-  review, one per element. Intentional truncation (`line-clamp`, ellipsis) and sr-only, collapsed
-  or scrollable boxes are not reported. `--ignore-overflow` excludes other cases. See
-  docs/exploration.md (#302).
-- UX findings are claims verified by code (#198). A usability finding now comes from a guard
-  probe, from the product facts, or from friction the run hit. The guard probe is opt-in
-  (`--probe-guards`). It clicks each destructive control once and checks whether a confirm dialog,
-  page dialog or confirmation page came first. It is fail-safe: it aborts every write and every
-  destructive-looking request (URL, query, RPC name or body, any method). It refuses pages with an
-  open WebSocket or EventSource or a service worker. It never answers a dialog. Without the flag,
-  guard claims are reported unverifiable.
-  Jev only categorizes: a claim type from a closed list, a target control, a duplicate check, and
-  two yes/no grade questions ("do we need this?", "do we need this to ship this feature?") that
-  code maps to actionable / relevant-minor / generic / wrong. Claims that fail code's check are
-  dropped and counted in `report.claims`. See docs/ux-findings.md.
-- Product facts: `.jevitate/product.json`, or `--product <file>` on `ux` and
-  `explore --strategy usability` (plus MCP `ux_review`/`run_exploration` and check suite items). The file
-  lists plans and prices, trial lengths, key journeys and each page's intended next step. A wrong
-  price or trial on screen is a `fact-conflict` finding, and a missing or disabled next step is
-  `next-step-unclear`. An invalid file is refused with `E_UX_PRODUCT_INPUT` (exit 64) before a
-  browser opens (#198).
-- Live usability findings get a cropped, secret-masked screenshot with the cited control or quoted
-  text boxed (`finding.screenshot`, `usability-<stamp>.findings/`). `--polish` (opt-in) rewrites
-  each verified finding's recommendation with one generation call (#198).
+### Behaviour changes
 
-### Changed
-
-- With `--action-deltas`, the goal loop's no-progress check reads each action's delta (#303): an
-  action whose delta is `relevant-change` is progress even when the control set is unchanged, and an
-  `inconclusive` one does not count toward the stop. Without it, no-progress is unchanged.
-- The #298 credential shapes and secret markers moved to `@jevitate/ai-core` (shared by the pixel
-  mask and action deltas); behaviour is unchanged.
-- Releases are published by hand with `scripts/release.sh` while npm OIDC publishing is blocked
-  (npm/cli#9969). The Release workflow versions on `main` and prints how to open the version PR,
-  publishes only from a manual run, and no longer fails on every push; its actions are pinned to
-  commit SHAs on the Node 24 runtime. `release.sh` waits until npm serves the new versions and
-  tags locally; `scripts/sync-release-branches.sh` prepares the post-release `main` → `dev`
-  back-merge. RELEASING.md describes the working path (#267).
-- UX finding output (#198). Finding text is built from templates over the verified fields
-  (control, page, blocked request, quoted text, expected fact) instead of being generated. The
-  rubric no longer reports findings on its own, so `heuristicAppendix` is empty, and a finding's
-  `rubricItemId` is the heuristic its claim type is cited under. Additive fields: `finding.claim`,
-  `finding.grade`, `finding.screenshot`, `report.claims` (probe status `skipped` when
-  `--probe-guards` is off), suppression reasons `unverified` and
-  `not-a-problem`, and `probes` in the evidence sidecar. Reports add evidence caveats when no
-  product facts were found, or when offline review has no guard probes.
+- **Keys are verified live (#291).** `ai status` and `init` check each key with its provider by a
+  non-billable auth call (`valid`, `invalid`, `unreachable`, `missing`); `ai status` exits 2 when a
+  key is invalid or could not be checked. `ai setup` refuses to store a key that fails the check.
+  Live-AI runs check once at startup and stop with `E_AI_SETUP_REQUIRED` (exit 64) on a rejected key.
+- **Sign-up identities are unique per run (#271).** A model-invented email or username gets a
+  per-run suffix, so a repeated sign-up goal never collides with an earlier run's account.
+- **No-destructive mode (#270).** A goal that asks for a change but has no `--success` no longer
+  performs a destructive write (e.g. "Remove" → `RemoveMember`) unless `--allow-writes` or
+  `--allow-destructive` is passed.
+- **Early `blocked` is refused (#237).** A model `blocked` before any action is refused; insisting
+  ends `inconclusive` (insufficient coverage), not `defects-found`.
+- **Frozen pages are stalls (#296).** A renderer that freezes mid-perception ends `inconclusive`
+  with `failure.kind: "stalled"`, never a crash.
+- **UX findings redesign (#198).** Far fewer findings: each one is a claim code verified.
+  Destructive-action checks need the opt-in `--probe-guards`.
+- **Resource governance on by default (#205).** Runs share a machine-wide browser cap and a
+  per-run browser-memory ceiling; a starved host refuses new runs with `E_HOST_STARVED`.
+- **Own-send tracking (#241).** A chat's reply wait follows the run's own in-flight request;
+  background polling no longer keeps a wait alive or holds a landed reply's settle open.
 
 ### Upgrade notes
 
-- **UX findings (#198).** Expect fewer findings and different `rubricItemId`s: a finding exists
-  only when code verified its claim. Tooling that read `heuristicAppendix` or `tier: "semantic"`
-  findings should read `findings[].claim` instead. A destructive-action finding needs a live run
-  with `--probe-guards` (preferably against staging), or its evidence sidecar. Without the flag,
-  such claims are unverifiable coverage, so a page with destructive controls no longer reads as
-  complete coverage. An offline `jevitate ux` without the sidecar lists such claims as
-  unverifiable coverage (`coverage.skipped`, `claim:destructive-unguarded`), never as findings.
-  Add `.jevitate/product.json` (docs/ux-findings.md) to have prices and intended next steps checked.
+- **Keys:** CI and offline use should pass `--no-verify` to `ai status`/`ai setup`/`init` and set
+  `JEVITATE_NO_KEY_VERIFY=1` for runs; scripts that treated `ai status` exit 0 as "configured"
+  will now see exit 2 for a bad or unverifiable key (#291).
+- **Change goals:** add `--success` checks, or pass `--allow-writes`/`--allow-destructive`, for a
+  change goal that must perform a destructive write (#270).
+- **Outcomes:** expect `inconclusive` (insufficient-coverage) where an early `blocked` used to
+  report defects (#237), and `inconclusive` / `failure.kind: "stalled"` where a frozen page used to
+  crash (#296).
+- **UX findings (#198):** expect fewer findings and different `rubricItemId`s. Tooling that read
+  `heuristicAppendix` or `tier: "semantic"` findings should read `findings[].claim`. Destructive-
+  action findings need a live run with `--probe-guards` (preferably against staging) or its
+  evidence sidecar; otherwise such claims are listed as unverifiable coverage (`coverage.skipped`,
+  `claim:destructive-unguarded`), so a page with destructive controls no longer reads as complete
+  coverage. Add `.jevitate/product.json` (docs/ux-findings.md) to have prices and next steps checked.
+- **Resources (#205):** defaults are `--max-browsers` = `JEVITATE_MAX_BROWSERS`, else cores/4 within
+  2..6, and `--max-browser-memory` = `JEVITATE_MAX_BROWSER_MEMORY_MB`, else 4 GiB or half the RAM.
+  A run over the ceiling ends `inconclusive` with `failure.kind: "resource-limit"`. A starved host
+  refuses with `E_HOST_STARVED` unless `--ignore-host-load`; `JEVITATE_RESOURCE_GOVERNANCE=off`
+  turns the automatic parts off. See docs/operations.md.
+- **Reply waits (#241):** chat runs that relied on background polling to extend a wait now end
+  sooner; a `send` that started no request is a failed send.
+- **New log flags (#204, #282):** `--log-correlation-header`, `--log-id-pattern` and `--log-scope`
+  are additive; set `--log-scope` when several runs share one backend log.
+- **Action deltas are opt-in (#303):** nothing changes without `--action-deltas`.
+
+### Added
+
+- **Journey-anchored exploration (#293):** `explore --from-journey <id> --at-step <n|anchor>`
+  replays a promoted Journey's prefix (fail-closed, never self-healed) and starts any mission on
+  the live page; a stale prefix is `inconclusive` / `failure.kind: "journey-stale"` (exit 2).
+  `--at-step all|anchors` sweeps every step or anchor in fresh `--fixtures`-restored sessions.
+  Results and findings record `branch: {journeyId, step, anchor}`; `verify-fix` and
+  `regression capture|run` replay through the prefix.
+- **Journey anchors (#293):** optional `metadata.anchors` (`{name, step, description?, probes?}`);
+  `journey anchors <id>` lists them.
+- **Campaigns (#293):** `campaign run <spec.json>` runs discovery then anchored missions with
+  fixture restores and one deduped report (`campaign.json`, `campaign.md`); an invalid spec exits
+  64 listing every problem. MCP `journey_anchors` and `run_campaign`; `run_exploration` and suite
+  mission items take `fromJourney`/`atStep`/`params`/`env`/`baseUrl`.
+- **Action deltas (#303):** opt-in `--action-deltas` (MCP/suite `actionDeltas`) on goal, usability,
+  adversarial and coverage runs and on `journey run|annotate|demo` and `verify-fix`. Code records
+  each action's redacted page change and a verdict (`no-change`, `relevant-change`,
+  `inconclusive`); deltas attach to transcript and Recording steps (`delta`) and the result
+  (`actionDeltas`). Goal runs re-check a write after reload (`persisted: yes | no | inconclusive`).
+  Cost: ~50–110 ms per action on a small page, 0.35–0.5 s on a 400-row page.
+- **Browser extensions (#256):** `--extension <dir>` (repeatable; MCP `extension`) loads an
+  unpacked extension; its `chrome-extension://<id>` pages are navigable. Recordings record each
+  extension's `{id, name, version}`; `verify-fix` refuses a different build (exit 64). See
+  docs/extensions.md.
+- **Fixture identities (#243):** a fixture step's `auth` can name an `identity`, bound by
+  `--fixture-identity <name>=<storageState>` (MCP `fixtureIdentity`) or a targets.json persona;
+  unbound identities are refused. `--url` accepts a root-relative `${setup.*}` path. See
+  docs/fixtures.md.
+- **Type fixtures (#281):** `explore --type-fixture '<descriptor>=<file>'` (MCP `typeFixture`)
+  types a file's exact text into a matching field.
+- **Markup-injection probe (#301):** adversarial `boundary-submit` submits inert, per-submission
+  canaries and reports a rendered one as a `markup-injection` defect (`stored` or `reflected`);
+  boundary values add a ~100 KB value and RTL-override / zero-width characters.
+- **Vertical clipping (#302):** viewport runs flag text cut off by a fixed-height
+  `overflow: hidden` box or spilled above the page top (`vertical-clipping`); intentional
+  truncation is not reported. See docs/exploration.md.
+- **UX claims (#198):** usability findings come from a guard probe (opt-in `--probe-guards`;
+  fail-safe, aborts every write), product facts or run friction; Jev only categorizes and answers
+  two grade questions. See docs/ux-findings.md.
+- **Product facts (#198):** `.jevitate/product.json` or `--product <file>` on `ux` and
+  `explore --strategy usability` (MCP `ux_review`/`run_exploration`, suite items): wrong prices or
+  trials are `fact-conflict`, a missing next step is `next-step-unclear`; an invalid file exits 64
+  (`E_UX_PRODUCT_INPUT`).
+- **UX screenshots and polish (#198):** live findings get a cropped, secret-masked screenshot with
+  the cited control boxed (`finding.screenshot`); opt-in `--polish` rewrites recommendations.
+- **Resource governance (#205):** `--max-browsers`, `--max-browser-memory <MiB>`,
+  `--ignore-host-load`, `jevitate doctor --cleanup` (closes browsers left by a killed jevitate,
+  found by an owner marker), MCP `maxBrowsers`/`maxBrowserMemory`, and `hostHealth.resources` in
+  results.
+- **Keys (#268):** `init` and `ai status` name each key, its provider and its source and report an
+  overriding env var (`--json` adds `sources`); `ai setup <feature> --replace` and
+  `init --replace-keys` replace a stored key.
+- **Skill (#292):** built-in `jevitate-test-campaign` — plan and run a whole-release test campaign
+  (now using anchors and campaigns, #293).
+
+### Changed
+
+- With `--action-deltas`, a `relevant-change` action is progress even with an unchanged control
+  set, and an `inconclusive` one does not count toward the no-progress stop (#303).
+- UX finding text is templated from verified fields; `heuristicAppendix` is empty; additive
+  `finding.claim`, `finding.grade`, `finding.screenshot`, `report.claims`, suppression reasons
+  `unverified`/`not-a-problem`, and sidecar `probes` (#198).
+- The #298 credential shapes and secret markers moved to `@jevitate/ai-core` (shared by the pixel
+  mask and action deltas); behaviour unchanged.
 
 ### Fixed
 
-- Adversarial runs notice when an action switches the signed-in identity (a "Continue as demo"
-  shortcut on a login page). The step's invariants are not judged against the new identity, the
-  control is not clicked again, and the run returns to the original identity in a fresh session.
-  Each switch is listed in `identityChanges`. A run that can't return stops `inconclusive` with
-  `stop: "identity-changed"` (#300).
-- Key entry is masked with `•`, and its instructions stay on screen (#269).
-- A multi-run (`--persona`/`--repeat`) forwards a bare `--screenshots`/`--record-video` to each
-  run instead of writing to `./true` (#290).
+#### Goal loop
+
+- Controls behind an open modal or unreachable by scroll are not offered; a twice-covered target
+  is withheld, and five failed actions in a row end the run naming the overlay (#272, #294).
+- `select` never re-chooses the selected option or a placeholder; dash spellings map (#273).
+- Retyping a field that changed only its own value is no progress (#242).
+- A `send` that started no request and changed nothing is a failed send (#241).
+- A model `blocked` before any action is refused (#237).
+- `<details>` summaries are controls; goal-named controls survive the candidate cap (#287).
+- Refusals and app-answered scrolls never produce a `ui-no-progress` hang (#276).
+- "Send invite" is goal-asked when the goal orders the thing itself; `reloadThen`-only checks no
+  longer turn `blocked` into "goal already met" (#235).
+- A goal's quoted passage is typed verbatim into a textarea, line breaks kept (#281).
+
+#### Answers & success checks
+
+- Numbered-list markers are not stated figures; inflected claim words are said by their quote (#236).
+- List answers may quote entries one per line when each is on an observed page, in order (#234).
+- "None exists" is a first-class answer once half the top-level navigation was seen, else
+  `inconclusive` (#238).
+- Reports never ground on the run's own unsaved input; a write goal needs a successful write (#239).
+- A goal that asks for a report is not met by `--success` checks alone (#286).
+- Declared invariants read request JSON payloads (`network.request`) and compare lists in order
+  (`sameList`); credential-named keys are never read (#295).
+
+#### Network & logs
+
+- The repeated-side-effect guard ignores third-party writes and `--settle-ignore`d beacons (#274, #284).
+- `requestMade` matches once sent, and a long in-flight write is pending work (#283).
+- Third-party iframe console errors are advisories with their `frameUrl` (#297).
+- Backend-log lines match the exact request by trace/correlation id and a `blocked` reason names
+  it (#204); `--log-scope` attributes only matching lines to the run (#282).
+- A chat's own in-flight turn is awaited; background polls are told apart over the last minute
+  (#241, #283, #284, #288).
+
+#### Capture & secrets
+
+- Screenshots and videos mask secrets the app reveals mid-run (#298).
+- Multi-runs forward a bare `--screenshots`/`--record-video` instead of writing `./true` (#290).
+- `visible:<d>` holds when any of several matches is visible (#299).
+- Typing into a textarea keeps newlines (#285).
+
+#### CLI & keys
+
+- Key entry is masked with `•` and its instructions stay on screen (#269).
 - `explore --hang-replays <n>` no longer crashes (#275).
-- `visible:<d>` holds when at least one of several matching elements is visible, instead of
-  crashing on a strict-mode violation (#299).
-- Typing into a textarea keeps the value's newlines (#285).
-- A model-invented sign-up email or username is unique per run, so a repeated sign-up goal does
-  not collide with an earlier run's account (#271).
-- Declared invariants can read a request's JSON payload (`network.request`) and compare lists in
-  order (`sameList(a, b)`), so "what was saved is what reloads" can be declared. Credential-named
-  keys are never read (#295).
-- Backend-log lines are matched to the exact request by trace or correlation id (`traceparent`,
-  `x-request-id`, …; `--log-correlation-header`, `--log-id-pattern`), and a `blocked` reason names
-  it: `caused by: … on POST /x (409)` (#204).
-- `--log-scope` attributes only matching backend-log lines to the run, for runs sharing one log (#282).
-- A find-out goal's read-only guard judges a form submit by the requests it sends: a lookup form
-  that only reads ("Load" → GETs) is clicked, and a submit that writes is blocked at the network
-  (#253).
-- A goal with no `--success` that asks for a change no longer performs a destructive write
-  ("Remove" → `RemoveMember`) unless `--allow-writes` or `--allow-destructive` is passed: the
-  control is refused and a destructive request an action fires is blocked (#270).
-- A goal asks for a `--paid` control by its action word: a trailing live estimate
-  ("(≈ 4–10 credits)") and confirmation words are ignored (#280).
-- The budget guard reads an estimate range at its high end ("≈ 50–90 credits" counts as 90) (#279).
 
-### Fixed
+#### Adversarial
 
-- The repeated-side-effect guard ignores third-party writes and `--settle-ignore`d requests
-  (telemetry and `csp-report` beacons, `m.stripe.com`), so a safe control can be clicked again
-  (#274, #284).
-- `requestMade` matches a request once it is sent, and a write still in flight (a unary RPC held
-  open for minutes) counts as pending work for `wait` and `blocked` (#283).
-- A console error raised inside a cross-origin third-party iframe (a vendor's own CSP noise) is an
-  advisory with its frame origin, not an app defect; every console signal records its `frameUrl` (#297).
-### Fixed
+- An action that switches the signed-in identity is detected; invariants are not judged across it
+  and the run returns to the original identity (`identityChanges`, else `stop: "identity-changed"`) (#300).
 
-- Find-out reports: numbered-list markers (`1.`, `2)`, `**3.**`) no longer count as stated figures, and an inflected claim word ("not subscribed") is said by its quote ("No subscription") (#236).
-- Find-out reports: a list answer may quote its entries one per line when each line is on one observed page, in order; a stitched quote that is not gets a repairable reason, and an identical resubmission is named as a repeat (#234).
-- Find-out reports: "none exists" is a first-class answer for a goal that asks whether something exists — accepted as `not present (pages seen: …)` (`answer.absent`, `answer.searched`) once the run has seen half its top-level navigation (≥ 2 pages), else the run is `inconclusive` (insufficient coverage), never a defect (#238).
-- Find-out reports never ground on the run's own typed-but-unsaved form values, and a goal that asks to record / save / create / invite something is not settled by a report before a write of the run succeeded (2xx) — "record a decision" was accepted with nothing saved (#239).
-- Goal runs: "Send invite" (and the other "Send <thing>" paid controls) is the goal-asked exemption when the goal orders the thing itself ("Invite a teammate"); a run whose only `--success` checks are `reloadThen` no longer turns a `blocked` into "goal already met" over an in-run check that evaluated nothing, and a model that gives up after a safety refusal names it in the reason (#235).
-- Goal runs: a goal that asks to report what it found ("Finish by reporting the price shown") is not met by its `--success` checks alone — the checks holding never stop it, `done` is answered with "end with `report`", and without a grounded answer it does not succeed (a `report` pseudo-check fails); a check held by an unrelated page's load-time request ended such a run `succeeded` with no price (#286).
-- Goal runs: a passage the goal quotes as text to type (after "type / enter / paste / write / import / insert / post / reply / add / use / with", or `text:` / `content:` / `body:`) — several lines, or 6+ words — is typed verbatim into a textarea / rich-text field by code, line breaks kept and never capped; the model paraphrased it and lost its paragraphs (#281).
-### Goal missions
+#### Hangs & waits
 
-- Controls behind an open modal, or that no scroll can bring into view (a closed off-screen panel), are not offered; a target failing twice as covered/unreachable is withheld, and five failed actions in a row end the run naming the overlay (#272, #294).
-- `select` never re-chooses the selected option or a placeholder; dash spellings map to the page's option (#273).
-- Retyping a field that changed nothing but its own value is no progress: a search box is submitted with Enter, other fields end the run as stuck (#242).
-- A `send` that started no request and changed nothing is a failed send; background polling no longer keeps a reply wait alive (#241).
-- A model `blocked` before any action is refused; insisting ends `inconclusive` (insufficient-coverage), not `defects-found` (#237).
-- `<details>` summaries are controls, and goal-named controls survive the candidate cap (#287).
-- Refusals and scrolls the app answered never produce an app `ui-no-progress` hang (#276).
+- Documented waits and live-progress busy indicators are waited out within `--job-wait-ms` (#258, #288).
+- A save that writes and returns to an earlier route is progress (#289).
+- Perception is bounded on pages with hundreds of controls (#278).
 
-### Fixed
+#### Guards
 
-- A wait the page documents ("usually takes less than a minute") and a busy indicator the app
-  visibly keeps working behind (live progress text, a job poll) are waited out within
-  `--job-wait-ms` instead of being a 15 s hang; a stated duration can raise the budget. A spinner
-  over a silent page is still a hang, and a deferred hang names the budget (#258, #288).
-- A save that writes (2xx) and returns to an earlier route is progress, not a hang (#289).
-- `--feature` treats its seed page as in scope and re-queues a seed that re-renders on reset, so
-  it follows in-scope navigation instead of stopping after a banner click (#277).
-- Perception is bounded on pages with hundreds of controls, so a feature mission no longer
-  stalls on a busy editor page (#278).
-- A page renderer that freezes mid-perception ends `inconclusive` (`failure.kind: "stalled"`),
-  never a crash attributed to jevitate (#296).
-- A chat's next message is awaited while its own request is still in flight: the run's earlier
-  turns' writes to that endpoint are not background polling, a request held past the long-poll
-  threshold still counts, and a later `wait` on the turn sees it. Background polls are told apart
-  over the last minute, not only since the last step, and never hold a landed reply's settle open
-  (a 1 s poll kept each reply waiting the 15 s ceiling); a `--settle-ignore`d beacon is never an
-  action's effect or a sign that a busy app is working (#241, #283, #284, #288).
+- A find-out goal's read-only guard judges a submit by its requests (#253).
+- `--paid` controls are matched by action word, ignoring live estimates (#280).
+- The budget guard reads an estimate range at its high end (#279).
+
+#### Journeys / campaigns
+
+- `--feature` treats its seed page as in scope and re-queues a re-rendered seed (#277).
+- Resets inside an anchored mission re-replay the prefix; a stale branch replay is a typed
+  `inconclusive` (#293).
+
+#### UX
+
+- Claims that fail code's check are dropped and counted in `report.claims`; reports add evidence
+  caveats when product facts or guard probes are missing (#198).
+
+#### Resources
+
+- Browsers orphaned by a killed jevitate are closed before the next run; only jevitate-launched
+  processes are signalled (#205).
+
+#### Release
+
+- Releases are published by hand with `scripts/release.sh` while npm OIDC publishing is blocked
+  (npm/cli#9969); the Release workflow no longer fails on every push (#267).
+
+### Internal
+
+- #232: the stateful exploration loops (`explore.ts`, `missions/adversarial.ts`,
+  `missions/induction.ts`) are split into `goal-loop/`, `missions/adversarial-hunt/` and
+  `missions/induction-frontier/` modules around explicit context objects; move-only.
+- AGENTS.md documents path-scoped test runs from the repo root.
+- Release workflow: actions pinned to commit SHAs on Node 24, manual publish runs only;
+  `release.sh` waits for npm and tags locally; `scripts/sync-release-branches.sh` prepares the
+  `main` → `dev` back-merge; RELEASING.md updated (#267).
 
 ## [0.2.0] – 2026-09-29
 
