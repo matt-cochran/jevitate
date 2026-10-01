@@ -28,6 +28,7 @@ import {
 } from "../declared-invariants.js";
 import { BudgetMonitor, type BudgetTrajectory } from "../budget.js";
 import { goalAsksForChange } from "../read-only.js";
+
 import { demoOverlayFor } from "../demo-overlay.js";
 import { secretFieldSecrets } from "../secret-fields.js";
 
@@ -604,6 +605,8 @@ async function adjudicatedRun(
               }
               return pending.length === 0 ? null : pending.join("; ");
             },
+            // #235: only `reloadThen` checks — the in-run check below evaluates none of them.
+            ...(checks.every((c) => c.kind === "reloadThen") ? { successCheckDeferred: true } : {}),
             successCheck: () =>
               evaluateChecks(cfg, checks.filter((c) => c.kind !== "reloadThen"), page, capture, scope()).then(
                 (rs) =>

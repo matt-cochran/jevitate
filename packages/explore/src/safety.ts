@@ -18,8 +18,10 @@ import type { Control } from "./snapshot.js";
  * `--allow-destructive` lifts the built-in categories (a `--deny` pattern always holds). On a goal
  * run, a built-in category is lifted for ONE control when the goal itself asks for it: the goal text
  * contains the control's risky verb ("delete the draft" allows "Delete"; "simulate how customers
- * respond" allows "Run the simulation"); a feature mission's named capability counts as its goal
- * ("buy a pack" allows "Buy pack 1"). A false positive only costs coverage of that control.
+ * respond" allows "Run the simulation"); a "Send <thing>" control is asked for by a goal that orders
+ * the thing as its verb ("Invite a teammate" allows "Send invite", #235); a feature mission's named
+ * capability counts as its goal ("buy a pack" allows "Buy pack 1"). A false positive only costs
+ * coverage of that control.
  *
  * #168 (Preveti round 3 dogfood): on a chat/question-card UI the controls ARE the assistant's
  * questions and answer options — a long question button ("How many qualified PM teams sign up but
@@ -126,7 +128,13 @@ export function goalAsksFor(goal: string, matched: string): boolean {
   // ("Send invite" needs both "send" and "invit" in the goal).
   if (SESSION_END.test(matched)) return g.includes(squash(matched));
   const words = matched.split(/\s+/).filter((w) => !/^(?:a|an|the|my|your)$/i.test(w));
-  return words.length > 0 && words.map(stem).every((s) => s.length >= 3 && g.includes(s));
+  if (words.length > 0 && words.map(stem).every((s) => s.length >= 3 && g.includes(s))) return true;
+  // #235: "Send <thing>" is asked for by the goal that orders the thing itself as its verb — "Invite a
+  // teammate" asks for "Send invite", "Email the team" for "Send email" — at a clause's start, never a
+  // mere mention ("report the invite's status" asks for nothing).
+  const [verb, ...object] = words;
+  if (verb?.toLowerCase() !== "send" || object.length === 0) return false;
+  return object.map(stem).every((s) => s.length >= 4 && new RegExp(`(?:^|[.;:!?]\\s*|\\b(?:and|then|please)\\s+)${s}`, "i").test(goal.trim()));
 }
 
 type DenyMatcher = (c: Pick<Control, "name" | "role" | "descriptor">) => boolean;

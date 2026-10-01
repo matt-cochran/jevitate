@@ -13,6 +13,7 @@ behaviour changes).
 - Find-out reports: a list answer may quote its entries one per line when each line is on one observed page, in order; a stitched quote that is not gets a repairable reason, and an identical resubmission is named as a repeat (#234).
 - Find-out reports: "none exists" is a first-class answer for a goal that asks whether something exists — accepted as `not present (pages seen: …)` (`answer.absent`, `answer.searched`) once the run has seen half its top-level navigation (≥ 2 pages), else the run is `inconclusive` (insufficient coverage), never a defect (#238).
 - Find-out reports never ground on the run's own typed-but-unsaved form values, and a goal that asks to record / save / create / invite something is not settled by a report before a write of the run succeeded (2xx) — "record a decision" was accepted with nothing saved (#239).
+- Goal runs: "Send invite" (and the other "Send <thing>" paid controls) is the goal-asked exemption when the goal orders the thing itself ("Invite a teammate"); a run whose only `--success` checks are `reloadThen` no longer turns a `blocked` into "goal already met" over an in-run check that evaluated nothing, and a model that gives up after a safety refusal names it in the reason (#235).
 
 ## [0.2.0] – 2026-09-29
 

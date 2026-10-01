@@ -241,6 +241,13 @@ export interface ExploreConfig {
    */
   readonly successCheckPending?: () => string | null;
   /**
+   * #235: every success check is judged only AFTER the run (a `reloadThen`): the in-run `successCheck`
+   * evaluates nothing, so it holds vacuously. It still grounds the model's own `done` (provisionally,
+   * see `successCheckPending`), but never turns a `blocked`, a sign-in or the decision's "already met"
+   * signal into "goal already met" — the run did not show anything held.
+   */
+  readonly successCheckDeferred?: boolean;
+  /**
    * #225: a `done` rejected by `successCheck` ends the run at once when the job is nonetheless judged
    * done on the page (the advisory goal judgment / code-observed save grounding, as without a check) —
    * the failed check is then the result, not a reason to spend the rest of the budget. The outcome
@@ -632,6 +639,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
    * set above — so a re-decide never re-chooses the same refused control.
    */
   const refusedKeys = new Set<string>();
+  /** #235: the latest safety refusal's reason (named when the model then gives up), else null. */
+  let lastRefusal: string | null = null;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -1409,6 +1418,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           (decision.goalMet !== null && decision.goalMet >= GOAL_CHECK_TRIGGER)) &&
         decision.op !== "done" &&
         decision.op !== "report" &&
+        // #235: an in-run check over nothing (every check is judged after the run) shows nothing held.
+        cfg.successCheckDeferred !== true &&
         // #207: a find-out goal is verified by a grounded answer; its `blocked` (after a report
         // attempt on this state found none) never becomes an answerless "goal already met".
         !(findOut && decision.op === "blocked") &&
@@ -1574,7 +1585,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           continue;
         }
         record(true, "model blocked");
-        incomplete = "the model reported the goal cannot be advanced from this page";
+        // #235: a control the goal needed may have been refused — the reason says so, actionably.
+        incomplete = `the model reported the goal cannot be advanced from this page${lastRefusal === null ? "" : ` (${lastRefusal})`}`;
         stop = "blocked";
         break;
       }
@@ -1759,6 +1771,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const unsafe = safety.refuses(control);
         if (unsafe !== null) {
           refusedKeys.add(keyOf(control));
+          lastRefusal = unsafe.reason;
           history.push(unsafe.reason);
           record(false, unsafe.reason, { origin: "engine" });
           lastActedOp = decision.op;
