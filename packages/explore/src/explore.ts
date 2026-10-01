@@ -1,3 +1,32 @@
+/**
+ * explore() — the goal loop (perceive → decide → act → record). Module map (#232): this file keeps the
+ * public surface (ExploreConfig, ExploreRun, the limits) and the loop itself as a dispatcher; each
+ * phase and each action handler lives in ./goal-loop/ as a function of the run's state:
+ *
+ *   context.ts        RunContext — every piece of run state the loop and its handlers share
+ *                     (formerly explore()'s closure variables, names unchanged) + createRunContext
+ *   start.ts          openRun: instrument, first navigation (#128), read-only guard (#158)
+ *   observe.ts        perceiveStep (perception, closing the last action's windows) + captureDelta (#303)
+ *   hang-check.ts     checkHang: working-page deferral (#153/#258/#288), the hang stop
+ *   settled-checks.ts checkSettled: origin guard (#1), hooks (#150), success held (#174), render guard
+ *   progress.ts       checkProgress: page status (#79), no-progress / ui-no-progress / last chance (#172)
+ *   page-view.ts      viewPage: the decision's candidates, bookkeeping and grounding evidence
+ *   decide-step.ts    decideStep: the model's op (#192 retry, #172/#207 report rewrites)
+ *   step.ts           Step / ActStep / Flow, and the per-step record + goal grounding (newStep)
+ *   handle-done.ts    goal-already-met check and `done` (#91, #188, #286)
+ *   handle-report.ts  `report` (#101)          handle-blocked.ts  `blocked` (#92, #237, #283)
+ *   handle-idle.ts    `wait` / `scroll_*`       handle-reload.ts   `reload`
+ *   act-gate.ts       refuseAction / beginAction: the gate every target op passes
+ *   handle-code-typed.ts  bound secrets (#72/#111) and type fixtures (#281), typed by code
+ *   handle-edit-text.ts   `edit_text` (#148)  handle-message.ts  `send` / chat `type` turns
+ *   handle-select.ts  options-aware `select`  handle-fill.ts     generated `type` / `select` values
+ *   handle-click.ts   `click`                 handle-upload.ts   `upload`
+ *   finish.ts         finishRun: end-of-run reclassification, Recording, outcome, ExploreRun
+ *   helpers.ts / limits.ts  pure helpers and the loop's limits (re-declared below)
+ *
+ * Every handler returns a Flow: "continue" (next step), "stop" (end the run, `ctx.stop` set) or
+ * "next" (not handled here — fall through), exactly the loop's former `continue` / `break` / fall-through.
+ */
 import type { Actor } from "@jevitate/screenplay";
 import type { JudgmentPort, GenerationPort } from "@jevitate/ai-core";
 import { type Recording } from "@jevitate/recording";
@@ -108,7 +137,6 @@ export const LAST_CHANCE_NOTE = limits.LAST_CHANCE_NOTE;
 export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean {
   return actionOrChromeName(c, chrome);
 }
-
 
 /**
  * explore: the bounded perceive → decide → act → record loop.
@@ -371,7 +399,6 @@ export interface ExploreRun {
   readonly actionDeltas?: ActionDeltaStats;
 }
 
-
 export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const ctx = await createRunContext(cfg);
 
@@ -539,5 +566,4 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
 
   return finishRun(ctx);
 }
-
 
