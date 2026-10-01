@@ -27,7 +27,7 @@ import { DEFAULT_STALL_MS } from "./hang-repro.js";
 import { decide, judgeGoalCompletion, type Decision } from "./decide.js";
 import { AuthProgress, isCredentialField } from "./auth-completion.js";
 import { SaveProgress } from "./save-completion.js";
-import { FieldValueLog, FillHelper, capMessage, chatReply, goalListsSeveral, matchOption } from "./fill.js";
+import { FieldValueLog, FillHelper, capFormText, chatReply, goalListsSeveral, matchOption } from "./fill.js";
 import {
   type SecretField,
   boundSecretField,
@@ -170,6 +170,11 @@ export interface ExploreConfig {
   readonly allowlist: readonly string[];
   readonly startUrl: string;
   readonly bounds?: Partial<Bounds>;
+  /**
+   * #271: the token a model-invented email / username gains so it is unique to this run (a sign-up
+   * goal never collides with an account an earlier run created). Random per run unless pinned.
+   */
+  readonly identityToken?: string;
   readonly secrets?: readonly string[];
   /**
    * Secret field bindings (#72): a `type` on a matching control is typed by code with the bound
@@ -468,7 +473,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const bounds = resolveBounds(cfg.bounds);
   const tracker = new BoundsTracker(bounds);
   const noProgress = new NoProgressDetector(3);
-  const fillHelper = new FillHelper(cfg.gen);
+  const fillHelper = new FillHelper(cfg.gen, cfg.identityToken === undefined ? {} : { identityToken: cfg.identityToken });
   const recorder = new RunRecorder(cfg.site ?? startOrigin, undefined, secrets, cfg.onRecording);
   const page = cfg.actor.ability(BrowseTheWebToken).session.page;
   const crashWatch = new CrashWatch(page);
@@ -2075,7 +2080,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
         // Free-text form values are bounded too (dogfood: 2–3k-char markdown essays in "Rationale").
         if (decision.op === "type" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
-          text = capMessage(text, FORM_TEXT_MAX_CHARS);
+          text = capFormText(text, FORM_TEXT_MAX_CHARS, control.tag === "textarea");
         }
         const r = await act(cfg.actor, { op: decision.op, control, value: text });
         if (r.ok) {

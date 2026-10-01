@@ -3,7 +3,8 @@ import { envCredentialStore, FEATURE_KEYS, type Feature } from "@jevitate/ai-cor
 import { loadLocalCredentials } from "./credentials-file.js";
 import { ok, fail } from "./envelope.js";
 import { initProjectDir, type ProjectInitReport } from "./project-dir.js";
-import { realSecureIO } from "./ai-cli.js";
+import { KeyCheckError, credentialInputs, enteredKeyCheck, realSecureIO } from "./ai-cli.js";
+import { keySources, realVerifyFetch, shadowWarnings, verifyFeatureKeys } from "./key-report.js";
 import { collectAllMissingKeys, type KeyCollectionReport } from "./init-keys.js";
 import { formatInitKeysHuman } from "./cli-output.js";
 import { detectRuntimes, resolveInstallTargetPaths, installSkills, type RuntimeId } from "./init-skills.js";
@@ -20,6 +21,8 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
     .description("set up jevitate: collect API keys, install skills/MCP wiring, create the repo's .jevitate/")
     .option("--json", "emit a JSON envelope")
     .option("--skip-keys", "skip credential collection")
+    .option("--replace-keys", "prompt (masked) for a new value of every key, even one already stored, and store it")
+    .option("--no-verify", "skip the live auth check of each key (offline / CI): report presence and source only")
     .option("--skip-skills", "skip skill installation")
     .option("--skip-mcp", "skip registering the jevitate MCP server in detected harnesses")
     .option("--targets <ids>", "comma-separated runtime ids to force-install to, overriding detection")
@@ -27,7 +30,9 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
     .option("--dry-run", "report planned skill-install/mcp-register actions without writing")
     .option("--skip-project", "skip creating the repo's .jevitate/ (journeys, regressions, baselines, logs)")
     .action(async function (this: Command) {
-      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun } = this.opts<{
+      const { json, skipKeys, skipSkills, skipMcp, skipProject, targets, force, dryRun, replaceKeys, verify } = this.opts<{
+        replaceKeys?: boolean;
+        verify: boolean;
         skipProject?: boolean;
         json?: boolean;
         skipKeys?: boolean;
@@ -52,7 +57,30 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           // `jevitate init`) — it would hang reading a 'line' event that never comes, or read EOF
           // silently. Report what's still missing instead; the rest of init still completes.
           const interactive = deps.init?.isInteractive?.() ?? process.stdin.isTTY === true;
-          data.keys = await collectAllMissingKeys(store, io, { interactive });
+          if (replaceKeys === true && !interactive) {
+            throw new Error("--replace-keys needs an interactive terminal (stdin is not a TTY) — run `jevitate init --replace-keys` in a terminal");
+          }
+          const fetchFn = deps.ai?.verifyFetch ?? realVerifyFetch;
+          // #291: each entered key is checked with its provider BEFORE it is stored.
+          const gate = enteredKeyCheck(fetchFn);
+          const keys = await collectAllMissingKeys(store, io, {
+            interactive,
+            ...(replaceKeys === true ? { replace: true } : {}),
+            ...(verify ? { check: gate.check } : {}),
+          });
+          // #268: name every key's source; #291: verify every key the features use (env wins).
+          const { env, localConfig } = credentialInputs(deps.ai);
+          const nowLocal = { ...localConfig, ...Object.fromEntries(gate.entered) };
+          const nowStore = envCredentialStore(env, nowLocal);
+          for (const feature of Object.keys(keys) as Feature[]) {
+            const r = keys[feature];
+            const sources = keySources(feature, env, verify ? nowLocal : { ...localConfig, ...Object.fromEntries(r.collected.map((k) => [k, "set"])) });
+            const warnings = shadowWarnings(r.collected, sources);
+            r.sources = sources;
+            if (verify) r.verification = await verifyFeatureKeys(feature, nowStore, fetchFn, gate.verdicts);
+            if (warnings.length > 0) r.warnings = warnings;
+          }
+          data.keys = keys;
         }
         // Explicit `--targets` overrides detection entirely (the user takes
         // full control); otherwise `detectRuntimes` decides, always including
@@ -89,7 +117,9 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
         // environments). Additive in --json (`data.nextSteps`); keys are checked by NAME only.
         const keysReady =
           data.keys !== undefined
-            ? Object.values(data.keys as KeyCollectionReport).every((r) => (r.missing ?? []).length === 0)
+            ? Object.values(data.keys as KeyCollectionReport).every(
+                (r) => (r.missing ?? []).length === 0 && !(r.verification ?? []).some((v) => v.status === "invalid"),
+              )
             : (() => {
                 const store = envCredentialStore(deps.ai?.env ?? process.env, deps.ai?.localConfig ?? loadLocalCredentials());
                 return (Object.keys(FEATURE_KEYS) as Feature[]).every((f) => FEATURE_KEYS[f].every((k) => store.detect(k)));
@@ -128,7 +158,8 @@ export function registerInitCommands(program: Command, deps: CliDeps): void {
           process.exitCode = 0;
         }
       } catch (err) {
-        emitCommandResult(program, fail("E_INIT", String(err instanceof Error ? err.message : err)), { json: json === true, command: "init" });
+        const code = err instanceof KeyCheckError ? err.code : "E_INIT";
+        emitCommandResult(program, fail(code, String(err instanceof Error ? err.message : err)), { json: json === true, command: "init" });
       }
     });
 }

@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/ai-core (85 exports)
+# @jevitate/ai-core (94 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -32,6 +32,9 @@
   JourneyGoalOutput: object
   JourneyStepInput: object
   JourneyStepOutput: object
+  KEY_PROVIDERS: object
+  KEY_VERIFY_TIMEOUT_MS: const (number)
+  KEY_VERIFY_URLS: object
   MAX_CHOICE_OPTIONS: const (number)
   MissingCredentialError: class
   ModelConstraintsSchema: object
@@ -59,7 +62,10 @@
   apiKeyFromAuthHeader: function
   assertNoOutboundCredential: function
   assertNoSecretInPayload: function
+  collectKeys: function
   collectMissingKeys: function
+  credentialProvenance: function
+  describeVerdict: function
   envAliasesFor: function
   envCredentialStore: function
   failureClass: function
@@ -68,6 +74,8 @@
   fromSdkAnswers: function
   isTransientError: function
   jittered: function
+  keyPrompt: function
+  looksLikeOtherKey: function
   openRouterProviderSettings: function
   priceCall: function
   realJevClientCall: function
@@ -85,6 +93,7 @@
   toSetupRequiredResult: function
   usageCountsFrom: function
   usageSidecar: function
+  verifyKey: function
   withPreflight: function
 
 # @jevitate/application (0 exports)
@@ -147,7 +156,7 @@
   targetsFor: function
   worstOutcome: function
 
-# @jevitate/explore (307 exports)
+# @jevitate/explore (311 exports)
   ALREADY_VETOED_REASON: const (string)
   ANSWER_FITS_INSTRUCTIONS: const (string)
   ANSWER_FITS_QUESTION: const (string)
@@ -283,6 +292,7 @@
   buildJudgmentState: function
   busyIndicatorOf: function
   candidateId: function
+  capFormText: function
   capMessage: function
   chatReply: function
   checkFieldValue: function
@@ -340,6 +350,7 @@
   hostProbe: function
   hotp: function
   http5xxSignalOf: function
+  identityKind: function
   invariantFingerprint: function
   isActionOrChromeName: function
   isAdvisoryConsoleError: function
@@ -365,6 +376,7 @@
   measurePageTiming: function
   messageClass: function
   monitorFor: function
+  newIdentityToken: function
   noActionShortfall: function
   normalizeAllowlist: function
   normalizeRoute: function
@@ -444,6 +456,7 @@
   toPath: function
   totp: function
   tryTriage: function
+  uniqueIdentity: function
   unreadablePageTiming: function
   urlMatcher: function
   vacuousCheckMessage: function

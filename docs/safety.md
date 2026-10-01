@@ -138,6 +138,25 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   from the video's first frame, and re-prove the mask at every step. This fails closed: a clip or
   image whose mask cannot be proven is not written, and the reason is recorded. The demo overlay
   is hidden in screenshots.
+- **Secrets the app reveals during the run** (#298) — a freshly minted API key, a one-time reveal
+  panel, an invite or reset link — are not known in advance, so they cannot be registered. The
+  pixel mask also covers, with no registration:
+  - elements the app marks as secret: `data-jevitate-mask` (add it to your app's reveal panels to
+    opt in), `data-secret`, `autocomplete="one-time-code"`, a `data-testid` containing `secret`,
+    `api-key`, `apikey` or `token`, an `aria-label` containing `secret`, `api key` or `token`;
+  - credential-shaped values in text and fields: JWTs, `sk_live_…`/`sk-…`, GitHub/GitLab/Slack
+    tokens, AWS access key ids, Google API keys, `<hex>.<hex>` id/secret pairs, 32+ hex chars, and
+    32+ char tokens mixing upper case, lower case and digits.
+
+  A value found either way is learned for the rest of the run: it is masked where it appears again
+  (another screen, unmarked) and scrubbed from the screenshot `index.md`. Learned values stay in
+  memory and are never written. **Limits:** a revealed secret with no marker and no credential
+  shape (a 6-digit code, a short word, a passphrase) is not masked — register it with `--secret`,
+  or mark it in the app. A marker on a large container masks the whole container. Over-masking is
+  possible (a commit SHA is 40 hex chars). A reveal inside a modal `<dialog>` fails closed (the
+  image is skipped, as for registered secrets). Pixel masking covers images and video only: a
+  revealed value the run *reports* (a find-out answer, the transcript) is not redacted unless it
+  is registered.
 
 **Page text is data, not instructions.** Model prompts carry a prompt-injection guard, and page
 content is passed as untrusted data.

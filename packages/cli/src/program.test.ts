@@ -678,7 +678,8 @@ function newInitProgram(opts: { keysPresent?: boolean; existsSync?: (p: string) 
     // `localConfig: {}` isolates from the real machine's ~/.jevitate/credentials.json — these
     // tests assert on exactly what `env` provides, not whatever keys happen to be configured
     // on whatever machine runs the suite.
-    ai: { env, localConfig: {} },
+    // #291: the live key check is stubbed (every key "valid") — never the network.
+    ai: { env, localConfig: {}, verifyFetch: async () => ({ status: 200 }) },
     init: {
       detection: { existsSync: opts.existsSync ?? (() => false), homedir: () => home, cwd: () => cwd },
       statePath,
@@ -696,7 +697,7 @@ test("init --json (keys present, first run) emits initialized + keys + skills", 
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(true);
   expect(parsed.data.initialized).toBe(true);
-  expect(parsed.data.keys).toEqual({
+  expect(parsed.data.keys).toMatchObject({
     generation: { required: ["OPENROUTER_API_KEY"], collected: [] },
     judgment: { required: ["TYPESAFE_API_KEY"], collected: [] },
   });
@@ -714,7 +715,7 @@ test("init --json (no TTY, keys missing): never prompts, completes init, reports
   await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
   const parsed = JSON.parse(lines.join(""));
   expect(parsed.ok).toBe(true);
-  expect(parsed.data.keys).toEqual({
+  expect(parsed.data.keys).toMatchObject({
     generation: { required: ["OPENROUTER_API_KEY"], collected: [], missing: ["OPENROUTER_API_KEY"] },
     judgment: { required: ["TYPESAFE_API_KEY"], collected: [], missing: ["TYPESAFE_API_KEY"] },
   });
@@ -728,8 +729,8 @@ test("init (no TTY, keys missing, human output): reports 'not configured' with t
   const { program, lines } = newInitProgram({ keysPresent: false, isInteractive: () => false });
   await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project"], { from: "user" });
   const out = lines.join("");
-  expect(out).toContain("keys: generation not configured — set OPENROUTER_API_KEY or run `jevitate ai setup generation`");
-  expect(out).toContain("keys: judgment not configured — set TYPESAFE_API_KEY or run `jevitate ai setup judgment`");
+  expect(out).toContain("keys: generation not configured — set OPENROUTER_API_KEY (OpenRouter) or run `jevitate ai setup generation`");
+  expect(out).toContain("keys: judgment not configured — set TYPESAFE_API_KEY (TypeSafe/Jev) or run `jevitate ai setup judgment`");
   expect(process.exitCode).toBe(0);
 });
 
@@ -755,7 +756,7 @@ test("init (no TTY, keys already present): reads exactly like the interactive pa
   const { program, lines } = newInitProgram({ keysPresent: true, isInteractive: () => false });
   await program.parseAsync(["init", "--skip-skills", "--skip-mcp", "--skip-project", "--json"], { from: "user" });
   const parsed = JSON.parse(lines.join(""));
-  expect(parsed.data.keys).toEqual({
+  expect(parsed.data.keys).toMatchObject({
     generation: { required: ["OPENROUTER_API_KEY"], collected: [] },
     judgment: { required: ["TYPESAFE_API_KEY"], collected: [] },
   });

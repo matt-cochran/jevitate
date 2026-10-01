@@ -54,6 +54,14 @@ APP_API_TOKEN=… jevitate explore --url https://app.example.test/ --goal "…" 
 
   A descriptor is `label=<text>`, `testId=<id>`, `type=<input type>` (for example
   `type=password`), `id=<element id>` or `name=<name attribute>`.
+- **Sign-up identities are unique per run.** When the goal does not state an email or a
+  username, the value the model invents for an email / username field gains the run's token
+  (`jane.doe@example.com` → `jane.doe.jev3k9x2a@example.com`, `janedoe` → `janedoe_jev3k9x2a`).
+  A sign-up goal can be repeated against the same stack without an "account already exists"
+  collision, and a sign-up followed by a sign-in in the same run types the same identity. A value
+  the goal states (`email: ada@example.com`) or a `--secret-field` binding is typed exactly as
+  given. A Journey authored from such a run records the unique value: replaying a sign-up Journey
+  against the same stack needs a fixture that resets that account.
 - **MFA (TOTP).** `--totp '<descriptor>=env:VAR'` takes a base32 TOTP seed (what
   the app shows at enrolment). The 6-digit code is computed locally (RFC 6238,
   SHA-1, 30 s) when the field is typed. The seed never reaches a model or disk.
@@ -79,6 +87,36 @@ read only by that server's own browser session, never returned or logged. A Jour
 can also declare `metadata.requiresAuth: true` so a run given no `storageState` fails
 fast, before any browser opens, with a clear message — instead of a confusing
 `replay-target-not-found` partway into the steps.
+
+## API keys for jevitate's own AI
+
+Jevitate's AI features each need one key: **generation** uses `OPENROUTER_API_KEY` (OpenRouter),
+**judgment** uses `TYPESAFE_API_KEY` (TypeSafe/Jev; `TYPESAFE_JEV_API_KEY` is accepted too). A key
+comes from the environment or from `~/.jevitate/credentials.json` (mode 0600). The environment
+wins when both are set.
+
+- **Enter a key:** `jevitate init` or `jevitate ai setup <generation|judgment>`. Entry needs a
+  terminal and is masked: each character shows as `•`, and the instructions stay on screen.
+  Backspace erases, Ctrl-C cancels. A key is never echoed, logged or sent to a model, and key
+  entry is never offered over MCP.
+- **See what is configured:** `jevitate ai status` (and `init`) prints, per feature, the key's
+  name, its provider and its source, for example
+  `generation: ready — OPENROUTER_API_KEY (OpenRouter), from ~/.jevitate/credentials.json: valid`.
+  With `--json`, `sources` and `verification` are added per feature (names, sources and
+  verdicts only, never a value). An env var that overrides a stored key is reported.
+- **Verification:** each key is checked with its provider by one authenticated, non-billable
+  request (OpenRouter `GET /api/v1/key`, TypeSafe `GET /v1/models`). The verdict is `valid`,
+  `invalid` (HTTP 401/403), `unreachable` (network error, timeout, 429, 5xx), `missing` or, with
+  `--no-verify`, not checked. A key that looks like another provider's (an OpenRouter `sk-or-…`
+  key in the TypeSafe slot) is flagged. `ai status` exits 2 when a key is invalid or could not
+  be checked. `ai setup` checks a key **before** storing it: a rejected key, or one that could not
+  be checked, is not stored. `ai setup` also fails when a key already present is invalid.
+- **Replace or rotate a key:** `jevitate ai setup <feature> --replace` prompts for a new value
+  even when one is stored and stores it the same way; `jevitate init --replace-keys` does it for
+  every feature. If an env var is set for that key, you get a warning that the env value still wins.
+- **Offline / CI:** pass `--no-verify` to `ai status`, `ai setup` or `init` to skip the live check
+  (presence and source only). Set keys in CI through the environment; nothing prompts without a
+  terminal.
 
 ## Persistent browser profiles (`jevitate profile`)
 

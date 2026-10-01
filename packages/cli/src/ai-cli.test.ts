@@ -1,9 +1,8 @@
-import { Writable } from "node:stream";
 import { expect, test } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import type { CliDeps } from "./program.js";
 import { buildProgram } from "./program.js";
-import { createMutableEcho, realSecureIO } from "./ai-cli.js";
+import { realSecureIO } from "./ai-cli.js";
 
 test("realSecureIO is exported so jevitate init can reuse the same masked-prompt implementation", () => {
   expect(typeof realSecureIO).toBe("function");
@@ -22,7 +21,9 @@ function newProgram(aiDeps?: CliDeps["ai"]) {
   const lines: string[] = [];
   // Hermetic by default: the real store falls back to ~/.jevitate/credentials.json, so a test that
   // does not inject `localConfig` would read whatever keys the developer's machine has saved.
-  const ai = aiDeps ? { localConfig: {}, ...aiDeps } : { localConfig: {} };
+  // #291: the live key check is stubbed (every key "valid") — a test never touches the network.
+  const verifyFetch = async () => ({ status: 200 });
+  const ai = aiDeps ? { localConfig: {}, verifyFetch, ...aiDeps } : { localConfig: {}, verifyFetch };
   const program = buildProgram({ profiles, ai });
   program.configureOutput({ writeOut: (s) => lines.push(s) });
   program.exitOverride();
@@ -35,7 +36,7 @@ test("ai status --json reports generation/judgment as missing when env is empty 
   const parsed = JSON.parse(lines.join(""));
 
   expect(parsed.ok).toBe(true);
-  expect(parsed.data).toEqual({
+  expect(parsed.data).toMatchObject({
     generation: { required: ["OPENROUTER_API_KEY"], missing: ["OPENROUTER_API_KEY"] },
     judgment: { required: ["TYPESAFE_API_KEY"], missing: ["TYPESAFE_API_KEY"] },
   });
@@ -48,7 +49,7 @@ test("ai status --json reports a feature as satisfied when its key is present", 
   await program.parseAsync(["ai", "status", "--json"], { from: "user" });
   const parsed = JSON.parse(lines.join(""));
 
-  expect(parsed.data.generation).toEqual({ required: ["OPENROUTER_API_KEY"], missing: [] });
+  expect(parsed.data.generation).toMatchObject({ required: ["OPENROUTER_API_KEY"], missing: [] });
   expect(lines.join("")).not.toContain("sk-or-should-not-appear");
 });
 
@@ -108,37 +109,6 @@ test("ai generate --real sanitizes a provider error so the raw message (and any 
   expect(parsed.error.code).toBe("E_AI_GENERATE");
   expect(lines.join("")).not.toContain("sk-or-FAKE-LEAK-KEY");
   expect(parsed.error.message).not.toContain("Authorization");
-});
-
-/**
- * I1 fix verification: `realSecureIO.promptSecret` wires `createMutableEcho`
- * as readline's internal output hook (`_writeToOutput`) and mutes it for the
- * entire duration the user is typing the secret — this is the actual
- * mechanism that decides whether typed characters get echoed to the
- * terminal. Per-keystroke readline/TTY behavior can't be faithfully
- * simulated outside a real terminal in a non-interactive test runner, so
- * this exercises the gate directly: writes made while muted never reach the
- * underlying stream (the secret, however it's chunked), while writes made
- * before muting / after unmuting (the prompt text, the trailing newline) do.
- */
-test("createMutableEcho suppresses writes while muted and passes them through otherwise", () => {
-  const written: string[] = [];
-  const sink = new Writable({
-    write(chunk, _enc, cb) {
-      written.push(chunk.toString());
-      cb();
-    },
-  });
-  const echo = createMutableEcho(sink);
-
-  echo.write("Enter OPENROUTER_API_KEY: ");
-  echo.mute();
-  for (const ch of "sk-or-super-secret-value") echo.write(ch);
-  echo.unmute();
-  echo.write("\n");
-
-  expect(written.join("")).toBe("Enter OPENROUTER_API_KEY: \n");
-  expect(written.join("")).not.toContain("sk-or-super-secret-value");
 });
 
 test("ai setup generation persists the prompted key via an injected secure IO without echoing it", async () => {

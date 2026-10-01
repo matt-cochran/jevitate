@@ -60,6 +60,14 @@ terminal (CI, a coding agent), `init` never prompts: it reports which keys are m
 add them later with `jevitate ai setup <generation|judgment>`. It ends with a short **next steps**
 list that fits what it set up.
 
+Key entry is masked (each character shows as `•`; the instructions stay on screen). `init` and
+`jevitate ai status` name each key, its provider and where it comes from (`from env
+OPENROUTER_API_KEY` or `from ~/.jevitate/credentials.json`), and check it with the provider (a
+live, non-billable auth call: `valid`, `INVALID (HTTP 401)`, or `could not verify`). A key the
+provider rejects is never stored. To rotate or replace a stored key, run `jevitate ai setup
+<feature> --replace` (or `jevitate init --replace-keys` for all of them). Offline or in CI, pass
+`--no-verify`. See [authentication](./docs/authentication.md#api-keys-for-jevitates-own-ai).
+
 **3. First run: try to break a form.** No keys needed, because the adversarial mission plans its
 misuse in code:
 
@@ -249,7 +257,7 @@ jevitate mcp --print-config claude # or cursor | codex | json: print the snippet
 ```
 
 Run non-interactively like this, `init` never prompts for keys — it reports what's still missing
-(`keys: generation not configured — set OPENROUTER_API_KEY or run \`jevitate ai setup generation\``)
+(`keys: generation not configured — set OPENROUTER_API_KEY (OpenRouter) or run \`jevitate ai setup generation\``)
 and exits 0 regardless, since the rest of init (skills, MCP registration) still succeeded. Set the
 keys separately with `jevitate ai setup <generation|judgment>`.
 

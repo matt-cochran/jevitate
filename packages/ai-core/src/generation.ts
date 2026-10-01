@@ -16,7 +16,8 @@ export const FORM_VALUE_INSTRUCTIONS =
   "term; a title → a short title; a rationale/notes/description → one sentence of reasoning in the " +
   "user's words; email/url → an email address / absolute URL. `alreadyUsed` lists values already " +
   "submitted into this field: when the goal names several items, use the next item not yet used, " +
-  "never one of them again. Return null only when no value can be invented safely.";
+  "never one of them again. A `textarea` list/CSV: one item per line, separated by newlines. " +
+  "Return null only when no value can be invented safely.";
 
 /** Text-only generation tasks (form values / triage). Closed set. */
 export const FormValueInput = z.object({
@@ -281,7 +282,7 @@ export const JourneyGoalOutput = z.object({
 }).strict();
 
 export const GEN_TASKS = {
-  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "4" },
+  "form.value": { input: FormValueInput, output: FormValueOutput, promptVersion: "5" },
   "chat.reply": { input: ChatReplyInput, output: ChatReplyOutput, promptVersion: "2" },
   "goal.answer": { input: GoalAnswerInput, output: GoalAnswerOutput, promptVersion: "4", temperature: 0 },
   "text.edit": { input: TextEditInput, output: TextEditOutput, promptVersion: "1", temperature: 0 },
