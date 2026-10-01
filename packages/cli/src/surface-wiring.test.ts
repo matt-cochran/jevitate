@@ -124,6 +124,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "journey-cli.ts runJourneyProgrammatically": { account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
     account: SITE_ACCOUNT,
+    actionDeltas:
+      "#303 × #293: the prefix is the anchored mission's setup, not its actions — `--action-deltas` records the mission's own steps from the branch point on; a prefix that no longer replays is already a typed journey-stale (fail-closed), never a delta mismatch",
     browserPortFactory: PREFIX_IN_SESSION,
     emulation: PREFIX_IN_SESSION,
     mask: PREFIX_IN_SESSION,
