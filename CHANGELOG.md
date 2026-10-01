@@ -39,6 +39,12 @@ behaviour changes).
   `x-request-id`, …; `--log-correlation-header`, `--log-id-pattern`), and a `blocked` reason names
   it: `caused by: … on POST /x (409)` (#204).
 - `--log-scope` attributes only matching backend-log lines to the run, for runs sharing one log (#282).
+- A find-out goal's read-only guard judges a form submit by the requests it sends: a lookup form
+  that only reads ("Load" → GETs) is clicked, and a submit that writes is blocked at the network
+  (#253).
+- A goal with no `--success` that asks for a change no longer performs a destructive write
+  ("Remove" → `RemoveMember`) unless `--allow-writes` or `--allow-destructive` is passed: the
+  control is refused and a destructive request an action fires is blocked (#270).
 
 ### Fixed
 

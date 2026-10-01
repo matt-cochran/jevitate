@@ -36,11 +36,16 @@ security bug, and how to report one.
   `--paid <pattern>` (repeatable, same syntax as `--deny`; `safety.paid` in
   `~/.jevitate/targets.json`) puts them in the paid category: a declared `budget` guard sees them,
   hang replays never repeat them, and a goal that asks for one may still click it — unlike
-  `--deny`, which no mission may click.
+  `--deny`, which no mission may click. A goal asks for a `--paid` control by its action word:
+  a trailing live estimate ("Confirm analysis (≈ 4–10 credits)") and confirmation words
+  ("Confirm", "and") are ignored, so "analyze this text" asks for "Confirm analysis".
 - A find-out goal (no `--success`) is read-only unless the goal asks for a change: write-flow
-  controls are refused and the write requests an action fires are blocked. `--allow-writes`
-  lifts it and `--allow-write <glob>` exempts a request path
-  ([find-out goals](./success-checks.md#find-out-goals-no---success)).
+  controls are refused and the write requests an action fires are blocked. A form submit is judged
+  by the requests it sends, so a lookup form that only reads still works. A goal with no
+  `--success` that asks for a change still never performs a destructive write (a destructive
+  control, or a `DELETE` / `Remove*`-style request) unless the operator passes `--allow-writes` or
+  `--allow-destructive`. `--allow-writes` lifts the guard and `--allow-write <glob>` exempts a
+  request path ([find-out goals](./success-checks.md#find-out-goals-no---success)).
 - **Third-party writes.** The read-only guard blocks only the app's own writes. Code decides from
   each request, never the model. A write is the app's (first-party) when any of these holds:
   - its origin is an `--allow` origin, or shares an allowed origin's host (any port) or site

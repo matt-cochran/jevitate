@@ -527,7 +527,11 @@ async function adjudicatedRun(
   const hasChecks = checks.length > 0;
   // #158 — a find-out goal is READ-ONLY unless its text asks for a change or `--allow-writes`:
   // independent code refuses write flows and aborts write requests; the model is told.
-  const readOnly = !hasChecks && cfg.safety?.allowWrites !== true && !goalAsksForChange(cfg.goal);
+  const writesLifted = cfg.safety?.allowWrites === true;
+  const readOnly = !hasChecks && !writesLifted && !goalAsksForChange(cfg.goal);
+  // #270 — the goal's own words never lift the guard on a DESTRUCTIVE write ("Remove a product…"
+  // clicked a member row's "Remove" → RemoveMember 200): only the operator can.
+  const noDestructiveWrites = !hasChecks && !readOnly && !writesLifted && cfg.safety?.allowDestructive !== true;
   const runOnce = (): Promise<ExploreRun> => {
     // A retried run (#126) starts over from the seed: nothing the first attempt saw carries over.
     settledSteps = 0;
@@ -540,6 +544,7 @@ async function adjudicatedRun(
     return explore({
       ...cfg,
       readOnly,
+      noDestructiveWrites,
       missionContext: `${cfg.missionBrief === undefined ? "" : `${cfg.missionBrief}; `}${
         hasChecks
           ? `success is judged independently by user-supplied checks — your \`done\` is only a proposal, not the verdict${

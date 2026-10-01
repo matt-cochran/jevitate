@@ -102,7 +102,7 @@ import {
   type PageStatus,
 } from "./status.js";
 import { SafetyPolicy, type SafetyConfig } from "./safety.js";
-import { READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
+import { NO_DESTRUCTIVE_NOTE, READ_ONLY_NOTE, ReadOnlyGuard } from "./read-only.js";
 import { FirstPartyOrigins } from "./third-party.js";
 import { HeapLog, buildCrashReport, sampleHeap, type CrashReport } from "./crash-report.js";
 import type { HeapSample } from "@jevitate/domain";
@@ -295,6 +295,13 @@ export interface ExploreConfig {
    */
   readonly readOnly?: boolean;
   /**
+   * #270: a goal with no success check that asks for a change (so not `readOnly`) still never
+   * performs a DESTRUCTIVE write: code refuses a destructive control (no goal-word lift) and aborts a
+   * destructive write request (`DELETE`, `Remove*`/`Delete*`… RPCs) an action fires. Set by the goal
+   * mission unless `--allow-writes` / `--allow-destructive`; ignored when `readOnly` is set.
+   */
+  readonly noDestructiveWrites?: boolean;
+  /**
    * #202: called as an action (a control op, or a chosen `reload`) is about to be dispatched — at the
    * same point, on the same wall clock (`Date.now`), as the request→step attribution mark
    * (`SideEffectLog.mark`). Requests captured with `startedAt >= at` were sent after it. Observation
@@ -482,7 +489,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
   const secretContext = secretFieldContext(cfg.secretFields);
   const missionContext =
-    [cfg.missionContext, secretContext, cfg.readOnly === true ? READ_ONLY_NOTE : null]
+    [
+      cfg.missionContext,
+      secretContext,
+      cfg.readOnly === true ? READ_ONLY_NOTE : cfg.noDestructiveWrites === true ? NO_DESTRUCTIVE_NOTE : null,
+    ]
       .filter((c): c is string => c !== undefined && c !== null && c !== "")
       .join("; ") || undefined;
   const bounds = resolveBounds(cfg.bounds);
@@ -779,8 +790,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   const effectLog = new SideEffectLog({ isWrite, now, allowlist: cfg.allowlist, firstParty });
   /** A find-out goal's read-only guard (#158), or null when the run may write. */
   const readOnly =
-    cfg.readOnly === true
+    cfg.readOnly === true || cfg.noDestructiveWrites === true
       ? new ReadOnlyGuard(isWrite, {
+          mode: cfg.readOnly === true ? "read-only" : "no-destructive",
           // #194: only writes to the app's own origins are blocked; a third-party beacon passes (listed).
           allowlist: cfg.allowlist,
           firstParty,
@@ -860,8 +872,10 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     // #158 — from here on, a read-only run's write requests never leave the browser.
     if (readOnly !== null) {
       await readOnly.arm(page);
-      effectLog.markBackground();
-      history.push(READ_ONLY_NOTE);
+      if (readOnly.mode === "read-only") {
+        effectLog.markBackground();
+        history.push(READ_ONLY_NOTE);
+      } else history.push(NO_DESTRUCTIVE_NOTE);
     }
 
     for (;;) {
@@ -889,7 +903,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         }
       }
       // #158 — the action's window closes once the page settled: later writes are the app's own.
-      if (readOnly?.settled() === true) effectLog.markBackground();
+      if (readOnly?.settled() === true && readOnly.mode === "read-only") effectLog.markBackground();
       // A bound secret field shows the model its placeholder only (#72).
       const snap = maskSecretFields(perception.snapshot, cfg.secretFields);
       {
@@ -1223,7 +1237,11 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // #194: a blocked write off the --allow origins says how to declare or exempt it.
           const hints = [...new Set(blocked.flatMap((b) => (b.hint === undefined ? [] : [b.hint])))];
           const note =
-            `blocked write request(s) ${redactText(what, secrets)}: this find-out goal is read-only — find the answer without changing anything` +
+            `blocked write request(s) ${redactText(what, secrets)}: ${
+              readOnly?.mode === "no-destructive"
+                ? "a destructive write needs --allow-writes on a goal with no success check — report what you found instead"
+                : "this find-out goal is read-only — find the answer without changing anything"
+            }` +
             (hints.length === 0 ? "" : ` (${redactText(hints.join("; "), secrets)})`);
           history.push(note);
           transcript.record({
