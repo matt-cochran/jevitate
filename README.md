@@ -246,7 +246,7 @@ More: [how it works](./docs/how-it-works.md), including the architecture and pac
 | **Evidence** | hangs (confirmed by replay), page timing, backend log correlation, redacted issue drafts ([exploration](./docs/exploration.md), [operations](./docs/operations.md)) |
 | **Journeys** | author a replayable flow from a goal, replay, self-heal under policy, load-test, share ([Journeys](./docs/journeys.md)) |
 | **Demos** | `journey demo` renders a Journey as a narrated video, `.vtt` subtitles and a step-by-step guide; `demo "<aspect>" --env <name> --success <check>` explores, minimizes, annotates and drafts one from a one-line request, and `demo approve <id>` promotes it ([demos](./docs/journeys.md#demo-an-aspect-from-a-one-line-request)) |
-| **Usability review** | ranked, cited findings grounded in what the run observed. Advisory, never a gate |
+| **Usability review** | ranked, cited findings: claims verified by code (a probe, the product facts, observed friction). Advisory, never a gate ([UX findings](./docs/ux-findings.md)) |
 
 ## Use it from your coding agent
 
@@ -341,10 +341,10 @@ Jevitate is pre-1.0 and under active development. Known limitations worth knowin
 - A hard-signal defect (e.g. an HTTP 500) is re-checked with `verify-fix`, not committed by
   `regression capture`. Declare the broken rule as an invariant to commit it
   ([verification](./docs/verification.md)).
-- UX quality findings (`jevitate ux`, `explore --strategy usability`) are a 0.2.0 PREVIEW:
-  advisory, the quality grader is not yet calibrated across apps, and finding grouping/dedup is
-  still being redesigned ([#133](https://github.com/matt-cochran/jevitate/issues/133),
-  [#198](https://github.com/matt-cochran/jevitate/issues/198)).
+- UX quality findings (`jevitate ux`, `explore --strategy usability`) are a PREVIEW and advisory.
+  Each finding is a claim verified by code, but Jev's categorization and the two-question grade
+  are tuned on fixtures only, not yet calibrated with the real model across apps
+  ([UX findings](./docs/ux-findings.md), [#198](https://github.com/matt-cochran/jevitate/issues/198)).
 - Chromium only.
 
 ## Documentation

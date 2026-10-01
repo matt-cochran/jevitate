@@ -35,6 +35,22 @@ behaviour changes).
   `--url chrome-extension://<id>/sidepanel.html`, and the agent acts on their DOM. Recordings
   record each extension's `{id, name, version}`. verify-fix refuses a different build with exit 64.
   Headless runs use Playwright's full Chromium in new-headless mode. See docs/extensions.md (#256).
+- UX findings are claims verified by code (#198). A usability finding now comes from a guard probe
+  (each destructive control clicked once with every write blocked: did a confirm dialog, page
+  dialog or confirmation page come first?), from the product facts, or from friction the run hit.
+  Jev only categorizes: a claim type from a closed list, a target control, a duplicate check, and
+  two yes/no grade questions ("do we need this?", "do we need this to ship this feature?") that
+  code maps to actionable / relevant-minor / generic / wrong. Claims that fail code's check are
+  dropped and counted in `report.claims`. See docs/ux-findings.md.
+- Product facts: `.jevitate/product.json`, or `--product <file>` on `ux` and
+  `explore --strategy usability` (plus MCP `ux_review`/`run_exploration` and check suite items). The file
+  lists plans and prices, trial lengths, key journeys and each page's intended next step. A wrong
+  price or trial on screen is a `fact-conflict` finding, and a missing or disabled next step is
+  `next-step-unclear`. An invalid file is refused with `E_UX_PRODUCT_INPUT` (exit 64) before a
+  browser opens (#198).
+- Live usability findings get a cropped, secret-masked screenshot with the cited control or quoted
+  text boxed (`finding.screenshot`, `usability-<stamp>.findings/`). `--polish` (opt-in) rewrites
+  each verified finding's recommendation with one generation call (#198).
 
 ### Changed
 
@@ -44,6 +60,22 @@ behaviour changes).
   commit SHAs on the Node 24 runtime. `release.sh` waits until npm serves the new versions and
   tags locally; `scripts/sync-release-branches.sh` prepares the post-release `main` → `dev`
   back-merge. RELEASING.md describes the working path (#267).
+- UX finding output (#198). Finding text is built from templates over the verified fields
+  (control, page, blocked request, quoted text, expected fact) instead of being generated. The
+  rubric no longer reports findings on its own, so `heuristicAppendix` is empty, and a finding's
+  `rubricItemId` is the heuristic its claim type is cited under. Additive fields: `finding.claim`,
+  `finding.grade`, `finding.screenshot`, `report.claims`, suppression reasons `unverified` and
+  `not-a-problem`, and `probes` in the evidence sidecar. Reports add evidence caveats when no
+  product facts were found, or when offline review has no guard probes.
+
+### Upgrade notes
+
+- **UX findings (#198).** Expect fewer findings and different `rubricItemId`s: a finding exists
+  only when code verified its claim. Tooling that read `heuristicAppendix` or `tier: "semantic"`
+  findings should read `findings[].claim` instead. A destructive-action finding needs a live run
+  (or its evidence sidecar). An offline `jevitate ux` without the sidecar lists such claims as
+  unverifiable coverage (`coverage.skipped`, `claim:destructive-unguarded`), never as findings.
+  Add `.jevitate/product.json` (docs/ux-findings.md) to have prices and intended next steps checked.
 
 ### Fixed
 
