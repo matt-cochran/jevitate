@@ -658,6 +658,13 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
   /** #237: actions the run attempted (any target op or reload, landed or not), and early `blocked`s refused. */
   let actionAttempts = 0;
   let earlyBlocked = 0;
+  /**
+   * #276: steps since the last executed page-changing action that were jevitate's own refusals, or
+   * scrolls that moved the page (the app answered them). A stall over such steps is the run's (nothing it tried reached the app), never an app
+   * `ui-no-progress` hang.
+   */
+  let refusedSinceMutation = 0;
+  let scrollsSinceMutation = 0;
   /** The concrete causes the run ran into, for a precise stop reason (#84). */
   const blockers: { failClosed: string | null; target: { key: string; text: string } | null } = {
     failClosed: null,
@@ -826,6 +833,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
     failedActs.succeeded();
     if (!label.startsWith("type ")) typeNoEffect = null;
     track.lastMutation = { at, before, seenBefore: new Set(seen), label, recordIndex: recorder.stepCount - 1, sawNewState: false, linkFromRoute };
+    refusedSinceMutation = 0;
+    scrollsSinceMutation = 0;
     track.lastRecordedTarget = JSON.stringify(descriptor);
     statusAfter = label;
   };
@@ -1075,6 +1084,9 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         const m = track.lastMutation;
         if (
           m !== null &&
+          // #276: the steps since were refusals / moved scrolls — the app answered: plain no-progress.
+          refusedSinceMutation === 0 &&
+          scrollsSinceMutation === 0 &&
           !m.sawNewState &&
           snap.signature !== m.before &&
           m.seenBefore.has(snap.signature) &&
@@ -1351,6 +1363,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
       ): void => {
         const op = extra.op ?? decision.op;
         const target = extra.control === undefined ? decision.control : extra.control;
+        if (!actOk && extra.origin === "engine") refusedSinceMutation += 1;
         if (op === "type" || op === "send") auth.noteTyped(target, snap.url, actOk, target !== null && isBound(target));
         // #225: typed credentials make the pending submit a sign-in, never a save.
         if ((op === "type" || op === "send") && actOk && target !== null && (isBound(target) || isCredentialField(target))) save.noteCredential();
@@ -1724,6 +1737,7 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
           // the pointer, else the window) until it settles, so this never reads immediately after the
           // wheel event before the scroll it dispatched has actually happened.
           const r = await act(cfg.actor, { op: decision.op, control: null });
+          if (r.ok && r.moved === true) scrollsSinceMutation += 1;
           changed = r.moved === true;
           lastScrollMoved = r.ok && changed;
           note = `${decision.op === "scroll_down" ? "scrolled down" : "scrolled up"} (${changed ? "the page moved" : "the page did not move — nothing more that way"})`;
@@ -1791,6 +1805,8 @@ export async function explore(cfg: ExploreConfig): Promise<ExploreRun> {
         if (r.ok) {
           recorder.navigate(page.url(), at);
           track.lastMutation = { at, before: snap.signature, seenBefore: new Set(seen), label: "reload", recordIndex: recorder.stepCount - 1, sawNewState: false };
+          refusedSinceMutation = 0;
+          scrollsSinceMutation = 0;
           track.lastRecordedTarget = null;
           tracker.countAction();
           failedActs.succeeded();
